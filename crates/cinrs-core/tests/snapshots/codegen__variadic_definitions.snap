@@ -1,0 +1,65 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        #include <stdarg.h>\n\n        int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap);\n\n        int sum(int n, ...) {\n            va_list ap;\n            int total = 0;\n            va_start(ap, n);\n            for (int i = 0; i < n; i++) {\n                total += va_arg(ap, int);\n            }\n            va_end(ap);\n            return total;\n        }\n\n        int format(char *buf, unsigned long size, const char *fmt, ...) {\n            va_list ap;\n            va_list copy;\n            va_start(ap, fmt);\n            va_copy(copy, ap);\n            int written = vsnprintf(buf, size, fmt, copy);\n            double first = va_arg(ap, double);\n            va_end(ap);\n            return written + (int) first;\n        }\n        \")"
+---
+mod __cinrs_unit_f47d9b27 {
+    #[allow(…)]
+    unsafe extern "C" {
+        #[link_name = "vsnprintf"]
+        pub fn __cinrs_f47d9b27_vsnprintf(
+            buf: *mut ::core::ffi::c_char,
+            size: ::core::ffi::c_ulong,
+            fmt: *const ::core::ffi::c_char,
+            ap: ::core::ffi::VaList,
+        ) -> ::core::ffi::c_int;
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn sum(
+        mut n: ::core::ffi::c_int,
+        __cinrs_va: ...
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut ap: ::core::ffi::VaList = __cinrs_va.clone();
+            let mut total: ::core::ffi::c_int = 0;
+            ap = __cinrs_va.clone();
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < n) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        total = total.wrapping_add(ap.next_arg::<::core::ffi::c_int>());
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            return total;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn format(
+        mut buf: *mut ::core::ffi::c_char,
+        mut size: ::core::ffi::c_ulong,
+        mut fmt: *const ::core::ffi::c_char,
+        __cinrs_va: ...
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut ap: ::core::ffi::VaList = __cinrs_va.clone();
+            let mut copy: ::core::ffi::VaList = __cinrs_va.clone();
+            ap = __cinrs_va.clone();
+            copy = ap.clone();
+            let mut written: ::core::ffi::c_int = __cinrs_f47d9b27_vsnprintf(
+                buf,
+                size,
+                fmt,
+                copy.clone(),
+            );
+            let mut first: ::core::ffi::c_double = ap
+                .next_arg::<::core::ffi::c_double>();
+            return written.wrapping_add(first as ::core::ffi::c_int);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_f47d9b27::*;

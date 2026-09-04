@@ -1,0 +1,52 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C23,\nr#\"\n        constexpr int LIMIT = 4;\n\n        int sum(void) {\n            int values[LIMIT] = { 1, 2, 3, 4 };\n            typeof(values[0]) total = 0;\n            for (auto i = 0; i < LIMIT; i++) total += values[i];\n            return total;\n        }\n\n        enum Small : unsigned char { RED, GREEN };\n        bool is_red(enum Small s) { return s == RED; }\n        void *nothing(void) { return nullptr; }\n        \"#)"
+---
+mod __cinrs_unit_8f5fa472 {
+    #[allow(…)]
+    pub const RED: ::core::ffi::c_uchar = 0;
+    #[allow(…)]
+    pub const GREEN: ::core::ffi::c_uchar = 1;
+    #[allow(…)]
+    pub type Small = ::core::ffi::c_uchar;
+    #[allow(…)]
+    pub unsafe extern "C" fn sum() -> ::core::ffi::c_int {
+        unsafe {
+            let mut values: [::core::ffi::c_int; 4] = [1, 2, 3, 4];
+            let mut total: ::core::ffi::c_int = 0;
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < 4) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        total = total
+                            .wrapping_add({
+                                let __cinrs_tmp0 = (&raw mut values)
+                                    .cast::<::core::ffi::c_int>()
+                                    .offset(i as isize);
+                                (*__cinrs_tmp0)
+                            });
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            return total;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn is_red(mut s: ::core::ffi::c_uchar) -> bool {
+        unsafe {
+            return (s as ::core::ffi::c_int == 0) as ::core::ffi::c_int != 0;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn nothing() -> *mut ::core::ffi::c_void {
+        unsafe {
+            return ::core::ptr::null_mut::<::core::ffi::c_void>();
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_8f5fa472::*;

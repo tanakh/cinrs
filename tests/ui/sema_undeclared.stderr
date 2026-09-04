@@ -1,0 +1,8 @@
+error: use of undeclared identifier 'missing_value'
+ --> tests/ui/sema_undeclared.rs:5:16
+  |
+5 |         return missing_value;
+  |                ^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

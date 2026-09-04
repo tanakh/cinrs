@@ -1,0 +1,1302 @@
+//! Integration tests that *run* the translated C.
+//!
+//! Every expected value here was derived from the C standard's semantics —
+//! integer promotions, the usual arithmetic conversions, truncation towards
+//! zero, wrap-around on unsigned overflow — rather than from what the
+//! implementation happens to produce.
+//!
+//! Each test holds its own `c99!` invocation, which is one translation unit;
+//! putting it inside the test function keeps the generated items local, so
+//! names never collide between tests. Calls are `unsafe` because `c99!`
+//! defines `extern "C"` functions.
+
+use cinrs::c99;
+
+// ---------------------------------------------------------------------------
+// the README example
+// ---------------------------------------------------------------------------
+
+#[test]
+fn readme_factorial() {
+    c99! {
+        int fact(int n) {
+            if (n == 0) {
+                return 1;
+            } else {
+                return n * fact(n - 1);
+            }
+        }
+    }
+
+    assert_eq!(unsafe { fact(0) }, 1);
+    assert_eq!(unsafe { fact(1) }, 1);
+    assert_eq!(unsafe { fact(5) }, 120);
+    assert_eq!(unsafe { fact(10) }, 3_628_800);
+}
+
+// ---------------------------------------------------------------------------
+// loops
+// ---------------------------------------------------------------------------
+
+#[test]
+fn for_loop_with_a_c99_declaration() {
+    c99! {
+        int fib(int n) {
+            int a = 0, b = 1;
+            for (int i = 0; i < n; i++) {
+                int next = a + b;
+                a = b;
+                b = next;
+            }
+            return a;
+        }
+    }
+
+    assert_eq!(unsafe { fib(0) }, 0);
+    assert_eq!(unsafe { fib(1) }, 1);
+    assert_eq!(unsafe { fib(10) }, 55);
+    assert_eq!(unsafe { fib(20) }, 6765);
+}
+
+#[test]
+fn while_loop() {
+    c99! {
+        int gcd(int a, int b) {
+            while (b != 0) {
+                int t = b;
+                b = a % b;
+                a = t;
+            }
+            return a;
+        }
+    }
+
+    assert_eq!(unsafe { gcd(48, 18) }, 6);
+    assert_eq!(unsafe { gcd(17, 5) }, 1);
+    assert_eq!(unsafe { gcd(270, 192) }, 6);
+}
+
+#[test]
+fn loop_with_shifts_and_compound_assignment() {
+    c99! {
+        long ipow(long base, int exp) {
+            long result = 1;
+            while (exp > 0) {
+                if (exp & 1) {
+                    result *= base;
+                }
+                base *= base;
+                exp >>= 1;
+            }
+            return result;
+        }
+    }
+
+    assert_eq!(unsafe { ipow(2, 10) }, 1024);
+    assert_eq!(unsafe { ipow(3, 5) }, 243);
+    assert_eq!(unsafe { ipow(7, 0) }, 1);
+}
+
+#[test]
+fn do_while_with_continue_retests_the_condition() {
+    c99! {
+        int steps(int n) {
+            int count = 0;
+            do {
+                n--;
+                if (n % 2 != 0) {
+                    continue;
+                }
+                count++;
+            } while (n > 0);
+            return count;
+        }
+    }
+
+    // n = 1: one iteration leaves n = 0, `continue` is not taken, and the
+    // condition `0 > 0` ends the loop.
+    assert_eq!(unsafe { steps(1) }, 1);
+    // n = 5: n runs 4, 3, 2, 1, 0; the odd values take `continue`, which must
+    // still evaluate `n > 0` — were it to skip the test, this would not
+    // terminate at all.
+    assert_eq!(unsafe { steps(5) }, 3);
+}
+
+#[test]
+fn do_while_whose_continue_ends_the_loop() {
+    c99! {
+        int once(int n) {
+            int count = 0;
+            do {
+                n--;
+                if (n % 2 == 0) {
+                    continue;
+                }
+                count++;
+            } while (n > 0);
+            return count;
+        }
+    }
+
+    // The single iteration leaves n = 0 and takes `continue`; the condition is
+    // then false, so the loop ends without ever incrementing `count`.
+    assert_eq!(unsafe { once(1) }, 0);
+}
+
+#[test]
+fn nested_loops_with_break() {
+    c99! {
+        int count_pairs(int limit) {
+            int count = 0;
+            for (int i = 1; i <= limit; i++) {
+                for (int j = 1; j <= limit; j++) {
+                    if (i * j > 6) {
+                        break;
+                    }
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
+    // limit = 4 admits (1,1..4), (2,1..3), (3,1..2) and (4,1): ten pairs.
+    assert_eq!(unsafe { count_pairs(4) }, 10);
+    assert_eq!(unsafe { count_pairs(1) }, 1);
+}
+
+#[test]
+fn an_infinite_loop_left_by_break() {
+    c99! {
+        int first_multiple(int of, int above) {
+            int n = above;
+            for (;;) {
+                n++;
+                if (n % of == 0) {
+                    break;
+                }
+            }
+            return n;
+        }
+    }
+
+    assert_eq!(unsafe { first_multiple(7, 10) }, 14);
+    assert_eq!(unsafe { first_multiple(3, 0) }, 3);
+}
+
+// ---------------------------------------------------------------------------
+// switch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn switch_with_fallthrough() {
+    c99! {
+        int classify(int n) {
+            int out = 0;
+            switch (n) {
+                case 0:
+                case 1:
+                    out += 1;
+                case 2:
+                    out += 10;
+                    break;
+                default:
+                    out = -1;
+            }
+            return out;
+        }
+    }
+
+    assert_eq!(unsafe { classify(0) }, 11);
+    assert_eq!(unsafe { classify(1) }, 11);
+    assert_eq!(unsafe { classify(2) }, 10);
+    assert_eq!(unsafe { classify(9) }, -1);
+}
+
+#[test]
+fn switch_with_default_in_the_middle() {
+    c99! {
+        int middle(int n) {
+            int out = 0;
+            switch (n) {
+                case 1: out += 1;
+                default: out += 2;
+                case 3: out += 4;
+            }
+            return out;
+        }
+    }
+
+    assert_eq!(unsafe { middle(1) }, 7);
+    assert_eq!(unsafe { middle(2) }, 6);
+    assert_eq!(unsafe { middle(3) }, 4);
+    assert_eq!(unsafe { middle(99) }, 6);
+}
+
+#[test]
+fn switch_without_a_default() {
+    c99! {
+        int lookup(int n) {
+            int out = 0;
+            switch (n) {
+                case 1: out = 10; break;
+                case 2: out = 20; break;
+            }
+            return out;
+        }
+    }
+
+    assert_eq!(unsafe { lookup(1) }, 10);
+    assert_eq!(unsafe { lookup(2) }, 20);
+    assert_eq!(unsafe { lookup(3) }, 0);
+}
+
+#[test]
+fn a_switch_may_be_the_whole_body_of_a_function() {
+    // Every group ends the function and there is a `default`, so control
+    // cannot fall out of the statement: nothing follows it, and the generated
+    // Rust has to be accepted without a `return` after it.
+    c99! {
+        int sign(int n) {
+            switch (n) {
+                case 0: return 0;
+                case 1: case 2: return 1;
+                default: return -1;
+            }
+        }
+
+        /* A group that ends in a loop with no exit terminates just as much. */
+        int spin(int n) {
+            switch (n) {
+                case 0: return 0;
+                default: while (1) { n++; if (n == 100) return n; }
+            }
+        }
+    }
+
+    unsafe {
+        assert_eq!(sign(0), 0);
+        assert_eq!(sign(2), 1);
+        assert_eq!(sign(9), -1);
+        assert_eq!(spin(0), 0);
+        assert_eq!(spin(50), 100);
+    }
+}
+
+#[test]
+fn break_inside_a_loop_inside_a_switch_leaves_the_loop() {
+    c99! {
+        int inner(int n) {
+            int total = 0;
+            switch (n) {
+                case 1:
+                    for (int i = 0; i < 5; i++) {
+                        if (i == 3) {
+                            break;
+                        }
+                        total += i;
+                    }
+                    total += 100;
+                    break;
+                default:
+                    total = -1;
+            }
+            return total;
+        }
+    }
+
+    // The inner `break` leaves the `for`, so `total += 100` still runs.
+    assert_eq!(unsafe { inner(1) }, 103);
+    assert_eq!(unsafe { inner(2) }, -1);
+}
+
+#[test]
+fn switch_inside_a_loop() {
+    c99! {
+        int cycle(int n) {
+            int total = 0;
+            for (int i = 0; i < n; i++) {
+                switch (i % 3) {
+                    case 0: total += 1; break;
+                    case 1: total += 10; break;
+                    default: total += 100;
+                }
+            }
+            return total;
+        }
+    }
+
+    assert_eq!(unsafe { cycle(6) }, 222);
+    assert_eq!(unsafe { cycle(1) }, 1);
+}
+
+#[test]
+fn switch_on_a_character() {
+    c99! {
+        int vowel(char c) {
+            switch (c) {
+                case 'a':
+                case 'e':
+                case 'i':
+                case 'o':
+                case 'u':
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
+    }
+
+    assert_eq!(unsafe { vowel(b'e' as ::core::ffi::c_char) }, 1);
+    assert_eq!(unsafe { vowel(b'z' as ::core::ffi::c_char) }, 0);
+}
+
+// ---------------------------------------------------------------------------
+// arithmetic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unsigned_arithmetic_wraps() {
+    c99! {
+        unsigned wrap_down(void) {
+            unsigned x = 0;
+            x = x - 1;
+            return x;
+        }
+
+        unsigned wrap_up(unsigned x) {
+            return x + 1;
+        }
+    }
+
+    assert_eq!(unsafe { wrap_down() }, 4_294_967_295);
+    assert_eq!(unsafe { wrap_up(4_294_967_295) }, 0);
+}
+
+#[test]
+fn signed_overflow_wraps_rather_than_panicking() {
+    c99! {
+        int overflow(int x) {
+            return x + 1;
+        }
+    }
+
+    // C leaves this undefined; wrapping is the predictable choice, and it is
+    // what a release build of C code does in practice.
+    assert_eq!(unsafe { overflow(2_147_483_647) }, -2_147_483_648);
+}
+
+#[test]
+fn comparing_a_signed_value_with_an_unsigned_one() {
+    c99! {
+        int literal_compare(void) {
+            unsigned u = 1;
+            return -1 < u;
+        }
+
+        int variable_compare(int s, unsigned u) {
+            return s < u;
+        }
+    }
+
+    // `-1` converts to `4294967295u`, which is not less than 1.
+    assert_eq!(unsafe { literal_compare() }, 0);
+    assert_eq!(unsafe { variable_compare(-1, 1) }, 0);
+    assert_eq!(unsafe { variable_compare(1, 2) }, 1);
+}
+
+#[test]
+fn the_integer_promotions_widen_before_arithmetic() {
+    c99! {
+        int promote(void) {
+            unsigned char a = 200, b = 100;
+            return a + b;
+        }
+
+        int promote_short(void) {
+            short a = 30000, b = 30000;
+            return a + b;
+        }
+    }
+
+    // Both operands become `int`, so the sum is 300 rather than 44.
+    assert_eq!(unsafe { promote() }, 300);
+    assert_eq!(unsafe { promote_short() }, 60_000);
+}
+
+#[test]
+fn char_arithmetic() {
+    c99! {
+        char next_letter(char c) {
+            return c + 1;
+        }
+
+        int letter_value(void) {
+            char c = 'A';
+            return c + 1;
+        }
+
+        int newline_value(void) {
+            return '\n';
+        }
+
+        int signed_char_is_negative(void) {
+            signed char c = -1;
+            return c;
+        }
+
+        int unsigned_char_is_not(void) {
+            unsigned char c = 255;
+            return c;
+        }
+    }
+
+    assert_eq!(
+        unsafe { next_letter(b'A' as ::core::ffi::c_char) },
+        b'B' as _
+    );
+    assert_eq!(unsafe { letter_value() }, 66);
+    assert_eq!(unsafe { newline_value() }, 10);
+    assert_eq!(unsafe { signed_char_is_negative() }, -1);
+    assert_eq!(unsafe { unsigned_char_is_not() }, 255);
+}
+
+#[test]
+fn division_truncates_towards_zero_and_the_remainder_follows_the_dividend() {
+    c99! {
+        int quotient(int a, int b) { return a / b; }
+        int remainder(int a, int b) { return a % b; }
+        unsigned uquotient(unsigned a, unsigned b) { return a / b; }
+    }
+
+    assert_eq!(unsafe { quotient(-7, 2) }, -3);
+    assert_eq!(unsafe { quotient(7, -2) }, -3);
+    assert_eq!(unsafe { quotient(7, 2) }, 3);
+    assert_eq!(unsafe { remainder(-7, 2) }, -1);
+    assert_eq!(unsafe { remainder(7, -2) }, 1);
+    assert_eq!(unsafe { remainder(7, 2) }, 1);
+    assert_eq!(unsafe { uquotient(7, 2) }, 3);
+}
+
+#[test]
+fn shifts() {
+    c99! {
+        int shift_left(int x, int n) { return x << n; }
+        int shift_right(int x, int n) { return x >> n; }
+        unsigned ushift_right(unsigned x, int n) { return x >> n; }
+        long shift_long(long x, int n) { return x << n; }
+    }
+
+    assert_eq!(unsafe { shift_left(1, 4) }, 16);
+    assert_eq!(unsafe { shift_right(1024, 3) }, 128);
+    // A right shift of a negative signed value keeps the sign, as every
+    // mainstream C implementation does.
+    assert_eq!(unsafe { shift_right(-16, 2) }, -4);
+    assert_eq!(unsafe { ushift_right(0x8000_0000, 4) }, 0x0800_0000);
+    assert_eq!(unsafe { shift_long(1, 40) }, 1 << 40);
+}
+
+#[test]
+fn bitwise_operators() {
+    c99! {
+        int band(int a, int b) { return a & b; }
+        int bor(int a, int b) { return a | b; }
+        int bxor(int a, int b) { return a ^ b; }
+        int bnot(int a) { return ~a; }
+        int double_not(int a) { return ~~a; }
+    }
+
+    assert_eq!(unsafe { band(0b1100, 0b1010) }, 0b1000);
+    assert_eq!(unsafe { bor(0b1100, 0b1010) }, 0b1110);
+    assert_eq!(unsafe { bxor(0b1100, 0b1010) }, 0b0110);
+    assert_eq!(unsafe { bnot(0) }, -1);
+    assert_eq!(unsafe { double_not(12345) }, 12345);
+}
+
+#[test]
+fn logical_operators_produce_exactly_zero_or_one() {
+    c99! {
+        int calls = 0;
+
+        int bump(void) {
+            calls++;
+            return 1;
+        }
+
+        int lnot(int x) { return !x; }
+        int land(int a, int b) { return a && b; }
+        int lor(int a, int b) { return a || b; }
+
+        int and_short_circuits(void) {
+            calls = 0;
+            if (0 && bump()) {
+                return -1;
+            }
+            return calls;
+        }
+
+        int or_short_circuits(void) {
+            calls = 0;
+            if (1 || bump()) {
+                return calls;
+            }
+            return -1;
+        }
+    }
+
+    assert_eq!(unsafe { lnot(0) }, 1);
+    assert_eq!(unsafe { lnot(5) }, 0);
+    assert_eq!(unsafe { lnot(-5) }, 0);
+    // The result is 1, not the operand: `2 && 3` is one, not six.
+    assert_eq!(unsafe { land(2, 3) }, 1);
+    assert_eq!(unsafe { land(0, 3) }, 0);
+    assert_eq!(unsafe { lor(0, 7) }, 1);
+    assert_eq!(unsafe { lor(0, 0) }, 0);
+    assert_eq!(unsafe { and_short_circuits() }, 0);
+    assert_eq!(unsafe { or_short_circuits() }, 0);
+}
+
+#[test]
+fn ternary_and_comma() {
+    c99! {
+        int abs_value(int x) {
+            return x > 0 ? x : -x;
+        }
+
+        int nested_ternary(int x) {
+            return x < 0 ? -1 : x > 0 ? 1 : 0;
+        }
+
+        int comma_operator(void) {
+            int a = 0, b = 0;
+            int c = (a = 1, b = 2, a + b);
+            return c;
+        }
+
+        int comma_in_a_for(int n) {
+            int total = 0;
+            for (int i = 0, j = n; i < j; i++, j--) {
+                total++;
+            }
+            return total;
+        }
+    }
+
+    assert_eq!(unsafe { abs_value(-5) }, 5);
+    assert_eq!(unsafe { abs_value(5) }, 5);
+    assert_eq!(unsafe { nested_ternary(-9) }, -1);
+    assert_eq!(unsafe { nested_ternary(0) }, 0);
+    assert_eq!(unsafe { nested_ternary(9) }, 1);
+    assert_eq!(unsafe { comma_operator() }, 3);
+    assert_eq!(unsafe { comma_in_a_for(10) }, 5);
+}
+
+#[test]
+fn compound_assignment() {
+    c99! {
+        int chain(int x) {
+            x += 5;
+            x *= 3;
+            x -= 2;
+            x /= 4;
+            x %= 7;
+            return x;
+        }
+
+        int narrow_compound(void) {
+            unsigned char c = 200;
+            c += 100;
+            return c;
+        }
+
+        int bit_compound(int x) {
+            x |= 0xF0;
+            x &= 0xFF;
+            x ^= 0x0F;
+            x <<= 1;
+            x >>= 2;
+            return x;
+        }
+    }
+
+    // 1 → 6 → 18 → 16 → 4 → 4
+    assert_eq!(unsafe { chain(1) }, 4);
+    // 200 + 100 is computed as `int`, then truncated back to `unsigned char`.
+    assert_eq!(unsafe { narrow_compound() }, 44);
+    // 5 → 0xF5 → 0xF5 → 0xFA → 0x1F4 → 0x7D
+    assert_eq!(unsafe { bit_compound(5) }, 0x7D);
+}
+
+#[test]
+fn increment_and_decrement_as_expressions() {
+    c99! {
+        int post_increment(int y) {
+            int a = y++;
+            return a * 100 + y;
+        }
+
+        int pre_increment(int y) {
+            int a = ++y;
+            return a * 100 + y;
+        }
+
+        int sequenced(void) {
+            int i = 0;
+            int a = i++;
+            int b = i++;
+            return a * 100 + b * 10 + i;
+        }
+
+        int decrements(int x) {
+            x--;
+            --x;
+            return x-- + --x;
+        }
+    }
+
+    assert_eq!(unsafe { post_increment(3) }, 304);
+    assert_eq!(unsafe { pre_increment(3) }, 404);
+    assert_eq!(unsafe { sequenced() }, 12);
+    // 10 → 9 → 8; then `x--` yields 8 leaving 7, and `--x` yields 6.
+    assert_eq!(unsafe { decrements(10) }, 14);
+}
+
+#[test]
+fn floating_point() {
+    c99! {
+        double average(double a, double b) { return (a + b) / 2; }
+        int truncate(double d) { return (int) d; }
+        double widen(int n) { return n; }
+        float multiply(float a, float b) { return a * b; }
+        int mixed(int n, double d) { return n * d; }
+        double divide(double a, double b) { return a / b; }
+        int compare(double a, double b) { return a < b; }
+    }
+
+    assert_eq!(unsafe { average(1.0, 2.0) }, 1.5);
+    assert_eq!(unsafe { truncate(3.99) }, 3);
+    // Conversion to an integer type discards the fractional part; it does not
+    // round.
+    assert_eq!(unsafe { truncate(-3.99) }, -3);
+    assert_eq!(unsafe { widen(7) }, 7.0);
+    assert_eq!(unsafe { multiply(1.5, 2.0) }, 3.0);
+    // `n * d` is done in `double` (4.5) and then truncated to `int`.
+    assert_eq!(unsafe { mixed(3, 1.5) }, 4);
+    assert_eq!(unsafe { divide(1.0, 4.0) }, 0.25);
+    assert_eq!(unsafe { compare(1.0, 2.0) }, 1);
+    assert_eq!(unsafe { compare(2.0, 1.0) }, 0);
+}
+
+#[test]
+fn boolean_type() {
+    c99! {
+        _Bool truthy(int x) {
+            _Bool b = x;
+            return b;
+        }
+
+        int as_int(int x) {
+            _Bool b = x;
+            return b;
+        }
+
+        int negate(_Bool b) {
+            return !b;
+        }
+
+        int bool_arithmetic(void) {
+            _Bool a = 5;
+            _Bool b = 0;
+            return a + a + b;
+        }
+    }
+
+    // Conversion to `_Bool` yields 0 or 1, never the original value.
+    assert!(unsafe { truthy(5) });
+    assert!(!unsafe { truthy(0) });
+    assert_eq!(unsafe { as_int(5) }, 1);
+    assert_eq!(unsafe { as_int(0) }, 0);
+    assert_eq!(unsafe { negate(true) }, 0);
+    assert_eq!(unsafe { negate(false) }, 1);
+    assert_eq!(unsafe { bool_arithmetic() }, 2);
+}
+
+#[test]
+fn integer_constant_types() {
+    c99! {
+        long long big(void) { return 4294967296; }
+        unsigned unsigned_suffix(void) { return 3000000000u; }
+        int hex_and_octal(void) { return 0x1F + 010; }
+        long long hex_wraps_to_unsigned(void) { return 0xFFFFFFFF; }
+    }
+
+    assert_eq!(unsafe { big() }, 4_294_967_296);
+    assert_eq!(unsafe { unsigned_suffix() }, 3_000_000_000);
+    assert_eq!(unsafe { hex_and_octal() }, 31 + 8);
+    // A hexadecimal constant may take an unsigned type, so this is positive.
+    assert_eq!(unsafe { hex_wraps_to_unsigned() }, 4_294_967_295);
+}
+
+#[test]
+fn sizeof_is_a_constant() {
+    c99! {
+        int size_of_int(void) { return sizeof(int); }
+        int size_of_double(void) { return sizeof(double); }
+        int size_of_expression(void) { char c = 0; return sizeof c; }
+    }
+
+    assert_eq!(
+        unsafe { size_of_int() },
+        core::mem::size_of::<core::ffi::c_int>() as _
+    );
+    assert_eq!(unsafe { size_of_double() }, 8);
+    assert_eq!(unsafe { size_of_expression() }, 1);
+}
+
+// ---------------------------------------------------------------------------
+// declarations and linkage
+// ---------------------------------------------------------------------------
+
+#[test]
+fn globals_are_visible_from_rust() {
+    c99! {
+        int total = 0;
+        int start = 41;
+
+        void add_to_total(int n) {
+            total += n;
+        }
+
+        int read_start(void) {
+            return start;
+        }
+    }
+
+    // A C global becomes a `static mut`, so Rust must read it by value:
+    // `assert_eq!(total, 0)` would take a reference to it, which edition 2024
+    // refuses.
+    unsafe {
+        assert_eq!({ total }, 0);
+        assert_eq!({ start }, 41);
+        add_to_total(5);
+        add_to_total(37);
+        assert_eq!({ total }, 42);
+        start = 1;
+        assert_eq!(read_start(), 1);
+    }
+}
+
+#[test]
+fn static_locals_keep_their_value() {
+    c99! {
+        int next_id(void) {
+            static int id = 0;
+            id++;
+            return id;
+        }
+
+        int other_counter(void) {
+            static int id = 100;
+            id++;
+            return id;
+        }
+    }
+
+    assert_eq!(unsafe { next_id() }, 1);
+    assert_eq!(unsafe { next_id() }, 2);
+    assert_eq!(unsafe { next_id() }, 3);
+    // A `static` in another function is a separate object even under the same
+    // name.
+    assert_eq!(unsafe { other_counter() }, 101);
+    assert_eq!(unsafe { next_id() }, 4);
+}
+
+#[test]
+fn static_functions_are_private_to_the_unit() {
+    c99! {
+        static int doubled(int x) {
+            return x * 2;
+        }
+
+        static long private_total = 0;
+
+        int use_helper(int x) {
+            private_total += doubled(x);
+            return doubled(x) + 1;
+        }
+
+        long read_private_total(void) {
+            return private_total;
+        }
+    }
+
+    assert_eq!(unsafe { use_helper(20) }, 41);
+    assert_eq!(unsafe { read_private_total() }, 40);
+}
+
+#[test]
+fn mutual_recursion() {
+    c99! {
+        int is_odd(int n);
+
+        int is_even(int n) {
+            return n == 0 ? 1 : is_odd(n - 1);
+        }
+
+        int is_odd(int n) {
+            return n == 0 ? 0 : is_even(n - 1);
+        }
+    }
+
+    assert_eq!(unsafe { is_even(10) }, 1);
+    assert_eq!(unsafe { is_odd(10) }, 0);
+    assert_eq!(unsafe { is_even(7) }, 0);
+    assert_eq!(unsafe { is_odd(7) }, 1);
+}
+
+#[test]
+fn c_names_that_are_rust_keywords() {
+    c99! {
+        int match(int type) {
+            int let = type * 2;
+            return let;
+        }
+
+        int fn(int impl) {
+            return impl + 1;
+        }
+
+        int uses_self(int self) {
+            int crate = self;
+            return crate * 10;
+        }
+    }
+
+    assert_eq!(unsafe { r#match(21) }, 42);
+    assert_eq!(unsafe { r#fn(41) }, 42);
+    assert_eq!(unsafe { uses_self(4) }, 40);
+}
+
+#[test]
+fn typedefs_of_scalar_types_resolve() {
+    c99! {
+        typedef int myint;
+        typedef unsigned long size_type;
+        typedef myint alias_of_alias;
+
+        size_type length(myint n) {
+            alias_of_alias doubled = n * 2;
+            return doubled;
+        }
+    }
+
+    assert_eq!(unsafe { length(21) }, 42);
+}
+
+#[test]
+fn a_void_function_without_a_return_statement() {
+    c99! {
+        int side_effect = 0;
+
+        void set_side_effect(int n) {
+            side_effect = n;
+        }
+
+        void does_nothing(void) {
+        }
+
+        void early_return(int n) {
+            if (n < 0) {
+                return;
+            }
+            side_effect = n * 2;
+        }
+    }
+
+    unsafe {
+        set_side_effect(7);
+        assert_eq!({ side_effect }, 7);
+        does_nothing();
+        early_return(-1);
+        assert_eq!({ side_effect }, 7);
+        early_return(21);
+        assert_eq!({ side_effect }, 42);
+    }
+}
+
+#[test]
+fn a_function_that_falls_off_its_end_returns_zero() {
+    c99! {
+        int no_return_on_every_path(int n) {
+            if (n > 0) {
+                return n;
+            }
+            /* C leaves the value indeterminate here; we return a zero. */
+        }
+
+        int infinite_loop_needs_no_return(int n) {
+            while (1) {
+                if (n > 100) {
+                    return n;
+                }
+                n = n * 2 + 1;
+            }
+        }
+    }
+
+    assert_eq!(unsafe { no_return_on_every_path(5) }, 5);
+    assert_eq!(unsafe { no_return_on_every_path(-5) }, 0);
+    assert_eq!(unsafe { infinite_loop_needs_no_return(1) }, 127);
+}
+
+#[test]
+fn inline_functions() {
+    c99! {
+        inline int quick(int x) {
+            return x + 1;
+        }
+
+        static inline int quicker(int x) {
+            return quick(x) + 1;
+        }
+
+        int use_both(int x) {
+            return quicker(x);
+        }
+    }
+
+    assert_eq!(unsafe { use_both(40) }, 42);
+}
+
+#[test]
+fn const_qualified_objects_are_readable() {
+    c99! {
+        const int limit = 10;
+
+        int under_limit(int n) {
+            const int local_limit = limit;
+            return n < local_limit;
+        }
+    }
+
+    assert_eq!(unsafe { under_limit(5) }, 1);
+    assert_eq!(unsafe { under_limit(50) }, 0);
+}
+
+#[test]
+fn declarations_may_shadow_in_inner_blocks() {
+    c99! {
+        int shadow(int x) {
+            int total = x;
+            {
+                int x = 100;
+                total += x;
+            }
+            total += x;
+            return total;
+        }
+    }
+
+    assert_eq!(unsafe { shadow(1) }, 102);
+}
+
+// ---------------------------------------------------------------------------
+// robustness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_deeply_nested_expression() {
+    // Code generation recurses on the caller's stack, so a real `c99!`
+    // invocation is the only honest way to test that it fits. `~` nests one
+    // level per token, which reaches the parser's limit with the least text.
+    c99! {
+        int deep(int x) {
+            return ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ x;
+        }
+    }
+
+    // 150 complements of a value are the value itself.
+    assert_eq!(unsafe { deep(12345) }, 12345);
+    assert_eq!(unsafe { deep(-1) }, -1);
+}
+
+#[test]
+fn a_deeply_nested_statement() {
+    c99! {
+        int nest(int n) {
+            if (n > 0) { if (n > 1) { if (n > 2) { if (n > 3) { if (n > 4) {
+            if (n > 5) { if (n > 6) { if (n > 7) { if (n > 8) { if (n > 9) {
+            if (n > 10) { if (n > 11) { if (n > 12) { if (n > 13) {
+                return 99;
+            } } } }
+            } } } } } }
+            } } } }
+            return n;
+        }
+    }
+
+    assert_eq!(unsafe { nest(20) }, 99);
+    assert_eq!(unsafe { nest(3) }, 3);
+}
+
+#[test]
+fn string_literal_mode_produces_the_same_code() {
+    c99! { r#"
+        int add_from_a_string(int a, int b) {
+            return a + b;
+        }
+    "# }
+
+    assert_eq!(unsafe { add_from_a_string(19, 23) }, 42);
+}
+
+// ---------------------------------------------------------------------------
+// corners
+// ---------------------------------------------------------------------------
+
+#[test]
+fn switch_corner_cases() {
+    c99! {
+        int empty_switch(int n) {
+            switch (n) { }
+            return n;
+        }
+
+        int body_is_not_a_block(int n) {
+            switch (n) n = 5;
+            return n;
+        }
+
+        int declarations_in_the_body(int n) {
+            switch (n) {
+                int local;
+                int with_init = 7;
+                case 1:
+                    local = 10;
+                    return local + with_init;
+                default:
+                    return 0;
+            }
+        }
+
+        int statements_before_the_first_label(int n) {
+            int x = 1;
+            switch (n) {
+                x = 99;
+                case 1: return x;
+                default: return 2;
+            }
+        }
+    }
+
+    // Without a label nothing in the body can run.
+    assert_eq!(unsafe { empty_switch(3) }, 3);
+    assert_eq!(unsafe { body_is_not_a_block(3) }, 3);
+    // The jump into `case 1:` skips the initialiser of `with_init`, which C
+    // leaves indeterminate and we leave zeroed.
+    assert_eq!(unsafe { declarations_in_the_body(1) }, 10);
+    assert_eq!(unsafe { declarations_in_the_body(2) }, 0);
+    assert_eq!(unsafe { statements_before_the_first_label(1) }, 1);
+}
+
+#[test]
+fn casts_chain_and_compare() {
+    c99! {
+        int cast_then_compare(long v) {
+            return (int) v < 5;
+        }
+
+        int cast_chain(double d) {
+            return (int)(char)(long) d;
+        }
+
+        void discard(int n) {
+            (void) n;
+        }
+    }
+
+    assert_eq!(unsafe { cast_then_compare(3) }, 1);
+    assert_eq!(unsafe { cast_then_compare(9) }, 0);
+    // 300 truncated to `char` is 44 on a target with 8-bit, signed `char`.
+    assert_eq!(unsafe { cast_chain(300.7) }, 44);
+    unsafe { discard(1) };
+}
+
+#[test]
+fn assignment_and_comma_as_expressions() {
+    c99! {
+        int chained_assignment(int n) {
+            int a, b;
+            a = b = n;
+            return a + b;
+        }
+
+        int comma_statement(int n) {
+            n++, n++;
+            return n;
+        }
+
+        int assignment_in_a_condition(int n) {
+            int x;
+            if ((x = n * 2)) {
+                return x;
+            }
+            return -1;
+        }
+    }
+
+    assert_eq!(unsafe { chained_assignment(4) }, 8);
+    assert_eq!(unsafe { comma_statement(1) }, 3);
+    assert_eq!(unsafe { assignment_in_a_condition(3) }, 6);
+    assert_eq!(unsafe { assignment_in_a_condition(0) }, -1);
+}
+
+#[test]
+fn extreme_constants() {
+    c99! {
+        unsigned long long largest(void) {
+            return 18446744073709551615ULL;
+        }
+
+        long long smallest(void) {
+            return -9223372036854775807LL - 1;
+        }
+
+        double infinite(void) {
+            return 1e400;
+        }
+
+        int is_infinite(void) {
+            double d = 1e400;
+            return d > 1e300;
+        }
+    }
+
+    assert_eq!(unsafe { largest() }, u64::MAX);
+    assert_eq!(unsafe { smallest() }, i64::MIN);
+    assert!(unsafe { infinite() }.is_infinite());
+    assert_eq!(unsafe { is_infinite() }, 1);
+}
+
+#[test]
+fn conditions_of_every_shape() {
+    c99! {
+        int bool_condition(int x) {
+            _Bool b = x;
+            return b ? 10 : 20;
+        }
+
+        int nested_conditions(int a, int b) {
+            return (a ? 1 : 0) ? b : -b;
+        }
+
+        int double_condition(double d) {
+            if (d) {
+                return 1;
+            }
+            return 0;
+        }
+    }
+
+    assert_eq!(unsafe { bool_condition(3) }, 10);
+    assert_eq!(unsafe { bool_condition(0) }, 20);
+    assert_eq!(unsafe { nested_conditions(1, 5) }, 5);
+    assert_eq!(unsafe { nested_conditions(0, 5) }, -5);
+    assert_eq!(unsafe { double_condition(0.5) }, 1);
+    assert_eq!(unsafe { double_condition(0.0) }, 0);
+}
+
+#[test]
+fn a_tentative_definition_completed_later() {
+    c99! {
+        int counter;
+        int counter = 7;
+
+        int read_counter(void) {
+            return counter;
+        }
+    }
+
+    assert_eq!(unsafe { read_counter() }, 7);
+    let value = unsafe { counter };
+    assert_eq!(value, 7);
+}
+
+#[test]
+fn conversions_between_every_scalar_kind() {
+    c99! {
+        double bool_to_double(int x) { _Bool b = x; double d = b; return d; }
+        float bool_to_float(int x) { _Bool b = x; float f = b; return f; }
+        int char_to_bool(char c) { _Bool b = c; return b; }
+        int double_to_bool(double d) { _Bool b = d; return b; }
+        long long_from_uchar(unsigned char c) { return c; }
+        unsigned char uchar_from_long(long v) { return v; }
+        int compare_after_cast(unsigned u) { return (int) u < 0; }
+        int negate_unsigned(unsigned u) { return -u == 0; }
+        double negate_double(double d) { return -d; }
+        int unary_plus_promotes(char c) { return +c; }
+    }
+
+    unsafe {
+        assert_eq!(bool_to_double(5), 1.0);
+        assert_eq!(bool_to_float(0), 0.0);
+        assert_eq!(char_to_bool(3), 1);
+        assert_eq!(double_to_bool(0.5), 1);
+        assert_eq!(double_to_bool(0.0), 0);
+        assert_eq!(long_from_uchar(200), 200);
+        // 300 does not fit in `unsigned char`; the value wraps.
+        assert_eq!(uchar_from_long(300), 44);
+        // `(int) 4294967295u` is -1, which is less than zero. Rust would read
+        // `x as i32 < 0` as the start of generic arguments, so the cast has to
+        // be parenthesised in the generated code.
+        assert_eq!(compare_after_cast(4_294_967_295), 1);
+        assert_eq!(negate_unsigned(0), 1);
+        assert_eq!(negate_double(1.5), -1.5);
+        assert_eq!(unary_plus_promotes(65), 65);
+    }
+}
+
+#[test]
+fn nested_switches_and_continue_from_inside_one() {
+    c99! {
+        int nested(int a, int b) {
+            int out = 0;
+            switch (a) {
+                case 1:
+                    switch (b) {
+                        case 1: out = 11; break;
+                        case 2: out = 12; break;
+                        default: out = 19;
+                    }
+                    break;
+                case 2:
+                    for (int i = 0; i < 3; i++) {
+                        switch (b) {
+                            case 1: out += 1; break;
+                            default: out += 10; continue;
+                        }
+                        out += 100;
+                    }
+                    break;
+                default:
+                    out = -1;
+            }
+            return out;
+        }
+    }
+
+    unsafe {
+        // The inner `break` leaves the inner `switch` only.
+        assert_eq!(nested(1, 1), 11);
+        assert_eq!(nested(1, 2), 12);
+        assert_eq!(nested(1, 9), 19);
+        // Each of three iterations adds 1 and then 100.
+        assert_eq!(nested(2, 1), 303);
+        // `continue` looks past the `switch` to the enclosing `for`, so the
+        // `out += 100` after the switch is skipped.
+        assert_eq!(nested(2, 5), 30);
+        assert_eq!(nested(9, 0), -1);
+    }
+}

@@ -1,0 +1,69 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump_as(Standard::C23,\nr#\"\n        _Static_assert(1, \"at file scope\");\n\n        struct S {\n            alignas(8) int aligned;\n            struct { int x; int y; };\n            static_assert(1);\n        };\n\n        enum Level : unsigned char { LOW, HIGH };\n\n        [[nodiscard]] int pick([[maybe_unused]] int n) {\n            static_assert(1, \"in a block\");\n            constexpr int limit = 4;\n            typeof(n) copy = n;\n            auto inferred = 1.5;\n            bool flag = true;\n            void *p = nullptr;\n            struct S empty = {};\n            return _Generic(n, int: alignof(int), default: sizeof(n)) + limit + copy;\n        }\n        \"#)"
+---
+translation-unit
+  static-assert "at file scope"
+    int 1
+  declaration
+    specifiers: struct S {…}
+    struct 'S' members
+      field 'aligned' : int
+      field '<anonymous>' : struct <anonymous> {…}
+        struct '<anonymous>' members
+          field 'x' : int
+          field 'y' : int
+      static-assert
+        int 1
+  declaration
+    specifiers: enum Level {…}
+    enum 'Level' enumerators
+      enumerator 'LOW'
+      enumerator 'HIGH'
+  function 'pick' : fn(n: int) -> int
+    body
+      static-assert "in a block"
+        int 1
+      declaration
+        specifiers: int [constexpr]
+        declarator 'limit' : int
+          init
+            int 4
+      declaration
+        specifiers: typeof<expr>
+        declarator 'copy' : typeof<expr>
+          init
+            ident 'n'
+      declaration
+        specifiers: auto [auto]
+        declarator 'inferred' : auto
+          init
+            float 1.5
+      declaration
+        specifiers: _Bool
+        declarator 'flag' : _Bool
+          init
+            true
+      declaration
+        specifiers: void
+        declarator 'p' : ptr<void>
+          init
+            nullptr
+      declaration
+        specifiers: struct S
+        declarator 'empty' : struct S
+          init
+            init-list
+      return
+        binary '+'
+          binary '+'
+            generic
+              controlling
+                ident 'n'
+              assoc int
+                alignof-type int
+              assoc default
+                sizeof-expr
+                  ident 'n'
+            ident 'limit'
+          ident 'copy'

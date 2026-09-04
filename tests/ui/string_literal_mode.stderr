@@ -1,0 +1,12 @@
+error: invalid digit '8' in octal constant '08' (at line 3, column 15 of the C source)
+ --> tests/ui/string_literal_mode.rs:5:15
+  |
+5 |   cinrs::c99! { r#"
+  |  _______________^
+6 | |     int ok(void) { return 0; }
+7 | |     int bad = 08;
+8 | | "# }
+  | |__^
+
+error: aborting due to 1 previous error
+

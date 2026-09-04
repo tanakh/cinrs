@@ -1,0 +1,85 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint prec(int a, int b, int c, int d, int e) {\n    a = b ? c : d, e;\n    a = b = c;\n    a += b * c - d / e % b;\n    a = b << c | d & e ^ b;\n    a = b < c == d > e;\n    a = !b && c || ~d;\n    a = -b + +c;\n    a = *&b;\n    return a;\n}\n\"#)"
+---
+translation-unit
+  function 'prec' : fn(a: int, b: int, c: int, d: int, e: int) -> int
+    body
+      expr-stmt
+        comma
+          assign '='
+            ident 'a'
+            conditional
+              cond
+                ident 'b'
+              then
+                ident 'c'
+              else
+                ident 'd'
+          ident 'e'
+      expr-stmt
+        assign '='
+          ident 'a'
+          assign '='
+            ident 'b'
+            ident 'c'
+      expr-stmt
+        assign '+='
+          ident 'a'
+          binary '-'
+            binary '*'
+              ident 'b'
+              ident 'c'
+            binary '%'
+              binary '/'
+                ident 'd'
+                ident 'e'
+              ident 'b'
+      expr-stmt
+        assign '='
+          ident 'a'
+          binary '|'
+            binary '<<'
+              ident 'b'
+              ident 'c'
+            binary '^'
+              binary '&'
+                ident 'd'
+                ident 'e'
+              ident 'b'
+      expr-stmt
+        assign '='
+          ident 'a'
+          binary '=='
+            binary '<'
+              ident 'b'
+              ident 'c'
+            binary '>'
+              ident 'd'
+              ident 'e'
+      expr-stmt
+        assign '='
+          ident 'a'
+          binary '||'
+            binary '&&'
+              unary '!'
+                ident 'b'
+              ident 'c'
+            unary '~'
+              ident 'd'
+      expr-stmt
+        assign '='
+          ident 'a'
+          binary '+'
+            unary '-'
+              ident 'b'
+            unary '+'
+              ident 'c'
+      expr-stmt
+        assign '='
+          ident 'a'
+          unary '*'
+            unary '&'
+              ident 'b'
+      return
+        ident 'a'

@@ -1,0 +1,11 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\n#define SIZE 4\n#define ARRAY(name) int name[SIZE]\nARRAY(a);\n#if SIZE > 2\nint big;\n#else\nint small;\n#endif\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: int
+    declarator 'a' : array<int, 4>
+  declaration
+    specifiers: int
+    declarator 'big' : int

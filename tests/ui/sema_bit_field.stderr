@@ -1,0 +1,14 @@
+error: bit-fields are not supported yet; declare the members as whole integers instead
+ --> tests/ui/sema_bit_field.rs:5:30
+  |
+5 |         unsigned int ready : 1;
+  |                              ^
+
+error: bit-fields are not supported yet; declare the members as whole integers instead
+ --> tests/ui/sema_bit_field.rs:6:29
+  |
+6 |         unsigned int mode : 3;
+  |                             ^
+
+error: aborting due to 2 previous errors
+

@@ -1,0 +1,28 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint fact(int n) {\n    if (n == 0) {\n        return 1;\n    } else {\n        return n * fact(n - 1);\n    }\n}\n\"#)"
+---
+translation-unit
+  function 'fact' : fn(n: int) -> int
+    body
+      if
+        cond
+          binary '=='
+            ident 'n'
+            int 0
+        then
+          block
+            return
+              int 1
+        else
+          block
+            return
+              binary '*'
+                ident 'n'
+                call
+                  callee
+                    ident 'fact'
+                  arg
+                    binary '-'
+                      ident 'n'
+                      int 1

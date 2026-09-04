@@ -1,0 +1,46 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int shadowing(int n) {\n            int total = 0;\n            { int x = 1; total += x; }\n            { int x = 20; { int x = 300; total += x; } total += x; }\n            if (n) goto out;\n            total = -1;\n        out:\n            return total;\n        }\n        \")"
+---
+mod __cinrs_unit_50c08a5c {
+    #[allow(…)]
+    pub unsafe extern "C" fn shadowing(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut total: ::core::ffi::c_int = 0;
+            let mut x: ::core::ffi::c_int = 0;
+            let mut x_1: ::core::ffi::c_int = 0;
+            let mut x_2: ::core::ffi::c_int = 0;
+            let mut __cinrs_state: u32 = 0;
+            'cfg: loop {
+                match __cinrs_state {
+                    0 => {
+                        total = 0;
+                        x = 1;
+                        total = total.wrapping_add(x);
+                        x_1 = 20;
+                        x_2 = 300;
+                        total = total.wrapping_add(x_2);
+                        total = total.wrapping_add(x_1);
+                        if n != 0 {
+                            __cinrs_state = 2;
+                        } else {
+                            __cinrs_state = 1;
+                        }
+                        continue 'cfg;
+                    }
+                    1 => {
+                        total = -1;
+                        __cinrs_state = 2;
+                        continue 'cfg;
+                    }
+                    2 => {
+                        return total;
+                    }
+                    _ => ::core::unreachable!(),
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_50c08a5c::*;

@@ -1,0 +1,8 @@
+error: '__VA_OPT__' requires C23 or later (this block is c99!)
+ --> tests/ui/c23_va_opt_in_a_c99_block.rs:5:35
+  |
+5 |     #define LOG(fmt, ...) log(fmt __VA_OPT__(,) __VA_ARGS__)
+  |                                   ^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

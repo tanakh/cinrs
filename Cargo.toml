@@ -1,0 +1,47 @@
+[workspace]
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tanakh/cinrs"
+description = "Write C code inside Rust"
+
+[workspace.dependencies]
+cinrs-core = { path = "crates/cinrs-core", version = "0.1.0" }
+cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+quote = "1.0"
+rustversion = "1.0.22"
+
+[package]
+name = "cinrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+readme = "README.md"
+
+[features]
+# Exact spans inside string-literal input; see the crate documentation.
+# Needs a nightly compiler.
+nightly = ["cinrs-macros/nightly"]
+
+[dependencies]
+cinrs-macros.workspace = true
+
+[dev-dependencies]
+rustversion.workspace = true
+ui_test = "0.30.7"
+
+[package.metadata.docs.rs]
+features = ["nightly"]
+
+[[test]]
+name = "ui"
+path = "tests/ui.rs"
+harness = false

@@ -1,0 +1,20 @@
+error: array size is not an integer constant expression
+ --> tests/ui/sema_array_errors.rs:6:15
+  |
+6 |     int table[length];
+  |               ^^^^^^
+
+error: variable length arrays are not supported yet; the bound of an array must be an integer constant expression
+ --> tests/ui/sema_array_errors.rs:9:20
+  |
+9 |         int values[n];
+  |                    ^
+
+error: array type 'int[3]' is not assignable
+  --> tests/ui/sema_array_errors.rs:16:9
+   |
+16 |         values = other;
+   |         ^^^^^^
+
+error: aborting due to 3 previous errors
+

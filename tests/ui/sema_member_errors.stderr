@@ -1,0 +1,20 @@
+error: no member named 'z' in 'struct Point'
+ --> tests/ui/sema_member_errors.rs:8:18
+  |
+8 |         return p.z;
+  |                  ^
+
+error: member reference base type 'int' is not a structure or union
+  --> tests/ui/sema_member_errors.rs:12:16
+   |
+12 |         return n.x;
+   |                ^
+
+error: member reference type 'struct Point' is not a pointer; did you mean to use '.'?
+  --> tests/ui/sema_member_errors.rs:16:16
+   |
+16 |         return p->x;
+   |                ^
+
+error: aborting due to 3 previous errors
+

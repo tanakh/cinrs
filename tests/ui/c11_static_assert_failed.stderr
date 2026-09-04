@@ -1,0 +1,26 @@
+error: static assertion failed: "int is not 64 bits"
+ --> tests/ui/c11_static_assert_failed.rs:5:5
+  |
+5 |     _Static_assert(sizeof(int) == 8, "int is not 64 bits");
+  |     ^^^^^^^^^^^^^^
+
+error: static assertion failed: "not in a struct either"
+ --> tests/ui/c11_static_assert_failed.rs:9:9
+  |
+9 |         _Static_assert(sizeof(int) == 8, "not in a struct either");
+  |         ^^^^^^^^^^^^^^
+
+error: static assertion failed: "not in a block either"
+  --> tests/ui/c11_static_assert_failed.rs:13:9
+   |
+13 |         _Static_assert(1 == 2, "not in a block either");
+   |         ^^^^^^^^^^^^^^
+
+error: static assertion failed
+  --> tests/ui/c11_static_assert_failed.rs:20:5
+   |
+20 |     static_assert(2 + 2 == 5);
+   |     ^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

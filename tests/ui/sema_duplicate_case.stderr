@@ -1,0 +1,16 @@
+error: duplicate case value '1'
+       note: previous case is at line 6
+ --> tests/ui/sema_duplicate_case.rs:7:13
+  |
+7 |             case 1 + 0: return 20;
+  |             ^^^^
+
+error: multiple 'default' labels in one 'switch'
+       note: previous 'default' is at line 8
+ --> tests/ui/sema_duplicate_case.rs:9:13
+  |
+9 |             default: return 40;
+  |             ^^^^^^^
+
+error: aborting due to 2 previous errors
+

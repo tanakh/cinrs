@@ -1,0 +1,63 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        typedef int (*BinOp)(int, int);\n\n        int add(int a, int b) { return a + b; }\n\n        int apply(BinOp op, int a, int b) {\n            if (op == 0) {\n                return 0;\n            }\n            return op(a, b);\n        }\n\n        int use_add(int a, int b) {\n            BinOp op = add;\n            return apply(op, a, b);\n        }\n        \")"
+---
+mod __cinrs_unit_ae1f887f {
+    #[allow(…)]
+    pub type BinOp = ::core::option::Option<
+        unsafe extern "C" fn(
+            ::core::ffi::c_int,
+            ::core::ffi::c_int,
+        ) -> ::core::ffi::c_int,
+    >;
+    #[allow(…)]
+    pub unsafe extern "C" fn add(
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return a.wrapping_add(b);
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn apply(
+        mut op: ::core::option::Option<
+            unsafe extern "C" fn(
+                ::core::ffi::c_int,
+                ::core::ffi::c_int,
+            ) -> ::core::ffi::c_int,
+        >,
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            if op.is_none() {
+                return 0;
+            }
+            return (op.expect("null function pointer"))(a, b);
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn use_add(
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut op: ::core::option::Option<
+                unsafe extern "C" fn(
+                    ::core::ffi::c_int,
+                    ::core::ffi::c_int,
+                ) -> ::core::ffi::c_int,
+            > = ::core::option::Option::Some(
+                add
+                    as unsafe extern "C" fn(
+                        ::core::ffi::c_int,
+                        ::core::ffi::c_int,
+                    ) -> ::core::ffi::c_int,
+            );
+            return apply(op, a, b);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_ae1f887f::*;

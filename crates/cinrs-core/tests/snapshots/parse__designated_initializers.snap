@@ -1,0 +1,56 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint a[6] = { [4] = 29, [2] = 15 };\nstruct Point { int x, y; };\nstruct Point pts[2] = { [0].x = 1, [0].y = 2, { .x = 3, .y = 4 } };\nint nested[2][2] = { { 1, 2 }, { 3, 4 } };\nchar msg[] = \"hi\";\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: int
+    declarator 'a' : array<int, 6>
+      init
+        init-list
+          element [4]
+            int 29
+          element [2]
+            int 15
+  declaration
+    specifiers: struct Point {…}
+    struct 'Point' members
+      field 'x' : int
+      field 'y' : int
+  declaration
+    specifiers: struct Point
+    declarator 'pts' : array<struct Point, 2>
+      init
+        init-list
+          element [0] .x
+            int 1
+          element [0] .y
+            int 2
+          element
+            init-list
+              element .x
+                int 3
+              element .y
+                int 4
+  declaration
+    specifiers: int
+    declarator 'nested' : array<array<int, 2>, 2>
+      init
+        init-list
+          element
+            init-list
+              element
+                int 1
+              element
+                int 2
+          element
+            init-list
+              element
+                int 3
+              element
+                int 4
+  declaration
+    specifiers: char
+    declarator 'msg' : array<char, ?>
+      init
+        string "hi" (2 elements)

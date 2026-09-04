@@ -1,0 +1,8 @@
+error: expected expression, found ';'
+ --> tests/ui/parse_error.rs:5:20
+  |
+5 |         return a + ;
+  |                    ^
+
+error: aborting due to 1 previous error
+

@@ -1,0 +1,26 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr#\"\n        _Noreturn void die(const char *why);\n\n        int checked(int n) {\n            if (n > 0) return n;\n            die(\"not positive\");\n        }\n        \"#)"
+---
+mod __cinrs_unit_a52dbf73 {
+    #[allow(…)]
+    unsafe extern "C" {
+        #[link_name = "die"]
+        pub fn __cinrs_a52dbf73_die(why: *const ::core::ffi::c_char);
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn checked(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            if n > 0 {
+                return n;
+            }
+            __cinrs_a52dbf73_die(
+                b"not positive\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
+                    as *const ::core::ffi::c_char,
+            );
+            ::core::unreachable!();
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_a52dbf73::*;

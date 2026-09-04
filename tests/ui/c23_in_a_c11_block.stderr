@@ -1,0 +1,14 @@
+error: 'nullptr' requires C23 or later (this block is c11!)
+ --> tests/ui/c23_in_a_c11_block.rs:6:16
+  |
+6 |         return nullptr;
+  |                ^^^^^^^
+
+error: 'constexpr' requires C23 or later (this block is c11!)
+ --> tests/ui/c23_in_a_c11_block.rs:9:5
+  |
+9 |     constexpr int LIMIT = 4;
+  |     ^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

@@ -1,0 +1,37 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nstruct S { int x; struct S *next; };\nint use(struct S *p, int (*fn)(int), int a[]) {\n    p->next->x++;\n    --p->x;\n    a[1] = fn(a[0]);\n    return (*p).x;\n}\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: struct S {…}
+    struct 'S' members
+      field 'x' : int
+      field 'next' : ptr<struct S>
+  function 'use' : fn(p: ptr<struct S>, fn: ptr<fn(int) -> int>, a: array<int, ?>) -> int
+    body
+      expr-stmt
+        postfix '++'
+          member '->x'
+            member '->next'
+              ident 'p'
+      expr-stmt
+        prefix '--'
+          member '->x'
+            ident 'p'
+      expr-stmt
+        assign '='
+          index
+            ident 'a'
+            int 1
+          call
+            callee
+              ident 'fn'
+            arg
+              index
+                ident 'a'
+                int 0
+      return
+        member '.x'
+          unary '*'
+            ident 'p'

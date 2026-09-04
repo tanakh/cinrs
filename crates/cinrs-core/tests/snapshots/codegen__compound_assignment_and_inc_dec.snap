@@ -1,0 +1,27 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int mix(int x) {\n            unsigned char c = 200;\n            c += 100;\n            x <<= 2;\n            x %= 7;\n            int y = x++ + ++x;\n            return y + c;\n        }\n        \")"
+---
+mod __cinrs_unit_03156086 {
+    #[allow(…)]
+    pub unsafe extern "C" fn mix(mut x: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut c: ::core::ffi::c_uchar = 200;
+            c = (c as ::core::ffi::c_int).wrapping_add(100) as ::core::ffi::c_uchar;
+            x = x.wrapping_shl(2);
+            x = x % 7;
+            let mut y: ::core::ffi::c_int = ({
+                let __cinrs_tmp0 = x;
+                x = x.wrapping_add(1);
+                __cinrs_tmp0
+            })
+                .wrapping_add({
+                    x = x.wrapping_add(1);
+                    x
+                });
+            return y.wrapping_add(c as ::core::ffi::c_int);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_03156086::*;

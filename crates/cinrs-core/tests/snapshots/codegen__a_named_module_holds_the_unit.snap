@@ -1,0 +1,22 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        #pragma cinrs module \"geometry\"\n\n        struct Point { int x; int y; };\n\n        int manhattan(struct Point p) {\n            return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);\n        }\n        \"#)"
+---
+pub mod geometry {
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Point {
+        pub x: ::core::ffi::c_int,
+        pub y: ::core::ffi::c_int,
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn manhattan(mut p: Point) -> ::core::ffi::c_int {
+        unsafe {
+            return (if p.x < 0 { p.x.wrapping_neg() } else { p.x })
+                .wrapping_add(if p.y < 0 { p.y.wrapping_neg() } else { p.y });
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use geometry::*;

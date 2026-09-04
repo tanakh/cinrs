@@ -1,0 +1,22 @@
+error: va_list is only supported as a local variable or parameter
+  --> tests/ui/sema_va_errors.rs:11:17
+   |
+11 |         va_list saved;
+   |                 ^^^^^
+
+error: 'char' is promoted to 'int' when passed through '...'; you should pass 'int' not 'char' to 'va_arg'
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/sema_va_errors.rs:18:27
+   |
+18 |         return va_arg(ap, char);
+   |                           ^^^^
+
+error: 'va_start' used in a function with fixed arguments
+       note: in expansion of macro 'va_start', defined in <cinrs>/stdarg.h:19
+  --> tests/ui/sema_va_errors.rs:22:9
+   |
+22 |         va_start(ap, n);
+   |         ^^^^^^^^
+
+error: aborting due to 3 previous errors
+

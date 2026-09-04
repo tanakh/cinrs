@@ -1,0 +1,8 @@
+error: 'break' statement not in a loop or 'switch' statement
+ --> tests/ui/sema_break_outside_loop.rs:5:9
+  |
+5 |         break;
+  |         ^^^^^
+
+error: aborting due to 1 previous error
+

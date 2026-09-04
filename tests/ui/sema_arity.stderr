@@ -1,0 +1,9 @@
+error: too few arguments to function call, expected 2, have 1
+       note: 'add' is declared at line 5
+  --> tests/ui/sema_arity.rs:10:16
+   |
+10 |         return add(1);
+   |                ^^^
+
+error: aborting due to 1 previous error
+

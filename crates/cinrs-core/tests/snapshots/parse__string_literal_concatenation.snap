@@ -1,0 +1,15 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nconst char *msg = \"hello, \" \"world\" \"\\n\";\nconst char *wide = \"a\" L\"b\";\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: const char
+    declarator 'msg' : ptr<const char>
+      init
+        string "hello, " "world" "\n" (13 elements)
+  declaration
+    specifiers: const char
+    declarator 'wide' : ptr<const char>
+      init
+        string L"a" "b" (2 elements)

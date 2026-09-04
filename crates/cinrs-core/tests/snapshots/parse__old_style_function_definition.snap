@@ -1,0 +1,26 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint add(a, b)\n    int a;\n    int b;\n{\n    return a + b;\n}\nstatic inline int twice(int x) { return x + x; }\nextern int global;\n\"#)"
+---
+translation-unit
+  function 'add' : fn(<K&R> a, b) -> int
+    kr-param-decl
+      specifiers: int
+      declarator 'a' : int
+    kr-param-decl
+      specifiers: int
+      declarator 'b' : int
+    body
+      return
+        binary '+'
+          ident 'a'
+          ident 'b'
+  function 'twice' : fn(x: int) -> int [static] [inline]
+    body
+      return
+        binary '+'
+          ident 'x'
+          ident 'x'
+  declaration
+    specifiers: int [extern]
+    declarator 'global' : int

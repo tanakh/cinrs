@@ -1,0 +1,29 @@
+error: indirection requires pointer operand ('int' invalid)
+ --> tests/ui/sema_pointer_errors.rs:6:16
+  |
+6 |         return *n;
+  |                ^
+
+error: assigning to 'int *' from incompatible type 'char *'
+       note: the pointee types differ; add a cast if the conversion is intended
+  --> tests/ui/sema_pointer_errors.rs:10:13
+   |
+10 |         p = s;
+   |             ^
+
+error: assigning to 'int *' from incompatible type 'int'
+       note: a pointer cannot be made from an integer without a cast; only the constant 0 is a null pointer
+  --> tests/ui/sema_pointer_errors.rs:14:13
+   |
+14 |         p = n;
+   |             ^
+
+error: returning 'int *' from a function with incompatible result type 'int'
+       note: a pointer cannot be converted to an integer without a cast
+  --> tests/ui/sema_pointer_errors.rs:18:16
+   |
+18 |         return p;
+   |                ^
+
+error: aborting due to 4 previous errors
+

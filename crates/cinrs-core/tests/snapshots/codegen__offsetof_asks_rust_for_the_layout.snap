@@ -1,0 +1,28 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        #include <stddef.h>\n\n        struct Mixed { char tag; int count; double weight; };\n\n        size_t weight_offset(void) {\n            return offsetof(struct Mixed, weight);\n        }\n        \")"
+---
+mod __cinrs_unit_8605ad16 {
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Mixed {
+        pub tag: ::core::ffi::c_char,
+        pub count: ::core::ffi::c_int,
+        pub weight: ::core::ffi::c_double,
+    }
+    #[allow(…)]
+    pub type size_t = ::core::ffi::c_ulong;
+    #[allow(…)]
+    pub type ptrdiff_t = ::core::ffi::c_long;
+    #[allow(…)]
+    pub type wchar_t = ::core::ffi::c_int;
+    #[allow(…)]
+    pub unsafe extern "C" fn weight_offset() -> ::core::ffi::c_ulong {
+        unsafe {
+            return ::core::mem::offset_of!(Mixed, weight) as ::core::ffi::c_ulong;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_8605ad16::*;

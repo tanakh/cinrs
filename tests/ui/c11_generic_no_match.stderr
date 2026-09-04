@@ -1,0 +1,15 @@
+error: '_Generic' has no association for the controlling expression's type 'double'
+ --> tests/ui/c11_generic_no_match.rs:6:16
+  |
+6 |         return _Generic(d, int: 1, char *: 2);
+  |                ^^^^^^^^
+
+error: '_Generic' has two associations for the compatible type 'int'
+       note: the first is at line 10
+  --> tests/ui/c11_generic_no_match.rs:10:36
+   |
+10 |         return _Generic(n, int: 1, signed int: 2, default: 0);
+   |                                    ^^^^^^
+
+error: aborting due to 2 previous errors
+

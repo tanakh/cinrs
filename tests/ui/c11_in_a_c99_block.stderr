@@ -1,0 +1,14 @@
+error: '_Static_assert' requires C11 or later (this block is c99!)
+ --> tests/ui/c11_in_a_c99_block.rs:7:5
+  |
+7 |     _Static_assert(1, "not in C99");
+  |     ^^^^^^^^^^^^^^
+
+error: '_Generic' requires C11 or later (this block is c99!)
+  --> tests/ui/c11_in_a_c99_block.rs:10:16
+   |
+10 |         return _Generic(1, int: 1, default: 0);
+   |                ^^^^^^^^
+
+error: aborting due to 2 previous errors
+

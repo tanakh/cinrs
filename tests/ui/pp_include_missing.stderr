@@ -1,0 +1,14 @@
+error: <nowhere.h> file not found; searched: <cinrs>
+ --> tests/ui/pp_include_missing.rs:7:5
+  |
+7 |     #include <nowhere.h>
+  |     ^
+
+error: "also_nowhere.h" file not found; searched: tests/ui, <cinrs>
+ --> tests/ui/pp_include_missing.rs:8:5
+  |
+8 |     #include "also_nowhere.h"
+  |     ^
+
+error: aborting due to 2 previous errors
+

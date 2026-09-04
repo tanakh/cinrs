@@ -1,0 +1,21 @@
+error: called object 'n' is not a function
+ --> tests/ui/sema_call_and_address.rs:6:16
+  |
+6 |         return n(1);
+  |                ^
+
+error: cannot take the address of an rvalue of type 'int'
+  --> tests/ui/sema_call_and_address.rs:10:18
+   |
+10 |         int *p = &(n + 1);
+   |                  ^
+
+error: cannot initialize 'n', of type 'int', with an expression of type 'char *'
+       note: a pointer cannot be converted to an integer without a cast
+  --> tests/ui/sema_call_and_address.rs:15:17
+   |
+15 |         int n = "text";
+   |                 ^^^^^^
+
+error: aborting due to 3 previous errors
+

@@ -1,0 +1,8 @@
+error: #else without #if
+ --> tests/ui/pp_stray_else.rs:5:5
+  |
+5 |     #else
+  |     ^
+
+error: aborting due to 1 previous error
+

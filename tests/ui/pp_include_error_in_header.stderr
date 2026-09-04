@@ -1,0 +1,8 @@
+error: tests/ui/include/bad.h:6:12: use of undeclared identifier 'undeclared_thing'
+ --> tests/ui/pp_include_error_in_header.rs:8:5
+  |
+8 |     #include "include/bad.h"
+  |     ^
+
+error: aborting due to 1 previous error
+

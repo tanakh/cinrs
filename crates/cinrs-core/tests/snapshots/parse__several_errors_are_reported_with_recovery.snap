@@ -1,0 +1,8 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_diagnostics(r#\"\nint bad1(void) { return 1 }\nint ok(void) { return 0; }\nint bad2 = ;\nint x = 08;\nint bad3(void) { int y = ; return y; }\n\"#)"
+---
+2:27: error: expected ';' after 'return' statement, found '}'
+4:12: error: expected expression, found ';'
+5:9: error: invalid digit '8' in octal constant '08'
+6:26: error: expected expression, found ';'

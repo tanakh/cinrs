@@ -1,0 +1,36 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int sum(int n) {\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                if (i == 3) continue;\n                total += i;\n            }\n            while (n > 0) {\n                n--;\n                if (n == 1) break;\n            }\n            return total;\n        }\n        \")"
+---
+mod __cinrs_unit_a53a4690 {
+    #[allow(…)]
+    pub unsafe extern "C" fn sum(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut total: ::core::ffi::c_int = 0;
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < n) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        if i == 3 {
+                            break 'l0_body;
+                        }
+                        total = total.wrapping_add(i);
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            'l1: while n > 0 {
+                n = n.wrapping_sub(1);
+                if n == 1 {
+                    break 'l1;
+                }
+            }
+            return total;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_a53a4690::*;

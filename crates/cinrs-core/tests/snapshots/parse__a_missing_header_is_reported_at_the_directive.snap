@@ -1,0 +1,5 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_diagnostics(r#\"\n#include <nowhere.h>\nint x;\n\"#)"
+---
+2:1: error: <nowhere.h> file not found; searched: <cinrs>

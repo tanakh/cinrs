@@ -1,0 +1,29 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint (*fp[3])(int, ...);\nconst char *const *p;\nint *f(void);\nchar (*g(int))[10];\nint matrix[2][3];\nvoid (*signal(int, void (*)(int)))(int);\nint arr[];\nvoid vla(int n, int a[static const 4], int b[*]);\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: int
+    declarator 'fp' : array<ptr<fn(int, ...) -> int>, 3>
+  declaration
+    specifiers: const char
+    declarator 'p' : ptr<const ptr<const char>>
+  declaration
+    specifiers: int
+    declarator 'f' : fn(void) -> ptr<int>
+  declaration
+    specifiers: char
+    declarator 'g' : fn(int) -> ptr<array<char, 10>>
+  declaration
+    specifiers: int
+    declarator 'matrix' : array<array<int, 3>, 2>
+  declaration
+    specifiers: void
+    declarator 'signal' : fn(int, ptr<fn(int) -> void>) -> ptr<fn(int) -> void>
+  declaration
+    specifiers: int
+    declarator 'arr' : array<int, ?>
+  declaration
+    specifiers: void
+    declarator 'vla' : fn(n: int, a: array<int, 4, static, const>, b: array<int, *>) -> void

@@ -1,0 +1,60 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int find(const int *values, int n, int needle) {\n            int i = 0;\n        loop:\n            if (i >= n) goto missing;\n            if (values[i] == needle) goto found;\n            i++;\n            goto loop;\n        found:\n            return i;\n        missing:\n            return -1;\n        }\n        \")"
+---
+mod __cinrs_unit_3db7f700 {
+    #[allow(…)]
+    pub unsafe extern "C" fn find(
+        mut values: *const ::core::ffi::c_int,
+        mut n: ::core::ffi::c_int,
+        mut needle: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut i: ::core::ffi::c_int = 0;
+            let mut __cinrs_state: u32 = 0;
+            'cfg: loop {
+                match __cinrs_state {
+                    0 => {
+                        i = 0;
+                        __cinrs_state = 1;
+                        continue 'cfg;
+                    }
+                    1 => {
+                        if i >= n {
+                            __cinrs_state = 2;
+                        } else {
+                            __cinrs_state = 3;
+                        }
+                        continue 'cfg;
+                    }
+                    2 => {
+                        return -1;
+                    }
+                    3 => {
+                        if ({
+                            let __cinrs_tmp0 = values.offset(i as isize);
+                            (*__cinrs_tmp0)
+                        }) == needle
+                        {
+                            __cinrs_state = 4;
+                        } else {
+                            __cinrs_state = 5;
+                        }
+                        continue 'cfg;
+                    }
+                    4 => {
+                        return i;
+                    }
+                    5 => {
+                        i = i.wrapping_add(1);
+                        __cinrs_state = 1;
+                        continue 'cfg;
+                    }
+                    _ => ::core::unreachable!(),
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_3db7f700::*;

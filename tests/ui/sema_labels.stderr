@@ -1,0 +1,15 @@
+error: use of undeclared label 'dnoe'
+ --> tests/ui/sema_labels.rs:6:18
+  |
+6 |             goto dnoe;
+  |                  ^^^^
+
+error: redefinition of label 'again'
+       note: previous definition of label 'again' is at line 14
+  --> tests/ui/sema_labels.rs:17:5
+   |
+17 |     again:
+   |     ^^^^^
+
+error: aborting due to 2 previous errors
+

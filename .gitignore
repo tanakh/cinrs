@@ -1,0 +1,5 @@
+/target
+
+# insta writes these next to the blessed snapshots when one fails
+*.snap.new
+*.pending-snap

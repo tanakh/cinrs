@@ -1,0 +1,45 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\ntypedef int T;\ntypedef struct Node { int v; struct Node *next; } Node;\nT * x;\nint y = (T)-1;\nNode n;\nint U;\nvoid f(void) { U * y; }\nvoid shadow(void) { int T; T * 2; }\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: int [typedef]
+    declarator 'T' : int
+  declaration
+    specifiers: struct Node {…} [typedef]
+    struct 'Node' members
+      field 'v' : int
+      field 'next' : ptr<struct Node>
+    declarator 'Node' : struct Node {…}
+  declaration
+    specifiers: typedef-name T
+    declarator 'x' : ptr<typedef-name T>
+  declaration
+    specifiers: int
+    declarator 'y' : int
+      init
+        cast to typedef-name T
+          unary '-'
+            int 1
+  declaration
+    specifiers: typedef-name Node
+    declarator 'n' : typedef-name Node
+  declaration
+    specifiers: int
+    declarator 'U' : int
+  function 'f' : fn(void) -> void
+    body
+      expr-stmt
+        binary '*'
+          ident 'U'
+          ident 'y'
+  function 'shadow' : fn(void) -> void
+    body
+      declaration
+        specifiers: int
+        declarator 'T' : int
+      expr-stmt
+        binary '*'
+          ident 'T'
+          int 2

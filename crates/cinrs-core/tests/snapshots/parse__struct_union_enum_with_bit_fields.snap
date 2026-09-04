@@ -1,0 +1,29 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nstruct Flags {\n    unsigned a : 1;\n    unsigned : 3;\n    signed b : 5, c : 2;\n    struct Flags *next;\n};\nunion U { int i; double d; char bytes[8]; };\nenum Color { Red, Green = 7, Blue, };\nenum Color pick(union U u);\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: struct Flags {…}
+    struct 'Flags' members
+      field 'a' : unsigned int : 1
+      field '<anonymous>' : unsigned int : 3
+      field 'b' : int : 5
+      field 'c' : int : 2
+      field 'next' : ptr<struct Flags>
+  declaration
+    specifiers: union U {…}
+    union 'U' members
+      field 'i' : int
+      field 'd' : double
+      field 'bytes' : array<char, 8>
+  declaration
+    specifiers: enum Color {…}
+    enum 'Color' enumerators
+      enumerator 'Red'
+      enumerator 'Green'
+        int 7
+      enumerator 'Blue'
+  declaration
+    specifiers: enum Color
+    declarator 'pick' : fn(u: union U) -> enum Color

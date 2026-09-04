@@ -1,0 +1,32 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int counter = 0;\n        static long private_total;\n\n        static void bump(void) {\n            static int calls = 1;\n            calls++;\n            counter += calls;\n            private_total += counter;\n        }\n\n        int match(int type) {\n            bump();\n            return type + counter;\n        }\n        \")"
+---
+mod __cinrs_unit_716967fa {
+    #[allow(…)]
+    pub static mut counter: ::core::ffi::c_int = 0;
+    #[allow(…)]
+    static mut private_total: ::core::ffi::c_long = 0;
+    #[allow(…)]
+    static mut __cinrs_static_716967fa_bump_calls: ::core::ffi::c_int = 1;
+    #[allow(…)]
+    unsafe extern "C" fn bump() {
+        unsafe {
+            __cinrs_static_716967fa_bump_calls = __cinrs_static_716967fa_bump_calls
+                .wrapping_add(1);
+            counter = counter.wrapping_add(__cinrs_static_716967fa_bump_calls);
+            private_total = private_total.wrapping_add(counter as ::core::ffi::c_long);
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn r#match(
+        mut r#type: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            bump();
+            return r#type.wrapping_add(counter);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_716967fa::*;

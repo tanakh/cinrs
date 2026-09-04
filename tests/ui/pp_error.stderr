@@ -1,0 +1,8 @@
+error: #error this code needs at least 32 bits
+ --> tests/ui/pp_error.rs:6:5
+  |
+6 |     #error this code needs at least 32 bits
+  |     ^
+
+error: aborting due to 1 previous error
+

@@ -1,0 +1,20 @@
+error: invalid application of 'sizeof' to an incomplete type 'struct Opaque'
+ --> tests/ui/sema_incomplete_type.rs:8:23
+  |
+8 |         return sizeof(struct Opaque);
+  |                       ^^^^^^
+
+error: invalid application of 'sizeof' to an incomplete type 'struct NeverMentioned'
+  --> tests/ui/sema_incomplete_type.rs:12:23
+   |
+12 |         return sizeof(struct NeverMentioned);
+   |                       ^^^^^^
+
+error: variable 'value' has incomplete type 'struct Opaque'
+  --> tests/ui/sema_incomplete_type.rs:16:9
+   |
+16 |         struct Opaque value;
+   |         ^^^^^^
+
+error: aborting due to 3 previous errors
+

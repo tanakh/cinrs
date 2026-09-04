@@ -1,0 +1,84 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nint classify(int n) {\n    int total = 0;\n    for (int i = 0; i < n; i++) {\n        switch (i % 3) {\n        case 0:\n            total += 1;\n            break;\n        case 1:\n            continue;\n        default:\n            goto done;\n        }\n    }\n    do { total--; } while (total > 0);\n    while (total < 0) total++;\n    if (total) total = 1; else total = 2;\ndone:\n    return total;\n}\n\"#)"
+---
+translation-unit
+  function 'classify' : fn(n: int) -> int
+    body
+      declaration
+        specifiers: int
+        declarator 'total' : int
+          init
+            int 0
+      for
+        init
+          declaration
+            specifiers: int
+            declarator 'i' : int
+              init
+                int 0
+        cond
+          binary '<'
+            ident 'i'
+            ident 'n'
+        step
+          postfix '++'
+            ident 'i'
+        body
+          block
+            switch
+              cond
+                binary '%'
+                  ident 'i'
+                  int 3
+              body
+                block
+                  case
+                    value
+                      int 0
+                    expr-stmt
+                      assign '+='
+                        ident 'total'
+                        int 1
+                  break
+                  case
+                    value
+                      int 1
+                    continue
+                  default
+                    goto 'done'
+      do-while
+        body
+          block
+            expr-stmt
+              postfix '--'
+                ident 'total'
+        cond
+          binary '>'
+            ident 'total'
+            int 0
+      while
+        cond
+          binary '<'
+            ident 'total'
+            int 0
+        body
+          expr-stmt
+            postfix '++'
+              ident 'total'
+      if
+        cond
+          ident 'total'
+        then
+          expr-stmt
+            assign '='
+              ident 'total'
+              int 1
+        else
+          expr-stmt
+            assign '='
+              ident 'total'
+              int 2
+      label 'done'
+        return
+          ident 'total'

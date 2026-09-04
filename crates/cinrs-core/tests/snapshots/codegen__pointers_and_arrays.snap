@@ -1,0 +1,87 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int sum(const int *values, int n) {\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                total += values[i];\n            }\n            return total;\n        }\n\n        void reverse(int values[], int n) {\n            int *front = values;\n            int *back = values + n - 1;\n            while (front < back) {\n                int t = *front;\n                *front++ = *back;\n                *back-- = t;\n            }\n        }\n\n        long span(const char *from, const char *to) {\n            return to - from;\n        }\n\n        int first(void) {\n            int grid[2][3] = {{1, 2, 3}, {4, 5, 6}};\n            int *p = &grid[1][2];\n            return *p + grid[0][0] + (p == 0);\n        }\n        \")"
+---
+mod __cinrs_unit_270870a9 {
+    #[allow(…)]
+    pub unsafe extern "C" fn sum(
+        mut values: *const ::core::ffi::c_int,
+        mut n: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut total: ::core::ffi::c_int = 0;
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < n) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        total = total
+                            .wrapping_add({
+                                let __cinrs_tmp0 = values.offset(i as isize);
+                                (*__cinrs_tmp0)
+                            });
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            return total;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn reverse(
+        mut values: *mut ::core::ffi::c_int,
+        mut n: ::core::ffi::c_int,
+    ) {
+        unsafe {
+            let mut front: *mut ::core::ffi::c_int = values;
+            let mut back: *mut ::core::ffi::c_int = values.offset(n as isize).offset(-1);
+            'l0: while front < back {
+                let mut t: ::core::ffi::c_int = (*front);
+                let __cinrs_tmp1 = ({
+                    let __cinrs_tmp0 = front;
+                    front = front.offset(1);
+                    __cinrs_tmp0
+                });
+                (*__cinrs_tmp1) = (*back);
+                let __cinrs_tmp3 = ({
+                    let __cinrs_tmp2 = back;
+                    back = back.offset(-1);
+                    __cinrs_tmp2
+                });
+                (*__cinrs_tmp3) = t;
+            }
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn span(
+        mut from: *const ::core::ffi::c_char,
+        mut to: *const ::core::ffi::c_char,
+    ) -> ::core::ffi::c_long {
+        unsafe {
+            return to.offset_from(from) as ::core::ffi::c_long;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn first() -> ::core::ffi::c_int {
+        unsafe {
+            let mut grid: [[::core::ffi::c_int; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
+            let mut p: *mut ::core::ffi::c_int = ((&raw mut grid)
+                .cast::<[::core::ffi::c_int; 3]>()
+                .offset(1) as *mut ::core::ffi::c_int)
+                .offset(2);
+            return (*p)
+                .wrapping_add({
+                    let __cinrs_tmp0 = ((&raw mut grid)
+                        .cast::<[::core::ffi::c_int; 3]>()
+                        .offset(0) as *mut ::core::ffi::c_int)
+                        .offset(0);
+                    (*__cinrs_tmp0)
+                })
+                .wrapping_add((p.is_null()) as ::core::ffi::c_int);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_270870a9::*;

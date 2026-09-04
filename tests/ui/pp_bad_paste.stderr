@@ -1,0 +1,9 @@
+error: pasting '+' and '1' does not give a valid token
+       note: in expansion of macro 'JOIN', defined at line 7
+  --> tests/ui/pp_bad_paste.rs:10:16
+   |
+10 |         return JOIN(+, 1);
+   |                ^^^^
+
+error: aborting due to 1 previous error
+

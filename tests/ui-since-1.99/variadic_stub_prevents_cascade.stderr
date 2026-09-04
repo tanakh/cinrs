@@ -1,0 +1,8 @@
+error: implicit declaration of function 'missing_helper' is invalid in C99
+  --> tests/ui-since-1.99/variadic_stub_prevents_cascade.rs:11:16
+   |
+11 |         return missing_helper(va_arg(ap, int));
+   |                ^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

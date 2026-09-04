@@ -1,0 +1,26 @@
+error: invalid digit '8' in octal constant '08'
+ --> tests/ui/multiple_errors.rs:4:13
+  |
+4 |     int a = 08;
+  |             ^^
+
+error: invalid digit '9' in octal constant '09'
+ --> tests/ui/multiple_errors.rs:6:13
+  |
+6 |     int b = 09;
+  |             ^^
+
+error: expected ';' after 'return' statement, found '}'
+  --> tests/ui/multiple_errors.rs:10:30
+   |
+10 |     int bad(void) { return 1 }
+   |                              ^
+
+error: expected ';' after member declaration, found '}'
+  --> tests/ui/multiple_errors.rs:12:22
+   |
+12 |     struct S { int x };
+   |                      ^
+
+error: aborting due to 4 previous errors
+

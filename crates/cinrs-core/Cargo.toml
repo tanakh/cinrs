@@ -1,0 +1,21 @@
+[package]
+name = "cinrs-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Implementation of the cinrs C front end (lexer, parser, diagnostics)"
+
+[lib]
+name = "cinrs_core"
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+rustversion.workspace = true
+
+[dev-dependencies]
+insta = "1"
+prettyplease = "0.2"
+syn = { version = "2", features = ["full", "parsing", "printing"] }

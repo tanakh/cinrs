@@ -1,0 +1,57 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\nstruct P { int x, y; };\ntypedef struct P P;\nint f(void) {\n    struct P q = (struct P){ .x = 1, .y = 2 };\n    int *v = (int[]){ 1, 2, 3 };\n    long l = (long)(P){ 0, 0 }.x;\n    return (int)(char)l + v[0] + q.x;\n}\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: struct P {…}
+    struct 'P' members
+      field 'x' : int
+      field 'y' : int
+  declaration
+    specifiers: struct P [typedef]
+    declarator 'P' : struct P
+  function 'f' : fn(void) -> int
+    body
+      declaration
+        specifiers: struct P
+        declarator 'q' : struct P
+          init
+            compound-literal struct P
+              element .x
+                int 1
+              element .y
+                int 2
+      declaration
+        specifiers: int
+        declarator 'v' : ptr<int>
+          init
+            compound-literal array<int, ?>
+              element
+                int 1
+              element
+                int 2
+              element
+                int 3
+      declaration
+        specifiers: long
+        declarator 'l' : long
+          init
+            cast to long
+              member '.x'
+                compound-literal typedef-name P
+                  element
+                    int 0
+                  element
+                    int 0
+      return
+        binary '+'
+          binary '+'
+            cast to int
+              cast to char
+                ident 'l'
+            index
+              ident 'v'
+              int 0
+          member '.x'
+            ident 'q'

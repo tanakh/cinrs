@@ -1,0 +1,8 @@
+error: tests/ui/include/loop.h:3:1: #include nested too deeply (more than 200 files)
+ --> tests/ui/pp_include_depth.rs:4:5
+  |
+4 |     #include "include/loop.h"
+  |     ^
+
+error: aborting due to 1 previous error
+

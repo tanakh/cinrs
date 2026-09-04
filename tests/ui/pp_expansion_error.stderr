@@ -1,0 +1,9 @@
+error: use of undeclared identifier 'factor'
+       note: in expansion of macro 'SCALE', defined at line 5
+ --> tests/ui/pp_expansion_error.rs:8:16
+  |
+8 |         return SCALE(n);
+  |                ^^^^^
+
+error: aborting due to 1 previous error
+

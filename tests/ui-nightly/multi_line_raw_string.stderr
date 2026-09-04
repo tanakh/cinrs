@@ -1,0 +1,14 @@
+error: invalid digit '8' in octal constant '08'
+ --> tests/ui-nightly/multi_line_raw_string.rs:7:15
+  |
+7 |     int bad = 08;
+  |               ^^
+
+error: use of undeclared identifier 'nope'
+ --> tests/ui-nightly/multi_line_raw_string.rs:8:30
+  |
+8 |     int worse(void) { return nope; }
+  |                              ^^^^
+
+error: aborting due to 2 previous errors
+

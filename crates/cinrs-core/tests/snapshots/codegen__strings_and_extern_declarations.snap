@@ -1,0 +1,49 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        unsigned long strlen(const char *s);\n        int printf(const char *fmt, ...);\n        extern int errno;\n\n        static const char *messages[2] = {\"ok\", \"failed\"};\n\n        int report(int failed) {\n            const char *message = messages[failed != 0];\n            printf(\"%s (%lu)\\n\", message, strlen(message));\n            return errno;\n        }\n        \"#)"
+---
+mod __cinrs_unit_5cdf88e1 {
+    #[allow(…)]
+    unsafe extern "C" {
+        #[link_name = "errno"]
+        pub static mut __cinrs_5cdf88e1_errno: ::core::ffi::c_int;
+        #[link_name = "strlen"]
+        pub fn __cinrs_5cdf88e1_strlen(
+            s: *const ::core::ffi::c_char,
+        ) -> ::core::ffi::c_ulong;
+        #[link_name = "printf"]
+        pub fn __cinrs_5cdf88e1_printf(
+            fmt: *const ::core::ffi::c_char,
+            ...
+        ) -> ::core::ffi::c_int;
+    }
+    #[allow(…)]
+    static mut messages: [*const ::core::ffi::c_char; 2] = [
+        b"ok\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
+            as *const ::core::ffi::c_char,
+        b"failed\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
+            as *const ::core::ffi::c_char,
+    ];
+    #[allow(…)]
+    pub unsafe extern "C" fn report(
+        mut failed: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut message: *const ::core::ffi::c_char = {
+                let __cinrs_tmp0 = (&raw mut messages)
+                    .cast::<*const ::core::ffi::c_char>()
+                    .offset((failed != 0) as ::core::ffi::c_int as isize);
+                (*__cinrs_tmp0)
+            };
+            __cinrs_5cdf88e1_printf(
+                b"%s (%lu)\n\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
+                    as *const ::core::ffi::c_char,
+                message,
+                __cinrs_5cdf88e1_strlen(message),
+            );
+            return __cinrs_5cdf88e1_errno;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_5cdf88e1::*;

@@ -1,0 +1,44 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int counter;\n        enum Level { Low, High };\n\n        int bump(int counter) {\n            int Low = counter + 1;\n            return Low;\n        }\n\n        int step(int n) {\n            switch (n) {\n                int counter;\n            case 0:\n                counter = 1;\n                return counter;\n            }\n            return 0;\n        }\n        \")"
+---
+mod __cinrs_unit_679b7a79 {
+    #[allow(…)]
+    pub type Level = ::core::ffi::c_int;
+    #[allow(…)]
+    pub const Low: ::core::ffi::c_int = 0;
+    #[allow(…)]
+    pub const High: ::core::ffi::c_int = 1;
+    #[allow(…)]
+    pub static mut counter: ::core::ffi::c_int = 0;
+    #[allow(…)]
+    pub unsafe extern "C" fn bump(
+        mut counter_1: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut Low_1: ::core::ffi::c_int = counter_1.wrapping_add(1);
+            return Low_1;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn step(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            {
+                let mut counter_1: ::core::ffi::c_int = 0;
+                'sw0: {
+                    'sw0_c0: {
+                        match n {
+                            0 => break 'sw0_c0,
+                            _ => break 'sw0,
+                        }
+                    }
+                    counter_1 = 1;
+                    return counter_1;
+                }
+            }
+            return 0;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_679b7a79::*;

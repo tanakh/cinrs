@@ -1,0 +1,34 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump(r#\"\ntypedef int T;\nstruct S { int a; };\nint sizes(int v) {\n    return sizeof v\n         + sizeof(int)\n         + sizeof(T)\n         + sizeof(struct S)\n         + sizeof(int *)\n         + sizeof(int (*)(void))\n         + sizeof(int[4])\n         + sizeof (T){1};\n}\n\"#)"
+---
+translation-unit
+  declaration
+    specifiers: int [typedef]
+    declarator 'T' : int
+  declaration
+    specifiers: struct S {…}
+    struct 'S' members
+      field 'a' : int
+  function 'sizes' : fn(v: int) -> int
+    body
+      return
+        binary '+'
+          binary '+'
+            binary '+'
+              binary '+'
+                binary '+'
+                  binary '+'
+                    binary '+'
+                      sizeof-expr
+                        ident 'v'
+                      sizeof-type int
+                    sizeof-type typedef-name T
+                  sizeof-type struct S
+                sizeof-type ptr<int>
+              sizeof-type ptr<fn(void) -> int>
+            sizeof-type array<int, 4>
+          sizeof-expr
+            compound-literal typedef-name T
+              element
+                int 1

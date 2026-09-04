@@ -1,0 +1,8 @@
+error: expression is not assignable
+ --> tests/ui/sema_not_assignable.rs:5:9
+  |
+5 |         1 = x;
+  |         ^
+
+error: aborting due to 1 previous error
+
