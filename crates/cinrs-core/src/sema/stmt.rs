@@ -350,7 +350,7 @@ impl Sema {
             );
             return None;
         }
-        let promoted = scrutinee.ty.promote(&self.target);
+        let promoted = self.promoted(&scrutinee);
         Some(self.convert(scrutinee, promoted))
     }
 

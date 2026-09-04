@@ -1,14 +1,74 @@
-error: bit-fields are not supported yet; declare the members as whole integers instead
- --> tests/ui/sema_bit_field.rs:5:30
+error: width 33 of bit-field 'too_wide' exceeds the 32 bits of its type 'int'
+ --> tests/ui/sema_bit_field.rs:6:27
   |
-5 |         unsigned int ready : 1;
-  |                              ^
+6 |         int   too_wide  : 33;
+  |                           ^^
 
-error: bit-fields are not supported yet; declare the members as whole integers instead
- --> tests/ui/sema_bit_field.rs:6:29
+error: width 9 of bit-field 'too_wide2' exceeds the 8 bits of its type 'char'
+ --> tests/ui/sema_bit_field.rs:7:27
   |
-6 |         unsigned int mode : 3;
-  |                             ^
+7 |         char  too_wide2 : 9;
+  |                           ^
 
-error: aborting due to 2 previous errors
+error: width 2 of bit-field 'too_wide3' exceeds the 1 bit of its type '_Bool'
+ --> tests/ui/sema_bit_field.rs:8:27
+  |
+8 |         _Bool too_wide3 : 2;
+  |                           ^
+
+error: negative width in bit-field 'negative'
+ --> tests/ui/sema_bit_field.rs:9:27
+  |
+9 |         int   negative  : -1;
+  |                           ^
+
+error: zero width for bit-field 'nothing'; only an unnamed bit-field may be `: 0`
+  --> tests/ui/sema_bit_field.rs:10:27
+   |
+10 |         int   nothing   : 0;
+   |                           ^
+
+error: bit-field 'd' has invalid type 'double'; only the integer types may be given a width
+  --> tests/ui/sema_bit_field.rs:14:17
+   |
+14 |         double  d : 3;
+   |                 ^
+
+error: bit-field 'p' has invalid type 'int *'; only the integer types may be given a width
+  --> tests/ui/sema_bit_field.rs:15:16
+   |
+15 |         int    *p : 3;
+   |                ^
+
+error: bit-field 'a' has invalid type 'int[2]'; only the integer types may be given a width
+  --> tests/ui/sema_bit_field.rs:16:16
+   |
+16 |         int    a[2] : 3;
+   |                ^
+
+error: the width of bit-field 'n' is not an integer constant expression
+  --> tests/ui/sema_bit_field.rs:21:17
+   |
+21 |         int n : width;
+   |                 ^^^^^
+
+error: cannot take the address of a bit-field
+  --> tests/ui/sema_bit_field.rs:27:32
+   |
+27 |         return (unsigned long) &f->ready;
+   |                                ^
+
+error: 'sizeof' applied to a bit-field, which has no size of its own
+  --> tests/ui/sema_bit_field.rs:31:23
+   |
+31 |         return sizeof f->level;
+   |                       ^
+
+error: 'offsetof' applied to the bit-field 'level', which has no address
+  --> tests/ui/sema_bit_field.rs:35:49
+   |
+35 |         return __builtin_offsetof(struct Flags, level);
+   |                                                 ^^^^^
+
+error: aborting due to 12 previous errors
 

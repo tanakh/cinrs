@@ -1,6 +1,6 @@
 ---
 source: crates/cinrs-core/tests/parse.rs
-expression: "parse_dump(r#\"\nstruct Flags {\n    unsigned a : 1;\n    unsigned : 3;\n    signed b : 5, c : 2;\n    struct Flags *next;\n};\nunion U { int i; double d; char bytes[8]; };\nenum Color { Red, Green = 7, Blue, };\nenum Color pick(union U u);\n\"#)"
+expression: "parse_dump(r#\"\nstruct Flags {\n    unsigned a : 1;\n    unsigned : 3;\n    signed b : 5, c : 2;\n    struct Flags *next;\n};\nunion U { int i; double d; char bytes[8]; };\nenum Color { Red, Green = 7, Blue, };\nenum Color pick(union U u);\nstruct Tagged { enum Color kind : 4; enum Color : 2; long long wide : 40; };\n\"#)"
 ---
 translation-unit
   declaration
@@ -27,3 +27,9 @@ translation-unit
   declaration
     specifiers: enum Color
     declarator 'pick' : fn(u: union U) -> enum Color
+  declaration
+    specifiers: struct Tagged {…}
+    struct 'Tagged' members
+      field 'kind' : enum Color : 4
+      field '<anonymous>' : enum Color : 2
+      field 'wide' : long long : 40

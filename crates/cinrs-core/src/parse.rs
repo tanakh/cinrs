@@ -1333,7 +1333,12 @@ impl Parser<'_> {
         let _ = self.parse_attributes()?;
         let name = self.eat_ident();
         // C23's fixed underlying type: `enum E : unsigned char { … }`.
-        let underlying = if self.at_punct(Punct::Colon) {
+        //
+        // The `:` only introduces one when a type follows it. Among the members
+        // of a record, `enum E : 3;` is an unnamed bit-field of the
+        // enumeration's type — which C has had for far longer — and the width
+        // is an expression, never a type.
+        let underlying = if self.at_punct(Punct::Colon) && self.starts_decl_specifier(1) {
             let colon = self.bump_range();
             self.require_standard(Standard::C23, "an enum with a fixed underlying type", colon);
             let specs = self.parse_decl_specifiers(false)?;

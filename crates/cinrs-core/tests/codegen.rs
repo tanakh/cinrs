@@ -517,6 +517,36 @@ fn offsetof_asks_rust_for_the_layout() {
 }
 
 #[test]
+fn bit_fields_become_storage_bytes_and_accessors() {
+    // A bit-field has no address, so it is not a Rust field: the run shares
+    // one `[u8; K]`, a pair of inherent methods reads and writes it, the
+    // `: 0` and the alignment of the fields' own type decide where `tag`
+    // lands and how strict the item is, and a constant initialiser is folded
+    // into the bytes so that a `static` can hold one.
+    insta::assert_snapshot!(generate(
+        r"
+        struct Flags {
+            unsigned int ready : 1;
+            int          level : 3;
+            unsigned int       : 0;
+            unsigned int mask  : 30;
+            char         tag;
+        };
+
+        static struct Flags defaults = { 1, -2, .mask = 5, .tag = 'x' };
+
+        void arm(struct Flags *f, int level) {
+            f->ready = 1;
+            f->level = level;
+            f->mask += 2;
+        }
+
+        int level_of(struct Flags f) { return f.level; }
+        "
+    ));
+}
+
+#[test]
 fn a_named_module_holds_the_unit() {
     // `#pragma cinrs module` replaces the generated name with one the user can
     // write, which is how an ambiguous glob re-export is disambiguated.

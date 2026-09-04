@@ -180,6 +180,69 @@
 //! apart from anything else of that name, and pointed back at its symbol with
 //! `#[link_name]`.
 //!
+//! ## Bit-fields
+//!
+//! A bit-field has no address of its own — it may share a byte with its
+//! neighbours, and it need not start on one — so it cannot be a field of the
+//! generated `#[repr(C)]` item. A maximal run of consecutive bit-fields
+//! becomes one `pub __cinrs_bitsN: [u8; K]` covering the bytes the run
+//! occupies, with explicit `pub __cinrs_padN: [u8; M]` wherever `#[repr(C)]`
+//! would otherwise place the next member too early and
+//! `#[repr(C, align(N))]` where the fields' own type made the record stricter
+//! than any field of it. Each *named* member becomes a pair of inherent
+//! methods instead, in plain inline integer code:
+//!
+//! ```
+//! cinrs::c99! {
+//!     struct Flags {
+//!         unsigned int ready : 1;
+//!         int          level : 3;
+//!         unsigned int       : 0;   /* start the next field on a new unit */
+//!         unsigned int mask  : 30;
+//!     };
+//!
+//!     void arm(struct Flags *f, int level) {
+//!         f->ready = 1;
+//!         f->level = level;
+//!         f->mask += 2;
+//!     }
+//! }
+//!
+//! let mut f = Flags { __cinrs_bits0: [0; 8] };
+//! unsafe { arm(&raw mut f, -3) };
+//! assert_eq!((f.ready(), f.level(), f.mask()), (1, -3, 2));
+//!
+//! f.set_level(9);          // stores the low three bits …
+//! assert_eq!(f.level(), 1); // … and reading one back sign-extends them
+//! ```
+//!
+//! The getter is the member's own name and the setter is `set_` in front of
+//! it, both taking and returning the member's declared C type — so an `enum`
+//! field reads as the `enum`'s alias and a `_Bool` field as a `bool`. A member
+//! whose name is a Rust keyword becomes a raw identifier (`n.r#match()`), and
+//! where two names would collide — a member `x` next to a member `set_x` —
+//! every getter is claimed first, in declaration order, so a member's own name
+//! always reads it and the setter that finds its name taken grows `_2`, `_3`,
+//! …. The accessors take `&self` and `&mut self`, so a bit-field of a
+//! *file-scope* object is reached through a raw pointer, exactly as the
+//! generated code does:
+//! `unsafe { (*(&raw mut STATE)).set_ready(1) }`.
+//!
+//! Inside the C nothing changes: `s.level = 3`, `p->flags |= 1`,
+//! `switch (s.kind)`, `++s.count`, a designated initialiser and a compound
+//! literal all work as they do for an ordinary member, `sizeof` and
+//! `offsetof` see the layout GCC and Clang give the record, and the integer
+//! promotions follow C99 6.3.1.1p2's width-restricted rule — `unsigned x : 31`
+//! takes part in arithmetic as an `int`, and `unsigned x : 32` as an
+//! `unsigned int`. Taking the address of a bit-field, `sizeof` of one and
+//! `offsetof` of one are the three things C forbids, and each is a located
+//! error.
+//!
+//! Beyond `_Bool`, `int` and `unsigned int`, which the standard requires, the
+//! other integer types and `enum` are accepted as the GCC and Clang extension
+//! they are; `doc/gnu-extensions.md` in the repository records what that
+//! commits the layout to, and the one corner where an `enum` field differs.
+//!
 //! ## Compound literals
 //!
 //! `(T){ … }` is an *object*, not a value, and C gives one written inside a
@@ -518,7 +581,8 @@
 //!
 //! The front end (lexer, preprocessor, parser, diagnostics) is complete for
 //! C99, and most of the language is translated end to end: all the arithmetic
-//! types, pointers, arrays, `struct`, `union`, `enum`, `typedef`, string
+//! types, pointers, arrays, `struct`, `union`, `enum`, bit-fields, `typedef`,
+//! string
 //! literals, function pointers, `sizeof` with real layout, casts, aggregate
 //! and designated initialisers, compound literals, file-scope, `static` and
 //! `extern` objects,
@@ -529,7 +593,7 @@
 //! C11 and C23 added on top of that is listed under [Standards](#standards),
 //! entry point by entry point.
 //!
-//! Deliberately never: bit-fields, variable length arrays, `_Complex`,
+//! Deliberately never: variable length arrays, `_Complex`,
 //! old-style (K&R) definitions, `setjmp`/`longjmp`, `_Thread_local`,
 //! `_Atomic`, `_BitInt`, `#embed`, `__has_include`, C11's `u8`/`u`/`U`
 //! literals, and

@@ -54,6 +54,19 @@
 //! `p[i()] += 1` therefore evaluates `i()` exactly once, and `s.f`, `p->f` and
 //! `a[i][j]` are all the same three lines of code.
 //!
+//! # Bit-fields
+//!
+//! A bit-field has no address, so it is not a field of the generated item: a
+//! run of them shares one `[u8; K]`, and sema has already worked out which
+//! bytes and bits each member owns (see [`crate::sema`]'s layout). This module
+//! turns that into a pair of inherent methods per named member — plain inline
+//! integer code, no helper type — and a place whose *access* is the record
+//! rather than the member, read with `.f()` and written with `.set_f(v)`. A
+//! constant initialiser is folded into the storage bytes here, which is what
+//! lets a `static` hold one; a non-constant one becomes a zeroed literal
+//! followed by setter calls. A place rooted in a `static mut` goes through
+//! `&raw mut` first, because the accessors borrow.
+//!
 //! # Loops
 //!
 //! Every loop gets a unique Rust label so that `break` and `continue` never
@@ -108,6 +121,7 @@
 //! [`crate::sema`]'s `va` module for the model.
 
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::quote_spanned;
@@ -117,7 +131,7 @@ use crate::capture::{SourceMap, SourceRange};
 use crate::cfg::{BasicBlock, BlockId, Cfg, Terminator};
 use crate::ir::{
     self, BinOp, Body, BreakTarget, Callee, CmpOp, ConstValue, Expr, ExprKind, Function, LogicalOp,
-    LoopId, Place, PlaceKind, Program, RecordKind, Stmt, Storage, Switch, Ty,
+    LoopId, NEVER_RAW, Place, PlaceKind, Program, RecordKind, Stmt, Storage, Switch, Ty,
 };
 
 /// Generates the Rust items for a fully checked program.
@@ -274,9 +288,6 @@ const RUST_KEYWORDS: &[&str] = &[
     "unsafe", "unsized", "use", "virtual", "where", "while", "yield", "Self",
 ];
 
-/// The names that cannot be written as raw identifiers at all.
-const NEVER_RAW: &[&str] = &["self", "Self", "super", "crate", "_"];
-
 /// Names that a `let` binding or a parameter must not carry, whatever the C
 /// program calls them.
 ///
@@ -395,6 +406,7 @@ fn allow_attr(span: Span) -> TokenStream {
             non_snake_case,
             non_upper_case_globals,
             overflowing_literals,
+            static_mut_refs,
             suspicious_runtime_symbol_definitions,
             unpredictable_function_pointer_comparisons,
             unreachable_code,
@@ -431,6 +443,26 @@ struct LoweredPlace {
     setup: TokenStream,
     /// A Rust place expression that may be evaluated more than once.
     access: TokenStream,
+    /// Set when the place is a bit-field, in which case `access` is the record
+    /// holding it and the bits are reached through the generated accessors.
+    bits: Option<BitAccess>,
+}
+
+impl LoweredPlace {
+    /// An ordinary place, whose access is the value.
+    fn plain(setup: TokenStream, access: TokenStream) -> Self {
+        Self {
+            setup,
+            access,
+            bits: None,
+        }
+    }
+}
+
+/// The accessors a bit-field place is read and written through.
+struct BitAccess {
+    getter: Ident,
+    setter: Ident,
 }
 
 /// Where the pristine argument list of the function being generated lives.
@@ -701,9 +733,10 @@ impl<'a> Codegen<'a> {
         // `Copy` is what makes a C struct behave like one: assigning it,
         // passing it and returning it all copy the bytes.
         let derives = match record.align {
-            // `_Alignas` on a member is honoured by raising the *record's*
-            // alignment; sema has already checked that the members still land
-            // where our own layout says they do.
+            // `_Alignas` on a member, or a bit-field whose type is stricter
+            // than any field the item really has, is honoured by raising the
+            // *record's* alignment; sema has already checked that the members
+            // still land where our own layout says they do.
             Some(align) => {
                 let align = usize_literal(align, span);
                 quote_spanned! {span=>
@@ -720,18 +753,187 @@ impl<'a> Codegen<'a> {
             };
         }
         let mut fields = TokenStream::new();
-        for field in &record.fields {
-            let fspan = self.sp(field.range);
-            let fname = c_ident(&field.name, fspan);
-            let fty = self.ty(field.ty, fspan);
-            // Members are `pub` so that Rust code can build and read the value.
-            fields.extend(quote_spanned! {fspan=> pub #fname: #fty, });
+        for rust_field in &record.rust_fields {
+            match rust_field {
+                ir::RustField::Member(index) => {
+                    let field = &record.fields[*index];
+                    let fspan = self.sp(field.range);
+                    let fname = c_ident(&field.name, fspan);
+                    let fty = self.ty(field.ty, fspan);
+                    // Members are `pub` so Rust code can build and read the
+                    // value.
+                    fields.extend(quote_spanned! {fspan=> pub #fname: #fty, });
+                }
+                ir::RustField::Bits { name, bytes, .. } | ir::RustField::Pad { name, bytes } => {
+                    let fname = Ident::new(name, span);
+                    let len = usize_literal(*bytes, span);
+                    fields.extend(quote_spanned! {span=> pub #fname: [u8; #len], });
+                }
+            }
         }
         let body = braced(fields, span);
-        match record.kind {
+        let item = match record.kind {
             RecordKind::Struct => quote_spanned! {span=> #attrs #derives pub struct #name #body },
             RecordKind::Union => quote_spanned! {span=> #attrs #derives pub union #name #body },
+        };
+        let accessors = self.bit_field_accessors(record, span);
+        quote_spanned! {span=> #item #accessors }
+    }
+
+    /// The `impl` block holding one getter and one setter per named bit-field.
+    ///
+    /// The bits are not a field, so this is the only way to reach them — from
+    /// the generated code and from Rust alike. Everything is written out
+    /// inline: no helper type, no runtime, nothing to look up.
+    fn bit_field_accessors(&self, record: &ir::RecordDef, span: Span) -> TokenStream {
+        let mut methods = TokenStream::new();
+        for field in &record.fields {
+            let Some(bits) = &field.bits else {
+                continue;
+            };
+            let fspan = self.sp(field.range);
+            methods.extend(self.bit_field_getter(record, field, bits, fspan));
+            methods.extend(self.bit_field_setter(record, field, bits, fspan));
         }
+        if methods.is_empty() {
+            return TokenStream::new();
+        }
+        let name = c_ident(&record.rust_name, span);
+        let attrs = allow_attr(span);
+        quote_spanned! {span=> #attrs impl #name { #methods } }
+    }
+
+    /// Reads the bytes a bit-field overlaps into a `u64`.
+    ///
+    /// The unit rule guarantees a field never spans more than eight bytes, so
+    /// one `u64` is always enough.
+    fn bit_field_window(&self, bits: &ir::BitField, span: Span) -> (TokenStream, u32, u64) {
+        let storage = Ident::new(&bits.storage, span);
+        let start = bits.offset_in_storage();
+        let first = start / 8;
+        let shift = (start % 8) as u32;
+        let count = (shift + bits.width).div_ceil(8);
+        let mut read = TokenStream::new();
+        for step in 0..count {
+            let index = usize_literal(first + u64::from(step), span);
+            let byte = if count == 1 {
+                quote_spanned! {span=> self.#storage[#index] as u64 }
+            } else {
+                quote_spanned! {span=> (self.#storage[#index] as u64) }
+            };
+            read.extend(if step == 0 {
+                byte
+            } else {
+                let by = usize_literal(u64::from(step) * 8, span);
+                quote_spanned! {span=> | (#byte << #by) }
+            });
+        }
+        // The mask of the field's bits inside that window. The unit rule keeps
+        // `shift + width` at 64 or less, and writing it this way makes that
+        // true of the shift as well.
+        let mask = mask_of(shift + bits.width) & !mask_of(shift);
+        (read, shift, mask)
+    }
+
+    fn bit_field_getter(
+        &self,
+        record: &ir::RecordDef,
+        field: &ir::Field,
+        bits: &ir::BitField,
+        span: Span,
+    ) -> TokenStream {
+        let (read, shift, _) = self.bit_field_window(bits, span);
+        let ty = self.ty(field.ty, span);
+        let name = c_ident(&bits.getter, span);
+        let mask = hex_literal(mask_of(bits.width), span);
+        let shifted = if shift == 0 {
+            quote_spanned! {span=> raw & #mask }
+        } else {
+            let by = usize_literal(u64::from(shift), span);
+            quote_spanned! {span=> (raw >> #by) & #mask }
+        };
+        let value = if field.ty.is_bool() {
+            quote_spanned! {span=> value != 0 }
+        } else if !bits.signed || bits.width == 64 {
+            quote_spanned! {span=> value as #ty }
+        } else {
+            // Sign extension: shift the field's top bit up to the sign bit of
+            // an `i64` and let the arithmetic shift bring it back down.
+            let by = usize_literal(u64::from(64 - bits.width), span);
+            quote_spanned! {span=> (((value << #by) as i64) >> #by) as #ty }
+        };
+        let body = self.accessor_body(
+            record,
+            quote_spanned! {span=>
+                let raw: u64 = #read;
+                let value: u64 = #shifted;
+                #value
+            },
+            span,
+        );
+        quote_spanned! {span=>
+            #[inline]
+            pub fn #name(&self) -> #ty { #body }
+        }
+    }
+
+    fn bit_field_setter(
+        &self,
+        record: &ir::RecordDef,
+        field: &ir::Field,
+        bits: &ir::BitField,
+        span: Span,
+    ) -> TokenStream {
+        let (read, shift, mask) = self.bit_field_window(bits, span);
+        let ty = self.ty(field.ty, span);
+        let name = c_ident(&bits.setter, span);
+        let storage = Ident::new(&bits.storage, span);
+        let value = Ident::new("value", span);
+        let field_mask = hex_literal(mask, span);
+        let keep = hex_literal(!mask, span);
+        let shifted = if shift == 0 {
+            quote_spanned! {span=> (#value as u64) & #field_mask }
+        } else {
+            let by = usize_literal(u64::from(shift), span);
+            quote_spanned! {span=> ((#value as u64) << #by) & #field_mask }
+        };
+        let start = bits.offset_in_storage();
+        let first = start / 8;
+        let count = (shift + bits.width).div_ceil(8);
+        let mut writes = TokenStream::new();
+        for step in 0..count {
+            let index = usize_literal(first + u64::from(step), span);
+            if step == 0 {
+                writes.extend(quote_spanned! {span=> self.#storage[#index] = raw as u8; });
+            } else {
+                let by = usize_literal(u64::from(step) * 8, span);
+                writes.extend(quote_spanned! {span=> self.#storage[#index] = (raw >> #by) as u8; });
+            }
+        }
+        let body = self.accessor_body(
+            record,
+            quote_spanned! {span=>
+                let bits: u64 = #shifted;
+                let raw: u64 = #read;
+                let raw: u64 = (raw & #keep) | bits;
+                #writes
+            },
+            span,
+        );
+        quote_spanned! {span=>
+            #[inline]
+            pub fn #name(&mut self, #value: #ty) { #body }
+        }
+    }
+
+    /// Wraps an accessor body in `unsafe` where reading the storage needs it,
+    /// which is exactly when the record is a `union`.
+    fn accessor_body(&self, record: &ir::RecordDef, body: TokenStream, span: Span) -> TokenStream {
+        if record.kind == RecordKind::Union {
+            let block = braced(body, span);
+            return quote_spanned! {span=> unsafe #block };
+        }
+        body
     }
 
     /// The `extern` block declaring everything the unit does not define.
@@ -1500,9 +1702,9 @@ impl<'a> Codegen<'a> {
             ExprKind::Assign { place, value } => {
                 let lowered = self.place(place, true);
                 let value = self.expr_at(value, place.ty);
-                let setup = lowered.setup;
-                let access = lowered.access;
-                quote_spanned! {span=> #setup #access = #value; }
+                let store = self.write(&lowered, value, span);
+                let setup = &lowered.setup;
+                quote_spanned! {span=> #setup #store }
             }
             ExprKind::CompoundAssign {
                 place,
@@ -1511,18 +1713,20 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
-                let updated = self.compound_value(&lowered.access, place.ty, *op, value, *compute);
-                let setup = lowered.setup;
-                let access = lowered.access;
+                let current = self.read(&lowered, span);
+                let updated = self.compound_value(current, place.ty, *op, value, *compute);
                 let updated = updated.at(prec::LOWEST, span);
-                quote_spanned! {span=> #setup #access = #updated; }
+                let store = self.write(&lowered, updated, span);
+                let setup = &lowered.setup;
+                quote_spanned! {span=> #setup #store }
             }
             ExprKind::IncDec { place, dec, .. } => {
                 let lowered = self.place(place, true);
-                let next = self.step_value(&lowered.access, place.ty, *dec, span);
-                let setup = lowered.setup;
-                let access = lowered.access;
-                quote_spanned! {span=> #setup #access = #next; }
+                let current = self.read(&lowered, span);
+                let next = self.step_value(current, place.ty, *dec, span);
+                let store = self.write(&lowered, next, span);
+                let setup = &lowered.setup;
+                quote_spanned! {span=> #setup #store }
             }
             ExprKind::Call { .. } => {
                 // A call to a `_Noreturn` function does not come back, and
@@ -1629,12 +1833,13 @@ impl<'a> Codegen<'a> {
             }
             ExprKind::Load(place) => {
                 let lowered = self.place(place, false);
+                let value = self.read(&lowered, span);
                 if lowered.setup.is_empty() {
-                    Value::atom(lowered.access)
+                    value
                 } else {
-                    let setup = lowered.setup;
-                    let access = lowered.access;
-                    Value::new(quote_spanned! {span=> { #setup #access } }, prec::BLOCK)
+                    let setup = &lowered.setup;
+                    let tokens = value.at(prec::LOWEST, span);
+                    Value::new(quote_spanned! {span=> { #setup #tokens } }, prec::BLOCK)
                 }
             }
             ExprKind::AddrOf(place) => self.address_of(place, expr.ty, span),
@@ -1650,12 +1855,14 @@ impl<'a> Codegen<'a> {
             ExprKind::Assign { place, value } => {
                 let lowered = self.place(place, true);
                 let value = self.expr_at(value, place.ty);
-                let setup = lowered.setup;
-                let access = lowered.access;
+                let store = self.write(&lowered, value, span);
                 // The value of an assignment is the value stored, which for a
-                // place is exactly what reading it back gives.
+                // place is exactly what reading it back gives — including for
+                // a bit-field, where reading back is what truncates.
+                let read = self.read(&lowered, span).at(prec::LOWEST, span);
+                let setup = &lowered.setup;
                 Value::new(
-                    quote_spanned! {span=> { #setup #access = #value; #access } },
+                    quote_spanned! {span=> { #setup #store #read } },
                     prec::BLOCK,
                 )
             }
@@ -1666,12 +1873,14 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
-                let updated = self.compound_value(&lowered.access, place.ty, *op, value, *compute);
-                let setup = lowered.setup;
-                let access = lowered.access;
+                let current = self.read(&lowered, span);
+                let updated = self.compound_value(current, place.ty, *op, value, *compute);
                 let updated = updated.at(prec::LOWEST, span);
+                let store = self.write(&lowered, updated, span);
+                let read = self.read(&lowered, span).at(prec::LOWEST, span);
+                let setup = &lowered.setup;
                 Value::new(
-                    quote_spanned! {span=> { #setup #access = #updated; #access } },
+                    quote_spanned! {span=> { #setup #store #read } },
                     prec::BLOCK,
                 )
             }
@@ -1681,20 +1890,22 @@ impl<'a> Codegen<'a> {
                 postfix,
             } => {
                 let lowered = self.place(place, true);
-                let next = self.step_value(&lowered.access, place.ty, *dec, span);
-                let setup = lowered.setup;
-                let access = lowered.access;
+                let current = self.read(&lowered, span);
+                let next = self.step_value(current, place.ty, *dec, span);
+                let store = self.write(&lowered, next, span);
+                let read = self.read(&lowered, span).at(prec::LOWEST, span);
+                let setup = &lowered.setup;
                 if *postfix {
                     let tmp = self.temporary();
                     Value::new(
                         quote_spanned! {span=>
-                            { #setup let #tmp = #access; #access = #next; #tmp }
+                            { #setup let #tmp = #read; #store #tmp }
                         },
                         prec::BLOCK,
                     )
                 } else {
                     Value::new(
-                        quote_spanned! {span=> { #setup #access = #next; #access } },
+                        quote_spanned! {span=> { #setup #store #read } },
                         prec::BLOCK,
                     )
                 }
@@ -1779,33 +1990,12 @@ impl<'a> Codegen<'a> {
                 Value::new(quote_spanned! {span=> { #lhs #rhs } }, prec::BLOCK)
             }
             ExprKind::Call { callee, args } => self.call(callee, args, span),
-            ExprKind::RecordLit { record, fields } => {
-                let def = self.program.types.record(*record);
-                let name = c_ident(&def.rust_name, span);
-                let names: Vec<String> = def.fields.iter().map(|f| f.name.clone()).collect();
-                let types: Vec<Ty> = def.fields.iter().map(|f| f.ty).collect();
-                let mut items = TokenStream::new();
-                for (index, value) in fields.iter().enumerate() {
-                    let fname = c_ident(&names[index], span);
-                    let tokens = self.expr_at(value, types[index]);
-                    items.extend(quote_spanned! {span=> #fname: #tokens, });
-                }
-                let body = braced(items, span);
-                Value::new(quote_spanned! {span=> #name #body }, prec::ATOM)
-            }
+            ExprKind::RecordLit { record, fields } => self.record_literal(*record, fields, span),
             ExprKind::UnionLit {
                 record,
                 index,
                 value,
-            } => {
-                let def = self.program.types.record(*record);
-                let name = c_ident(&def.rust_name, span);
-                let field = def.fields[*index].clone();
-                let fname = c_ident(&field.name, span);
-                let tokens = self.expr_at(value, field.ty);
-                let body = braced(quote_spanned! {span=> #fname: #tokens }, span);
-                Value::new(quote_spanned! {span=> #name #body }, prec::ATOM)
-            }
+            } => self.union_literal(*record, *index, value, span),
             ExprKind::ArrayLit(items) => {
                 let elem = self.program.types.elem(expr.ty).unwrap_or(Ty::Int);
                 let mut tokens = TokenStream::new();
@@ -1837,6 +2027,132 @@ impl<'a> Codegen<'a> {
                 prec::CALL,
             ),
         }
+    }
+
+    /// A `struct` value: one expression per member, in declaration order.
+    ///
+    /// Without bit-fields this is a plain Rust struct literal. With them the
+    /// members that share a storage field have to be *packed* into it: every
+    /// constant one is folded into the `[u8; K]` there and then, which is what
+    /// lets a `static` — where nothing may run — hold a bit-field at all, and
+    /// what makes the byte pattern visible in the expansion. A member whose
+    /// value is not constant is stored afterwards through its setter, so the
+    /// literal becomes a block.
+    fn record_literal(&mut self, record: ir::RecordId, fields: &[Expr], span: Span) -> Value {
+        let def = self.program.types.record(record).clone();
+        let name = c_ident(&def.rust_name, span);
+        let mut packed: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut dynamic: Vec<usize> = Vec::new();
+        for rust_field in &def.rust_fields {
+            if let ir::RustField::Bits { name, bytes, .. } = rust_field {
+                packed.insert(name.clone(), vec![0u8; *bytes as usize]);
+            }
+        }
+        for (index, field) in def.fields.iter().enumerate() {
+            let Some(bits) = &field.bits else { continue };
+            match fields.get(index).and_then(constant_bits) {
+                Some(value) => {
+                    if let Some(storage) = packed.get_mut(&bits.storage) {
+                        pack_bits(storage, bits, value);
+                    }
+                }
+                None => dynamic.push(index),
+            }
+        }
+
+        let mut items = TokenStream::new();
+        for rust_field in &def.rust_fields {
+            match rust_field {
+                ir::RustField::Member(index) => {
+                    let field = &def.fields[*index];
+                    let fname = c_ident(&field.name, span);
+                    let tokens = self.expr_at(&fields[*index], field.ty);
+                    items.extend(quote_spanned! {span=> #fname: #tokens, });
+                }
+                ir::RustField::Bits { name, .. } => {
+                    let fname = Ident::new(name, span);
+                    let value = byte_array(&packed[name], span);
+                    items.extend(quote_spanned! {span=> #fname: #value, });
+                }
+                ir::RustField::Pad { name, bytes } => {
+                    let fname = Ident::new(name, span);
+                    let len = usize_literal(*bytes, span);
+                    items.extend(quote_spanned! {span=> #fname: [0; #len], });
+                }
+            }
+        }
+        let body = braced(items, span);
+        let literal = quote_spanned! {span=> #name #body };
+        if dynamic.is_empty() {
+            return Value::new(literal, prec::ATOM);
+        }
+        // The members that are not constants are stored through their setters,
+        // in declaration order, which is one of the orders C allows.
+        let tmp = self.temporary();
+        let ty = self.ty(Ty::Record(record), span);
+        let mut stores = TokenStream::new();
+        for index in dynamic {
+            let field = &def.fields[index];
+            let bits = field.bits.as_ref().expect("only bit-fields are deferred");
+            let setter = c_ident(&bits.setter, span);
+            let value = self.expr_at(&fields[index], field.ty);
+            stores.extend(quote_spanned! {span=> #tmp.#setter(#value); });
+        }
+        Value::new(
+            quote_spanned! {span=>
+                { let mut #tmp: #ty = #literal; #stores #tmp }
+            },
+            prec::BLOCK,
+        )
+    }
+
+    /// A `union` value, which initialises exactly one member.
+    fn union_literal(
+        &mut self,
+        record: ir::RecordId,
+        index: usize,
+        value: &Expr,
+        span: Span,
+    ) -> Value {
+        let def = self.program.types.record(record).clone();
+        let name = c_ident(&def.rust_name, span);
+        let field = &def.fields[index];
+        let Some(bits) = &field.bits else {
+            let fname = c_ident(&field.name, span);
+            let tokens = self.expr_at(value, field.ty);
+            let body = braced(quote_spanned! {span=> #fname: #tokens }, span);
+            return Value::new(quote_spanned! {span=> #name #body }, prec::ATOM);
+        };
+        let bytes = def
+            .rust_fields
+            .iter()
+            .find_map(|rust_field| match rust_field {
+                ir::RustField::Bits { name, bytes, .. } if *name == bits.storage => Some(*bytes),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let mut packed = vec![0u8; bytes as usize];
+        let constant = constant_bits(value);
+        if let Some(constant) = constant {
+            pack_bits(&mut packed, bits, constant);
+        }
+        let storage = Ident::new(&bits.storage, span);
+        let array = byte_array(&packed, span);
+        let body = braced(quote_spanned! {span=> #storage: #array }, span);
+        let literal = quote_spanned! {span=> #name #body };
+        if constant.is_some() {
+            return Value::new(literal, prec::ATOM);
+        }
+        let tmp = self.temporary();
+        let ty = self.ty(Ty::Record(record), span);
+        let setter = c_ident(&bits.setter, span);
+        let value = self.expr_at(value, field.ty);
+        Value::new(
+            quote_spanned! {span=>
+                { let mut #tmp: #ty = #literal; #tmp.#setter(#value); #tmp }
+            },
+            prec::BLOCK,
+        )
     }
 
     /// `offsetof(T, member)`, asked of Rust rather than worked out here.
@@ -2236,7 +2552,7 @@ impl<'a> Codegen<'a> {
     /// The value `place op= value` stores.
     fn compound_value(
         &mut self,
-        access: &TokenStream,
+        current: Value,
         place_ty: Ty,
         op: BinOp,
         value: &Expr,
@@ -2245,10 +2561,10 @@ impl<'a> Codegen<'a> {
         let span = self.sp(value.range);
         if place_ty.is_pointer() {
             // `p += n` moves by elements, not by bytes.
+            let access = current.at(prec::CALL, span);
             let offset = self.offset_argument(value, op == BinOp::Sub, span);
             return Value::new(quote_spanned! {span=> #access.offset(#offset) }, prec::CALL);
         }
-        let current = Value::atom(access.clone());
         let current = self.cast(current, place_ty, compute, span);
         // The left operand is a place and therefore always typed, so a
         // constant right operand can stay a bare literal.
@@ -2261,8 +2577,9 @@ impl<'a> Codegen<'a> {
     }
 
     /// The value `++place` or `--place` stores.
-    fn step_value(&mut self, access: &TokenStream, ty: Ty, dec: bool, span: Span) -> TokenStream {
+    fn step_value(&mut self, current: Value, ty: Ty, dec: bool, span: Span) -> TokenStream {
         if ty.is_pointer() {
+            let access = current.at(prec::CALL, span);
             let one = if dec {
                 quote_spanned! {span=> -1 }
             } else {
@@ -2271,6 +2588,7 @@ impl<'a> Codegen<'a> {
             return quote_spanned! {span=> #access.offset(#one) };
         }
         if ty.is_floating() {
+            let access = current.at(prec::SUM, span);
             let one = Literal::f64_unsuffixed(1.0);
             let op = if dec {
                 quote_spanned! {span=> - }
@@ -2282,10 +2600,12 @@ impl<'a> Codegen<'a> {
         if ty.is_bool() {
             // `b++` is `b = b + 1 != 0`, which is `true` for `++` and the
             // negation of `b` for `--`.
+            let access = current.at(prec::CAST, span);
             let int = self.ty(Ty::Int, span);
             let method = Ident::new(if dec { "wrapping_sub" } else { "wrapping_add" }, span);
             return quote_spanned! {span=> (#access as #int).#method(1) != 0 };
         }
+        let access = current.at(prec::CALL, span);
         let method = Ident::new(if dec { "wrapping_sub" } else { "wrapping_add" }, span);
         quote_spanned! {span=> #access.#method(1) }
     }
@@ -2391,53 +2711,66 @@ impl<'a> Codegen<'a> {
         match &place.kind {
             PlaceKind::Object(id) => {
                 let name = self.object_ident(*id, span);
-                LoweredPlace {
-                    setup: TokenStream::new(),
-                    access: quote_spanned! {span=> #name },
-                }
+                LoweredPlace::plain(TokenStream::new(), quote_spanned! {span=> #name })
             }
             PlaceKind::Deref(ptr) => self.deref_place(ptr, place.ty, mutable, span),
             PlaceKind::Index { base, index } => {
                 let pointer = self.pointer_operand(base, place.ty, mutable, span);
                 let offset = self.offset_argument(index, false, span);
                 let tmp = self.temporary();
-                LoweredPlace {
-                    setup: quote_spanned! {span=> let #tmp = #pointer.offset(#offset); },
-                    access: parenthesize(quote_spanned! {span=> *#tmp }, span),
-                }
+                LoweredPlace::plain(
+                    quote_spanned! {span=> let #tmp = #pointer.offset(#offset); },
+                    parenthesize(quote_spanned! {span=> *#tmp }, span),
+                )
             }
             PlaceKind::Field {
                 base,
                 record,
                 index,
             } => {
+                let field = self.program.types.record(*record).fields[*index].clone();
                 let lowered = self.place(base, mutable);
-                let name = self.program.types.record(*record).fields[*index]
-                    .name
-                    .clone();
-                let field = c_ident(&name, span);
                 let access = lowered.access;
+                let Some(bits) = &field.bits else {
+                    let name = c_ident(&field.name, span);
+                    return LoweredPlace::plain(
+                        lowered.setup,
+                        quote_spanned! {span=> #access.#name },
+                    );
+                };
+                // The accessors take `&self` and `&mut self`, and a reference
+                // to a `static mut` is exactly what edition 2024 refuses; the
+                // raw pointer keeps the item out of the expression.
+                let access = if rooted_in_static(base, self.program) {
+                    parenthesize(quote_spanned! {span=> *(&raw mut #access) }, span)
+                } else {
+                    access
+                };
                 LoweredPlace {
                     setup: lowered.setup,
-                    access: quote_spanned! {span=> #access.#field },
+                    access,
+                    bits: Some(BitAccess {
+                        getter: c_ident(&bits.getter, span),
+                        setter: c_ident(&bits.setter, span),
+                    }),
                 }
             }
             PlaceKind::Str(id) => {
                 let pointer = self.string_pointer(*id, !mutable, span);
                 let tmp = self.temporary();
-                LoweredPlace {
-                    setup: quote_spanned! {span=> let #tmp = #pointer; },
-                    access: parenthesize(quote_spanned! {span=> *#tmp }, span),
-                }
+                LoweredPlace::plain(
+                    quote_spanned! {span=> let #tmp = #pointer; },
+                    parenthesize(quote_spanned! {span=> *#tmp }, span),
+                )
             }
             PlaceKind::Temporary(expr) => {
                 let ty = expr.ty;
                 let value = self.expr_at(expr, ty);
                 let tmp = self.temporary();
-                LoweredPlace {
-                    setup: quote_spanned! {span=> let mut #tmp = #value; },
-                    access: quote_spanned! {span=> #tmp },
-                }
+                LoweredPlace::plain(
+                    quote_spanned! {span=> let mut #tmp = #value; },
+                    quote_spanned! {span=> #tmp },
+                )
             }
             // The binding itself was made at the top of the enclosing block —
             // C gives the object that lifetime, and it is what lets `&(T){…}`
@@ -2448,11 +2781,35 @@ impl<'a> Codegen<'a> {
             PlaceKind::CompoundLiteral { object, init } => {
                 let name = self.object_ident(*object, span);
                 let value = self.expr_at(init, place.ty);
-                LoweredPlace {
-                    setup: quote_spanned! {span=> #name = #value; },
-                    access: quote_spanned! {span=> #name },
-                }
+                LoweredPlace::plain(
+                    quote_spanned! {span=> #name = #value; },
+                    quote_spanned! {span=> #name },
+                )
             }
+        }
+    }
+
+    /// Reads a lowered place.
+    fn read(&self, place: &LoweredPlace, span: Span) -> Value {
+        let access = &place.access;
+        match &place.bits {
+            Some(bits) => {
+                let getter = &bits.getter;
+                Value::new(quote_spanned! {span=> #access.#getter() }, prec::CALL)
+            }
+            None => Value::atom(access.clone()),
+        }
+    }
+
+    /// The statement that stores `value` into a lowered place.
+    fn write(&self, place: &LoweredPlace, value: TokenStream, span: Span) -> TokenStream {
+        let access = &place.access;
+        match &place.bits {
+            Some(bits) => {
+                let setter = &bits.setter;
+                quote_spanned! {span=> #access.#setter(#value); }
+            }
+            None => quote_spanned! {span=> #access = #value; },
         }
     }
 
@@ -2464,17 +2821,17 @@ impl<'a> Codegen<'a> {
             // A variable holding the pointer can be dereferenced as often as
             // needed, so no temporary is called for.
             let tokens = self.pointer_operand(ptr, pointee, mutable, span);
-            return LoweredPlace {
-                setup: TokenStream::new(),
-                access: parenthesize(quote_spanned! {span=> *#tokens }, span),
-            };
+            return LoweredPlace::plain(
+                TokenStream::new(),
+                parenthesize(quote_spanned! {span=> *#tokens }, span),
+            );
         }
         let value = self.pointer_operand(ptr, pointee, mutable, span);
         let tmp = self.temporary();
-        LoweredPlace {
-            setup: quote_spanned! {span=> let #tmp = #value; },
-            access: parenthesize(quote_spanned! {span=> *#tmp }, span),
-        }
+        LoweredPlace::plain(
+            quote_spanned! {span=> let #tmp = #value; },
+            parenthesize(quote_spanned! {span=> *#tmp }, span),
+        )
     }
 
     /// The pointer a place is built on.
@@ -2683,6 +3040,81 @@ impl<'a> Codegen<'a> {
             }
         }
     }
+}
+
+/// The value a bit-field's initialiser folds to, if it folds at all.
+///
+/// Sema has already reduced a constant to a bare `Int` node, and the implicit
+/// zero every unmentioned member gets is either that or [`ExprKind::Zeroed`].
+fn constant_bits(expr: &Expr) -> Option<i128> {
+    match &expr.kind {
+        ExprKind::Int(value) => Some(*value),
+        ExprKind::Zeroed if expr.ty.is_integer() => Some(0),
+        _ => None,
+    }
+}
+
+/// Writes the low `width` bits of `value` into a run's storage bytes.
+fn pack_bits(storage: &mut [u8], bits: &ir::BitField, value: i128) {
+    let start = bits.offset_in_storage();
+    for bit in 0..u64::from(bits.width) {
+        if (value as u128) >> bit & 1 == 0 {
+            continue;
+        }
+        let at = start + bit;
+        if let Some(byte) = storage.get_mut((at / 8) as usize) {
+            *byte |= 1 << (at % 8);
+        }
+    }
+}
+
+/// `[0x1f, 0x00, …]`, the initialiser of a storage field.
+fn byte_array(bytes: &[u8], span: Span) -> TokenStream {
+    if bytes.iter().all(|byte| *byte == 0) {
+        let len = usize_literal(bytes.len() as u64, span);
+        return bracketed(quote_spanned! {span=> 0; #len }, span);
+    }
+    let mut items = TokenStream::new();
+    for byte in bytes {
+        let value = hex_literal(u64::from(*byte), span);
+        items.extend(quote_spanned! {span=> #value, });
+    }
+    bracketed(items, span)
+}
+
+/// Whether a place ultimately names an object with static storage duration.
+///
+/// The bit-field accessors borrow, and edition 2024 refuses a reference to a
+/// `static mut`; a place rooted in one is reached through `&raw mut` instead.
+/// Anything behind a pointer is already a raw dereference, so it needs nothing.
+fn rooted_in_static(place: &Place, program: &Program) -> bool {
+    let mut place = place;
+    loop {
+        match &place.kind {
+            PlaceKind::Object(id) => {
+                return !matches!(program.object(*id).storage, Storage::Automatic);
+            }
+            PlaceKind::Field { base, .. } => place = base,
+            _ => return false,
+        }
+    }
+}
+
+/// A mask of `width` low bits, in a `u64`.
+fn mask_of(width: u32) -> u64 {
+    if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
+}
+
+/// A `u64` literal written in hexadecimal, which is how a mask reads.
+fn hex_literal(value: u64, span: Span) -> TokenStream {
+    let mut literal = Literal::from_str(&format!("0x{value:x}"))
+        .unwrap_or_else(|_| Literal::u64_unsuffixed(value));
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
 }
 
 /// A state number, which is a `u32` because the state variable is.

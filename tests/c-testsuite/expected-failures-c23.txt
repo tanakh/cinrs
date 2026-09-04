@@ -24,5 +24,4 @@
 00213   extension: statement expression `({ … })`
 00214   extension: statement expression `({ … })` and `__builtin_expect`
 00216   unsupported: an empty `struct` in an initializer, GCC range designators and flexible array members
-00218   unsupported: bit-fields
 00220   missing header: <wchar.h> is not bundled

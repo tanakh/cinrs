@@ -38,7 +38,8 @@ Run it with `cargo run --example fact`.
   underlying type and `unreachable()`. A feature from a later revision used in
   an earlier block is a diagnostic that says which macro to write instead.
 * **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
-  `union`, `enum`, `typedef`, string literals, function pointers, `sizeof` with
+  `union`, `enum`, bit-fields, `typedef`, string literals, function pointers,
+  `sizeof` with
   the real layout, casts, aggregate and designated initialisers, compound
   literals — `&(struct S){ 1, 2 }`, whose object lives as long as the block it
   is written in — file-scope,
@@ -79,10 +80,16 @@ Run it with `cargo run --example fact`.
 ## Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
-  variable length arrays, bit-fields, `_Complex`, old-style (K&R) function
-  definitions, `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`,
-  `#embed`, `__has_include`, and C11's `u8"…"`/`u"…"`/`U"…"` literals with
-  their `char16_t`/`char32_t`.
+  variable length arrays, `_Complex`, old-style (K&R) function definitions,
+  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`,
+  `__has_include`, and C11's `u8"…"`/`u"…"`/`U"…"` literals with their
+  `char16_t`/`char32_t`.
+* A bit-field has no address, so it is not a field of the generated Rust
+  `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
+  named member becomes a pair of inherent methods — `s.level()` reads it and
+  `s.set_level(v)` writes it, in the member's declared C type. The C itself is
+  unchanged (`s.level = 3`, `p->flags |= 1`, `switch (s.kind)`); the accessors
+  are what *Rust* code on the other side uses.
 * `_Alignas` is honoured on the members of a `struct` or `union`, by raising
   the alignment of the whole record; a member whose natural offset does not
   already satisfy the alignment it asks for — `struct { char c;
@@ -111,8 +118,8 @@ Run it with `cargo run --example fact`.
 `cinrs` is measured against
 [c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
 C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **203 of the 218 that `c99!` is eligible for
-pass (93.1 %)**, and 206 of 220 under `c11!` — compiled, run, and diffed
+220 in its `single-exec` suite, **204 of the 218 that `c99!` is eligible for
+pass (93.6 %)**, and 207 of 220 under `c11!` — compiled, run, and diffed
 against the expected output. What is left is GCC extensions the cases lean on
 (statement expressions, `__attribute__`, incomplete `enum`s, range designators)
 and the constructs listed as unsupported above; one program compiles and prints

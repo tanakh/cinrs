@@ -80,6 +80,24 @@ pub const VA_LIST_NAMES: &[&str] = &["__builtin_va_list"];
 /// `unreachable` for whatever it likes.
 pub const UNREACHABLE_BUILTIN: &str = "__builtin_unreachable";
 
+/// The names Rust cannot spell even as raw identifiers.
+///
+/// A C identifier that is one of them is generated with an underscore
+/// appended, which both code generation and the naming of the bit-field
+/// accessors have to agree on.
+pub const NEVER_RAW: &[&str] = &["self", "Self", "super", "crate", "_"];
+
+/// The Rust identifier a C name is generated as, spelled out.
+///
+/// Only the names [`NEVER_RAW`] lists change; a name that collides with an
+/// ordinary keyword becomes a raw identifier, which is the same identifier.
+pub fn rust_name_of(name: &str) -> String {
+    if NEVER_RAW.contains(&name) {
+        return format!("{name}_");
+    }
+    name.to_owned()
+}
+
 /// A pointer type in the [`Types`] arena.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerId(pub u32);
@@ -227,6 +245,43 @@ pub struct Layout {
     pub align: u64,
 }
 
+/// What makes a member a bit-field (C99 6.7.2.1).
+///
+/// A bit-field has no address of its own, so it is not a Rust field: a maximal
+/// run of them shares one `[u8; K]` storage field, and reading or writing one
+/// goes through a pair of generated accessors. Everything code generation needs
+/// to emit those — where the bits are and how wide they are — lives here.
+#[derive(Clone, Debug)]
+pub struct BitField {
+    /// The declared width, in bits.
+    pub width: u32,
+    /// The bit offset from the start of the record, counting from the least
+    /// significant bit of byte 0 (the little-endian bit order every ABI this
+    /// crate targets uses).
+    pub bit_offset: u64,
+    /// Whether reading the field sign-extends.
+    ///
+    /// Usually the signedness of the declared type; an `enum` bit-field follows
+    /// the enumeration's underlying type instead, which GCC and Clang make
+    /// unsigned when no enumerator is negative.
+    pub signed: bool,
+    /// The name of the `[u8; K]` field the bits live in.
+    pub storage: String,
+    /// The byte offset of that field within the record.
+    pub storage_offset: u64,
+    /// The name of the generated getter.
+    pub getter: String,
+    /// The name of the generated setter.
+    pub setter: String,
+}
+
+impl BitField {
+    /// The bit offset of the field within its storage array.
+    pub fn offset_in_storage(&self) -> u64 {
+        self.bit_offset - self.storage_offset * 8
+    }
+}
+
 /// One member of a `struct` or `union`.
 #[derive(Clone, Debug)]
 pub struct Field {
@@ -242,9 +297,42 @@ pub struct Field {
     /// Whether the member's type is `const`-qualified.
     pub is_const: bool,
     /// The byte offset from the start of the record (always 0 in a union).
+    ///
+    /// For a bit-field this is the byte the field's first bit falls in; the
+    /// exact position is in [`Field::bits`].
     pub offset: u64,
+    /// Set when the member was declared with a width.
+    pub bits: Option<BitField>,
     /// Where the member was declared.
     pub range: SourceRange,
+}
+
+/// One field of the generated Rust item.
+///
+/// A record without bit-fields maps one C member onto one Rust field, and this
+/// is simply its member list. Bit-fields break that correspondence: they share
+/// storage, they may be unnamed, and the bytes they occupy do not always start
+/// where `#[repr(C)]` would put the next field on its own.
+#[derive(Clone, Debug)]
+pub enum RustField {
+    /// A C member, by its index in [`RecordDef::fields`].
+    Member(usize),
+    /// The bytes one maximal run of bit-fields lives in.
+    Bits {
+        /// The field name, `__cinrs_bitsN`.
+        name: String,
+        /// The byte offset of the run within the record.
+        offset: u64,
+        /// How many bytes it covers.
+        bytes: u64,
+    },
+    /// Filler that puts the field after it where C puts it.
+    Pad {
+        /// The field name, `__cinrs_padN`.
+        name: String,
+        /// How many bytes it covers.
+        bytes: u64,
+    },
 }
 
 /// A `struct` or `union` tag.
@@ -260,7 +348,13 @@ pub struct RecordDef {
     /// tag, and may therefore be replaced by the name of a `typedef` of it.
     pub anonymous: bool,
     /// The members, in declaration order. Empty while the tag is incomplete.
+    ///
+    /// An unnamed bit-field is *not* here: it declares no member, so nothing
+    /// can name it and no initialiser reaches it. It still occupies bits, and
+    /// [`RecordDef::rust_fields`] accounts for them.
     pub fields: Vec<Field>,
+    /// The fields of the generated Rust item, in order.
+    pub rust_fields: Vec<RustField>,
     /// Whether a member list has been seen.
     pub complete: bool,
     /// The layout, computed once the tag is complete.
@@ -293,6 +387,13 @@ pub struct Enumerator {
 /// A file-scope `enum` tag, which becomes a named `c_int` alias.
 #[derive(Clone, Debug)]
 pub struct EnumDef {
+    /// Whether the enumeration's underlying type is unsigned, which is what GCC
+    /// and Clang pick when no enumerator is negative.
+    ///
+    /// The choice is implementation defined and only observable through a
+    /// bit-field of the type, which is where this is used; everywhere else an
+    /// enumeration is `int`, as [`Ty::Enum`] says.
+    pub unsigned: bool,
     /// The C tag, if one was written.
     pub tag: Option<String>,
     /// The name of the generated Rust type alias.
@@ -855,6 +956,39 @@ impl Ty {
         } else {
             Ty::UInt
         }
+    }
+
+    /// The integer promotions applied to a bit-field (C99 6.3.1.1p2, "as
+    /// restricted by the width").
+    ///
+    /// The value of a bit-field of width `width` ranges over `width` bits
+    /// rather than over the whole declared type, so `unsigned x : 31` promotes
+    /// to `int` — every value fits — while `unsigned x : 32` promotes to
+    /// `unsigned int`. The standard only defines the promotions for a type
+    /// whose rank is at most `int`'s, which is the only case standard C allows
+    /// a bit-field to have; GCC and Clang apply the same width-restricted rule
+    /// to the wider types they accept as an extension, so `unsigned long x : 31`
+    /// is an `int` too and `unsigned long x : 33` keeps its declared type. This
+    /// follows them.
+    ///
+    /// `signed` is the signedness of the *field*, which is the declared type's
+    /// except for an `enum` whose underlying type the implementation made
+    /// unsigned.
+    pub fn promote_bit_field(self, width: u32, signed: bool, target: &TargetModel) -> Ty {
+        if !self.is_integer() || width == 0 || width > 127 {
+            return self.promote(target);
+        }
+        let (min, max) = if signed {
+            (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+        } else {
+            (0, (1i128 << width) - 1)
+        };
+        for candidate in [Ty::Int, Ty::UInt] {
+            if candidate.can_represent(min, target) && candidate.can_represent(max, target) {
+                return candidate;
+            }
+        }
+        self
     }
 
     /// The default argument promotions, applied to the variable part of a
@@ -1882,6 +2016,34 @@ mod tests {
         assert_eq!(Ty::Int.promote(&T), Ty::Int);
         assert_eq!(Ty::UInt.promote(&T), Ty::UInt);
         assert_eq!(Ty::Double.promote(&T), Ty::Double);
+    }
+
+    #[test]
+    fn bit_fields_promote_by_their_width() {
+        // 6.3.1.1p2's "as restricted by the width": `int` first, then
+        // `unsigned int`, and only then the declared type. The expectations
+        // were read off gcc 15 and clang 21 on x86-64.
+        let p = |ty: Ty, width: u32| ty.promote_bit_field(width, ty.is_signed(&T), &T);
+        assert_eq!(p(Ty::UInt, 31), Ty::Int);
+        assert_eq!(p(Ty::UInt, 32), Ty::UInt);
+        assert_eq!(p(Ty::Int, 32), Ty::Int);
+        assert_eq!(p(Ty::Int, 3), Ty::Int);
+        assert_eq!(p(Ty::Bool, 1), Ty::Int);
+        assert_eq!(p(Ty::Char, 8), Ty::Int);
+        assert_eq!(p(Ty::UChar, 8), Ty::Int);
+        assert_eq!(p(Ty::UShort, 16), Ty::Int);
+        // The types GCC accepts as an extension follow the same rule, so a
+        // narrow field of a wide type is still an `int`.
+        assert_eq!(p(Ty::ULong, 31), Ty::Int);
+        assert_eq!(p(Ty::ULong, 32), Ty::UInt);
+        assert_eq!(p(Ty::ULong, 33), Ty::ULong);
+        assert_eq!(p(Ty::Long, 33), Ty::Long);
+        assert_eq!(p(Ty::LongLong, 32), Ty::Int);
+        assert_eq!(p(Ty::ULongLong, 40), Ty::ULongLong);
+        assert_eq!(p(Ty::ULongLong, 64), Ty::ULongLong);
+        // An `enum` whose underlying type the implementation made unsigned.
+        assert_eq!(Ty::Int.promote_bit_field(8, false, &T), Ty::Int);
+        assert_eq!(Ty::Int.promote_bit_field(32, false, &T), Ty::UInt);
     }
 
     #[test]

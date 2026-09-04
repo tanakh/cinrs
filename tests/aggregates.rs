@@ -483,6 +483,83 @@ fn sizeof_agrees_with_the_generated_rust_types() {
 }
 
 #[test]
+fn sizeof_agrees_with_the_generated_rust_types_for_bit_fields() {
+    c99! {
+        /* A bit-field is not a Rust field, so a run of them shares an
+         * `[u8; K]` and everything after it has to be reconciled by hand.
+         * These are the shapes where that goes wrong if it is done naively. */
+        struct Packed { char a : 2; int b : 30; };
+        struct Split { char c; int x : 9; char d; };
+        struct Moved { char c; short x : 9; };
+        struct Zeroed { unsigned int a : 3; unsigned int : 0; unsigned int b : 3; };
+        struct Trailing { int a; long long : 0; };
+        struct After { char a : 3; double d; char b; };
+        union Overlaid { unsigned int a : 3; unsigned int b : 20; double d; };
+
+        unsigned long sizes(int which) {
+            switch (which) {
+                case 0: return sizeof(struct Packed);
+                case 1: return sizeof(struct Split);
+                case 2: return sizeof(struct Moved);
+                case 3: return sizeof(struct Zeroed);
+                case 4: return sizeof(struct Trailing);
+                case 5: return sizeof(struct After);
+                case 6: return sizeof(union Overlaid);
+                default: return 0;
+            }
+        }
+
+        unsigned long offsets(int which) {
+            switch (which) {
+                case 0: return __builtin_offsetof(struct Split, d);
+                case 1: return __builtin_offsetof(struct After, d);
+                case 2: return __builtin_offsetof(struct After, b);
+                default: return 0;
+            }
+        }
+    }
+
+    // What the C front end folded `sizeof` into must be what `rustc` lays the
+    // generated `#[repr(C)]` types out as — bit-field storage, padding and
+    // raised alignment included.
+    unsafe {
+        assert_eq!(sizes(0) as usize, size_of::<Packed>());
+        assert_eq!(sizes(1) as usize, size_of::<Split>());
+        assert_eq!(sizes(2) as usize, size_of::<Moved>());
+        assert_eq!(sizes(3) as usize, size_of::<Zeroed>());
+        assert_eq!(sizes(4) as usize, size_of::<Trailing>());
+        assert_eq!(sizes(5) as usize, size_of::<After>());
+        assert_eq!(sizes(6) as usize, size_of::<Overlaid>());
+
+        assert_eq!(offsets(0) as usize, core::mem::offset_of!(Split, d));
+        assert_eq!(offsets(1) as usize, core::mem::offset_of!(After, d));
+        assert_eq!(offsets(2) as usize, core::mem::offset_of!(After, b));
+    }
+
+    // The numbers themselves, as gcc gives them.
+    assert_eq!((size_of::<Packed>(), align_of::<Packed>()), (4, 4));
+    assert_eq!((size_of::<Split>(), align_of::<Split>()), (4, 4));
+    assert_eq!((size_of::<Moved>(), align_of::<Moved>()), (4, 2));
+    assert_eq!((size_of::<Zeroed>(), align_of::<Zeroed>()), (8, 4));
+    // A trailing `long long : 0` grows the record with no storage of its own,
+    // and — being unnamed — leaves its alignment alone.
+    assert_eq!((size_of::<Trailing>(), align_of::<Trailing>()), (8, 4));
+    assert_eq!((size_of::<After>(), align_of::<After>()), (24, 8));
+    assert_eq!((size_of::<Overlaid>(), align_of::<Overlaid>()), (8, 8));
+
+    // And the storage a run lives in starts at the byte its first bit is in,
+    // which is what makes the members after it land where C puts them.
+    assert_eq!(core::mem::offset_of!(Packed, __cinrs_bits0), 0);
+    assert_eq!(core::mem::offset_of!(Split, __cinrs_bits0), 1);
+    assert_eq!(core::mem::offset_of!(Split, d), 3);
+    // `short x : 9` cannot straddle a `short`, so it starts at bit 16 and the
+    // byte before it is explicit padding.
+    assert_eq!(core::mem::offset_of!(Moved, __cinrs_bits0), 2);
+    assert_eq!(core::mem::offset_of!(After, d), 8);
+    assert_eq!(core::mem::offset_of!(After, b), 16);
+}
+
+#[test]
 fn initializers_may_arrive_in_any_order() {
     c99! {
         struct Rgb { int r; int g; int b; };

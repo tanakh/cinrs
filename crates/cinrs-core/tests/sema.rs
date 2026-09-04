@@ -124,11 +124,75 @@ fn derived_and_tagged_types_are_accepted() {
 }
 
 #[test]
-fn constructs_that_are_still_out_of_reach_are_named() {
+fn bit_fields_are_checked_against_their_type() {
+    accepted("struct S { unsigned int flag : 1; int level : 3; unsigned : 0; char tag; };");
+    accepted("struct S { _Bool a : 1; long long b : 40; };");
+    accepted("enum E { A, B }; struct S { enum E e : 3; };");
+    accepted("union U { unsigned a : 3; unsigned b : 20; };");
     rejected(
-        "struct S { unsigned int flag : 1; };",
-        &["bit-fields are not supported yet; declare the members as whole integers instead"],
+        "struct S { double d : 3; };",
+        &["bit-field 'd' has invalid type 'double'; only the integer types may be given a width"],
     );
+    rejected(
+        "struct S { int *p : 3; };",
+        &["bit-field 'p' has invalid type 'int *'; only the integer types may be given a width"],
+    );
+    rejected(
+        "struct S { int : 3.5; };",
+        &["the width of anonymous bit-field has non-integer type 'double'"],
+    );
+    rejected(
+        "int n; struct S { int a : n; };",
+        &["the width of bit-field 'a' is not an integer constant expression"],
+    );
+    rejected(
+        "struct S { int a : -1; };",
+        &["negative width in bit-field 'a'"],
+    );
+    rejected(
+        "struct S { char a : 9; };",
+        &["width 9 of bit-field 'a' exceeds the 8 bits of its type 'char'"],
+    );
+    rejected(
+        "struct S { _Bool a : 2; };",
+        &["width 2 of bit-field 'a' exceeds the 1 bit of its type '_Bool'"],
+    );
+    rejected(
+        "struct S { int a : 0; };",
+        &["zero width for bit-field 'a'; only an unnamed bit-field may be `: 0`"],
+    );
+    rejected(
+        "struct S { int a : 3; int a : 3; };",
+        &["duplicate member 'a'"],
+    );
+    // A bit-field has no address, so there is nothing for an alignment to
+    // apply to; GCC says the same.
+    let mut c11 = Options::new(Standard::C11);
+    c11.c_variadic = true;
+    assert_eq!(
+        errors_with("struct S { _Alignas(4) int a : 3; };", &c11),
+        ["'_Alignas' cannot be applied to a bit-field"]
+    );
+}
+
+#[test]
+fn a_bit_field_has_neither_an_address_nor_a_size() {
+    rejected(
+        "struct S { int a : 3; }; int f(struct S *s) { return (int) &s->a; }",
+        &["cannot take the address of a bit-field"],
+    );
+    rejected(
+        "struct S { int a : 3; }; unsigned long f(struct S *s) { return sizeof s->a; }",
+        &["'sizeof' applied to a bit-field, which has no size of its own"],
+    );
+    rejected(
+        "struct S { int a : 3; }; unsigned long f(void) { return __builtin_offsetof(struct S, a); }",
+        &["'offsetof' applied to the bit-field 'a', which has no address"],
+    );
+}
+
+#[test]
+fn constructs_that_are_still_out_of_reach_are_named() {
     rejected(
         "int f(int n) { int a[n]; return a[0]; }",
         &[

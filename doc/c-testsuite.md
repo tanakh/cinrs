@@ -208,16 +208,16 @@ corpus revision.
 
 | entry point | selected | passed | rate |
 | --- | ---: | ---: | ---: |
-| `c99!` | 218 | 203 | **93.1 %** |
-| `c11!` | 220 | 206 | **93.6 %** |
-| `c23!` | 220 | 206 | **93.6 %** |
+| `c99!` | 218 | 204 | **93.6 %** |
+| `c11!` | 220 | 207 | **94.1 %** |
+| `c23!` | 220 | 207 | **94.1 %** |
 
 Per tag, under `c11!` (the run that selects everything):
 
 | tag | passed | rate |
 | --- | ---: | ---: |
-| `portable` | 206/220 | 93.6 % |
-| `c89` | 163/174 | 93.7 % |
+| `portable` | 207/220 | 94.1 % |
+| `c89` | 164/174 | 94.3 % |
 | `c99` | 41/43 | 95.3 % |
 | `c11` | 2/2 | 100 % |
 | `needs-cpp` | 90/98 | 91.8 % |
@@ -226,15 +226,16 @@ Per tag, under `c11!` (the run that selects everything):
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
 fails on 1.97.1. The table above counts it as a failure; on 1.99 the rows are
-204/218 (93.6 %) for `c99!` and 207/220 (94.1 %) for `c11!` and `c23!`.
+205/218 (94.0 %) for `c99!` and 208/220 (94.5 %) for `c11!` and `c23!`.
 
 ### The failures, by cause
 
-Fourteen cases fail under `c11!` — thirteen to compile and one at run time —
-and `c99!` adds `00219`, which wants a later entry point. None of them is a
-`cinrs` bug any more: the four the first measurement found — `00110`, `00159`,
-`00200` and `00219` — are fixed and have regression tests of their own, and so
-are the two that wanted compound literals (`00149` and `00150`).
+Thirteen cases fail under `c11!` — twelve to compile and one at run time — and
+`c99!` adds `00219`, which wants a later entry point. None of them is a `cinrs`
+bug any more: the four the first measurement found — `00110`, `00159`, `00200`
+and `00219` — are fixed and have regression tests of their own, and so are the
+two that wanted compound literals (`00149` and `00150`) and the one that wanted
+bit-fields (`00218`).
 
 **A GCC extension the case relies on (6).** `cinrs` implements C, and refuses
 these with a located diagnostic rather than mistranslating them. Several of the
@@ -248,14 +249,13 @@ cases say so in their own comments.
 | `00213` | a statement expression, `({ … })` |
 | `00214` | a statement expression and `__builtin_expect` |
 
-**Something `cinrs` has not implemented yet (5).**
+**Something `cinrs` has not implemented yet (4).**
 
 | case | what it needs |
 | --- | --- |
 | `00204` | `va_arg` with a struct type |
 | `00207` | a variable length array |
 | `00216` | an empty `struct` as a member of an initialised aggregate (a GCC extension: C99 has no empty structs), GCC's range designators `[1 ... 5]`, and flexible array members |
-| `00218` | bit-fields (documented as deliberately never supported) |
 | `00220` | `<wchar.h>`, which is not among the bundled headers |
 
 **Wanted a later entry point (1, `c99!` only).** `00219` uses `_Generic` and is

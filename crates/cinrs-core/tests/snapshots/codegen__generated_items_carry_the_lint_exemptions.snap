@@ -12,6 +12,7 @@ expression: attribute
     non_snake_case,
     non_upper_case_globals,
     overflowing_literals,
+    static_mut_refs,
     suspicious_runtime_symbol_definitions,
     unpredictable_function_pointer_comparisons,
     unreachable_code,

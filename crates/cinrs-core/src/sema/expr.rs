@@ -110,11 +110,7 @@ impl Sema {
             ast::ExprKind::PreIncDec { op, operand } => self.inc_dec(*op, operand, false, range),
             ast::ExprKind::Cast { ty, expr: operand } => self.cast_expr(ty, operand, range),
             ast::ExprKind::SizeofExpr(operand) => {
-                let ty = if self.is_lvalue_form(operand) {
-                    self.lvalue(operand)?.ty
-                } else {
-                    self.expr(operand)?.ty
-                };
+                let ty = self.operand_ty(operand, "sizeof")?;
                 self.sizeof(ty, operand.range, range)
             }
             ast::ExprKind::SizeofType(ty) => {
@@ -122,11 +118,7 @@ impl Sema {
                 self.sizeof(target, ty.range, range)
             }
             ast::ExprKind::AlignofExpr(operand) => {
-                let ty = if self.is_lvalue_form(operand) {
-                    self.lvalue(operand)?.ty
-                } else {
-                    self.expr(operand)?.ty
-                };
+                let ty = self.operand_ty(operand, "_Alignof")?;
                 self.alignof(ty, operand.range, range)
             }
             ast::ExprKind::AlignofType(name) => {
@@ -697,8 +689,8 @@ impl Sema {
             },
             ast::UnaryOp::Plus | ast::UnaryOp::Minus => {
                 let value = self.expr(operand)?;
-                let ty = self.require_arithmetic(&value, op.as_str(), operand.range)?;
-                let promoted = ty.promote(&self.target);
+                self.require_arithmetic(&value, op.as_str(), operand.range)?;
+                let promoted = self.promoted(&value);
                 let value = self.convert(value, promoted);
                 if op == ast::UnaryOp::Plus {
                     return Some(Expr::new(value.kind, promoted, range));
@@ -715,8 +707,8 @@ impl Sema {
             }
             ast::UnaryOp::BitNot => {
                 let value = self.expr(operand)?;
-                let ty = self.require_integer(&value, "~", operand.range)?;
-                let promoted = ty.promote(&self.target);
+                self.require_integer(&value, "~", operand.range)?;
+                let promoted = self.promoted(&value);
                 let value = self.convert(value, promoted);
                 Some(Expr::new(
                     ExprKind::BitNot(Box::new(value)),
@@ -768,6 +760,12 @@ impl Sema {
         if self.is_lvalue_form(operand) {
             let place = self.lvalue(operand)?;
             if place.ty.is_error() {
+                return None;
+            }
+            if self.bit_field_of(&place).is_some() {
+                // A bit-field has no address: it may share a byte with its
+                // neighbours, and it need not start on one.
+                self.error(range, "cannot take the address of a bit-field");
                 return None;
             }
             if rooted_in_temporary(&place) {
@@ -904,8 +902,8 @@ impl Sema {
         if bin.is_shift() {
             // The operands of a shift are promoted separately: the result has
             // the type of the promoted left operand.
-            let lhs_ty = lhs_value.ty.promote(&self.target);
-            let rhs_ty = rhs_value.ty.promote(&self.target);
+            let lhs_ty = self.promoted(&lhs_value);
+            let rhs_ty = self.promoted(&rhs_value);
             let lhs_value = self.convert(lhs_value, lhs_ty);
             let rhs_value = self.convert(rhs_value, rhs_ty);
             return Some(Expr::new(
@@ -1290,7 +1288,7 @@ impl Sema {
                     // The variable part of a variadic call gets the default
                     // argument promotions: `float` widens to `double` and the
                     // small integer types to `int`.
-                    let promoted = value.ty.promote_argument(&self.target);
+                    let promoted = self.promoted_argument(&value);
                     let value = self.convert(value, promoted);
                     values.push(value);
                 }
@@ -1461,11 +1459,15 @@ impl Sema {
         }
 
         let (compute, value) = if bin.is_shift() {
-            let compute = ty.promote(&self.target);
-            let promoted = value.ty.promote(&self.target);
+            let compute = self.promoted_place(&place);
+            let promoted = self.promoted(&value);
             (compute, self.convert(value, promoted))
         } else {
-            let compute = Ty::usual_arithmetic(ty, value.ty, &self.target);
+            let compute = Ty::usual_arithmetic(
+                self.promoted_place(&place),
+                self.promoted(&value),
+                &self.target,
+            );
             (compute, self.convert(value, compute))
         };
 
@@ -1605,11 +1607,48 @@ impl Sema {
             );
             return None;
         };
+        if self.member_bits(record, &path) {
+            self.error(
+                member.range,
+                format!(
+                    "'offsetof' applied to the bit-field '{}', which has no address",
+                    member.name
+                ),
+            );
+            return None;
+        }
         Some(Expr::new(
             ExprKind::OffsetOf { record, path },
             self.size_ty(),
             range,
         ))
+    }
+
+    /// The type `sizeof` or `_Alignof` is being asked about, rejecting the one
+    /// operand that has neither: a bit-field.
+    fn operand_ty(&mut self, operand: &ast::Expr, what: &str) -> Option<Ty> {
+        if !self.is_lvalue_form(operand) {
+            return Some(self.expr(operand)?.ty);
+        }
+        let place = self.lvalue(operand)?;
+        if self.bit_field_of(&place).is_some() {
+            self.error(
+                operand.range,
+                format!("'{what}' applied to a bit-field, which has no size of its own"),
+            );
+            return None;
+        }
+        Some(place.ty)
+    }
+
+    /// Whether the member a [path](Sema::member_path) reaches is a bit-field.
+    fn member_bits(&self, record: crate::ir::RecordId, path: &[usize]) -> bool {
+        let field = &self.types().record(record).fields[path[0]];
+        match (path.len(), field.ty) {
+            (1, _) => field.bits.is_some(),
+            (_, Ty::Record(inner)) => self.member_bits(inner, &path[1..]),
+            _ => false,
+        }
     }
 
     fn sizeof(&mut self, ty: Ty, operand_range: SourceRange, range: SourceRange) -> Option<Expr> {
@@ -1762,7 +1801,10 @@ impl Sema {
 
     /// Applies the usual arithmetic conversions to a pair of operands.
     pub(super) fn balance(&mut self, lhs: Expr, rhs: Expr) -> (Expr, Expr, Ty) {
-        let common = Ty::usual_arithmetic(lhs.ty, rhs.ty, &self.target);
+        // The operands are promoted first, which is where a bit-field's width
+        // has its say; `usual_arithmetic` promotes again, and the promotions
+        // are idempotent, so passing the promoted types through is exact.
+        let common = Ty::usual_arithmetic(self.promoted(&lhs), self.promoted(&rhs), &self.target);
         let lhs = self.convert(lhs, common);
         let rhs = self.convert(rhs, common);
         (lhs, rhs, common)

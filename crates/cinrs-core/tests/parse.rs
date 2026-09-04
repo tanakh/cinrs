@@ -88,6 +88,9 @@ void vla(int n, int a[static const 4], int b[*]);
 
 #[test]
 fn struct_union_enum_with_bit_fields() {
+    // `enum Color : 4;` is an unnamed bit-field of the enumeration's type and
+    // not C23's fixed underlying type: the `:` only introduces one of those
+    // when a *type* follows it.
     insta::assert_snapshot!(parse_dump(
         r#"
 struct Flags {
@@ -99,6 +102,7 @@ struct Flags {
 union U { int i; double d; char bytes[8]; };
 enum Color { Red, Green = 7, Blue, };
 enum Color pick(union U u);
+struct Tagged { enum Color kind : 4; enum Color : 2; long long wide : 40; };
 "#
     ));
 }

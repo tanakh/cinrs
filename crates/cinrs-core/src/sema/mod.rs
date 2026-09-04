@@ -154,10 +154,15 @@ struct TypedefEntry {
 #[derive(Clone, Copy, Debug)]
 enum TagEntry {
     Record(RecordId),
-    /// The type `enum X` names: [`Ty::Enum`] for a file-scope tag that becomes
-    /// a named alias, the fixed underlying type of a C23 enumeration, and
-    /// `int` for everything else.
-    Enum(Ty),
+    Enum {
+        /// The type `enum X` names: [`Ty::Enum`] for a file-scope tag that
+        /// becomes a named alias, the fixed underlying type of a C23
+        /// enumeration, and `int` for everything else.
+        ty: Ty,
+        /// Whether the enumeration's underlying type is unsigned, which is
+        /// only observable through a bit-field of the type.
+        unsigned: bool,
+    },
 }
 
 #[derive(Default)]
@@ -248,6 +253,12 @@ struct Sema {
     /// one type, and the range they were written at is what says so.
     record_by_range: HashMap<(Pos, Pos), RecordId>,
     enum_by_range: HashMap<(Pos, Pos), Ty>,
+    /// Whether the enumeration a specifier names has an unsigned underlying
+    /// type, keyed the same way as `enum_by_range`.
+    ///
+    /// It decides whether a bit-field of the type sign-extends when it is read,
+    /// which is the only place the choice shows; see `Sema::bit_field_signed`.
+    enum_unsigned: HashMap<(Pos, Pos), bool>,
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
@@ -311,6 +322,7 @@ impl Sema {
             tags: vec![HashMap::new()],
             record_by_range: HashMap::new(),
             enum_by_range: HashMap::new(),
+            enum_unsigned: HashMap::new(),
             defined_functions: HashSet::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
@@ -491,6 +503,53 @@ impl Sema {
 
     fn size_ty(&self) -> Ty {
         Ty::size_ty(&self.target)
+    }
+
+    // -- bit-fields ---------------------------------------------------------
+
+    /// What makes a place a bit-field, if it is one.
+    fn bit_field_of(&self, place: &Place) -> Option<&ir::BitField> {
+        let ir::PlaceKind::Field { record, index, .. } = &place.kind else {
+            return None;
+        };
+        self.types().record(*record).fields[*index].bits.as_ref()
+    }
+
+    /// The type a value takes part in arithmetic as, after the integer
+    /// promotions.
+    ///
+    /// Reading a bit-field is the one case where the promotions do not follow
+    /// from the type alone: 6.3.1.1p2 restricts the range to the field's width,
+    /// so `unsigned x : 31` promotes to `int`. Nothing else can produce a value
+    /// with that range, so recognising the load here is enough — the IR does
+    /// not have to carry the width around.
+    fn promoted(&self, expr: &Expr) -> Ty {
+        if let ExprKind::Load(place) = &expr.kind
+            && let Some(bits) = self.bit_field_of(place)
+        {
+            return expr
+                .ty
+                .promote_bit_field(bits.width, bits.signed, &self.target);
+        }
+        expr.ty.promote(&self.target)
+    }
+
+    /// The same, for the place a compound assignment computes in.
+    fn promoted_place(&self, place: &Place) -> Ty {
+        match self.bit_field_of(place) {
+            Some(bits) => place
+                .ty
+                .promote_bit_field(bits.width, bits.signed, &self.target),
+            None => place.ty.promote(&self.target),
+        }
+    }
+
+    /// The default argument promotions, applied to a value.
+    fn promoted_argument(&self, expr: &Expr) -> Ty {
+        if expr.ty == Ty::Float {
+            return Ty::Double;
+        }
+        self.promoted(expr)
     }
 
     // -- objects ------------------------------------------------------------
