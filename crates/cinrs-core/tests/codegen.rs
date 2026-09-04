@@ -9,7 +9,7 @@
 use std::str::FromStr;
 
 use cinrs_core::{Options, Standard, expand};
-use proc_macro2::TokenStream;
+use proc_macro2::{TokenStream, TokenTree};
 
 /// Expands `source` and pretty-prints the result.
 ///
@@ -657,4 +657,106 @@ fn a_noreturn_call_ends_the_function() {
         }
         "#
     ));
+}
+
+#[test]
+fn compound_literals_become_a_hidden_object() {
+    // The object has to outlive the expression — C gives it the lifetime of
+    // the enclosing block — so it cannot be a temporary inside one. It is a
+    // binding at the head of the block, and the value is stored into it
+    // *where the literal was written*, which is what keeps C's evaluation
+    // order and rebuilds the object on every pass through a loop. A literal at
+    // file scope has static storage duration and becomes an item instead.
+    insta::assert_snapshot!(generate(
+        r"
+        struct S { int a; int b; };
+
+        struct S *global = &(struct S){ 1, 2 };
+
+        int local(int n) {
+            struct S *p = &(struct S){ n, n + 1 };
+            int total = 0;
+            for (int i = 0; i < n; i++) {
+                total += (int[]){ i, i * 2 }[1];
+            }
+            return p->a + p->b + total;
+        }
+        "
+    ));
+}
+
+#[test]
+fn a_definition_after_an_extern_declaration_leaves_the_extern_block() {
+    // C99 6.9.2: the later declaration *defines* the object here, so it has to
+    // stop being an entry in the `extern` block or the link fails.
+    let defined = generate("extern int x; int x; int f(void) { return x; }");
+    assert!(
+        defined.contains("pub static mut x: ::core::ffi::c_int = 0;"),
+        "{defined}"
+    );
+    assert!(!defined.contains("link_name"), "{defined}");
+
+    let initialized = generate("extern int x; int x = 3; int f(void) { return x; }");
+    assert!(
+        initialized.contains("pub static mut x: ::core::ffi::c_int = 3;"),
+        "{initialized}"
+    );
+    assert!(!initialized.contains("link_name"), "{initialized}");
+
+    // An `extern` the unit never defines is still linked from elsewhere.
+    let declared = generate("extern int x; int f(void) { return x; }");
+    assert!(declared.contains("#[link_name = \"x\"]"), "{declared}");
+    assert!(!declared.contains("static mut x"), "{declared}");
+}
+
+/// Every bare integer literal in `tokens` that is the receiver of a method
+/// call, which Rust cannot give a type to (`E0689`).
+///
+/// Working on the tokens rather than on the pretty-printed text is what makes
+/// this independent of how the output happens to be formatted.
+fn literal_method_receivers(tokens: TokenStream) -> Vec<String> {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut found = Vec::new();
+    for (index, tree) in trees.iter().enumerate() {
+        if let TokenTree::Group(group) = tree {
+            found.extend(literal_method_receivers(group.stream()));
+            continue;
+        }
+        let TokenTree::Literal(literal) = tree else {
+            continue;
+        };
+        // A suffixed literal (`4u32`) says what it is, and so does anything
+        // with a `.` or an `x` in it; only a plain run of digits is open.
+        let text = literal.to_string();
+        if !text.chars().all(|c| c.is_ascii_digit() || c == '_') {
+            continue;
+        }
+        let dot = matches!(trees.get(index + 1), Some(TokenTree::Punct(p)) if p.as_char() == '.');
+        let method = matches!(trees.get(index + 2), Some(TokenTree::Ident(_)));
+        if dot && method {
+            found.push(text);
+        }
+    }
+    found
+}
+
+#[test]
+fn a_bare_literal_is_never_the_receiver_of_a_method() {
+    // `{integer}.wrapping_mul(…)` is `E0689`: Rust refuses to guess. The
+    // shapes below are the ones that get close to it — a folded constant, and
+    // a conditional whose arms are both bare literals, which has no more of a
+    // type than a literal does. (c-testsuite 00200.)
+    for source in [
+        "int f(int n) { return ((n) < 0 || -(n) < 0 ? -1 : 1) * (int) sizeof(n + 0); }",
+        "long f(int n) { return (n ? 1 : 2) * 3L; }",
+        "int f(int n) { return (n ? 1 : 2) << 3; }",
+        "int f(int n) { return -(n ? 1 : 2); }",
+        "int f(int n) { return 2 * 3 + n; }",
+        "unsigned long f(void) { return sizeof(int) * 4; }",
+    ] {
+        let input = TokenStream::from_str(source).expect("the C must lex as Rust tokens");
+        let output = expand(input, &Options::new(Standard::C99));
+        let found = literal_method_receivers(output);
+        assert!(found.is_empty(), "in\n{source}\nfound receivers {found:?}");
+    }
 }

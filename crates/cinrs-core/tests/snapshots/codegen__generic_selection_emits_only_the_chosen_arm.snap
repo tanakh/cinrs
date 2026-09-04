@@ -35,9 +35,7 @@ mod __cinrs_unit_16919680 {
     #[allow(…)]
     pub unsafe extern "C" fn alignments() -> ::core::ffi::c_ulong {
         unsafe {
-            return (8 as ::core::ffi::c_ulong)
-                .wrapping_add(8 as ::core::ffi::c_ulong)
-                .wrapping_add(8);
+            return (8 as ::core::ffi::c_ulong).wrapping_add(8).wrapping_add(8);
         }
     }
 }

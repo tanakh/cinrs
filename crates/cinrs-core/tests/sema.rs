@@ -365,9 +365,51 @@ fn old_style_definitions_are_not_supported() {
 fn extern_objects_are_declared_not_defined() {
     accepted("extern int shared; int read_it(void) { return shared; }");
     accepted("extern int shared; int shared = 1; int read_it(void) { return shared; }");
+    // C99 6.9.2: a declaration with no storage class is a definition, so the
+    // `extern` in front of it is only a claim about linkage.
+    accepted("extern int shared; int shared; int read_it(void) { return shared; }");
+    accepted("int shared; extern int shared; int read_it(void) { return shared; }");
+    accepted("extern int f(int n); int f(int n) { return n; }");
     rejected(
         "extern int shared = 1;",
         &["'shared' is declared 'extern' and cannot have an initializer here"],
+    );
+    // One definition is still all that is allowed.
+    rejected(
+        "extern int shared; int shared = 1; int shared = 2;",
+        &["redefinition of 'shared'"],
+    );
+}
+
+#[test]
+fn compound_literals_follow_the_rules_of_the_objects_they_are() {
+    accepted("struct S { int a; }; struct S *f(void) { return &(struct S){ 1 }; }");
+    accepted("int f(int i) { return (int[]){ 1, 2, 3 }[i]; }");
+    accepted("struct S { int a; }; struct S *p = &(struct S){ 1 };");
+    accepted("char *f(void) { return (char[]){ \"abc\" }; }");
+    // C requires the type name to be a complete object type.
+    rejected(
+        "void *f(void) { return &(void){ 0 }; }",
+        &["a compound literal needs a complete object type, and 'void' is not one"],
+    );
+    rejected(
+        "struct S; struct S *f(void) { return &(struct S){ 0 }; }",
+        &["a compound literal needs a complete object type, and 'struct S' is not one"],
+    );
+    // At file scope the object has static storage duration, so the initialiser
+    // has to be a constant expression.
+    rejected(
+        "int g(void) { return 1; } int *p = &(int){ g() };",
+        &["the initializer of a compound literal is not a compile-time constant expression"],
+    );
+    // At block scope it does not, and so its address is not one either.
+    rejected(
+        "int f(void) { static int *p = &(int){ 1 }; return *p; }",
+        &["initializer is not a compile-time constant expression"],
+    );
+    rejected(
+        "int f(void) { return (const int){ 1 } = 2; }",
+        &["cannot assign to a location of const-qualified type 'int'"],
     );
 }
 

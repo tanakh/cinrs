@@ -13,14 +13,9 @@
 #         CINRS_CTESTSUITE_STANDARD=c99 cargo test --test c_testsuite
 
 00095   extension: converting a function pointer to `void *`
-00110   cinrs bug: a tentative definition after `extern` stays external, so the link fails
 ?00140  variadic function definition; needs Rust 1.99, so it passes there and not before
-00149   unsupported: compound literal
-00150   unsupported: compound literal
 00152   deviation: `__LINE__` names the .rs line, and `#line` does not redirect it
-00159   cinrs bug: a constant cast to a function pointer type has no inferable type (E0282)
 00170   extension: forward-declared (incomplete) `enum`
-00200   cinrs bug: an integer constant expression left with an inferred Rust type (E0689)
 00204   unsupported: `va_arg` with a struct type
 00206   unsupported: `#pragma push_macro` / `pop_macro`, which are ignored
 00207   unsupported: variable length array
@@ -28,7 +23,7 @@
 00210   extension: `__attribute__((…))`
 00213   extension: statement expression `({ … })`
 00214   extension: statement expression `({ … })` and `__builtin_expect`
-00216   unsupported: compound literal, and an empty `struct`
+00216   unsupported: an empty `struct` in an initializer, GCC range designators and flexible array members
 00218   unsupported: bit-fields
 00219   needs `c11!`: `_Generic`
 00220   missing header: <wchar.h> is not bundled

@@ -39,7 +39,9 @@ Run it with `cargo run --example fact`.
   an earlier block is a diagnostic that says which macro to write instead.
 * **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
   `union`, `enum`, `typedef`, string literals, function pointers, `sizeof` with
-  the real layout, casts, aggregate and designated initialisers, file-scope,
+  the real layout, casts, aggregate and designated initialisers, compound
+  literals — `&(struct S){ 1, 2 }`, whose object lives as long as the block it
+  is written in — file-scope,
   `static` and `extern` objects, every operator, every control structure —
   `if`, `while`, `do`/`while`, `for`, `switch` with fallthrough, `break`,
   `continue`, `return`, and `goto`, which is lowered to a state machine over
@@ -109,12 +111,12 @@ Run it with `cargo run --example fact`.
 `cinrs` is measured against
 [c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
 C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **198 of the 218 that `c99!` is eligible for
-pass (90.8 %)**, and 200 of 220 under `c11!` — compiled, run, and diffed
-against the expected output. The rest are, in the main, GCC extensions the
-cases lean on (statement expressions, `__attribute__`, incomplete `enum`s) and
-the constructs listed as unsupported above; three are `cinrs` bugs (a fourth
-appears under `c11!`), and one program compiles and prints the wrong thing. The corpus is a git submodule, so
+220 in its `single-exec` suite, **203 of the 218 that `c99!` is eligible for
+pass (93.1 %)**, and 206 of 220 under `c11!` — compiled, run, and diffed
+against the expected output. What is left is GCC extensions the cases lean on
+(statement expressions, `__attribute__`, incomplete `enum`s, range designators)
+and the constructs listed as unsupported above; one program compiles and prints
+the wrong thing, and one needs a newer Rust than 1.97. The corpus is a git submodule, so
 a fresh checkout skips the suite until `git submodule update --init
 third_party/c-testsuite` fetches it. [`doc/c-testsuite.md`](doc/c-testsuite.md)
 has the harness, how to run it in either mode, the selection rules and the

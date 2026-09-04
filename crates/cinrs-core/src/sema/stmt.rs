@@ -21,6 +21,12 @@ impl Sema {
     }
 
     pub(super) fn block_items(&mut self, items: &[ast::BlockItem]) -> Vec<Stmt> {
+        // A compound literal written anywhere in this block — including in a
+        // statement of it that is not a block of its own, such as the
+        // controlling expression of an `if` — needs an object that lives as
+        // long as the block does. The list is saved and restored so that a
+        // nested block claims only its own.
+        let enclosing = std::mem::take(&mut self.compound_literals);
         let mut out = Vec::new();
         for item in items {
             match item {
@@ -39,7 +45,25 @@ impl Sema {
                 ast::BlockItem::StaticAssert(assert) => self.static_assert(assert),
             }
         }
-        out
+        let mine = std::mem::replace(&mut self.compound_literals, enclosing);
+        if mine.is_empty() {
+            return out;
+        }
+        // The definitions go at the head of the block, zero-initialised; the
+        // value each literal was written with is stored where it was written.
+        let mut prologue = Vec::with_capacity(mine.len() + out.len());
+        for object in mine {
+            let info = self.program.object(object);
+            let (ty, range) = (info.ty, info.range);
+            let init = self.zero(ty, range);
+            prologue.push(Stmt::Let {
+                object,
+                init,
+                explicit: false,
+            });
+        }
+        prologue.append(&mut out);
+        prologue
     }
 
     pub(super) fn stmt(&mut self, stmt: &ast::Stmt) -> Stmt {

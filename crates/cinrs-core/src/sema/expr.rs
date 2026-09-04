@@ -146,9 +146,11 @@ impl Sema {
                 let ty = self.ptr_to(Ty::Void, false);
                 Some(Expr::new(ExprKind::Zeroed, ty, range))
             }
-            ast::ExprKind::CompoundLiteral { .. } => {
-                self.error(range, "compound literals are not supported yet");
-                None
+            // A compound literal is an object, so reading one goes through its
+            // place — and an array one decays, just as a named array does.
+            ast::ExprKind::CompoundLiteral { ty, init } => {
+                let place = self.compound_literal(ty, init, range)?;
+                Some(self.load_or_decay(place, range))
             }
             ast::ExprKind::Error => None,
         }
@@ -195,7 +197,17 @@ impl Sema {
     /// checked, because its *type* is the whole question. That type has had
     /// the lvalue conversion applied (an array is a pointer, a function is a
     /// pointer to one, and the top-level qualifiers are gone), which is what
-    /// C11 DR 481 settled.
+    /// C11 DR 481 settled. Two consequences follow, and both are about
+    /// qualifiers:
+    ///
+    /// * an association is chosen only when its type is *unqualified* and
+    ///   equal to the controlling type, since a qualified type can never be
+    ///   compatible with the unqualified one lvalue conversion produced —
+    ///   `_Generic(x, const int: 1, int: 2)` is 2 for every `int` lvalue,
+    ///   `const` or not; and
+    /// * the rule that no two associations may name *compatible* types
+    ///   (C11 6.5.1.1p2) compares the types **with** their qualifiers, so
+    ///   `int` and `const int` may both appear.
     fn generic_selection(
         &mut self,
         controlling: &ast::Expr,
@@ -210,7 +222,7 @@ impl Sema {
         let mut chosen: Option<&ast::GenericAssoc> = None;
         let mut default: Option<&ast::GenericAssoc> = None;
         let mut default_range: Option<SourceRange> = None;
-        let mut seen: Vec<(Ty, SourceRange)> = Vec::new();
+        let mut seen: Vec<(Ty, ast::TypeQualifiers, SourceRange)> = Vec::new();
         for assoc in assocs {
             let Some(name) = &assoc.ty else {
                 match default_range {
@@ -230,21 +242,23 @@ impl Sema {
             let Some(assoc_ty) = self.ty_of(&name.ty) else {
                 continue;
             };
-            if let Some((_, previous)) = seen.iter().find(|(seen, _)| *seen == assoc_ty) {
+            let quals = name.ty.qualifiers;
+            if let Some((_, _, previous)) = seen
+                .iter()
+                .find(|(seen, seen_quals, _)| *seen == assoc_ty && *seen_quals == quals)
+            {
                 let previous = *previous;
+                let spelled = self.qualified_name(assoc_ty, quals);
                 self.error_note(
                     name.range,
-                    format!(
-                        "'_Generic' has two associations for the compatible type '{}'",
-                        self.tyname(assoc_ty)
-                    ),
+                    format!("'_Generic' has two associations for the compatible type '{spelled}'"),
                     previous,
                     "the first is",
                 );
                 continue;
             }
-            seen.push((assoc_ty, name.range));
-            if assoc_ty == ty && chosen.is_none() {
+            seen.push((assoc_ty, quals, name.range));
+            if assoc_ty == ty && !quals.any() && chosen.is_none() {
                 chosen = Some(assoc);
             }
         }
@@ -262,6 +276,37 @@ impl Sema {
         // the operation is not defined for, which is the point of `_Generic`.
         let value = self.expr(&picked.value)?;
         Some(Expr::new(value.kind, value.ty, range))
+    }
+
+    /// A type spelled the way it was written, qualifiers and all.
+    ///
+    /// [`Ty`] carries no top-level qualifiers — they change nothing about the
+    /// generated Rust — so a diagnostic that is *about* them has to put them
+    /// back. They go in front of the type name, except on a pointer, where C
+    /// writes them after the `*` (`int * const`, not `const int *`, which
+    /// means something else).
+    fn qualified_name(&self, ty: Ty, quals: ast::TypeQualifiers) -> String {
+        let mut written = String::new();
+        for (set, word) in [
+            (quals.is_const, "const"),
+            (quals.is_volatile, "volatile"),
+            (quals.is_restrict, "restrict"),
+        ] {
+            if set {
+                if !written.is_empty() {
+                    written.push(' ');
+                }
+                written.push_str(word);
+            }
+        }
+        let name = self.tyname(ty);
+        if written.is_empty() {
+            name
+        } else if ty.is_pointer() {
+            format!("{name} {written}")
+        } else {
+            format!("{written} {name}")
+        }
     }
 
     /// The value of a function name used as an expression: a pointer to it.
@@ -300,7 +345,8 @@ impl Sema {
             }
             | ast::ExprKind::Index { .. }
             | ast::ExprKind::Member { .. }
-            | ast::ExprKind::Str(_) => true,
+            | ast::ExprKind::Str(_)
+            | ast::ExprKind::CompoundLiteral { .. } => true,
             _ => false,
         }
     }
@@ -344,6 +390,7 @@ impl Sema {
                 self.member_place(base, *arrow, field, range)
             }
             ast::ExprKind::Str(lit) => Some(self.string_place(lit, range)),
+            ast::ExprKind::CompoundLiteral { ty, init } => self.compound_literal(ty, init, range),
             _ => {
                 self.error(range, "expression is not assignable");
                 None

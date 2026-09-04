@@ -1,0 +1,8 @@
+error: expected expression, found ','
+ --> tests/ui/parse_compound_literal.rs:8:31
+  |
+8 |         return (struct S){ 1, , 2 };
+  |                               ^
+
+error: aborting due to 1 previous error
+

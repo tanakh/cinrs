@@ -1294,6 +1294,25 @@ pub enum PlaceKind {
     /// A temporary holding the value of an expression, which is what makes
     /// `f().field` work for a `struct` returned by value.
     Temporary(Box<Expr>),
+    /// The object a block-scope compound literal (`(T){ … }`, C99 6.5.2.5)
+    /// denotes.
+    ///
+    /// Unlike a [`PlaceKind::Temporary`] it is a real object with automatic
+    /// storage duration and the lifetime of the *enclosing block*, so its
+    /// address may be taken and used for the rest of that block. `object` is a
+    /// hidden local sema declares at the top of that block, zero-initialised;
+    /// `init` is the value the literal was written with, and is evaluated
+    /// *here* — where the literal stands — so that C's evaluation order
+    /// survives and a literal inside a loop is built afresh on every
+    /// iteration. A compound literal at *file* scope is an ordinary
+    /// [`Storage::Static`] object instead and arrives as a
+    /// [`PlaceKind::Object`].
+    CompoundLiteral {
+        /// The hidden local the object lives in.
+        object: ObjectId,
+        /// The value stored into it where the literal was written.
+        init: Box<Expr>,
+    },
 }
 
 /// A typed expression.

@@ -16,10 +16,12 @@
 
 use crate::ast;
 use crate::capture::SourceRange;
-use crate::ir::{ConstValue, Expr, ExprKind, RecordId, RecordKind, Ty};
+use crate::ir::{
+    ConstValue, Expr, ExprKind, Place, PlaceKind, RecordId, RecordKind, StaticVar, Storage, Ty,
+};
 use crate::lex::{StrKind, StrLit};
 
-use super::{ConvContext, Sema};
+use super::{ConvContext, Sema, place_of};
 
 /// The most elements an aggregate initialiser will lay out one by one.
 ///
@@ -86,6 +88,98 @@ impl Sema {
         }
     }
 
+    /// Checks `(T){ … }` — a C99 compound literal (6.5.2.5).
+    ///
+    /// A compound literal denotes an *object*, not a value: it may be assigned
+    /// to, subscripted, and have its address taken, and the initialiser rules
+    /// are the ones a declaration uses, designators and elided braces and all.
+    /// Where the object lives is what the translation turns on.
+    ///
+    /// * **At block scope** it has automatic storage duration and the lifetime
+    ///   of the enclosing block, so `&(struct S){1, 2}` is still valid at the
+    ///   end of that block. The object is a hidden local
+    ///   [`Sema::block_items`] defines at the head of the block, and the place
+    ///   carries the initialiser so that it is evaluated *where the literal
+    ///   was written*: C's evaluation order survives, and a literal inside a
+    ///   loop is rebuilt on every iteration, exactly as C says.
+    /// * **At file scope** it has static storage duration, so it becomes a
+    ///   `static mut` item of its own and its initialiser has to be a constant
+    ///   expression, as it does for every other object with that duration.
+    pub(super) fn compound_literal(
+        &mut self,
+        type_name: &ast::TypeName,
+        items: &[ast::InitItem],
+        range: SourceRange,
+    ) -> Option<Place> {
+        let is_const = type_name.ty.qualifiers.is_const;
+        let init = ast::Initializer {
+            kind: ast::InitializerKind::List(items.to_vec()),
+            range,
+        };
+        // `(T[]){ … }` takes its length from the initialiser, exactly as
+        // `T x[] = { … }` does.
+        let inferred = matches!(
+            type_name.ty.kind,
+            ast::TypeKind::Array {
+                size: ast::ArraySize::Unspecified,
+                ..
+            }
+        );
+        let (ty, value) = if inferred {
+            let ast::TypeKind::Array { elem, .. } = &type_name.ty.kind else {
+                unreachable!("just matched");
+            };
+            let element = self.ty_of(elem)?;
+            let elem_const = elem.qualifiers.is_const;
+            self.init_array_inferred(&init, element, elem_const, "compound literal")?
+        } else {
+            let ty = self.ty_of(&type_name.ty)?;
+            if ty.is_void() || ty.is_func() || !self.types().is_complete(ty) {
+                self.error(
+                    type_name.range,
+                    format!(
+                        "a compound literal needs a complete object type, and '{}' is not one",
+                        self.tyname(ty)
+                    ),
+                );
+                return None;
+            }
+            if self.reject_va_list(ty, type_name.range) {
+                return None;
+            }
+            let value = self.initializer(&init, ty, "compound literal")?;
+            (ty, value)
+        };
+
+        if self.at_file_scope() {
+            let value = self.static_init(value, "the initializer of a compound literal")?;
+            let item_name = self.anonymous_name("literal");
+            let storage = Storage::Static {
+                item_name: item_name.clone(),
+                exported: false,
+            };
+            let id = self.new_object(&item_name, ty, storage, is_const, range);
+            self.program.statics.push(StaticVar {
+                object: id,
+                init: value,
+            });
+            return Some(place_of(PlaceKind::Object(id), ty, is_const, range));
+        }
+
+        let name = self.anonymous_name("literal");
+        let id = self.new_object(&name, ty, Storage::Automatic, is_const, range);
+        self.compound_literals.push(id);
+        Some(place_of(
+            PlaceKind::CompoundLiteral {
+                object: id,
+                init: Box::new(value),
+            },
+            ty,
+            is_const,
+            range,
+        ))
+    }
+
     /// Builds the type and the value of `T x[] = …`, whose length comes from
     /// the initialiser.
     pub(super) fn init_array_inferred(
@@ -114,6 +208,18 @@ impl Sema {
             }
             ast::InitializerKind::List(items) => {
                 let mut cursor = Cursor::new(items);
+                // `char s[] = { "hi" }`: C99 6.7.8p14 lets the string literal
+                // that initialises a character array be wrapped in braces.
+                if let Some(lit) = braced_string(&cursor).filter(|lit| fills_array(elem, lit)) {
+                    let len = lit.values.len() as u64 + 1;
+                    let ty = self.program.types.array(elem, len, elem_const);
+                    let value = self.string_initializer(lit, ty, init.range)?;
+                    cursor.advance();
+                    if let Some(extra) = cursor.peek() {
+                        self.error(extra.range, "excess elements in initializer");
+                    }
+                    return Some((ty, value));
+                }
                 let filled = self.fill_array(elem, None, &mut cursor, name, init.range)?;
                 if let Some(extra) = cursor.peek() {
                     self.error(extra.range, "excess elements in initializer");
@@ -147,6 +253,14 @@ impl Sema {
         match ty {
             Ty::Array(id) => {
                 let array = self.types().array_type(id);
+                // `char s[4] = { "abc" }` — the braces around the string are
+                // C's, not a one-element list of characters.
+                if let Some(lit) = braced_string(cursor).filter(|lit| fills_array(array.elem, lit))
+                {
+                    let value = self.string_initializer(lit, ty, range);
+                    cursor.advance();
+                    return value;
+                }
                 let (values, len) =
                     self.fill_array(array.elem, Some(array.len), cursor, name, range)?;
                 Some(self.assemble_array(values, array.elem, len, range))
@@ -667,6 +781,34 @@ impl Sema {
             items.push(Expr::int(0, array.elem, range));
         }
         Some(Expr::new(ExprKind::ArrayLit(items), array_ty, range))
+    }
+}
+
+/// The string literal a braced initialiser list is nothing but, if it is one.
+///
+/// `{ "hi" }` initialising a character array is the string initialiser with
+/// braces around it (C99 6.7.8p14), not a list whose single element is a
+/// `char *`.
+fn braced_string<'a>(cursor: &Cursor<'a>) -> Option<&'a StrLit> {
+    let item = cursor.peek()?;
+    if !item.designators.is_empty() {
+        return None;
+    }
+    match &item.init.kind {
+        ast::InitializerKind::Expr(ast::Expr {
+            kind: ast::ExprKind::Str(lit),
+            ..
+        }) => Some(lit),
+        _ => None,
+    }
+}
+
+/// Whether a string literal is the kind that initialises an array of `elem`.
+fn fills_array(elem: Ty, lit: &StrLit) -> bool {
+    if lit.kind == StrKind::Wide {
+        elem == Ty::wchar_ty()
+    } else {
+        matches!(elem, Ty::Char | Ty::SChar | Ty::UChar)
     }
 }
 

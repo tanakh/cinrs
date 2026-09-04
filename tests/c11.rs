@@ -75,6 +75,59 @@ fn generic_selection_dispatches_on_the_type() {
     }
 }
 
+#[test]
+fn generic_associations_may_differ_only_in_their_qualifiers() {
+    // C11 6.5.1.1p2 forbids two associations naming *compatible* types, and a
+    // qualifier is part of the type: `int` and `const int` are not compatible,
+    // so both may appear. The controlling expression has had the lvalue
+    // conversion applied to it (DR 481), which drops the top-level qualifiers
+    // — so it is always the unqualified association that is chosen, whether
+    // the operand was `const` or not. (c-testsuite 00219.)
+    c11! {
+        const int qualified = 0;
+
+        int a_f(void) { return 20; }
+        int b_f(void) { return 10; }
+
+        int through_a_const_lvalue(void) {
+            return _Generic(qualified, int: a_f, const int: b_f)();
+        }
+
+        int through_a_plain_lvalue(void) {
+            int plain = 0;
+            /* The qualified association is written first, and still loses. */
+            return _Generic(plain, const int: 1, volatile int: 2, int: 3);
+        }
+
+        int pointers(void) {
+            const int *to_const = &qualified;
+            int value = 0;
+            int *to_plain = &value;
+            return _Generic(to_const, int *: 1, const int *: 2, default: 0) * 10
+                 + _Generic(to_plain, int *: 1, const int *: 2, default: 0);
+        }
+
+        int a_top_level_qualified_pointer(void) {
+            const int *const doubly = &qualified;
+            /* Lvalue conversion drops the *pointer's* own `const`, so neither
+               `int *` nor `int * const` matches a `const int *`. */
+            return _Generic(doubly, int *: 1, int *const: 2, default: 20);
+        }
+
+        int arrays_are_not_pointers(void) {
+            return _Generic(qualified, char: 1, int[4]: 2, default: 5);
+        }
+    }
+
+    unsafe {
+        assert_eq!(through_a_const_lvalue(), 20);
+        assert_eq!(through_a_plain_lvalue(), 3);
+        assert_eq!(pointers(), 21);
+        assert_eq!(a_top_level_qualified_pointer(), 20);
+        assert_eq!(arrays_are_not_pointers(), 5);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // anonymous members
 // ---------------------------------------------------------------------------

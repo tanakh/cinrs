@@ -14,7 +14,7 @@ mod __cinrs_unit_b637b67f {
     #[allow(…)]
     pub unsafe extern "C" fn area_of_three() -> ::core::ffi::c_int {
         unsafe {
-            return (4 as ::core::ffi::c_int).wrapping_mul(3 as ::core::ffi::c_int);
+            return (4 as ::core::ffi::c_int).wrapping_mul(3);
         }
     }
     #[allow(…)]

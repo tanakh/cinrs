@@ -1225,6 +1225,101 @@ fn a_tentative_definition_completed_later() {
 }
 
 #[test]
+fn an_extern_declaration_the_unit_then_defines() {
+    // C99 6.9.2: `extern` says only that the name has external linkage. A
+    // later declaration of it with no storage class is a *definition* in this
+    // unit — a tentative one when it writes no initialiser — so the object
+    // stops being an external declaration and gets storage here.
+    c99! {
+        extern int tentative_after_extern;
+        int tentative_after_extern;
+
+        extern int initialized_after_extern;
+        int initialized_after_extern = 5;
+
+        int extern_after_tentative;
+        extern int extern_after_tentative;
+
+        extern int defined_then_declared_extern(int n);
+        int defined_then_declared_extern(int n) { return n * 3; }
+
+        int totals(void) {
+            tentative_after_extern = 3;
+            extern_after_tentative = 7;
+            return tentative_after_extern
+                 + initialized_after_extern
+                 + extern_after_tentative
+                 + defined_then_declared_extern(2);
+        }
+    }
+
+    unsafe {
+        // A tentative definition starts out zero, as C says.
+        assert_eq!({ tentative_after_extern }, 0);
+        assert_eq!({ initialized_after_extern }, 5);
+        assert_eq!(totals(), 3 + 5 + 7 + 6);
+    }
+}
+
+#[test]
+fn an_integer_constant_expression_keeps_its_type() {
+    // `(c ? -1 : 1) * (int) sizeof(int)` is a `{integer}` in Rust unless the
+    // conditional says what it is, and `{integer}.wrapping_mul(…)` is `E0689`.
+    // (c-testsuite 00200.)
+    c99! {
+        /* 00200's own idiom: the sign of the result says whether the type is
+           signed, and its magnitude is the width. */
+        int signed_width(int n) {
+            return ((n) < 0 || -(n) < 0 ? -1 : 1) * (int) sizeof(n + 0);
+        }
+
+        int unsigned_width(unsigned n) {
+            return ((n) < 0 || -(n) < 0 ? -1 : 1) * (int) sizeof(n + 0);
+        }
+
+        long long_width(int n) {
+            /* The same shape at a width where Rust's `i32` fallback would be
+               wrong as well as ambiguous. */
+            return (n ? 3000000000L : 1L) / 2;
+        }
+
+        int shifted(int n) {
+            return (n ? 1 : 2) << 3;
+        }
+
+        int dispatched(int n) {
+            switch (n ? 1L : 2L) {
+                case 1: return 100;
+                default: return 200;
+            }
+        }
+
+        #include <stdio.h>
+
+        /* An argument matched by `...` has no parameter to take its type from,
+           so the conditional has to carry its own: `%ld` reads eight bytes. */
+        int formatted(char *buf, unsigned long size, int n) {
+            return snprintf(buf, size, "%ld", n ? 3000000000L : 1L);
+        }
+    }
+
+    let mut buf = [0u8; 32];
+    unsafe {
+        assert_eq!(signed_width(1), -4);
+        assert_eq!(signed_width(-1), -4);
+        assert_eq!(unsigned_width(1), 4);
+        assert_eq!(long_width(1), 1_500_000_000);
+        assert_eq!(long_width(0), 0);
+        assert_eq!(shifted(1), 8);
+        assert_eq!(shifted(0), 16);
+        assert_eq!(dispatched(1), 100);
+        assert_eq!(dispatched(0), 200);
+        let n = formatted(buf.as_mut_ptr().cast(), 32, 1);
+        assert_eq!(&buf[..n as usize], b"3000000000");
+    }
+}
+
+#[test]
 fn conversions_between_every_scalar_kind() {
     c99! {
         double bool_to_double(int x) { _Bool b = x; double d = b; return d; }

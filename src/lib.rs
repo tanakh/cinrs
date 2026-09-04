@@ -180,6 +180,32 @@
 //! apart from anything else of that name, and pointed back at its symbol with
 //! `#[link_name]`.
 //!
+//! ## Compound literals
+//!
+//! `(T){ … }` is an *object*, not a value, and C gives one written inside a
+//! block the lifetime of that block — so `&(struct S){1, 2}` is a pointer that
+//! is still good after the statement that made it. It becomes a hidden binding
+//! at the top of the block, with the value stored into it where the literal
+//! was written: side effects in the initialiser happen in C's order, and a
+//! literal inside a loop is a fresh object on every iteration.
+//!
+//! ```
+//! cinrs::c99! {
+//!     struct S { int a; int b; };
+//!
+//!     int sum(void) {
+//!         struct S *p = &(struct S){ 1, 2 };
+//!         return p->a + p->b + (int[]){ 10, 20, 30 }[2];
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { sum() }, 33);
+//! ```
+//!
+//! At file scope the object has static storage duration instead and becomes a
+//! `static mut` item of its own, so its initialiser has to be a constant
+//! expression like any other.
+//!
 //! # One block, one module
 //!
 //! A translation unit is a namespace, so each expansion goes into a private
@@ -494,7 +520,8 @@
 //! C99, and most of the language is translated end to end: all the arithmetic
 //! types, pointers, arrays, `struct`, `union`, `enum`, `typedef`, string
 //! literals, function pointers, `sizeof` with real layout, casts, aggregate
-//! and designated initialisers, file-scope, `static` and `extern` objects,
+//! and designated initialisers, compound literals, file-scope, `static` and
+//! `extern` objects,
 //! functions (including `static`, `inline` and variadic ones), every operator,
 //! every control structure — `if`, `while`, `do`/`while`, `for`, `switch` with
 //! fallthrough, `break`, `continue`, `return` and `goto` — and the whole

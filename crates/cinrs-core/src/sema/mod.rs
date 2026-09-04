@@ -257,6 +257,15 @@ struct Sema {
     /// Objects with static storage that an initialiser has already been seen
     /// for, which is what tells a tentative definition from a redefinition.
     initialized: HashSet<ObjectId>,
+    /// The hidden locals the compound literals written in the block being
+    /// checked need, waiting to be defined at the top of it.
+    ///
+    /// C99 6.5.2.5p5 gives a compound literal at block scope automatic storage
+    /// duration and the lifetime of the *enclosing block*, so `&(T){…}` stays
+    /// usable for the rest of that block — which a temporary inside the
+    /// expression could not offer. [`Sema::block_items`] empties this list into
+    /// definitions at the head of the block it belongs to.
+    compound_literals: Vec<ObjectId>,
     /// Return type of the function being checked.
     ret_ty: Ty,
     /// Name of the function being checked, for diagnostics and for mangling.
@@ -305,6 +314,7 @@ impl Sema {
             defined_functions: HashSet::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
+            compound_literals: Vec::new(),
             ret_ty: Ty::Void,
             func_name: String::new(),
             func_variadic: false,

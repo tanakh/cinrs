@@ -617,6 +617,55 @@ fn aggregates_reached_through_pointers_and_arrays() {
 }
 
 #[test]
+fn integer_constants_cast_to_a_function_pointer_type() {
+    // `(void (*)(void))0` is a null function pointer, and Rust's `Option<fn>`
+    // has to be told *which* function type it is null of: a bare
+    // `Option::None` there is `E0282`, even where the value is never called.
+    // A non-zero constant is an implementation-defined conversion, and goes
+    // through `usize`, since the integer type C names need not be
+    // pointer-sized. (c-testsuite 00159.)
+    c99! {
+        typedef void (*Action)(void);
+        typedef int (*Unary)(int);
+
+        int negate(int n) { return -n; }
+
+        int never_called(void) {
+            void (*f)(void) = (void (*)(void)) 0;
+            if (f) {
+                f();
+                return 1;
+            }
+            return 0;
+        }
+
+        int null_forms(void) {
+            Action a = (Action) 0;
+            Action b = (void *) 0;
+            Unary c = 0;
+            return (a == 0) + (b == 0) + (c == 0);
+        }
+
+        Unary from_integer(unsigned long bits) { return (Unary) bits; }
+        unsigned long to_integer(Unary f) { return (unsigned long) f; }
+        int roundtrip(int n) { return from_integer(to_integer(negate))(n); }
+
+        int a_narrow_constant(void) {
+            /* The constant has type `int`, which is half a pointer wide. */
+            return (Unary) 1 == 0;
+        }
+    }
+
+    unsafe {
+        assert_eq!(never_called(), 0);
+        assert_eq!(null_forms(), 3);
+        assert_eq!(roundtrip(7), -7);
+        assert!(to_integer(Some(negate)) != 0);
+        assert_eq!(a_narrow_constant(), 0);
+    }
+}
+
+#[test]
 fn function_pointers_cast_to_and_from_other_pointers() {
     c99! {
         typedef int (*Unary)(int);

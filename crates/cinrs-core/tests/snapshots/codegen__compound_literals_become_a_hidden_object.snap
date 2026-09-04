@@ -1,0 +1,53 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        struct S { int a; int b; };\n\n        struct S *global = &(struct S){ 1, 2 };\n\n        int local(int n) {\n            struct S *p = &(struct S){ n, n + 1 };\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                total += (int[]){ i, i * 2 }[1];\n            }\n            return p->a + p->b + total;\n        }\n        \")"
+---
+mod __cinrs_unit_e8e1058d {
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct S {
+        pub a: ::core::ffi::c_int,
+        pub b: ::core::ffi::c_int,
+    }
+    #[allow(…)]
+    static mut __cinrs_e8e1058d_literal0: S = S { a: 1, b: 2 };
+    #[allow(…)]
+    pub static mut global: *mut S = unsafe { (&raw mut __cinrs_e8e1058d_literal0) };
+    #[allow(…)]
+    pub unsafe extern "C" fn local(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut __cinrs_e8e1058d_literal1: S = ::core::mem::zeroed::<S>();
+            let mut p: *mut S = {
+                __cinrs_e8e1058d_literal1 = S { a: n, b: n.wrapping_add(1) };
+                (&raw mut __cinrs_e8e1058d_literal1)
+            };
+            let mut total: ::core::ffi::c_int = 0;
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < n) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        let mut __cinrs_e8e1058d_literal2: [::core::ffi::c_int; 2] = [0; 2];
+                        total = total
+                            .wrapping_add({
+                                let __cinrs_tmp0 = ({
+                                    __cinrs_e8e1058d_literal2 = [i, i.wrapping_mul(2)];
+                                    (&raw mut __cinrs_e8e1058d_literal2)
+                                        .cast::<::core::ffi::c_int>()
+                                })
+                                    .offset(1);
+                                (*__cinrs_tmp0)
+                            });
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            return (*p).a.wrapping_add((*p).b).wrapping_add(total);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_e8e1058d::*;

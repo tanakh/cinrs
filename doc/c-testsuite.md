@@ -208,29 +208,33 @@ corpus revision.
 
 | entry point | selected | passed | rate |
 | --- | ---: | ---: | ---: |
-| `c99!` | 218 | 198 | **90.8 %** |
-| `c11!` | 220 | 200 | **90.9 %** |
-| `c23!` | 220 | 200 | **90.9 %** |
+| `c99!` | 218 | 203 | **93.1 %** |
+| `c11!` | 220 | 206 | **93.6 %** |
+| `c23!` | 220 | 206 | **93.6 %** |
 
 Per tag, under `c11!` (the run that selects everything):
 
 | tag | passed | rate |
 | --- | ---: | ---: |
-| `portable` | 200/220 | 90.9 % |
-| `c89` | 160/174 | 92.0 % |
-| `c99` | 38/43 | 88.4 % |
+| `portable` | 206/220 | 93.6 % |
+| `c89` | 163/174 | 93.7 % |
+| `c99` | 41/43 | 95.3 % |
 | `c11` | 2/2 | 100 % |
-| `needs-cpp` | 87/98 | 88.8 % |
-| `needs-libc` | 54/63 | 85.7 % |
+| `needs-cpp` | 90/98 | 91.8 % |
+| `needs-libc` | 57/63 | 90.5 % |
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
-fails on 1.97.1. The table above counts it as a failure; on 1.99 the `c99!` row
-is 199/218 (91.3 %).
+fails on 1.97.1. The table above counts it as a failure; on 1.99 the rows are
+204/218 (93.6 %) for `c99!` and 207/220 (94.1 %) for `c11!` and `c23!`.
 
 ### The failures, by cause
 
-Nineteen of the twenty fail to compile and one produces the wrong output.
+Fourteen cases fail under `c11!` — thirteen to compile and one at run time —
+and `c99!` adds `00219`, which wants a later entry point. None of them is a
+`cinrs` bug any more: the four the first measurement found — `00110`, `00159`,
+`00200` and `00219` — are fixed and have regression tests of their own, and so
+are the two that wanted compound literals (`00149` and `00150`).
 
 **A GCC extension the case relies on (6).** `cinrs` implements C, and refuses
 these with a located diagnostic rather than mistranslating them. Several of the
@@ -244,30 +248,19 @@ cases say so in their own comments.
 | `00213` | a statement expression, `({ … })` |
 | `00214` | a statement expression and `__builtin_expect` |
 
-**Something `cinrs` has not implemented yet (7).**
+**Something `cinrs` has not implemented yet (5).**
 
 | case | what it needs |
 | --- | --- |
-| `00149`, `00150` | compound literals — `&(struct S){ 1, 2 }` |
-| `00216` | a compound literal with C23's empty initializer, `(empty_s){}`, over an empty `struct` (itself a GCC extension) |
 | `00204` | `va_arg` with a struct type |
 | `00207` | a variable length array |
+| `00216` | an empty `struct` as a member of an initialised aggregate (a GCC extension: C99 has no empty structs), GCC's range designators `[1 ... 5]`, and flexible array members |
 | `00218` | bit-fields (documented as deliberately never supported) |
 | `00220` | `<wchar.h>`, which is not among the bundled headers |
 
-**Wanted a later entry point (1).** `00219` uses `_Generic` and is tagged
-`c89`, so `c99!` refuses it and says to write `c11!`. Under `c11!` it still
-fails, for the reason two rows down.
-
-**A `cinrs` bug (3, and a fourth once `00219` gets past the entry point)** —
-the interesting part of the list, and where a follow-up should start:
-
-| case | symptom | likely cause |
-| --- | --- | --- |
-| `00110` | `undefined symbol: x` at link time | `extern int x; int x;` — a *tentative definition* after an `extern` declaration stays an external declaration rather than becoming the definition |
-| `00159` | `error[E0282]: type annotations needed` | `((void (*)(void))0)()` — an integer constant cast to a function pointer type is emitted as an untyped `None`, so `rustc` cannot infer it. The function is never even called |
-| `00200` | `error[E0689]: can't call method wrapping_mul on ambiguous numeric type {integer}` | an integer constant expression is emitted without a concrete Rust type, and then multiplied |
-| `00219` (under `c11!`) | `'_Generic' has two associations for the compatible type 'int'` | `_Generic(a, int: …, const int: …)` — `int` and `const int` are *not* compatible types in C, so both associations are allowed |
+**Wanted a later entry point (1, `c99!` only).** `00219` uses `_Generic` and is
+tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under `c11!` and
+`c23!` it passes, and is not on their lists.
 
 **A miscompile (1).** `00206` is the only case that compiles and runs and
 prints the wrong thing: it uses `#pragma push_macro("abort")` and

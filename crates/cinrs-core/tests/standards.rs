@@ -228,6 +228,51 @@ fn generic_selection_picks_by_type() {
 }
 
 #[test]
+fn generic_associations_are_compared_with_their_qualifiers() {
+    let program = |body: &str| {
+        format!(
+            "const int c; int i; const int *pc; int *p;\n\
+             int f(void) {{ return {body}; }}"
+        )
+    };
+    // C11 6.5.1.1p2 forbids two associations naming *compatible* types, and a
+    // qualifier is part of the type: `int` and `const int` are not compatible.
+    accepted(
+        Standard::C11,
+        &program("_Generic(i, int: 1, const int: 2, volatile int: 3)"),
+    );
+    accepted(
+        Standard::C11,
+        &program("_Generic(p, int *: 1, const int *: 2, int *const: 3)"),
+    );
+    accepted(Standard::C11, &program("_Generic(c, int: 1, int[4]: 2)"));
+    // Repeating one *with* its qualifiers is still a duplicate, and the
+    // message spells the type the way C does.
+    rejected(
+        Standard::C11,
+        &program("_Generic(i, const int: 1, const int: 2, default: 0)"),
+        &["'_Generic' has two associations for the compatible type 'const int'"],
+    );
+    rejected(
+        Standard::C11,
+        &program("_Generic(p, int *const: 1, int *const: 2, default: 0)"),
+        &["'_Generic' has two associations for the compatible type 'int * const'"],
+    );
+    // The controlling expression's type has had the lvalue conversion applied
+    // to it (DR 481), so a qualified association can never be the one chosen.
+    rejected(
+        Standard::C11,
+        &program("_Generic(c, const int: 1)"),
+        &["'_Generic' has no association for the controlling expression's type 'int'"],
+    );
+    rejected(
+        Standard::C11,
+        &program("_Generic(pc, int *const: 1)"),
+        &["'_Generic' has no association for the controlling expression's type 'const int *'"],
+    );
+}
+
+#[test]
 fn anonymous_members_are_reached_through() {
     accepted(
         Standard::C11,

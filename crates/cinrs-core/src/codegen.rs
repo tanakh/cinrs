@@ -1577,7 +1577,14 @@ impl<'a> Codegen<'a> {
     /// Emits an expression whose type the surrounding context already fixes.
     ///
     /// A constant then needs no `as`, which is the difference between
-    /// `let mut i: c_int = 0;` and `let mut i: c_int = 0 as c_int;`.
+    /// `let mut i: c_int = 0;` and `let mut i: c_int = 0 as c_int;`. It is the
+    /// *only* place a bare literal is emitted from, and the reason it is safe
+    /// is that every caller writes the tokens somewhere the type is already
+    /// stated — the annotation of a `let`, a place being assigned to, a
+    /// parameter, a field, the return type of the function.
+    ///
+    /// [`Codegen::expr`] has no such promise, so nothing it produces may
+    /// depend on inference; that is what the conditional below is about.
     fn expr_at(&mut self, expr: &Expr, expected: Ty) -> TokenStream {
         let span = self.sp(expr.range);
         if expr.ty == expected {
@@ -1585,6 +1592,20 @@ impl<'a> Codegen<'a> {
                 ExprKind::Int(value) => return bare_int_literal(*value, expected, span),
                 ExprKind::Float(value) if value.is_finite() => {
                     return bare_float_literal(*value, span);
+                }
+                // The arms of a conditional may stay bare here, because
+                // whatever fixes this expression's type fixes theirs.
+                ExprKind::Cond {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } => {
+                    let cond_tokens = self.condition(cond).at_condition(span);
+                    let then_tokens = self.expr_at(then_expr, expected);
+                    let else_tokens = self.expr_at(else_expr, expected);
+                    return quote_spanned! {span=>
+                        if #cond_tokens { #then_tokens } else { #else_tokens }
+                    };
                 }
                 _ => {}
             }
@@ -1730,14 +1751,21 @@ impl<'a> Codegen<'a> {
                 let value = self.expr(inner);
                 self.cast(value, from, expr.ty, span)
             }
+            // Both arms are emitted as expressions of their own rather than at
+            // the conditional's type: an `if` whose arms are two bare literals
+            // is `{integer}`, which Rust either resolves to `i32` — wrong
+            // wherever C said `long` — or refuses to resolve at all, as it
+            // does for the receiver of `wrapping_mul` (`E0689`). The bare form
+            // is still used from [`Codegen::expr_at`], where the context says
+            // what the type is.
             ExprKind::Cond {
                 cond,
                 then_expr,
                 else_expr,
             } => {
                 let cond_tokens = self.condition(cond).at_condition(span);
-                let then_tokens = self.expr_at(then_expr, expr.ty);
-                let else_tokens = self.expr_at(else_expr, expr.ty);
+                let then_tokens = self.expr(then_expr).at(prec::LOWEST, span);
+                let else_tokens = self.expr(else_expr).at(prec::LOWEST, span);
                 Value::new(
                     quote_spanned! {span=>
                         if #cond_tokens { #then_tokens } else { #else_tokens }
@@ -2106,19 +2134,18 @@ impl<'a> Codegen<'a> {
         let lhs_constant = constant_of(lhs);
         let rhs_constant = constant_of(rhs);
 
+        // At most one side may be bare, and it is never the left one where a
+        // method call follows.
+        let lhs_bare = lhs_constant.is_some() && !uses_method && rhs_constant.is_none();
         let lhs_value = match lhs_constant {
-            Some(value) if !uses_method && rhs_constant.is_none() => {
-                self.bare_value(value, lhs.ty, self.sp(lhs.range))
-            }
+            Some(value) if lhs_bare => self.bare_value(value, lhs.ty, self.sp(lhs.range)),
             _ => self.expr(lhs),
         };
         let rhs_value = match rhs_constant {
             // The shift amount is converted to `u32` whatever its C type is,
             // so a constant there never needs the other operand's help.
             Some(value) if op.is_shift() => self.bare_value(value, rhs.ty, self.sp(rhs.range)),
-            Some(value) if lhs_constant.is_none() => {
-                self.bare_value(value, rhs.ty, self.sp(rhs.range))
-            }
+            Some(value) if !lhs_bare => self.bare_value(value, rhs.ty, self.sp(rhs.range)),
             _ => self.expr(rhs),
         };
         (lhs_value, rhs_value)
@@ -2290,11 +2317,33 @@ impl<'a> Codegen<'a> {
             return Value::new(quote_spanned! {span=> #tokens != #zero }, prec::CMP);
         }
         if from_fn || to_fn {
-            // Rust has no `as` between an `Option<fn>` and anything else, but
-            // both are pointer-sized, so a transmute is the honest translation
-            // of what C's cast does.
+            // Rust has no `as` between an `Option<fn>` and anything else, so a
+            // transmute is the honest translation of what C's cast does — but
+            // only between two things of the same size. An integer of any
+            // other width goes through `usize`, which is what C's own
+            // implementation-defined conversion between a pointer and an
+            // integer amounts to.
             let target = self.ty(to, span);
             let source = self.ty(from, span);
+            if to_fn && !from.is_pointer() {
+                let tokens = value.at(prec::CAST, span);
+                return Value::new(
+                    quote_spanned! {span=>
+                        ::core::mem::transmute::<usize, #target>(#tokens as usize)
+                    },
+                    prec::CALL,
+                );
+            }
+            if from_fn && !to.is_pointer() {
+                let tokens = value.at(prec::LOWEST, span);
+                return Value::new(
+                    quote_spanned! {span=>
+                        ::core::mem::transmute::<#source, usize>(#tokens) as #target
+                    },
+                    prec::CAST,
+                )
+                .type_end(true);
+            }
             let tokens = value.at(prec::LOWEST, span);
             return Value::new(
                 quote_spanned! {span=>
@@ -2388,6 +2437,20 @@ impl<'a> Codegen<'a> {
                 LoweredPlace {
                     setup: quote_spanned! {span=> let mut #tmp = #value; },
                     access: quote_spanned! {span=> #tmp },
+                }
+            }
+            // The binding itself was made at the top of the enclosing block —
+            // C gives the object that lifetime, and it is what lets `&(T){…}`
+            // outlive the expression. What happens *here* is the
+            // initialisation, so that side effects in it happen where the
+            // literal was written and a literal in a loop is rebuilt on every
+            // iteration.
+            PlaceKind::CompoundLiteral { object, init } => {
+                let name = self.object_ident(*object, span);
+                let value = self.expr_at(init, place.ty);
+                LoweredPlace {
+                    setup: quote_spanned! {span=> #name = #value; },
+                    access: quote_spanned! {span=> #name },
                 }
             }
         }
@@ -2595,8 +2658,15 @@ impl<'a> Codegen<'a> {
             _ if ty.is_integer() => bare_int_literal(0, ty, span),
             Ty::Pointer(id) => {
                 let pointer = self.program.types.pointer_type(id);
-                if matches!(pointer.pointee, Ty::Func(_)) {
-                    return quote_spanned! {span=> ::core::option::Option::None };
+                if let Ty::Func(func) = pointer.pointee {
+                    // The signature is written out rather than left to
+                    // inference: a null function pointer is often the whole
+                    // expression — `((void (*)(void))0)()` — and a bare
+                    // `Option::None` there is `E0282`.
+                    let signature = self.fn_ty(func, span);
+                    return quote_spanned! {span=>
+                        ::core::option::Option::<#signature>::None
+                    };
                 }
                 let pointee = self.pointee_ty(pointer.pointee, span);
                 if pointer.konst {

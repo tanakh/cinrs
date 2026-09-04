@@ -326,7 +326,7 @@ impl Sema {
             && let Some(Entry::Object(existing)) = self.declared_here(&name.name).cloned()
             && self.program.object(existing).ty == ty
         {
-            self.complete_tentative_definition(name, existing, declarator, init);
+            self.complete_tentative_definition(name, existing, declarator, init, !is_static);
             return;
         }
 
@@ -386,7 +386,20 @@ impl Sema {
         id: ObjectId,
         declarator: &ast::InitDeclarator,
         init: Option<Expr>,
+        defines: bool,
     ) {
+        // C99 6.9.2p2: a file-scope declaration with no storage-class
+        // specifier is a definition of the object — a *tentative* one when it
+        // has no initialiser, which the end of the translation unit turns into
+        // a definition with a zero initialiser. An earlier `extern` only said
+        // that the name has external linkage; it does not stop this unit
+        // defining it, so `extern int x; int x;` defines `x` here and the
+        // declaration has to stop being an external one. `static` is the
+        // storage class that does *not* define anything on its own, and it is
+        // the only one that reaches here.
+        if defines {
+            self.define_here(id, declarator);
+        }
         let Some(init) = init else {
             return;
         };
@@ -406,19 +419,33 @@ impl Sema {
             .unwrap_or_else(|| self.zero(ty, declarator.range));
         if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
             entry.init = value;
-        } else if matches!(self.program.object(id).storage, Storage::Extern { .. }) {
-            // `extern int x; int x = 1;` defines here what was promised.
-            let item_name = self.program.object(id).name.clone();
-            self.program.objects[id.0 as usize].storage = Storage::Static {
-                item_name,
-                exported: true,
-            };
-            self.program.externs.retain(|e| *e != id);
-            self.program.statics.push(StaticVar {
-                object: id,
-                init: value,
-            });
         }
+    }
+
+    /// Turns an object this unit only *declared* into one it defines.
+    ///
+    /// `extern int x;` puts `x` in the generated `extern` block, where the
+    /// linker is expected to find it elsewhere. A later declaration of the
+    /// same name without a storage class is a definition (C99 6.9.2p2), so the
+    /// object moves out of the `extern` block and becomes a `static mut` item
+    /// with the zero C gives an object with static storage duration; an
+    /// initialiser, if the declaration wrote one, replaces that zero
+    /// afterwards. Doing nothing at all is what left `extern int x; int x;`
+    /// with an undefined symbol at link time.
+    fn define_here(&mut self, id: ObjectId, declarator: &ast::InitDeclarator) {
+        if !matches!(self.program.object(id).storage, Storage::Extern { .. }) {
+            return;
+        }
+        let ty = self.program.object(id).ty;
+        let name = self.program.object(id).name.clone();
+        let item_name = self.reserve_item_name(&name);
+        self.program.objects[id.0 as usize].storage = Storage::Static {
+            item_name,
+            exported: true,
+        };
+        self.program.externs.retain(|e| *e != id);
+        let init = self.zero(ty, declarator.range);
+        self.program.statics.push(StaticVar { object: id, init });
     }
 
     /// Declares an object defined outside the translation unit.
@@ -946,7 +973,10 @@ impl Sema {
                 self.is_address_constant(base) && matches!(index.kind, ExprKind::Int(_))
             }
             PlaceKind::Deref(ptr) => self.is_address_constant(ptr),
-            PlaceKind::Temporary(_) => false,
+            // A block-scope compound literal has automatic storage duration,
+            // so its address is not something the linker can work out; one at
+            // file scope is an ordinary `Object` with static storage.
+            PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => false,
         }
     }
 }
