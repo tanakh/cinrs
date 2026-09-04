@@ -104,6 +104,22 @@ Run it with `cargo run --example fact`.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
 
+## Conformance
+
+`cinrs` is measured against
+[c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
+C compiler test cases: whole programs with the output each must produce. Of the
+220 in its `single-exec` suite, **198 of the 218 that `c99!` is eligible for
+pass (90.8 %)**, and 200 of 220 under `c11!` — compiled, run, and diffed
+against the expected output. The rest are, in the main, GCC extensions the
+cases lean on (statement expressions, `__attribute__`, incomplete `enum`s) and
+the constructs listed as unsupported above; three are `cinrs` bugs (a fourth
+appears under `c11!`), and one program compiles and prints the wrong thing. The corpus is a git submodule, so
+a fresh checkout skips the suite until `git submodule update --init
+third_party/c-testsuite` fetches it. [`doc/c-testsuite.md`](doc/c-testsuite.md)
+has the harness, how to run it in either mode, the selection rules and the
+baseline with every failure and its cause.
+
 ## How it works
 
 The macro recovers the C source text of its own invocation (by slicing the

@@ -45,3 +45,10 @@ features = ["nightly"]
 name = "ui"
 path = "tests/ui.rs"
 harness = false
+
+# The c-testsuite conformance harness; see doc/c-testsuite.md. It skips itself
+# when the submodule holding the corpus has not been checked out.
+[[test]]
+name = "c_testsuite"
+path = "tests/c_testsuite.rs"
+harness = false
