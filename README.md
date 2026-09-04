@@ -26,8 +26,10 @@ Run it with `cargo run --example fact`.
 
 ## What works
 
-* **Four standards.** `c99!`, `c11!`, `c17!` and `c23!` are the same macro for
-  four revisions of the language, and `__STDC_VERSION__` follows. `c11!` adds
+* **Four standards, twice over.** `c99!`, `c11!`, `c17!` and `c23!` are the
+  same macro for four revisions of the language, and `__STDC_VERSION__`
+  follows; `gnu99!`, `gnu11!`, `gnu17!` and `gnu23!` are the same four with the
+  GNU extensions switched on. `c11!` adds
   `_Static_assert`, `_Generic`, `_Alignof`, `_Alignas` (on the members of a
   `struct` or `union`), `_Noreturn` and anonymous `struct`/`union` members;
   `c17!` is `c11!` with a different version macro; `c23!` adds the keywords C23
@@ -55,6 +57,19 @@ Run it with `cargo run --example fact`.
   from the platform, and the calls link against the real C library. Your own
   headers are found next to the `.rs` file that includes them, and editing one
   rebuilds the crate.
+* **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
+  `__attribute__((packed))` and `aligned` with the layout GCC gives them,
+  `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
+  `asm` labels, `constructor`/`destructor`, `__func__`, the `__builtin_*`
+  family — bit counting, checked overflow, `__builtin_expect`,
+  `__builtin_types_compatible_p` — `, ## __VA_ARGS__`, `__COUNTER__`,
+  `__has_include`, `__has_attribute` and the rest. Everything spelled with a
+  leading double underscore works in `c99!` too, exactly as it does in GCC's
+  own `-std=c99`; only the plain spellings `typeof` and `asm`, and the features
+  of later revisions, need `gnu99!`. Inline *assembly* is a clear error rather
+  than a guess, and so is every other extension with no honest translation.
+  [`doc/gnu-extensions.md`](doc/gnu-extensions.md) is the catalogue, row by
+  row.
 * **Pragmas that configure the unit.**
   `#pragma cinrs include_path "…"` adds a search directory;
   `#pragma cinrs link "…"` links a library;
@@ -81,20 +96,23 @@ Run it with `cargo run --example fact`.
 
 * Not supported, each as a located error rather than a silent mistranslation:
   variable length arrays, `_Complex`, old-style (K&R) function definitions,
-  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`,
-  `__has_include`, and C11's `u8"…"`/`u"…"`/`U"…"` literals with their
-  `char16_t`/`char32_t`.
+  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`, and
+  C11's `u8"…"`/`u"…"`/`U"…"` literals with their `char16_t`/`char32_t`. On the
+  GNU side: inline assembly, computed `goto`, `cleanup`, `__int128`, the vector
+  extensions and the `__sync_*`/`__atomic_*` builtins. C11's four
+  `__STDC_NO_*` macros are predefined, which is the standard's own way of
+  saying that atomics, threads, VLAs and complex arithmetic are left out.
 * A bit-field has no address, so it is not a field of the generated Rust
   `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
   named member becomes a pair of inherent methods — `s.level()` reads it and
   `s.set_level(v)` writes it, in the member's declared C type. The C itself is
   unchanged (`s.level = 3`, `p->flags |= 1`, `switch (s.kind)`); the accessors
   are what *Rust* code on the other side uses.
-* `_Alignas` is honoured on the members of a `struct` or `union`, by raising
-  the alignment of the whole record; a member whose natural offset does not
-  already satisfy the alignment it asks for — `struct { char c;
-  _Alignas(16) int x; }` — is refused rather than laid out differently from
-  the Rust item. On an object it is not supported at all.
+* `_Alignas` and `__attribute__((aligned(N)))` are honoured on the members of a
+  `struct` or `union`: the member moves to the boundary it asks for and the
+  generated Rust item gets explicit padding so that both sides agree about
+  where it went. On an *object* an alignment specifier is not supported at
+  all.
 * A `constexpr` object is a *constant*: its value is folded wherever the name
   is used (so it may be an array bound or a `case` label), and there is
   nothing to take the address of. Only the arithmetic types are accepted.
@@ -118,16 +136,18 @@ Run it with `cargo run --example fact`.
 `cinrs` is measured against
 [c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
 C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **204 of the 218 that `c99!` is eligible for
-pass (93.6 %)**, and 207 of 220 under `c11!` — compiled, run, and diffed
-against the expected output. What is left is GCC extensions the cases lean on
-(statement expressions, `__attribute__`, incomplete `enum`s, range designators)
-and the constructs listed as unsupported above; one program compiles and prints
-the wrong thing, and one needs a newer Rust than 1.97. The corpus is a git submodule, so
-a fresh checkout skips the suite until `git submodule update --init
-third_party/c-testsuite` fetches it. [`doc/c-testsuite.md`](doc/c-testsuite.md)
-has the harness, how to run it in either mode, the selection rules and the
-baseline with every failure and its cause.
+220 in its `single-exec` suite, **209 of the 218 that `c99!` is eligible for
+pass (95.9 %)**, and 212 of 220 under `c11!`, `c23!` and every GNU dialect —
+compiled, run, and diffed against the expected output. What is left is the
+constructs listed as unsupported above — variable length arrays, `va_arg` with
+a struct, `<wchar.h>` — plus three corners GCC has and this does not: a
+function declarator with no prototype, a `goto` out of a statement expression,
+and initialising a flexible array member. One needs a newer Rust than 1.97. The
+corpus is a git submodule, so a fresh checkout skips the suite until
+`git submodule update --init third_party/c-testsuite` fetches it.
+[`doc/c-testsuite.md`](doc/c-testsuite.md) has the harness, how to run it in
+either mode, the selection rules and the baseline with every failure and its
+cause.
 
 ## How it works
 

@@ -116,9 +116,61 @@ pub fn c23(input: TokenStream) -> TokenStream {
     expand(input, Standard::C23)
 }
 
-/// The body every entry point shares.
+/// Compiles a C99 translation unit with the GNU extensions switched on.
+///
+/// Everything [`c99!`](macro@c99) does, plus what GCC's `-std=gnu99` adds over
+/// its `-std=c99`: the plain spellings `typeof` and `asm` are keywords, and a
+/// construct a later revision introduced — `_Static_assert`, `_Generic`, a
+/// `0b` literal — is accepted rather than being told which macro to write.
+///
+/// The extensions spelled with a leading double underscore — `__typeof__`,
+/// `__attribute__`, `__extension__`, `__builtin_*`, `__restrict` — are
+/// available in *every* entry point, exactly as they are in GCC's strict
+/// modes: the names are reserved, so nothing a program may legally call its
+/// own is taken away. `__STRICT_ANSI__` is defined only in the strict entry
+/// points; `__GNUC__` is 4 in all of them.
+///
+/// See `doc/gnu-extensions.md` in the repository for the whole catalogue.
+#[proc_macro]
+pub fn gnu99(input: TokenStream) -> TokenStream {
+    expand_gnu(input, Standard::C99)
+}
+
+/// Compiles a C11 translation unit with the GNU extensions switched on.
+///
+/// [`c11!`](macro@c11) plus what [`gnu99!`](macro@gnu99) adds.
+#[proc_macro]
+pub fn gnu11(input: TokenStream) -> TokenStream {
+    expand_gnu(input, Standard::C11)
+}
+
+/// Compiles a C17 translation unit with the GNU extensions switched on.
+///
+/// [`c17!`](macro@c17) plus what [`gnu99!`](macro@gnu99) adds.
+#[proc_macro]
+pub fn gnu17(input: TokenStream) -> TokenStream {
+    expand_gnu(input, Standard::C17)
+}
+
+/// Compiles a C23 translation unit with the GNU extensions switched on.
+///
+/// [`c23!`](macro@c23) plus what [`gnu99!`](macro@gnu99) adds.
+#[proc_macro]
+pub fn gnu23(input: TokenStream) -> TokenStream {
+    expand_gnu(input, Standard::C23)
+}
+
+/// The body every strict entry point shares.
 fn expand(input: TokenStream, standard: Standard) -> TokenStream {
-    let options = Options::new(standard);
+    run(input, Options::new(standard))
+}
+
+/// The body every GNU entry point shares.
+fn expand_gnu(input: TokenStream, standard: Standard) -> TokenStream {
+    run(input, Options::gnu(standard))
+}
+
+fn run(input: TokenStream, options: Options) -> TokenStream {
     let subspan = subspan(&input);
     cinrs_core::expand_with(input.into(), &options, subspan).into()
 }

@@ -51,10 +51,7 @@ fn run_errors(src: &str, search: &[&str]) -> String {
 fn preprocess_text(src: &str, search: &[&str]) -> (Vec<String>, Vec<String>) {
     let mut options = Options::new(Standard::C99);
     options.include_paths = search.iter().map(PathBuf::from).collect();
-    let lex_options = LexOptions {
-        standard: Standard::C99,
-        dollar_in_identifiers: false,
-    };
+    let lex_options = LexOptions::new(Standard::C99);
     let ctx = Context::new(src, 0);
     let mut diags = Diagnostics::new();
     let tokens = lex_text(src, ctx.base, &lex_options);

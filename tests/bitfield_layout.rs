@@ -132,6 +132,46 @@ struct Field {
     bits: bool,
 }
 
+/// How a generated record is packed.
+///
+/// The three forms are not interchangeable: `__attribute__((packed))` caps
+/// every member at one byte, `#pragma pack(N)` caps them at N — and switches
+/// the bit-field allocation-unit rule off for the whole record either way —
+/// while a `packed` on one *member* leaves the rest alone.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Packing {
+    /// Natural alignment throughout.
+    None,
+    /// `__attribute__((packed))` on the record.
+    Attribute,
+    /// `#pragma pack(N)` around the record.
+    Pragma(u32),
+    /// `__attribute__((packed))` on one member, chosen by index.
+    Member(usize),
+}
+
+/// Everything the generator decided about one record beyond its members.
+struct Shape {
+    packing: Packing,
+    /// `__attribute__((aligned(N)))` on the record, which never appears
+    /// together with packing: Rust refuses `#[repr(C, packed, align(N))]`.
+    aligned: Option<u32>,
+    /// `__attribute__((aligned(N)))` on one ordinary member.
+    member_aligned: Option<(usize, u32)>,
+}
+
+impl Shape {
+    /// Whether the generated Rust item can carry the record's alignment.
+    ///
+    /// A record one *member* of which is packed cannot: Rust has no way to
+    /// spell `packed` and `align(N)` at once, so the item is left one byte
+    /// aligned while C keeps the alignment of its other members. Offsets and
+    /// `sizeof` still agree, which is what the C program can observe.
+    fn rust_carries_alignment(&self) -> bool {
+        !matches!(self.packing, Packing::Member(_))
+    }
+}
+
 /// The two generated files: the C corpus and the Rust assertions over it.
 struct Corpus {
     header: String,
@@ -149,18 +189,43 @@ fn corpus() -> Corpus {
     for index in 0..RECORDS {
         let tag = format!("S{index:03}");
         let union = rng.below(4) == 0;
-        let fields = record_fields(&mut rng, union);
+        let mut fields = record_fields(&mut rng, union);
+        let shape = record_shape(&mut rng, &fields);
         let keyword = if union { "union" } else { "struct" };
 
+        // `packed` on one member, and `aligned(N)` on one, are written onto
+        // the declaration rather than onto the record.
+        if let Packing::Member(at) = shape.packing {
+            fields[at].decl.push_str(" __attribute__((packed))");
+        }
+        if let Some((at, align)) = shape.member_aligned {
+            let _ = write!(fields[at].decl, " __attribute__((aligned({align})))");
+        }
+        if let Packing::Pragma(n) = shape.packing {
+            let _ = writeln!(out, "#pragma pack({n})");
+        }
+        let record_attrs = match (shape.packing, shape.aligned) {
+            (Packing::Attribute, _) => " __attribute__((packed))".to_owned(),
+            (_, Some(align)) => format!(" __attribute__((aligned({align})))"),
+            _ => String::new(),
+        };
         let _ = writeln!(out, "{keyword} {tag} {{");
         for field in &fields {
             let _ = writeln!(out, "    {};", field.decl);
         }
-        let _ = writeln!(out, "}};");
+        let _ = writeln!(out, "}}{record_attrs};");
+        if let Packing::Pragma(_) = shape.packing {
+            let _ = writeln!(out, "#pragma pack()");
+        }
         let _ = writeln!(out);
 
         let named: Vec<&Field> = fields.iter().filter(|f| f.name.is_some()).collect();
-        let _ = writeln!(checks, "    check_record::<{tag}>({index}, \"{tag}\");");
+        let check = if shape.rust_carries_alignment() {
+            "check_record"
+        } else {
+            "check_record_size_only"
+        };
+        let _ = writeln!(checks, "    {check}::<{tag}>({index}, \"{tag}\");");
         for (k, field) in named.iter().enumerate() {
             if field.bits {
                 continue;
@@ -240,6 +305,48 @@ fn corpus() -> Corpus {
     Corpus {
         header: out,
         checks,
+    }
+}
+
+/// How one record is packed and aligned.
+///
+/// Every form is generated, and never two that Rust cannot spell together:
+/// `#[repr(C, packed, align(N))]` is `E0587`, so a record is either packed or
+/// over-aligned. A `union` is left unpacked — every member is at offset zero
+/// there, so packing has nothing to move and only the alignment would change.
+fn record_shape(rng: &mut Rng, fields: &[Field]) -> Shape {
+    let ordinary: Vec<usize> = fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.bits && f.name.is_some())
+        .map(|(i, _)| i)
+        .collect();
+    let packing = match rng.below(8) {
+        0 => Packing::Attribute,
+        1 => Packing::Pragma(1),
+        2 => Packing::Pragma(2),
+        3 => Packing::Pragma(4),
+        4 if !ordinary.is_empty() => Packing::Member(ordinary[rng.below(ordinary.len())]),
+        _ => Packing::None,
+    };
+    let aligned = if packing == Packing::None && rng.below(6) == 0 {
+        Some(1u32 << rng.between(3, 5))
+    } else {
+        None
+    };
+    // An `aligned` member only ever *raises* an alignment, so it is safe to
+    // put on any ordinary member of a record that is not packed.
+    let member_aligned = match (&packing, ordinary.is_empty()) {
+        (Packing::None, false) if rng.below(6) == 0 => Some((
+            ordinary[rng.below(ordinary.len())],
+            1u32 << rng.between(3, 4),
+        )),
+        _ => None,
+    };
+    Shape {
+        packing,
+        aligned,
+        member_aligned,
     }
 }
 
@@ -476,6 +583,26 @@ fn check_record<T>(index: usize, name: &str) {
     let align = unsafe { bf_query(index, 1, 0, 0, null) };
     assert_eq!(size as usize, size_of::<T>(), "sizeof {name}");
     assert_eq!(align as usize, align_of::<T>(), "_Alignof {name}");
+}
+
+/// The same, for a record whose Rust item cannot carry the alignment.
+///
+/// One member packed and the rest not is the only shape where the two differ:
+/// Rust refuses `#[repr(C, packed, align(N))]`, so the item is one byte
+/// aligned. What the C program can observe — every offset, and `sizeof` — is
+/// still identical, and the alignment the item does have must at least divide
+/// the one C computed, or an array of them would stride differently.
+fn check_record_size_only<T>(index: usize, name: &str) {
+    let index = index as ::core::ffi::c_int;
+    let null = ::core::ptr::null_mut();
+    let size = unsafe { bf_query(index, 0, 0, 0, null) };
+    let align = unsafe { bf_query(index, 1, 0, 0, null) };
+    assert_eq!(size as usize, size_of::<T>(), "sizeof {name}");
+    assert!(
+        (align as usize).is_multiple_of(align_of::<T>()),
+        "_Alignof {name}: the item's {} does not divide C's {align}",
+        align_of::<T>()
+    );
 }
 
 /// One ordinary member: `offsetof` against `offset_of!`.

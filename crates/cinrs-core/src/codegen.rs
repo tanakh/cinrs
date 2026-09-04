@@ -142,10 +142,18 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     for var in &program.statics {
         out.extend(cg.static_item(var));
     }
+    let mut initialisers = TokenStream::new();
     for func in &program.functions {
         if func.body.is_some() && !cg.beyond_toolchain(func) {
             out.extend(cg.function_item(func));
+            if let Some(kind) = func.init_kind {
+                initialisers.extend(cg.init_array_item(func, kind));
+            }
         }
+    }
+    if !initialisers.is_empty() {
+        out.extend(cg.init_array_guard());
+        out.extend(initialisers);
     }
     out
 }
@@ -335,56 +343,6 @@ fn c_ident(name: &str, span: Span) -> Ident {
         return Ident::new_raw(name, span);
     }
     Ident::new(name, span)
-}
-
-/// Collects every object a structured body binds with a `let`.
-///
-/// `switch` is the interesting case: the objects declared directly in its body
-/// are defined ahead of the dispatch rather than where they were written, and
-/// they are bindings all the same.
-fn collect_bound_objects(stmts: &[Stmt], out: &mut Vec<ir::ObjectId>) {
-    for stmt in stmts {
-        match stmt {
-            Stmt::Let { object, .. } => out.push(*object),
-            Stmt::Block(items) => collect_bound_objects(items, out),
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                collect_bound_objects(std::slice::from_ref(then_branch), out);
-                if let Some(alt) = else_branch {
-                    collect_bound_objects(std::slice::from_ref(alt), out);
-                }
-            }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_bound_objects(std::slice::from_ref(body), out);
-            }
-            Stmt::For { init, body, .. } => {
-                collect_bound_objects(init, out);
-                collect_bound_objects(std::slice::from_ref(body), out);
-            }
-            Stmt::Switch(switch) => {
-                out.extend(switch.hoisted.iter().copied());
-                collect_bound_objects(&switch.prelude, out);
-                for group in &switch.groups {
-                    collect_bound_objects(&group.body, out);
-                }
-            }
-            Stmt::SwitchTree(switch) => {
-                collect_bound_objects(std::slice::from_ref(&switch.body), out);
-            }
-            Stmt::Case { body, .. } | Stmt::Label { body, .. } => {
-                collect_bound_objects(std::slice::from_ref(body), out);
-            }
-            Stmt::Nop
-            | Stmt::Expr(_)
-            | Stmt::Goto { .. }
-            | Stmt::Break { .. }
-            | Stmt::Continue { .. }
-            | Stmt::Return { .. } => {}
-        }
-    }
 }
 
 /// The lint exemptions every generated item carries.
@@ -732,18 +690,28 @@ impl<'a> Codegen<'a> {
         let attrs = allow_attr(span);
         // `Copy` is what makes a C struct behave like one: assigning it,
         // passing it and returning it all copy the bytes.
-        let derives = match record.align {
-            // `_Alignas` on a member, or a bit-field whose type is stricter
-            // than any field the item really has, is honoured by raising the
-            // *record's* alignment; sema has already checked that the members
-            // still land where our own layout says they do.
-            Some(align) => {
+        let derives = match (record.align, record.packed) {
+            // `__attribute__((packed))` and `#pragma pack(N)` are exactly
+            // Rust's own `packed(N)`: every field's alignment is capped at N,
+            // and so is the record's.
+            (_, Some(1)) => quote_spanned! {span=> #[repr(C, packed)] #[derive(Copy, Clone)] },
+            (_, Some(pack)) => {
+                let pack = usize_literal(pack, span);
+                quote_spanned! {span=>
+                    #[repr(C, packed(#pack))] #[derive(Copy, Clone)]
+                }
+            }
+            // `_Alignas` or `aligned(N)` on a member, or a bit-field whose
+            // type is stricter than any field the item really has, is honoured
+            // by raising the *record's* alignment; sema has already placed the
+            // members where that leaves them.
+            (Some(align), None) => {
                 let align = usize_literal(align, span);
                 quote_spanned! {span=>
                     #[repr(C, align(#align))] #[derive(Copy, Clone)]
                 }
             }
-            None => quote_spanned! {span=> #[repr(C)] #[derive(Copy, Clone)] },
+            (None, None) => quote_spanned! {span=> #[repr(C)] #[derive(Copy, Clone)] },
         };
         if !record.complete {
             // A tag that is never completed can still be pointed at. An empty
@@ -769,7 +737,18 @@ impl<'a> Codegen<'a> {
                     let len = usize_literal(*bytes, span);
                     fields.extend(quote_spanned! {span=> pub #fname: [u8; #len], });
                 }
+                ir::RustField::Align { name, align } => {
+                    let fname = Ident::new(name, span);
+                    let unit = unsigned_rust_ty((*align * 8) as u32, span);
+                    fields.extend(quote_spanned! {span=> pub #fname: [#unit; 0], });
+                }
             }
+        }
+        if record.rust_fields.is_empty() && record.kind == RecordKind::Union {
+            // GCC gives an empty `union` a size of zero, and so does an empty
+            // Rust `struct`; a Rust `union` has to have at least one field, so
+            // this is the one place the two kinds are generated differently.
+            fields.extend(quote_spanned! {span=> pub __cinrs_empty: [u8; 0], });
         }
         let body = braced(fields, span);
         let item = match record.kind {
@@ -951,7 +930,10 @@ impl<'a> Codegen<'a> {
             let ospan = self.sp(object.range);
             let rust_name = Ident::new(&self.program.extern_name(item_name), ospan);
             let ty = self.ty(object.ty, ospan);
-            let link = link_name(item_name, ospan);
+            // An `__asm__("symbol")` label renames the declaration, which is
+            // exactly what `#[link_name]` already says.
+            let symbol = object.asm_label.as_deref().unwrap_or(item_name);
+            let link = link_name(symbol, ospan);
             items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
         }
         for func in &self.program.functions {
@@ -967,7 +949,8 @@ impl<'a> Codegen<'a> {
                 let ty = self.ty(func.sig.ret, fspan);
                 quote_spanned! {fspan=> -> #ty }
             };
-            let link = link_name(&func.name, fspan);
+            let symbol = func.asm_label.as_deref().unwrap_or(&func.name);
+            let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
         }
         let attrs = allow_attr(span);
@@ -1029,7 +1012,8 @@ impl<'a> Codegen<'a> {
         let attrs = allow_attr(span);
         let (vis, export) = if *exported {
             let export = if self.program.export {
-                export_attr(&object.name, &name, span)
+                let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
+                export_attr(symbol, &name, span)
             } else {
                 TokenStream::new()
             };
@@ -1037,12 +1021,21 @@ impl<'a> Codegen<'a> {
         } else {
             (TokenStream::new(), TokenStream::new())
         };
+        let section = match &object.section {
+            Some(section) => {
+                let mut literal = Literal::string(section);
+                literal.set_span(span);
+                quote_spanned! {span=> #[unsafe(link_section = #literal)] }
+            }
+            None => TokenStream::new(),
+        };
         // `static mut` rather than a cell: C code assigns to globals from
         // anywhere, and reading or writing one directly (never taking a
         // reference) is what keeps edition 2024's `static_mut_refs` quiet.
         quote_spanned! {span=>
             #attrs
             #export
+            #section
             #vis static mut #name: #ty = #init;
         }
     }
@@ -1100,6 +1093,12 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> -> #ty }
         };
         let attrs = allow_attr(span);
+        // A definition is a Rust item rather than a C symbol unless the unit
+        // asked for real symbols, so an `__asm__("name")` label on one only
+        // means something there — and there it names the symbol the item
+        // takes, which is what `#[unsafe(export_name)]` says. On a *declaration*
+        // the label is always honoured, through the `extern` block's
+        // `#[link_name]`.
         let exported = !func.is_static && self.program.export;
         let vis = if func.is_static {
             TokenStream::new()
@@ -1107,22 +1106,115 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> pub }
         };
         let export = if exported {
-            export_attr(&func.name, &name, span)
+            let symbol = func.asm_label.as_deref().unwrap_or(&func.name);
+            export_attr(symbol, &name, span)
         } else {
             TokenStream::new()
         };
         // `#[inline]` is ignored on an exported function, and saying so is
         // `rustc`'s job rather than the user's to read: leave it out.
-        let inline = if func.is_inline && !exported {
-            quote_spanned! {span=> #[inline] }
+        let inline = match func.inline_hint {
+            Some(_) if exported => TokenStream::new(),
+            Some(ir::InlineHint::Always) => quote_spanned! {span=> #[inline(always)] },
+            Some(ir::InlineHint::Never) => quote_spanned! {span=> #[inline(never)] },
+            None if func.is_inline && !exported => quote_spanned! {span=> #[inline] },
+            None => TokenStream::new(),
+        };
+        let cold = if func.cold {
+            quote_spanned! {span=> #[cold] }
         } else {
             TokenStream::new()
+        };
+        let deprecated = match &func.deprecated {
+            Some(Some(message)) => {
+                let mut literal = Literal::string(message);
+                literal.set_span(span);
+                quote_spanned! {span=> #[deprecated(note = #literal)] }
+            }
+            Some(None) => quote_spanned! {span=> #[deprecated] },
+            None => TokenStream::new(),
+        };
+        let section = match &func.section {
+            Some(section) => {
+                let mut literal = Literal::string(section);
+                literal.set_span(span);
+                quote_spanned! {span=> #[unsafe(link_section = #literal)] }
+            }
+            None => TokenStream::new(),
         };
         quote_spanned! {span=>
             #attrs
             #export
             #inline
+            #cold
+            #deprecated
+            #section
             #vis unsafe extern "C" fn #name(#params) #ret
+        }
+    }
+
+    /// The `static` that puts a `constructor` or `destructor` function into the
+    /// table the runtime walks before `main` (or after it).
+    ///
+    /// ELF has `.init_array` and `.fini_array`, and Mach-O has
+    /// `__DATA,__mod_init_func` and `__mod_term_func`; nothing else this crate
+    /// can name has such a table, so a program that asks for one elsewhere is
+    /// told so rather than quietly built without it.
+    fn init_array_item(&mut self, func: &Function, kind: ir::InitKind) -> TokenStream {
+        let span = self.sp(func.range);
+        let name = c_ident(&func.name, span);
+        let signature = self.function_pointer_ty(func, span);
+        let item = Ident::new(
+            &format!(
+                "__CINRS_INIT_{:08x}_{}",
+                self.program.unit_id as u32, func.name
+            ),
+            span,
+        );
+        let elf = match kind {
+            ir::InitKind::Constructor => ".init_array",
+            ir::InitKind::Destructor => ".fini_array",
+        };
+        let apple = match kind {
+            ir::InitKind::Constructor => "__DATA,__mod_init_func",
+            ir::InitKind::Destructor => "__DATA,__mod_term_func",
+        };
+        let mut elf_literal = Literal::string(elf);
+        elf_literal.set_span(span);
+        let mut apple_literal = Literal::string(apple);
+        apple_literal.set_span(span);
+        let attrs = allow_attr(span);
+        // The section name is the one thing about this that is not portable,
+        // so it is chosen at compile time rather than assumed.
+        quote_spanned! {span=>
+            #attrs
+            #[used]
+            #[cfg_attr(target_vendor = "apple", unsafe(link_section = #apple_literal))]
+            #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = #elf_literal))]
+            static #item: #signature = #name;
+        }
+    }
+
+    /// The one check a unit with a `constructor` or a `destructor` carries.
+    ///
+    /// A procedural macro is compiled for the *host*, so it cannot know which
+    /// target the code it generates is for; the check therefore has to be part
+    /// of the expansion. It is emitted once per unit rather than once per
+    /// function, since it says the same thing either way.
+    fn init_array_guard(&self) -> TokenStream {
+        let span = self.map.span(SourceRange::at(0));
+        let attrs = allow_attr(span);
+        quote_spanned! {span=>
+            #attrs
+            const _: () = {
+                #[cfg(not(any(target_os = "linux", target_os = "android",
+                              target_os = "freebsd", target_os = "netbsd",
+                              target_os = "openbsd", target_os = "dragonfly",
+                              target_vendor = "apple")))]
+                ::core::compile_error!(
+                    "'constructor' and 'destructor' need a target whose runtime walks an initialiser table (ELF or Mach-O)"
+                );
+            };
         }
     }
 
@@ -1166,19 +1258,17 @@ impl<'a> Codegen<'a> {
 
         // Every object this function binds with a `let` or a parameter, so
         // that one that would shadow a file-scope item can be renamed apart
-        // and the rename can be checked against the others.
+        // and the rename can be checked against the others. Sema's list is
+        // what makes a local declared inside a statement expression — which no
+        // walk over the *statements* would reach — part of it.
         let mut bound: Vec<ir::ObjectId> = func.params.clone();
-        match &func.body {
-            Some(Body::Cfg(cfg)) => {
-                for local in &cfg.locals {
-                    self.local_names
-                        .insert(local.object, local.rust_name.clone());
-                    bound.push(local.object);
-                }
+        if let Some(Body::Cfg(cfg)) = &func.body {
+            for local in &cfg.locals {
+                self.local_names
+                    .insert(local.object, local.rust_name.clone());
             }
-            Some(Body::Structured(stmts)) => collect_bound_objects(stmts, &mut bound),
-            None => {}
         }
+        bound.extend(func.locals.iter().copied());
         self.rename_shadowing(&bound);
 
         self.va_source = if func.sig.variadic {
@@ -1372,7 +1462,7 @@ impl<'a> Codegen<'a> {
                         if index > 0 {
                             pattern.extend(quote_spanned! {sspan=> | });
                         }
-                        pattern.extend(bare_int_literal(*case, value.ty, sspan));
+                        pattern.extend(case_pattern(*case, value.ty, sspan));
                     }
                     let enter = self.enter_block(target, sspan);
                     arms.extend(quote_spanned! {sspan=> #pattern => { #enter } });
@@ -1654,7 +1744,7 @@ impl<'a> Codegen<'a> {
                 }
                 // A pattern takes its type from the scrutinee, so the bare
                 // literal is both correct and the most readable form.
-                pattern.extend(bare_int_literal(*value, scrutinee_ty, span));
+                pattern.extend(case_pattern(*value, scrutinee_ty, span));
             }
             arms.extend(quote_spanned! {span=> #pattern => break #label, });
         }
@@ -2013,6 +2103,40 @@ impl<'a> Codegen<'a> {
                 let len = usize_literal(*len, span);
                 Value::atom(bracketed(quote_spanned! {span=> #tokens ; #len }, span))
             }
+            // GNU's `a ?: b`. The value is held in a temporary so that the
+            // operand is evaluated exactly once, which is the whole point.
+            ExprKind::CondDefault { value, else_expr } => {
+                let ty = expr.ty;
+                let first = self.expr_at(value, ty);
+                let other = self.expr_at(else_expr, ty);
+                let tmp = self.temporary();
+                let target = self.ty(ty, span);
+                let test = if ty.is_pointer() {
+                    quote_spanned! {span=> !#tmp.is_null() }
+                } else {
+                    let zero = self.zero_tokens(ty, span);
+                    quote_spanned! {span=> #tmp != #zero }
+                };
+                Value::new(
+                    quote_spanned! {span=>
+                        { let #tmp: #target = #first; if #test { #tmp } else { #other } }
+                    },
+                    prec::BLOCK,
+                )
+            }
+            // GNU's statement expression, which is what a Rust block is.
+            ExprKind::StmtExpr { stmts, value } => {
+                let body = self.stmts(stmts);
+                let tail = match value {
+                    Some(value) => {
+                        let ty = expr.ty;
+                        self.expr_at(value, ty)
+                    }
+                    None => TokenStream::new(),
+                };
+                Value::new(quote_spanned! {span=> { #body #tail } }, prec::BLOCK)
+            }
+            ExprKind::Builtin { op, args } => self.builtin(*op, args, span),
             ExprKind::VaListPristine => Value::new(self.va_pristine(span), prec::CALL),
             ExprKind::VaArg { ap } => self.va_arg(ap, expr.ty, span),
             // `va_end` is nothing: the list ends when its value is dropped.
@@ -2078,6 +2202,10 @@ impl<'a> Codegen<'a> {
                     let fname = Ident::new(name, span);
                     let len = usize_literal(*bytes, span);
                     items.extend(quote_spanned! {span=> #fname: [0; #len], });
+                }
+                ir::RustField::Align { name, .. } => {
+                    let fname = Ident::new(name, span);
+                    items.extend(quote_spanned! {span=> #fname: [], });
                 }
             }
         }
@@ -2184,6 +2312,178 @@ impl<'a> Codegen<'a> {
             prec::CAST,
         )
         .type_end(true)
+    }
+
+    /// One of the builtins that becomes a fixed piece of Rust.
+    ///
+    /// The bit-manipulation ones are the integer methods of the same name, on
+    /// the *unsigned* type of the operand's width — C's are defined on
+    /// unsigned values and Rust's `leading_zeros` counts the same way. The
+    /// overflow ones do the arithmetic in `i128` and ask whether the value
+    /// survives the round trip through the type it is stored in, which is
+    /// exactly "compute in infinite precision, then convert".
+    fn builtin(&mut self, op: ir::BuiltinOp, args: &[Expr], span: Span) -> Value {
+        use ir::BuiltinOp;
+        let int = self.ty(Ty::Int, span);
+        match op {
+            BuiltinOp::Discard => {
+                let mut out = TokenStream::new();
+                for arg in args {
+                    out.extend(self.expr_stmt(arg));
+                }
+                Value::new(quote_spanned! {span=> { #out } }, prec::BLOCK)
+            }
+            BuiltinOp::Bswap => {
+                let operand = args[0].ty;
+                let value = self.unsigned_operand(&args[0], span);
+                let target = self.ty(operand, span);
+                Value::new(
+                    quote_spanned! {span=> #value.swap_bytes() as #target },
+                    prec::CAST,
+                )
+                .type_end(true)
+            }
+            BuiltinOp::Popcount => {
+                let value = self.unsigned_operand(&args[0], span);
+                Value::new(
+                    quote_spanned! {span=> #value.count_ones() as #int },
+                    prec::CAST,
+                )
+                .type_end(true)
+            }
+            BuiltinOp::Parity => {
+                let value = self.unsigned_operand(&args[0], span);
+                Value::new(
+                    quote_spanned! {span=> (#value.count_ones() & 1) as #int },
+                    prec::CAST,
+                )
+                .type_end(true)
+            }
+            BuiltinOp::Clz => {
+                let value = self.unsigned_operand(&args[0], span);
+                Value::new(
+                    quote_spanned! {span=> #value.leading_zeros() as #int },
+                    prec::CAST,
+                )
+                .type_end(true)
+            }
+            BuiltinOp::Ctz => {
+                let value = self.unsigned_operand(&args[0], span);
+                Value::new(
+                    quote_spanned! {span=> #value.trailing_zeros() as #int },
+                    prec::CAST,
+                )
+                .type_end(true)
+            }
+            BuiltinOp::Ffs => {
+                let value = self.unsigned_operand(&args[0], span);
+                let tmp = self.temporary();
+                Value::new(
+                    quote_spanned! {span=>
+                        { let #tmp = #value;
+                          if #tmp == 0 { 0 } else { #tmp.trailing_zeros() as #int + 1 } }
+                    },
+                    prec::BLOCK,
+                )
+            }
+            // The number of leading bits that repeat the sign bit, not
+            // counting the sign bit itself — which is what `leading_zeros` of
+            // the value XORed with itself shifted left gives.
+            BuiltinOp::Clrsb => {
+                let width = args[0].ty.bits(&self.options.target);
+                let signed = signed_rust_ty(width, span);
+                let value = self.expr(&args[0]).at(prec::CAST, span);
+                let tmp = self.temporary();
+                let bits = usize_literal(u64::from(width), span);
+                Value::new(
+                    quote_spanned! {span=>
+                        { let #tmp = #value as #signed;
+                          ((#tmp ^ (#tmp << 1)).leading_zeros() as #int)
+                              .min(#bits as #int - 1) }
+                    },
+                    prec::BLOCK,
+                )
+            }
+            BuiltinOp::Overflow(bin) | BuiltinOp::OverflowP(bin) => {
+                let store = matches!(op, BuiltinOp::Overflow(_));
+                // The third operand carries the result type: the pointee of
+                // the pointer the value is stored through, or the type of the
+                // expression the `_p` forms only ask about.
+                let result_ty = if store {
+                    self.program.types.pointee(args[2].ty).unwrap_or(Ty::Int)
+                } else {
+                    args[2].ty
+                };
+                self.overflow_builtin(bin, args, store, result_ty, span)
+            }
+        }
+    }
+
+    /// The operand of a bit-manipulation builtin, as the unsigned integer of
+    /// its own width.
+    fn unsigned_operand(&mut self, arg: &Expr, span: Span) -> TokenStream {
+        let width = arg.ty.bits(&self.options.target);
+        let target = unsigned_rust_ty(width, span);
+        let value = self.expr(arg).at(prec::CAST, span);
+        parenthesize(quote_spanned! {span=> #value as #target }, span)
+    }
+
+    /// `__builtin_add_overflow(a, b, &r)` and its relatives.
+    fn overflow_builtin(
+        &mut self,
+        op: BinOp,
+        args: &[Expr],
+        store: bool,
+        result_ty: Ty,
+        span: Span,
+    ) -> Value {
+        let method = match op {
+            BinOp::Add => "wrapping_add",
+            BinOp::Sub => "wrapping_sub",
+            _ => "wrapping_mul",
+        };
+        let method = Ident::new(method, span);
+        let checked = match op {
+            BinOp::Add => "checked_add",
+            BinOp::Sub => "checked_sub",
+            _ => "checked_mul",
+        };
+        let checked = Ident::new(checked, span);
+        let lhs = self.expr(&args[0]).at(prec::CAST, span);
+        let rhs = self.expr(&args[1]).at(prec::CAST, span);
+        let target = self.ty(result_ty, span);
+        let a = self.temporary();
+        let b = self.temporary();
+        let wide = self.temporary();
+        let narrow = self.temporary();
+        let compute = quote_spanned! {span=>
+            let #a: i128 = #lhs as i128;
+            let #b: i128 = #rhs as i128;
+            let #wide: i128 = #a.#method(#b);
+            let #narrow: #target = #wide as #target;
+        };
+        // The value overflows exactly when the wrapped result no longer equals
+        // what infinite precision gave — and `i128` itself can only overflow
+        // on a multiplication, where the answer is certainly out of range.
+        let flag = quote_spanned! {span=>
+            #a.#checked(#b).is_none() || (#narrow as i128) != #wide
+        };
+        if !store {
+            // The `_p` forms still evaluate their third operand.
+            let third = self.expr_stmt(&args[2]);
+            return Value::new(
+                quote_spanned! {span=> { #third #compute #flag } },
+                prec::BLOCK,
+            );
+        }
+        let place = self.expr(&args[2]).at(prec::CALL, span);
+        let out = self.temporary();
+        Value::new(
+            quote_spanned! {span=>
+                { #compute let #out = #place; *#out = #narrow; #flag }
+            },
+            prec::BLOCK,
+        )
     }
 
     /// `va_arg(ap, T)`: reads the next argument and advances the list.
@@ -3100,6 +3400,31 @@ fn rooted_in_static(place: &Place, program: &Program) -> bool {
     }
 }
 
+/// The Rust unsigned integer of a given width, which is what the bit-counting
+/// builtins are defined on.
+fn unsigned_rust_ty(width: u32, span: Span) -> TokenStream {
+    let name = match width {
+        0..=8 => "u8",
+        9..=16 => "u16",
+        17..=32 => "u32",
+        _ => "u64",
+    };
+    let ident = Ident::new(name, span);
+    quote_spanned! {span=> #ident }
+}
+
+/// The signed counterpart, for `__builtin_clrsb`.
+fn signed_rust_ty(width: u32, span: Span) -> TokenStream {
+    let name = match width {
+        0..=8 => "i8",
+        9..=16 => "i16",
+        17..=32 => "i32",
+        _ => "i64",
+    };
+    let ident = Ident::new(name, span);
+    quote_spanned! {span=> #ident }
+}
+
 /// A mask of `width` low bits, in a `u64`.
 fn mask_of(width: u32) -> u64 {
     if width >= 64 {
@@ -3126,10 +3451,10 @@ fn state_literal(value: usize, span: Span) -> TokenStream {
 
 /// Groups a switch's cases by the block they enter, keeping source order.
 ///
-/// `case 0: case 1:` reaches the same block through two values, and one arm
+/// `case 0: case 1:` reaches the same block through two labels, and one arm
 /// with an or-pattern is how that should read.
-fn group_cases(cases: &[(i128, BlockId)]) -> Vec<(BlockId, Vec<i128>)> {
-    let mut out: Vec<(BlockId, Vec<i128>)> = Vec::new();
+fn group_cases(cases: &[(ir::CaseRange, BlockId)]) -> Vec<(BlockId, Vec<ir::CaseRange>)> {
+    let mut out: Vec<(BlockId, Vec<ir::CaseRange>)> = Vec::new();
     for (value, target) in cases {
         match out.iter_mut().find(|(block, _)| block == target) {
             Some((_, values)) => values.push(*value),
@@ -3137,6 +3462,16 @@ fn group_cases(cases: &[(i128, BlockId)]) -> Vec<(BlockId, Vec<i128>)> {
         }
     }
     out
+}
+
+/// The Rust pattern one `case` label matches: a literal, or a range.
+fn case_pattern(value: ir::CaseRange, ty: Ty, span: Span) -> TokenStream {
+    let low = bare_int_literal(value.low, ty, span);
+    if value.is_single() {
+        return low;
+    }
+    let high = bare_int_literal(value.high, ty, span);
+    quote_spanned! {span=> #low ..= #high }
 }
 
 /// The precedence of the tokens [`Codegen::zero_tokens`] produces.

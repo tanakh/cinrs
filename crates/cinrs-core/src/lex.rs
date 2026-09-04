@@ -104,6 +104,35 @@ pub enum Keyword {
     AlignofName,
     AlignasName,
     ThreadLocalName,
+    // The GNU keywords. Every one of them is spelled with a leading double
+    // underscore, which C reserves, so they are available in every entry point
+    // — exactly as they are in GCC's own strict modes. They are *not* produced
+    // by [`Keyword::from_str`]: the [preprocessor](crate::pp) turns the
+    // identifiers into them on the way out, after macro replacement, so that
+    // `#define __attribute__(x)` — which portability headers really do write —
+    // still defines and expands a macro of that name.
+    /// `__attribute__`, `__attribute`
+    Attribute,
+    /// `__extension__`
+    Extension,
+    /// `__alignof__`, `__alignof`
+    AlignofGnu,
+    /// `__typeof__`, `__typeof`, and `typeof` in a GNU dialect
+    TypeofGnu,
+    /// `__typeof_unqual__`
+    TypeofUnqualGnu,
+    /// `__asm__`, `__asm`, and `asm` in a GNU dialect
+    Asm,
+    /// `__label__`
+    Label,
+    /// `__auto_type`
+    AutoType,
+    /// `__thread`
+    ThreadGnu,
+    /// `__real__`, `__real`
+    RealGnu,
+    /// `__imag__`, `__imag`
+    ImagGnu,
 }
 
 impl Keyword {
@@ -167,7 +196,38 @@ impl Keyword {
             AlignofName => "alignof",
             AlignasName => "alignas",
             ThreadLocalName => "thread_local",
+            Attribute => "__attribute__",
+            Extension => "__extension__",
+            AlignofGnu => "__alignof__",
+            TypeofGnu => "__typeof__",
+            TypeofUnqualGnu => "__typeof_unqual__",
+            Asm => "__asm__",
+            Label => "__label__",
+            AutoType => "__auto_type",
+            ThreadGnu => "__thread",
+            RealGnu => "__real__",
+            ImagGnu => "__imag__",
         }
+    }
+
+    /// Whether this keyword is one of the GNU spellings the preprocessor
+    /// introduces; see the variants' own documentation.
+    pub fn is_gnu(self) -> bool {
+        use Keyword::*;
+        matches!(
+            self,
+            Attribute
+                | Extension
+                | AlignofGnu
+                | TypeofGnu
+                | TypeofUnqualGnu
+                | Asm
+                | Label
+                | AutoType
+                | ThreadGnu
+                | RealGnu
+                | ImagGnu
+        )
     }
 
     /// The revision that made this spelling a keyword.
@@ -700,14 +760,31 @@ impl Token {
 pub struct LexOptions {
     /// Which standard's lexical rules to apply.
     pub standard: Standard,
+    /// How a constant form a newer revision introduced is gated.
+    pub gating: crate::Gating,
     /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`.
     pub dollar_in_identifiers: bool,
+}
+
+impl LexOptions {
+    /// The lexical rules of `standard`, in the strict ISO dialect.
+    pub fn new(standard: Standard) -> Self {
+        Self {
+            standard,
+            gating: crate::Gating {
+                standard,
+                dialect: crate::Dialect::Iso,
+            },
+            dollar_in_identifiers: false,
+        }
+    }
 }
 
 impl From<&Options> for LexOptions {
     fn from(o: &Options) -> Self {
         Self {
             standard: o.standard,
+            gating: o.gating(),
             dollar_in_identifiers: o.dollar_in_identifiers,
         }
     }
@@ -1039,11 +1116,12 @@ impl<'a> Lexer<'a> {
         }
         let text = &self.text[start..self.pos];
         let range = self.range(start, self.pos);
-        if separators && self.options.standard < Standard::C23 {
-            let message = self
+        if separators
+            && let Some(message) = self
                 .options
-                .standard
-                .requires("a digit separator", Standard::C23);
+                .gating
+                .requires("a digit separator", Standard::C23)
+        {
             self.error(range, message);
         }
         // Everything below reads the digits; the separators are not part of
@@ -1084,11 +1162,12 @@ impl<'a> Lexer<'a> {
             } else {
                 (NumBase::Decimal, 0)
             };
-        if base == NumBase::Binary && self.options.standard < Standard::C23 {
-            let message = self
+        if base == NumBase::Binary
+            && let Some(message) = self
                 .options
-                .standard
-                .requires("a binary integer constant", Standard::C23);
+                .gating
+                .requires("a binary integer constant", Standard::C23)
+        {
             self.error(range, message);
         }
 
@@ -1330,6 +1409,11 @@ impl<'a> Lexer<'a> {
             b'\\' => Some(0x5c),
             b'a' => Some(0x07),
             b'b' => Some(0x08),
+            // `\e` is GNU's escape for ESC. GCC accepts it in every mode (with
+            // a pedantic warning), and `"\e[0m"` is how a program writes a
+            // terminal colour; refusing it would be refusing the extension in
+            // the one place a strict mode still has it.
+            b'e' => Some(0x1b),
             b'f' => Some(0x0c),
             b'n' => Some(0x0a),
             b'r' => Some(0x0d),

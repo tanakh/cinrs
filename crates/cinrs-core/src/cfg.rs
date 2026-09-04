@@ -68,8 +68,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::capture::SourceRange;
 use crate::ir::{
-    BreakTarget, Expr, ExprKind, LabelId, LoopId, Object, ObjectId, Place, PlaceKind, Stmt,
-    Storage, SwitchId, is_always_true,
+    BreakTarget, CaseRange, Expr, ExprKind, LabelId, LoopId, Object, ObjectId, Place, PlaceKind,
+    Stmt, Storage, SwitchId, is_always_true,
 };
 
 /// Identifies a basic block inside a [`Cfg`].
@@ -127,8 +127,8 @@ pub enum Terminator {
     Switch {
         /// The controlling expression, after the integer promotions.
         value: Expr,
-        /// The `case` values and the blocks they enter, in source order.
-        cases: Vec<(i128, BlockId)>,
+        /// The `case` labels and the blocks they enter, in source order.
+        cases: Vec<(CaseRange, BlockId)>,
         /// Where `default:` goes — past the statement when there is none.
         default: BlockId,
         /// Where the statement was written.
@@ -240,7 +240,7 @@ struct LoopBlocks {
 /// A `switch` whose body is being walked.
 struct SwitchFrame {
     brk: BlockId,
-    cases: Vec<(i128, BlockId)>,
+    cases: Vec<(CaseRange, BlockId)>,
     default: Option<BlockId>,
 }
 
@@ -592,7 +592,7 @@ impl Lowerer<'_> {
         self.continue_at(exit);
     }
 
-    fn case(&mut self, switch: SwitchId, value: Option<i128>, body: Stmt, range: SourceRange) {
+    fn case(&mut self, switch: SwitchId, value: Option<CaseRange>, body: Stmt, range: SourceRange) {
         let block = self.new_block();
         // A group falls through into the next one, so the statements before
         // the label flow here too.

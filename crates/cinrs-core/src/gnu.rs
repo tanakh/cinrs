@@ -1,0 +1,318 @@
+//! The GNU extensions' name tables.
+//!
+//! Two questions are asked of this module, and it matters that both are
+//! answered from the same place: the [parser](crate::parse) and
+//! [sema](crate::sema) ask "what does this attribute or builtin mean?", and the
+//! [preprocessor](crate::pp) answers `__has_attribute`, `__has_builtin`,
+//! `__has_feature` and `__has_extension` from it — so a program that guards a
+//! construct with `#if __has_attribute(packed)` gets an answer that is true of
+//! this implementation rather than of GCC's.
+//!
+//! `doc/gnu-extensions.md` is the prose version of the same tables.
+
+/// What an `__attribute__` (or a C23 `[[…]]`) asks for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Attribute {
+    /// `noreturn`, `_Noreturn`: a call to the function does not come back.
+    Noreturn,
+    /// `always_inline`: `#[inline(always)]`.
+    AlwaysInline,
+    /// `noinline`: `#[inline(never)]`.
+    NoInline,
+    /// `cold`, and `hot` as its opposite: `#[cold]`.
+    Cold,
+    /// `hot`, which cancels `cold`.
+    Hot,
+    /// `deprecated`: `#[deprecated]`.
+    Deprecated,
+    /// `fallthrough`, which is a statement attribute and means nothing here —
+    /// a `switch` group falls through in the generated Rust either way.
+    Fallthrough,
+    /// `packed`: no padding, on a record or on one member.
+    Packed,
+    /// `aligned(N)`: raise the alignment.
+    Aligned,
+    /// `section("…")`: `#[unsafe(link_section = "…")]`.
+    Section,
+    /// `constructor`, optionally with a priority: run before `main`.
+    Constructor,
+    /// `destructor`, likewise: run after it.
+    Destructor,
+    /// `asm("symbol")` written as an attribute is not a thing, but
+    /// `alias`, `weak` and the rest are: known, and refused with the reason.
+    Unsupported,
+    /// Known and safe to ignore: a hint, a diagnostic request, or something
+    /// the generated Rust cannot observe.
+    Ignored,
+}
+
+/// The attributes that are refused rather than ignored, with the reason.
+///
+/// Silently ignoring one of these would change what the program *means*, which
+/// is the one thing this crate will not do.
+pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
+    (
+        "weak",
+        "is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for",
+    ),
+    (
+        "weakref",
+        "is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for",
+    ),
+    (
+        "alias",
+        "is not supported: write a function that forwards to the other one instead",
+    ),
+    (
+        "ifunc",
+        "is not supported: choosing an implementation at load time has no stable Rust counterpart",
+    ),
+    (
+        "vector_size",
+        "is not supported: the vector extensions need `core::simd`, which is unstable",
+    ),
+    (
+        "mode",
+        "is not supported: write the type the mode names instead",
+    ),
+    (
+        "cleanup",
+        "is not supported yet: it needs a drop guard around the object's scope",
+    ),
+];
+
+/// The attribute a name spells, accepting both the `name` and the `__name__`
+/// forms GCC does.
+pub fn attribute(name: &str) -> Option<Attribute> {
+    let bare = name
+        .strip_prefix("__")
+        .and_then(|rest| rest.strip_suffix("__"))
+        .unwrap_or(name);
+    if UNSUPPORTED_ATTRIBUTES.iter().any(|(n, _)| *n == bare) {
+        return Some(Attribute::Unsupported);
+    }
+    Some(match bare {
+        "noreturn" => Attribute::Noreturn,
+        "always_inline" => Attribute::AlwaysInline,
+        "noinline" => Attribute::NoInline,
+        "cold" => Attribute::Cold,
+        "hot" => Attribute::Hot,
+        "deprecated" => Attribute::Deprecated,
+        "fallthrough" => Attribute::Fallthrough,
+        "packed" => Attribute::Packed,
+        "aligned" | "alignas" => Attribute::Aligned,
+        "section" => Attribute::Section,
+        "constructor" => Attribute::Constructor,
+        "destructor" => Attribute::Destructor,
+        _ if IGNORED_ATTRIBUTES.contains(&bare) => Attribute::Ignored,
+        _ => return None,
+    })
+}
+
+/// The reason an [`Attribute::Unsupported`] one is refused.
+pub fn unsupported_reason(name: &str) -> Option<&'static str> {
+    let bare = name
+        .strip_prefix("__")
+        .and_then(|rest| rest.strip_suffix("__"))
+        .unwrap_or(name);
+    UNSUPPORTED_ATTRIBUTES
+        .iter()
+        .find(|(n, _)| *n == bare)
+        .map(|(_, reason)| *reason)
+}
+
+/// Attributes that are hints, diagnostic requests or optimiser instructions:
+/// accepted, and ignored exactly as C23 6.7.13.1p3 allows.
+const IGNORED_ATTRIBUTES: &[&str] = &[
+    "access",
+    "alloc_align",
+    "alloc_size",
+    "artificial",
+    "assume_aligned",
+    "cdecl",
+    "const",
+    "designated_init",
+    "error",
+    "externally_visible",
+    "fastcall",
+    "flatten",
+    "format",
+    "format_arg",
+    "gnu_inline",
+    "leaf",
+    "malloc",
+    "may_alias",
+    "maybe_unused",
+    "no_instrument_function",
+    "no_sanitize",
+    "no_split_stack",
+    "noclone",
+    "nodiscard",
+    "noipa",
+    "nonnull",
+    "nonstring",
+    "nothrow",
+    "optimize",
+    "pure",
+    "reproducible",
+    "returns_nonnull",
+    "returns_twice",
+    "sentinel",
+    "stdcall",
+    "target",
+    "target_clones",
+    "transparent_union",
+    "unavailable",
+    "unsequenced",
+    "unused",
+    "used",
+    "visibility",
+    "warn_unused_result",
+    "warning",
+];
+
+/// Whether `__has_attribute(name)` answers yes.
+pub fn has_attribute(name: &str) -> bool {
+    attribute(name).is_some_and(|a| a != Attribute::Unsupported)
+}
+
+/// The value `__has_c_attribute(name)` answers with.
+///
+/// C23 6.10.1p6 wants the revision that added the attribute; every one this
+/// crate honours arrived with C23 itself, so `202311L` is the honest answer,
+/// and everything else is 0.
+pub fn has_c_attribute(name: &str) -> u64 {
+    let standard = matches!(
+        name,
+        "deprecated"
+            | "fallthrough"
+            | "maybe_unused"
+            | "nodiscard"
+            | "noreturn"
+            | "unsequenced"
+            | "reproducible"
+    );
+    if standard { 202_311 } else { 0 }
+}
+
+/// Whether `__has_builtin(name)` answers yes.
+pub fn has_builtin(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("__builtin_") else {
+        return false;
+    };
+    SPECIAL_BUILTINS.contains(&rest) || LIBRARY_BUILTINS.contains(&rest)
+}
+
+/// Whether `__has_feature(name)` / `__has_extension(name)` answers yes.
+///
+/// Clang's vocabulary, answered for what this crate really has: `c_atomic`,
+/// `c_thread_local` and `blocks` are deliberately absent, because the
+/// constructs behind them are diagnosed rather than translated.
+pub fn has_feature(name: &str) -> bool {
+    SUPPORTED_FEATURES.contains(&name)
+}
+
+/// The features `__has_feature` and `__has_extension` answer yes to.
+const SUPPORTED_FEATURES: &[&str] = &[
+    "c_alignas",
+    "c_alignof",
+    "c_attributes",
+    "c_generic_selection",
+    "c_generic_selections",
+    "c_static_assert",
+    "cinrs",
+];
+
+/// The builtins the front end implements itself.
+///
+/// Sema recognises exactly these names; `__has_builtin` answers from the same
+/// list, so the two can never drift.
+pub const SPECIAL_BUILTINS: &[&str] = &[
+    "add_overflow",
+    "add_overflow_p",
+    "assume",
+    "assume_aligned",
+    "bswap16",
+    "bswap32",
+    "bswap64",
+    "choose_expr",
+    "clrsb",
+    "clrsbl",
+    "clrsbll",
+    "clz",
+    "clzl",
+    "clzll",
+    "constant_p",
+    "ctz",
+    "ctzl",
+    "ctzll",
+    "dynamic_object_size",
+    "expect",
+    "expect_with_probability",
+    "ffs",
+    "ffsl",
+    "ffsll",
+    "huge_val",
+    "huge_valf",
+    "inf",
+    "inff",
+    "mul_overflow",
+    "mul_overflow_p",
+    "nan",
+    "nanf",
+    "object_size",
+    "offsetof",
+    "parity",
+    "parityl",
+    "parityll",
+    "popcount",
+    "popcountl",
+    "popcountll",
+    "prefetch",
+    "sub_overflow",
+    "sub_overflow_p",
+    "trap",
+    "types_compatible_p",
+    "unreachable",
+    "va_arg",
+    "va_copy",
+    "va_end",
+    "va_start",
+    "FILE",
+    "FUNCTION",
+    "LINE",
+];
+
+/// The operation a typed overflow builtin performs, if the name spells one.
+///
+/// `__builtin_sadd_overflow` and its fifteen relatives are the generic
+/// builtins with the result type written into the name; the type the value is
+/// stored in says the same thing, so only the operation has to be read out.
+pub fn typed_overflow(rest: &str) -> Option<&'static str> {
+    let rest = rest.strip_prefix('s').or_else(|| rest.strip_prefix('u'))?;
+    let (op, rest) = if let Some(rest) = rest.strip_prefix("add") {
+        ("add", rest)
+    } else if let Some(rest) = rest.strip_prefix("sub") {
+        ("sub", rest)
+    } else {
+        ("mul", rest.strip_prefix("mul")?)
+    };
+    matches!(rest, "_overflow" | "l_overflow" | "ll_overflow").then_some(op)
+}
+
+/// The library functions `__builtin_X` may name.
+///
+/// GCC has a builtin for every standard library function; `cinrs` calls the
+/// real one, declaring it if the unit did not include the header. The list is
+/// what the bundled headers declare, which is what a call can be typed from.
+pub const LIBRARY_BUILTINS: &[&str] = &[
+    "abort", "abs", "acos", "asin", "atan", "atan2", "atof", "atoi", "atol", "atoll", "calloc",
+    "ceil", "ceilf", "cos", "cosf", "cosh", "exit", "exp", "expf", "fabs", "fabsf", "floor",
+    "floorf", "fmax", "fmin", "fmod", "fprintf", "fputc", "fputs", "free", "frexp", "isalnum",
+    "isalpha", "isdigit", "islower", "isprint", "isspace", "isupper", "labs", "ldexp", "llabs",
+    "log", "log10", "log2", "logf", "malloc", "memchr", "memcmp", "memcpy", "memmove", "memset",
+    "modf", "pow", "powf", "printf", "putchar", "puts", "realloc", "round", "roundf", "sin",
+    "sinf", "sinh", "snprintf", "sprintf", "sqrt", "sqrtf", "strcat", "strchr", "strcmp", "strcpy",
+    "strcspn", "strlen", "strncat", "strncmp", "strncpy", "strpbrk", "strrchr", "strspn", "strstr",
+    "strtod", "strtol", "strtoul", "tan", "tanf", "tanh", "tolower", "toupper", "trunc", "truncf",
+];

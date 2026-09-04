@@ -303,6 +303,9 @@ pub struct Field {
     pub offset: u64,
     /// Set when the member was declared with a width.
     pub bits: Option<BitField>,
+    /// Whether this is the flexible array member `int data[];` — an array of
+    /// no elements that the object is expected to be over-allocated for.
+    pub flexible: bool,
     /// Where the member was declared.
     pub range: SourceRange,
 }
@@ -333,6 +336,20 @@ pub enum RustField {
         /// How many bytes it covers.
         bytes: u64,
     },
+    /// A zero-sized field whose only job is to raise the item's alignment.
+    ///
+    /// `#[repr(C, align(N))]` says the same thing and reads better, so it is
+    /// what a record normally carries. A record that is a member of a *packed*
+    /// one cannot use it: Rust refuses a packed type that transitively holds a
+    /// `#[repr(align)]` one (`E0588`), while C is perfectly happy to pack such
+    /// a member. A `[uN; 0]` field costs no bytes, raises the alignment the
+    /// same way, and is not a `repr(align)` type.
+    Align {
+        /// The field name, `__cinrs_alignN`.
+        name: String,
+        /// The alignment it carries, in bytes.
+        align: u64,
+    },
 }
 
 /// A `struct` or `union` tag.
@@ -362,6 +379,18 @@ pub struct RecordDef {
     /// The alignment `_Alignas` on a member raised the record to, which
     /// becomes `#[repr(C, align(N))]` on the generated item.
     pub align: Option<u64>,
+    /// The maximum member alignment `__attribute__((packed))` or
+    /// `#pragma pack(N)` asked for, which becomes `#[repr(C, packed(N))]`.
+    pub packed: Option<u64>,
+    /// The alignment the *generated Rust item* has, which is [`Layout::align`]
+    /// except for a packed record — Rust refuses `packed` and `align(N)`
+    /// together, so such an item is one byte aligned however strict C says the
+    /// record is. Laying out a record that has one as a member reads this
+    /// rather than the C alignment, so that the padding it inserts puts the
+    /// member where both sides agree it goes.
+    pub rust_align: u64,
+    /// Whether the record ends in a flexible array member.
+    pub flexible: bool,
     /// Whether an item should be generated for this tag.
     pub emit: bool,
     /// Where the tag was defined (or first mentioned).
@@ -1123,6 +1152,10 @@ pub struct Object {
     pub storage: Storage,
     /// Whether the object's type is `const`-qualified.
     pub is_const: bool,
+    /// The symbol `__asm__("name")` renamed the object to.
+    pub asm_label: Option<String>,
+    /// The section `__attribute__((section("…")))` asked for.
+    pub section: Option<String>,
     /// Where the declarator was written.
     pub range: SourceRange,
 }
@@ -1180,11 +1213,48 @@ pub struct Function {
     /// Whether the function was declared `_Noreturn` (or `[[noreturn]]`), so
     /// that a call to it ends the statement it is in.
     pub noreturn: bool,
+    /// What `always_inline` / `noinline` asked for.
+    pub inline_hint: Option<InlineHint>,
+    /// Whether `__attribute__((cold))` marked it unlikely.
+    pub cold: bool,
+    /// The message `__attribute__((deprecated))` gave, if it was there at all.
+    pub deprecated: Option<Option<String>>,
+    /// The section `__attribute__((section("…")))` asked for.
+    pub section: Option<String>,
+    /// The symbol `__asm__("name")` renamed the function to.
+    pub asm_label: Option<String>,
+    /// Whether `__attribute__((constructor))` asked for it to run before
+    /// `main`, or `destructor` for after it.
+    pub init_kind: Option<InitKind>,
+    /// Every automatic object the body declared, in declaration order.
+    ///
+    /// Code generation needs the whole list — not only the ones a `let`
+    /// statement is visible for — because a local declared inside a statement
+    /// expression is a binding too and may need renaming apart.
+    pub locals: Vec<ObjectId>,
     /// The body, present once a definition has been type checked.
     pub body: Option<Body>,
     /// Where the function's name was written, at its definition if there is one
     /// and at its first declaration otherwise.
     pub range: SourceRange,
+}
+
+/// What `always_inline` and `noinline` ask for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InlineHint {
+    /// `#[inline(always)]`
+    Always,
+    /// `#[inline(never)]`
+    Never,
+}
+
+/// Whether a function runs before `main` or after it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InitKind {
+    /// `__attribute__((constructor))`
+    Constructor,
+    /// `__attribute__((destructor))`
+    Destructor,
 }
 
 impl Function {
@@ -1383,6 +1453,38 @@ pub enum LogicalOp {
     And,
     /// `||`
     Or,
+}
+
+/// A GNU builtin that becomes a fixed piece of Rust rather than a call.
+///
+/// The bit-manipulation ones map onto the integer methods of the same name;
+/// the overflow ones do the arithmetic in `i128` and check the result against
+/// the range of the type it is stored in, which is exactly the "compute in
+/// infinite precision, then convert" the builtins are defined by.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuiltinOp {
+    /// `__builtin_popcount…`
+    Popcount,
+    /// `__builtin_clz…`; undefined for zero in C, and this follows Rust.
+    Clz,
+    /// `__builtin_ctz…`
+    Ctz,
+    /// `__builtin_ffs…`: one more than the index of the lowest set bit, or 0.
+    Ffs,
+    /// `__builtin_parity…`
+    Parity,
+    /// `__builtin_clrsb…`: leading redundant sign bits.
+    Clrsb,
+    /// `__builtin_bswap16/32/64`
+    Bswap,
+    /// `__builtin_{add,sub,mul}_overflow(a, b, &r)`, whose value is the flag.
+    Overflow(BinOp),
+    /// The `_p` forms, which only ask whether it *would* overflow.
+    OverflowP(BinOp),
+    /// Evaluate the operands and produce nothing: `__builtin_prefetch` and
+    /// `__builtin_assume`, which promise something the generated code cannot
+    /// pass on.
+    Discard,
 }
 
 /// An assignable location.
@@ -1594,6 +1696,28 @@ pub enum ExprKind {
         /// The value otherwise.
         else_expr: Box<Expr>,
     },
+    /// GNU's `a ?: b`: `a` if it is non-zero and `b` otherwise, with `a`
+    /// evaluated exactly once. Both operands already have the result type.
+    CondDefault {
+        /// The value that is both the condition and the first result.
+        value: Box<Expr>,
+        /// The value when it is zero.
+        else_expr: Box<Expr>,
+    },
+    /// GNU's statement expression, `({ …; e; })`.
+    StmtExpr {
+        /// The statements, in order.
+        stmts: Vec<Stmt>,
+        /// The value of the last expression statement, if there was one.
+        value: Option<Box<Expr>>,
+    },
+    /// A builtin lowered to a fixed piece of Rust; see [`BuiltinOp`].
+    Builtin {
+        /// Which builtin.
+        op: BuiltinOp,
+        /// Its operands, already converted.
+        args: Vec<Expr>,
+    },
     /// `lhs, rhs`: `lhs` is evaluated for its side effects only.
     Comma {
         /// Evaluated and discarded.
@@ -1764,8 +1888,8 @@ pub enum Stmt {
     Case {
         /// The `switch` the label belongs to.
         switch: SwitchId,
-        /// The value that enters here, or `None` for `default:`.
-        value: Option<i128>,
+        /// The values that enter here, or `None` for `default:`.
+        value: Option<CaseRange>,
         /// The labelled statement.
         body: Box<Stmt>,
         /// Where the label was written.
@@ -1857,12 +1981,46 @@ pub struct SwitchTree {
     pub range: SourceRange,
 }
 
+/// The values one `case` label matches.
+///
+/// A plain `case k:` is the range `k..=k`; GNU's `case low ... high:` is the
+/// whole interval, which code generation emits as one Rust range pattern
+/// rather than as one arm per value — `case 0 ... 1000000:` is a perfectly
+/// ordinary thing to write.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CaseRange {
+    /// The lowest value, already converted to the controlling type.
+    pub low: i128,
+    /// The highest, which equals `low` for a plain label.
+    pub high: i128,
+}
+
+impl CaseRange {
+    /// The range one value makes.
+    pub fn single(value: i128) -> Self {
+        Self {
+            low: value,
+            high: value,
+        }
+    }
+
+    /// Whether this is a plain `case k:`.
+    pub fn is_single(self) -> bool {
+        self.low == self.high
+    }
+
+    /// Whether two labels would both match some value.
+    pub fn overlaps(self, other: CaseRange) -> bool {
+        self.low <= other.high && other.low <= self.high
+    }
+}
+
 /// One run of statements in a `switch`, together with the values that enter it.
 #[derive(Clone, Debug)]
 pub struct SwitchGroup {
     /// The `case` values that jump here, already converted to the type of the
     /// controlling expression.
-    pub values: Vec<i128>,
+    pub values: Vec<CaseRange>,
     /// The statements, which fall through into the next group.
     pub body: Vec<Stmt>,
 }

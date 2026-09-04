@@ -14,10 +14,7 @@ use cinrs_core::pp::{Context, Preprocessed, preprocess};
 use cinrs_core::{Options, Standard};
 
 fn lex_options() -> LexOptions {
-    LexOptions {
-        standard: Standard::C99,
-        dollar_in_identifiers: false,
-    }
+    LexOptions::new(Standard::C99)
 }
 
 /// Preprocesses `src` with a context that knows nothing about a `.rs` file, so
@@ -605,8 +602,23 @@ fn the_target_is_described_consistently_with_the_target_model() {
     if cfg!(target_arch = "x86_64") {
         assert!(cond("defined(__x86_64__)"));
     }
-    // Nothing claims to be another compiler.
-    assert!(cond("!defined(__GNUC__) && !defined(__clang__)"));
+    // `__GNUC__` is 4.2.1, which is what Clang reports too and for the same
+    // reason: it is the version a program's `#if __GNUC__ >= 4` guard is
+    // asking about before it uses `__attribute__` or `__builtin_expect`, and
+    // those work here. Nothing claims to be Clang, which has extensions of its
+    // own this crate does not have.
+    assert!(cond(
+        "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
+    ));
+    assert!(cond("!defined(__clang__)"));
+    // The four parts of C11 this crate leaves out say so, which is what makes
+    // leaving them out conforming.
+    assert!(cond(
+        "defined(__STDC_NO_ATOMICS__) && defined(__STDC_NO_THREADS__) \
+         && defined(__STDC_NO_VLA__) && defined(__STDC_NO_COMPLEX__)"
+    ));
+    // A strict entry point is `-std=c99`, and says so.
+    assert!(cond("defined(__STRICT_ANSI__)"));
 }
 
 #[test]
@@ -789,10 +801,15 @@ fn a_keyword_may_be_a_macro_name() {
     // Keywords are ordinary identifiers in translation phase 4, and
     // `#define restrict` is what a header for an older compiler does.
     assert_eq!(pp("#define restrict\nint *restrict p;"), "int * p ;");
+    // `__inline` is one of the GNU spellings of `inline`, and the
+    // preprocessor turns it into that keyword on the way to the parser — after
+    // the macro has been replaced, which is what keeps `#define __inline` and
+    // `#ifdef __restrict` about the names that were written.
     assert_eq!(
         pp("#define inline __inline\ninline int f();"),
-        "__inline int f ( ) ;"
+        "inline int f ( ) ;"
     );
+    assert_eq!(pp("#define __restrict\nint *__restrict p;"), "int * p ;");
     assert_eq!(pp("#ifdef int\nno\n#endif\nyes"), "yes");
 }
 
@@ -1182,14 +1199,7 @@ fn run_c23(src: &str) -> (Vec<String>, Vec<String>) {
     let options = Options::new(Standard::C23);
     let ctx = Context::new(src, 0);
     let mut diags = cinrs_core::Diagnostics::new();
-    let tokens = lex_text(
-        src,
-        ctx.base,
-        &LexOptions {
-            standard: Standard::C23,
-            dollar_in_identifiers: false,
-        },
-    );
+    let tokens = lex_text(src, ctx.base, &LexOptions::new(Standard::C23));
     let out = preprocess(&tokens, &ctx, &options, &mut diags);
     let spellings = out
         .tokens
@@ -1286,9 +1296,28 @@ fn true_and_false_are_one_and_zero_in_a_c23_condition() {
 }
 
 #[test]
-fn has_include_is_reported_rather_than_answered_wrongly() {
-    let (_, errors) = run_c23("#if __has_include(<stdio.h>)\nyes\n#endif");
-    assert_eq!(errors, ["'__has_include' is not supported yet"]);
+fn has_include_answers_from_the_search_path() {
+    let (tokens, errors) = run_c23("#if __has_include(<stdio.h>)\nyes\n#endif");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(tokens.join(" "), "yes");
+    let (tokens, errors) = run_c23("#if __has_include(<nowhere.h>)\nyes\n#endif");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(tokens.join(" "), "");
+}
+
+#[test]
+fn the_has_family_answers_from_this_implementations_tables() {
+    // `packed` is honoured, `cleanup` is refused, and the answers say so.
+    assert_eq!(pp("#if __has_attribute(packed)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_attribute(__packed__)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_attribute(cleanup)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_attribute(no_such_thing)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_builtin(__builtin_popcount)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_builtin(__builtin_apply)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_feature(c_static_assert)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_feature(c_atomic)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_c_attribute(fallthrough)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_c_attribute(packed)\n1\n#endif"), "");
 }
 
 #[test]

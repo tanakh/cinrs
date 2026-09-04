@@ -1,0 +1,35 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        int classify(int c) {\n            switch (c) {\n            case '0' ... '9': return 1;\n            case 'a' ... 'z':\n            case 'A' ... 'Z': return 2;\n            case '_': return 3;\n            default: return 0;\n            }\n        }\n        \"#)"
+---
+mod __cinrs_unit_ffb16314 {
+    #[allow(…)]
+    pub unsafe extern "C" fn classify(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            {
+                'sw0: {
+                    'sw0_c3: {
+                        'sw0_c2: {
+                            'sw0_c1: {
+                                'sw0_c0: {
+                                    match c {
+                                        48..=57 => break 'sw0_c0,
+                                        97..=122 | 65..=90 => break 'sw0_c1,
+                                        95 => break 'sw0_c2,
+                                        _ => break 'sw0_c3,
+                                    }
+                                }
+                                return 1;
+                            }
+                            return 2;
+                        }
+                        return 3;
+                    }
+                    return 0;
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_ffb16314::*;

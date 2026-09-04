@@ -1,0 +1,32 @@
+error: attempt to use the poisoned identifier 'gets'
+ --> tests/ui/gnu_pragmas.rs:8:16
+  |
+8 |         return gets(dst);
+  |                ^^^^
+
+error: implicit declaration of function 'gets' is invalid in C99
+ --> tests/ui/gnu_pragmas.rs:8:16
+  |
+8 |         return gets(dst);
+  |                ^^^^
+
+error: #pragma pack expects '(N)', '(push, N)', '(push)', '(pop)' or '()', where N is a power of two up to 16
+  --> tests/ui/gnu_pragmas.rs:12:18
+   |
+12 |     #pragma pack(3)
+   |                  ^
+
+error: #pragma pack expects '(N)', '(push, N)', '(push)', '(pop)' or '()', where N is a power of two up to 16
+  --> tests/ui/gnu_pragmas.rs:13:5
+   |
+13 |     #pragma pack(push 4)
+   |     ^
+
+error: #pragma pack(pop) with nothing pushed
+  --> tests/ui/gnu_pragmas.rs:14:5
+   |
+14 |     #pragma pack(pop)
+   |     ^
+
+error: aborting due to 5 previous errors
+

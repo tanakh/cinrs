@@ -23,6 +23,7 @@ enum BfUnsigned { BFU_A = 0, BFU_B = 148, BFU_C = 149 };
 struct BfInner { int a; char b; };
 struct BfNested { unsigned int p : 3; int q : 5; char r; };
 
+#pragma pack(1)
 struct S000 {
     double f0;
     unsigned int f1 : 3;
@@ -30,395 +31,416 @@ struct S000 {
     signed char f3 : 4;
     int f4;
 };
+#pragma pack()
 
+#pragma pack(4)
 struct S001 {
-    unsigned int : 0;
-    long long f1 : 32;
-    signed char f2 : 5;
-    unsigned long long f3 : 62;
-    unsigned long long f4 : 60;
-    _Bool f5 : 1;
+    signed char f0 : 3;
+    struct BfNested f1;
+    unsigned short f2 : 9;
+    long long f3;
 };
+#pragma pack()
 
 struct S002 {
-    int f0;
-    enum BfSigned f1 : 4;
-    short f2;
-    struct BfInner f3;
-    unsigned long f4 : 5;
-    short f5;
+    unsigned long long f0 : 60;
+    _Bool f1 : 1;
+    int f2 : 19;
 };
 
 struct S003 {
+    short f0;
+    struct BfInner f1 __attribute__((packed));
+    unsigned long f2 : 5;
+};
+
+#pragma pack(4)
+struct S004 {
     signed char f0 : 5;
     enum BfSigned f1 : 8;
 };
+#pragma pack()
 
-struct S004 {
-    void * f0;
-    unsigned long f1 : 26;
+struct S005 {
+    char : 0;
+    int f1 : 14;
+    int f2 : 16;
 };
 
-union S005 {
-    char : 8;
-    _Bool f1 : 1;
-    struct BfInner f2;
-    long : 1;
-};
+struct S006 {
+    struct BfInner f0;
+    long : 0;
+} __attribute__((packed));
 
-union S006 {
-    enum BfUnsigned : 22;
+#pragma pack(4)
+struct S007 {
+    unsigned int f0 : 6;
     unsigned char f1 : 3;
     unsigned long long : 54;
     int f3;
-    signed char f4 : 8;
 };
-
-union S007 {
-    unsigned short : 4;
-    unsigned long : 6;
-    int f9 : 5;
-};
+#pragma pack()
 
 struct S008 {
-    enum BfSigned f0 : 9;
-    char f1;
+    long long : 54;
+    unsigned char f1 : 6;
+    long long f2 : 38;
+    int : 0;
+    struct BfInner f4;
+    char f5;
 };
 
 struct S009 {
-    long long f0 : 59;
-    double f1;
-    short f2 : 14;
+    signed char : 3;
+    unsigned short f1 : 14;
+    long long f2 : 38;
+    short f3 __attribute__((packed));
+    long long f4 : 19;
+    long long f5 : 56;
 };
 
 union S010 {
-    long long f0 : 38;
-    short f1;
-    long long f2 : 19;
-    long long f3 : 56;
+    _Bool f0 : 1;
+    unsigned long long f1 : 30;
+    _Bool : 1;
+    char f3 : 8;
 };
 
 union S011 {
-    double f0;
-    _Bool f1 : 1;
-    unsigned long long f2 : 30;
-    _Bool : 1;
-};
+    enum BfUnsigned f0 : 20;
+    struct BfNested f1;
+} __attribute__((aligned(8)));
 
+#pragma pack(4)
 struct S012 {
-    unsigned char : 1;
-    unsigned int f1 : 29;
-    int f2[2];
-    unsigned long long f3 : 8;
-    unsigned char f4 : 2;
-    _Bool f5 : 1;
+    enum BfUnsigned f0 : 4;
+    unsigned short f1 : 14;
+    signed char f2 : 5;
+    short : 0;
+    unsigned int f4 : 3;
 };
+#pragma pack()
 
 struct S013 {
-    _Bool f0 : 1;
-    char f1;
-    char f2 : 2;
-    signed char f3 : 4;
-    unsigned long long : 0;
+    short f0 : 9;
+    short f1 : 9;
 };
 
+#pragma pack(2)
 struct S014 {
-    short f0 : 9;
-    long f1 : 26;
-    _Bool f2 : 1;
-    long f3 : 22;
+    _Bool f0 : 1;
+    long f1 : 22;
+    enum BfSigned f2 : 8;
 };
+#pragma pack()
 
 struct S015 {
-    double f0;
-    enum BfUnsigned f1 : 2;
-    int f2 : 1;
-    int f3 : 4;
-    unsigned short f4 : 7;
-    long long f5 : 19;
+    unsigned char f0 : 6;
+    short f1;
+    short f2;
+    short f3 : 1;
+    unsigned int f4 : 12;
+    unsigned long long f5 : 53;
 };
 
 struct S016 {
-    int f0;
-    unsigned long long f1 : 56;
-    struct BfNested f2;
+    struct BfNested f0;
     enum BfUnsigned : 20;
-    _Bool f4 : 1;
-    short f5;
-};
+    _Bool f2 : 1;
+    short f3;
+    unsigned long f4 : 5;
+} __attribute__((packed));
 
+#pragma pack(1)
 struct S017 {
-    _Bool f0 : 1;
-    int f1[2];
-    enum BfUnsigned : 0;
-    short : 11;
+    unsigned long long f0 : 59;
+    unsigned short : 0;
 };
+#pragma pack()
 
+#pragma pack(4)
 struct S018 {
-    unsigned char : 3;
-    _Bool f1 : 1;
-    char f2 : 6;
+    double f0;
+    long long f1 : 59;
 };
+#pragma pack()
 
 union S019 {
-    enum BfSigned f0 : 16;
-    long long f1 : 7;
-    char f2;
+    unsigned int f0 : 2;
+    short f1 : 10;
+    int f2;
 };
 
-struct S020 {
-    enum BfSigned f0 : 11;
-    unsigned short f1 : 2;
-    short f2;
-    struct BfNested f3;
-    unsigned char f4 : 2;
-    enum BfSigned f5 : 19;
+union S020 {
+    char f0;
+    long long f1 : 1;
 };
 
+#pragma pack(1)
 struct S021 {
-    void * f0;
-    int f1[2];
-    enum BfUnsigned f2 : 27;
+    int : 0;
+    enum BfSigned f1 : 23;
+    unsigned long long f2 : 36;
+    unsigned long f3 : 17;
+    enum BfSigned f4 : 31;
 };
+#pragma pack()
 
-union S022 {
-    enum BfSigned f0 : 4;
-    char f1;
-    long f2 : 28;
-    struct BfNested f3;
+struct S022 {
+    short f0 __attribute__((packed));
+    enum BfSigned f1 : 4;
 };
 
 struct S023 {
-    unsigned int f0 : 30;
-    char f1;
-    unsigned short f2 : 12;
-    int f3;
+    struct BfInner f0;
+    struct BfNested f1;
+    enum BfUnsigned f2 : 29;
 };
 
 struct S024 {
-    unsigned long long f0 : 12;
-    unsigned short : 0;
-    short f2;
-    int f3 : 6;
-    char f4 : 8;
-    short f5 : 11;
+    char f0 : 1;
+    int f1[2] __attribute__((packed));
+    short f2 : 11;
+    unsigned int f3 : 4;
 };
 
+#pragma pack(2)
 union S025 {
+    long long f0;
+    unsigned int f1 : 9;
+    long f2 : 13;
+};
+#pragma pack()
+
+#pragma pack(4)
+union S026 {
     unsigned char f0 : 3;
     unsigned short f1 : 6;
     unsigned short f2 : 9;
     int f3[2];
 };
+#pragma pack()
 
-struct S026 {
-    enum BfSigned f0 : 24;
-    struct BfInner f1;
-    _Bool f2 : 1;
-    short f3 : 12;
-    unsigned long long f4 : 45;
+struct S027 {
+    unsigned char f0 : 1;
+    unsigned int : 30;
+    short f2 : 12;
+    unsigned long long f3 : 45;
 };
 
-union S027 {
-    unsigned long f0 : 24;
-    long f1 : 32;
+#pragma pack(2)
+struct S028 {
+    unsigned long f0 : 29;
+    double f1;
     short f2 : 4;
     _Bool f3 : 1;
     _Bool f4 : 1;
+    unsigned int f5 : 8;
 };
+#pragma pack()
 
-struct S028 {
-    unsigned short f0 : 2;
-    int f1 : 8;
-    unsigned char f2 : 8;
-    struct BfNested f3;
-};
+struct S029 {
+    long long f0;
+    unsigned long f1 : 32;
+} __attribute__((aligned(16)));
 
-union S029 {
-    int f0;
-    unsigned int f1 : 15;
-    unsigned short f2 : 15;
-    long f3 : 30;
-    signed char f4 : 7;
-};
-
+#pragma pack(2)
 struct S030 {
-    _Bool f0 : 1;
-    double f1;
-    unsigned long long f2 : 22;
-    long long f3;
-    char f4;
-    _Bool f5 : 1;
+    int f0 : 21;
+    unsigned char f1 : 2;
+    unsigned short : 0;
+    short : 0;
+    unsigned short f4 : 15;
+    long f5 : 13;
 };
+#pragma pack()
 
-union S031 {
-    unsigned int : 1;
-    long long f1 : 4;
+struct S031 {
+    unsigned short f0 : 10;
+    char f1;
     _Bool f2 : 1;
+    struct BfInner f3;
 };
 
-struct S032 {
-    enum BfUnsigned f0 : 5;
-    short f1 : 2;
-    short f2 : 5;
-};
-
-union S033 {
-    short f0 : 6;
-    long long f1 : 23;
-    unsigned char f2 : 7;
-    enum BfUnsigned f3 : 24;
-    unsigned long long : 22;
-};
-
-struct S034 {
+union S032 {
     int f0[2];
-    struct BfInner f1;
-};
+    enum BfUnsigned f1 : 9;
+    char f2 : 7;
+    unsigned long f3 : 12;
+} __attribute__((packed));
 
-struct S035 {
-    enum BfUnsigned f0 : 23;
-    unsigned short f1 : 10;
-    signed char f2 : 8;
-    enum BfSigned f3 : 11;
-    int f4 : 11;
-    _Bool f5 : 1;
+#pragma pack(4)
+struct S033 {
+    short f0 : 5;
+    int f1[2];
+    short f2 : 6;
 };
+#pragma pack()
+
+#pragma pack(4)
+union S034 {
+    unsigned int f0 : 4;
+    signed char : 1;
+    enum BfUnsigned f2 : 9;
+};
+#pragma pack()
+
+#pragma pack(2)
+struct S035 {
+    int f0 : 9;
+    unsigned long long f1 : 52;
+    long long f2 : 52;
+    _Bool f3 : 1;
+    _Bool f4 : 1;
+    double f5;
+};
+#pragma pack()
 
 struct S036 {
-    long f0 : 2;
-    struct BfNested f1;
-    double f2;
-    unsigned short : 0;
-    long f4 : 1;
-};
+    struct BfInner f0;
+    _Bool f1 : 1;
+} __attribute__((aligned(8)));
 
-struct S037 {
-    int f0 : 16;
-    int f1[2];
-    int f2;
-    double f3;
-    long long : 0;
+#pragma pack(4)
+union S037 {
+    struct BfNested f0;
+    double f1;
 };
+#pragma pack()
 
+#pragma pack(2)
 struct S038 {
-    unsigned long f0 : 30;
-    unsigned char f1 : 3;
-    long long f2 : 15;
-    char f3 : 2;
-    short f4;
+    int f0;
+    short f1 : 3;
 };
+#pragma pack()
 
+#pragma pack(2)
 struct S039 {
-    short f0 : 4;
-    enum BfUnsigned f1 : 23;
-    long f2 : 20;
+    unsigned int f0 : 8;
+    int f1;
+    double f2;
+    long long : 0;
+    unsigned long : 22;
+    enum BfUnsigned f5 : 3;
 };
+#pragma pack()
 
+#pragma pack(1)
 struct S040 {
-    short f0 : 9;
-    struct BfNested f1;
+    _Bool f0 : 1;
+    enum BfUnsigned f1 : 20;
+    unsigned long f2 : 31;
+    unsigned long f3 : 2;
+};
+#pragma pack()
+
+struct S041 {
+    char f0;
+    int f1 : 14;
+} __attribute__((packed));
+
+struct S042 {
+    struct BfNested f0;
     unsigned char : 0;
-};
-
-union S041 {
-    signed char f0 : 2;
-    char f1;
-    enum BfSigned : 4;
-    char f3 : 5;
-};
-
-union S042 {
-    long : 1;
-    struct BfNested f1;
     struct BfNested f2;
 };
 
 struct S043 {
-    enum BfSigned f0 : 20;
-    int f1 : 6;
-    long f2 : 20;
-    unsigned char : 0;
-};
-
-struct S044 {
-    enum BfSigned : 26;
+    int f0[2];
     void * f1;
-};
+    unsigned int f2 : 16;
+    struct BfNested f3;
+    long long f4;
+    long : 0;
+} __attribute__((packed));
 
-union S045 {
-    unsigned char : 8;
-    long long f1 : 24;
-    long long f2 : 28;
-    unsigned short f3 : 6;
-    char f4;
+#pragma pack(4)
+struct S044 {
+    long long f0 : 48;
+    unsigned int f1 : 20;
+    long long f2 : 6;
+    long long f3 : 51;
+    char : 0;
+    long f5 : 4;
 };
+#pragma pack()
 
+#pragma pack(1)
+struct S045 {
+    signed char f0 : 4;
+    long long f1 : 56;
+    long long f2 : 24;
+};
+#pragma pack()
+
+#pragma pack(4)
 struct S046 {
-    short f0 : 4;
-    enum BfUnsigned f1 : 17;
-    long f2 : 27;
+    unsigned int f0 : 16;
+    _Bool f1 : 1;
+    long long : 52;
+    enum BfUnsigned f3 : 17;
+    long f4 : 27;
 };
+#pragma pack()
 
 struct S047 {
-    unsigned short f0 : 15;
-    char f1 : 1;
-    int f2 : 3;
+    unsigned long : 0;
+    unsigned short f1 : 14;
+    short f2 : 6;
+    long long : 0;
 };
 
-struct S048 {
-    void * f0;
-    unsigned short f1 : 1;
-    unsigned char f2 : 3;
-    enum BfUnsigned : 0;
+#pragma pack(4)
+union S048 {
+    unsigned int f0 : 28;
+    unsigned int f1 : 13;
+    unsigned long long f2 : 24;
+    char f3;
+    int f4[2];
 };
+#pragma pack()
 
-union S049 {
-    enum BfSigned f0 : 25;
-    signed char : 7;
+struct S049 {
+    int : 1;
+    unsigned int f1 : 12;
     int f2 : 21;
-    signed char : 1;
-    unsigned char : 1;
-    void * f5;
+    struct BfInner f3 __attribute__((packed));
+    int f4 : 2;
 };
 
-union S050 {
-    long long f0;
-    int f1 : 16;
-    int f2;
-    unsigned long long f3 : 28;
+#pragma pack(1)
+struct S050 {
+    unsigned short f0 : 16;
+    signed char f1 : 7;
+    char f2 : 1;
+    unsigned char f3 : 6;
+    long : 14;
+    unsigned long f5 : 2;
 };
+#pragma pack()
 
 struct S051 {
-    short f0 : 6;
-    short f1;
-    signed char f2 : 8;
-    signed char f3 : 6;
+    unsigned long long f0 : 32;
+    int f1[2];
+    enum BfUnsigned : 30;
 };
 
 struct S052 {
-    unsigned char f0 : 7;
-    char f1;
-    short : 0;
-    char f3;
-    unsigned int f4 : 14;
+    unsigned long long f0 : 59;
+    int f1 : 20;
+    unsigned int f2 : 28;
+    unsigned char : 0;
 };
 
 struct S053 {
-    enum BfUnsigned f0 : 12;
-    unsigned char f1 : 8;
-    unsigned long f2 : 7;
-    _Bool f3 : 1;
-    unsigned long f4 : 24;
-    unsigned short : 7;
+    signed char f0 : 6;
+    void * f1;
 };
 
-union S054 {
-    void * f0;
-    unsigned int f1 : 19;
-    long long f2;
-    unsigned int f3 : 7;
-    unsigned long long : 12;
+struct S054 {
+    char f0 : 8;
+    int f1 : 7;
 };
 
 struct S055 {
@@ -427,1050 +449,1115 @@ struct S055 {
     long long f2;
 };
 
+#pragma pack(2)
 struct S056 {
-    short f0;
-    long long : 56;
-    enum BfSigned f2 : 15;
-    long f3 : 12;
+    void * f0;
+    enum BfUnsigned f1 : 5;
+    long f2 : 17;
+    unsigned int f3 : 29;
+    _Bool f4 : 1;
 };
+#pragma pack()
 
 struct S057 {
-    _Bool f0 : 1;
-    signed char f1 : 4;
-    unsigned long long f2 : 8;
-    enum BfSigned : 0;
-    struct BfInner f4;
-    char f5;
-};
+    unsigned int f0 : 15;
+    enum BfUnsigned f1 : 17;
+    int f2[2];
+    enum BfSigned f3 : 19;
+    unsigned long : 23;
+} __attribute__((packed));
 
 struct S058 {
-    signed char f0 : 7;
-    int f1[2];
-    void * f2;
-    unsigned short f3 : 10;
-    _Bool f4 : 1;
-    long long f5 : 21;
+    unsigned short f0 : 13;
+    unsigned int f1 : 21;
+    int f2 __attribute__((packed));
 };
 
-struct S059 {
-    long long f0;
-    short f1;
+#pragma pack(4)
+union S059 {
+    signed char f0 : 1;
+    unsigned long long f1 : 48;
     _Bool f2 : 1;
-    unsigned char f3 : 6;
+    int f3 : 30;
+    unsigned long f4 : 9;
 };
+#pragma pack()
 
 struct S060 {
-    enum BfUnsigned : 19;
-    unsigned short f1 : 13;
-    long f2 : 32;
-    enum BfUnsigned f3 : 18;
-    unsigned long long : 50;
-    unsigned long long f5 : 22;
+    struct BfNested f0;
+    struct BfNested f1 __attribute__((packed));
+    unsigned long long f2 : 42;
 };
 
-union S061 {
-    enum BfSigned : 1;
-    unsigned long f1 : 4;
-    long f2 : 8;
-    long long f3 : 44;
-    enum BfSigned : 17;
-    short : 1;
-};
+struct S061 {
+    unsigned short f0 : 10;
+    struct BfNested f1;
+} __attribute__((packed));
 
 struct S062 {
-    enum BfUnsigned f0 : 27;
-    enum BfSigned : 0;
+    unsigned char f0 : 2;
+    long f1 : 28;
+    long long : 0;
+    struct BfInner f3;
+    unsigned char f4 : 4;
 };
 
-union S063 {
-    struct BfInner f0;
-    signed char f1 : 6;
-    signed char f2 : 2;
-    int f3[2];
+struct S063 {
+    unsigned char : 0;
+    enum BfSigned f1 : 22;
 };
 
+#pragma pack(4)
 struct S064 {
-    long long f0 : 8;
-    char f1 : 4;
+    long long f0 : 28;
+    void * f1;
+    unsigned int f2 : 27;
+    enum BfSigned f3 : 14;
+    enum BfUnsigned : 0;
+    unsigned short : 0;
 };
+#pragma pack()
 
 union S065 {
     long long f0;
     unsigned short f1 : 14;
     enum BfSigned f2 : 11;
-};
+} __attribute__((packed));
 
 union S066 {
-    _Bool f0 : 1;
-    long f1 : 8;
-    _Bool f2 : 1;
-    unsigned long f3 : 2;
-    enum BfUnsigned f4 : 18;
-    enum BfUnsigned f5 : 22;
+    struct BfInner f0;
+    enum BfSigned f1 : 23;
 };
 
-union S067 {
+#pragma pack(4)
+struct S067 {
+    unsigned long f0 : 2;
+    enum BfUnsigned f1 : 18;
+    enum BfUnsigned f2 : 22;
+    short f3;
     int : 7;
-    enum BfUnsigned f1 : 28;
-    long long : 31;
-    signed char f3 : 8;
-    int f4[2];
-    int f5[2];
+    enum BfUnsigned f5 : 28;
 };
+#pragma pack()
 
 union S068 {
-    double f0;
-    int f1 : 22;
-    void * f2;
-    int f3;
-    unsigned short : 12;
-    long long f5;
+    signed char f0 : 5;
+    char f1 __attribute__((packed));
 };
 
-struct S069 {
+union S069 {
+    void * f0;
+    double f1;
+};
+
+struct S070 {
+    signed char f0 : 4;
+    char f1 : 4;
+};
+
+struct S071 {
     _Bool f0 : 1;
     unsigned short f1 : 2;
     int f2;
     enum BfSigned f3 : 26;
     short f4 : 15;
-};
+} __attribute__((aligned(8)));
 
-struct S070 {
-    char f0 : 7;
-    signed char f1 : 8;
-    long long f2;
-    signed char f3 : 6;
-    long f4 : 12;
-};
-
-union S071 {
-    unsigned char f0 : 4;
-    enum BfUnsigned f1 : 6;
-    unsigned int f2 : 16;
-    unsigned long : 1;
-    enum BfSigned f4 : 15;
-    signed char f5 : 4;
-};
-
+#pragma pack(4)
 union S072 {
-    unsigned long f0 : 12;
-    long long f1 : 33;
+    signed char f0 : 8;
+    long long f1;
+    signed char f2 : 6;
 };
+#pragma pack()
 
+#pragma pack(1)
 struct S073 {
-    struct BfInner f0;
-    _Bool f1 : 1;
-    struct BfNested f2;
-    char f3;
-    short f4 : 8;
-    struct BfNested f5;
+    long f0 : 19;
+    unsigned long f1 : 8;
+    _Bool f2 : 1;
+    char f3 : 8;
+    unsigned long long : 43;
+    char f5;
+};
+#pragma pack()
+
+union S074 {
+    int : 8;
+    unsigned long f1 : 3;
+    _Bool : 1;
+    int f3[2] __attribute__((aligned(8)));
+    enum BfSigned f4 : 25;
 };
 
-struct S074 {
-    double f0;
-    signed char f1 : 7;
-    short f2;
-    int f3[2];
-    unsigned int f4 : 1;
-};
-
+#pragma pack(4)
 struct S075 {
-    enum BfUnsigned : 9;
+    struct BfNested f0;
+    unsigned short f1 : 6;
+    signed char f2 : 7;
+    short f3;
+    int f4[2];
+};
+#pragma pack()
+
+#pragma pack(2)
+struct S076 {
+    int f0[2];
+    int f1[2];
+    int f2 : 14;
     _Bool : 0;
     enum BfSigned : 25;
-    int f3 : 9;
-    unsigned short f4 : 13;
-    char : 2;
+    int f5 : 9;
 };
+#pragma pack()
 
-struct S076 {
-    char f0 : 1;
-    enum BfUnsigned f1 : 13;
-    int f2 : 19;
-    char f3 : 7;
+#pragma pack(2)
+struct S077 {
+    short f0;
+    enum BfUnsigned f1 : 24;
+    int f2 : 14;
+    enum BfSigned f3 : 24;
 };
+#pragma pack()
 
-union S077 {
-    enum BfSigned f0 : 20;
-    unsigned char f1 : 6;
-    long f2 : 1;
-    long long f3 : 15;
-};
-
-union S078 {
-    long long f0 : 64;
-    unsigned char f1 : 4;
-    double f2;
-};
-
-struct S079 {
+#pragma pack(4)
+struct S078 {
     int f0[2];
-    int f1 : 29;
-    long long f2 : 14;
-    int f3;
-    unsigned int f4 : 12;
-    long long f5 : 45;
+    long long : 31;
+    short f2;
 };
+#pragma pack()
+
+#pragma pack(4)
+union S079 {
+    unsigned long f0 : 10;
+    unsigned long long f1 : 54;
+    struct BfInner f2;
+    unsigned long : 1;
+    signed char : 8;
+};
+#pragma pack()
 
 struct S080 {
-    long f0 : 13;
-    unsigned int f1 : 5;
-    signed char : 7;
+    long f0 : 20;
+    double f1;
+    unsigned char f2 : 8;
+    long long f3;
+    struct BfNested f4;
 };
 
-union S081 {
-    unsigned long long : 1;
-    int f1[2];
-    int f2;
+#pragma pack(1)
+struct S081 {
+    enum BfUnsigned f0 : 5;
+    double f1;
+    long long f2 : 15;
+    short f3;
+    unsigned int f4 : 5;
 };
+#pragma pack()
 
 struct S082 {
-    int f0;
+    int f0 : 12;
+    unsigned long long : 0;
+};
+
+union S083 {
+    short f0 : 13;
     unsigned long : 21;
-    char : 0;
-    short f3;
-};
+    char : 1;
+} __attribute__((packed));
 
-struct S083 {
-    int f0 : 10;
-    enum BfUnsigned f1 : 23;
-    short f2;
-    long long f3 : 43;
-};
-
-union S084 {
-    enum BfUnsigned f0 : 15;
-    short f1;
-    char f2 : 1;
-    short f3 : 15;
-    short f4;
-};
+struct S084 {
+    void * f0;
+    long long f1 : 46;
+    unsigned long long f2 : 33;
+    enum BfUnsigned f3 : 25;
+    _Bool f4 : 1;
+} __attribute__((aligned(16)));
 
 struct S085 {
-    long long f0;
-    signed char f1 : 7;
-    unsigned short f2 : 5;
-    short f3 : 16;
-    signed char f4 : 7;
-    unsigned long long f5 : 39;
+    unsigned long long : 0;
+    enum BfSigned f1 : 29;
+    void * f2 __attribute__((aligned(8)));
 };
 
+#pragma pack(1)
 union S086 {
-    unsigned char : 8;
-    unsigned char f1 : 8;
-    int f2[2];
+    unsigned short f0 : 5;
+    short f1 : 16;
+    signed char f2 : 7;
 };
+#pragma pack()
 
-union S087 {
-    double f0;
-    unsigned short f1 : 1;
+struct S087 {
+    enum BfSigned f0 : 4;
+    unsigned short f1 : 8;
+    unsigned char f2 : 8;
+    int f3[2];
+    long long f4;
+} __attribute__((packed));
+
+#pragma pack(1)
+struct S088 {
+    long : 0;
+    unsigned long f1 : 6;
+    short : 0;
+    enum BfUnsigned : 0;
+    enum BfUnsigned f4 : 20;
 };
+#pragma pack()
 
-union S088 {
-    unsigned char f0 : 2;
-    enum BfUnsigned f1 : 26;
-    long long f2 : 44;
-    long f3 : 18;
-};
-
+#pragma pack(2)
 struct S089 {
     long long f0 : 48;
     char f1;
     long long f2;
 };
+#pragma pack()
 
+#pragma pack(2)
 struct S090 {
-    unsigned long long f0 : 20;
-    signed char f1 : 6;
-    unsigned int f2 : 15;
+    unsigned short f0 : 12;
+    unsigned short : 4;
+    short : 0;
     long long f3;
-    long long f4;
+    unsigned int f4 : 12;
 };
+#pragma pack()
 
-struct S091 {
-    unsigned long f0 : 5;
-    unsigned short : 10;
+#pragma pack(4)
+union S091 {
+    short : 13;
+    unsigned char f1 : 6;
+    long f2 : 23;
+    char f3 : 8;
 };
+#pragma pack()
 
-union S092 {
-    unsigned short : 3;
-    short f1 : 10;
-    unsigned char f2 : 6;
-    short f3 : 2;
-};
+struct S092 {
+    void * f0;
+    unsigned int f1 : 30;
+} __attribute__((packed));
 
-struct S093 {
-    enum BfSigned f0 : 12;
-    long long f1;
-    unsigned long long f2 : 59;
+#pragma pack(2)
+union S093 {
+    long long f0;
+    unsigned long long f1 : 59;
     _Bool : 1;
-    unsigned long f4 : 4;
-    unsigned short : 0;
+    unsigned long f3 : 4;
+    unsigned short : 1;
+    struct BfNested f5;
 };
+#pragma pack()
 
-union S094 {
-    signed char f0 : 6;
-    enum BfSigned f1 : 30;
-    unsigned char f2 : 8;
-    struct BfInner f3;
-    unsigned long long : 1;
-    struct BfInner f5;
+struct S094 {
+    unsigned char f0 : 4;
+    long long f1 : 42;
+    long : 8;
+    enum BfSigned : 22;
+    int : 0;
+    long long f5 : 31;
 };
 
 struct S095 {
-    double f0;
-    int f1[2];
-    signed char f2 : 7;
-    enum BfUnsigned : 19;
-    long long f4;
+    unsigned int f0 : 31;
+    unsigned int f1 : 11;
 };
 
 struct S096 {
-    signed char f0 : 4;
-    enum BfSigned f1 : 6;
-    unsigned long long f2 : 32;
+    unsigned int f0 : 10;
+    int f1 __attribute__((packed));
     long long : 42;
-    long long f4;
-    struct BfNested f5;
+    long long f3;
 };
 
+#pragma pack(2)
 struct S097 {
     unsigned char f0 : 6;
     int f1[2];
 };
+#pragma pack()
 
-struct S098 {
-    unsigned int f0 : 23;
-    char f1 : 1;
-    _Bool f2 : 1;
+#pragma pack(2)
+union S098 {
+    short f0 : 6;
+    enum BfUnsigned f1 : 4;
 };
+#pragma pack()
 
-struct S099 {
-    long long f0;
+union S099 {
+    enum BfUnsigned f0 : 26;
     unsigned long f1 : 4;
-    unsigned short : 0;
+    unsigned short : 1;
     long long f3;
-    char f4 : 8;
 };
 
+#pragma pack(4)
 struct S100 {
-    char f0 : 3;
-    unsigned char f1 : 7;
-    char f2;
-    unsigned char f3 : 1;
-    unsigned char : 5;
-    unsigned char : 0;
+    long long f0;
+    unsigned int f1 : 11;
+    long f2 : 13;
 };
+#pragma pack()
 
 struct S101 {
-    double f0;
-    signed char f1 : 1;
-    unsigned short f2 : 8;
-    int f3;
-};
+    long f0 : 8;
+    unsigned short f1 : 12;
+    unsigned long long f2 : 51;
+    _Bool f3 : 1;
+} __attribute__((packed));
 
 struct S102 {
-    char f0 : 3;
-    struct BfNested f1;
-    char f2;
-    int f3[2];
-    int f4[2];
-    unsigned long long : 0;
+    unsigned short f0 : 8;
+    int f1 __attribute__((packed));
+    unsigned short f2 : 16;
+    signed char f3 : 7;
+    char f4;
 };
 
 union S103 {
-    int f0 : 27;
-    enum BfSigned f1 : 26;
-    unsigned char f2 : 1;
+    unsigned long long : 1;
+    char f1;
+    int f2 : 27;
 };
 
-union S104 {
-    short f0 : 11;
-    long f1 : 12;
-    double f2;
-    short f3 : 2;
+#pragma pack(2)
+struct S104 {
+    unsigned int : 0;
+    int f1 : 26;
+    signed char f2 : 5;
+    signed char f3 : 3;
 };
+#pragma pack()
 
+#pragma pack(4)
 struct S105 {
-    signed char f0 : 5;
-    unsigned char : 0;
+    long long f0 : 7;
+    enum BfSigned f1 : 2;
     struct BfInner f2;
-    int f3 : 2;
-    short f4 : 10;
-    long long : 0;
+    struct BfInner f3;
+    int f4 : 2;
+    short f5 : 10;
 };
+#pragma pack()
 
+#pragma pack(4)
 struct S106 {
-    short f0 : 12;
-    unsigned char f1 : 5;
-    struct BfInner f2;
-    unsigned long long f3 : 35;
+    unsigned int f0 : 24;
+    int f1;
 };
+#pragma pack()
 
+#pragma pack(1)
 struct S107 {
-    short f0 : 5;
-    unsigned long long f1 : 7;
-    char f2;
-    short f3;
+    long : 10;
+    enum BfUnsigned f1 : 6;
+    unsigned short f2 : 13;
+    int f3;
+    unsigned long f4 : 9;
 };
+#pragma pack()
 
-struct S108 {
-    unsigned char f0 : 8;
-    enum BfSigned f1 : 20;
-    char f2;
+union S108 {
+    int f0 : 28;
+    int f1;
+    enum BfSigned f2 : 20;
+    char f3;
     unsigned long long : 19;
-};
+    signed char f5 : 8;
+} __attribute__((packed));
 
+#pragma pack(4)
 struct S109 {
-    unsigned char f0 : 3;
-    unsigned int : 20;
-    double f2;
-    enum BfUnsigned f3 : 10;
-    unsigned int f4 : 4;
-    unsigned int f5 : 26;
+    short f0 : 4;
+    double f1;
+    enum BfUnsigned f2 : 10;
+    unsigned int f3 : 4;
+    unsigned int f4 : 26;
 };
+#pragma pack()
 
-struct S110 {
-    char : 0;
-    unsigned long long : 25;
+union S110 {
+    short f0 : 3;
+    int f1 : 25;
     unsigned char f2 : 8;
     unsigned int f3 : 24;
+    long long f4;
+    unsigned short f5 : 10;
 };
 
-union S111 {
-    unsigned short f0 : 10;
-    unsigned int f1 : 27;
+struct S111 {
+    int f0;
+    char f1 : 2;
 };
 
+#pragma pack(2)
 struct S112 {
-    long long f0 : 56;
-    unsigned char f1 : 5;
-    unsigned short f2 : 9;
-    double f3;
-    int f4 : 13;
+    signed char f0 : 1;
+    int f1 : 13;
+    unsigned int f2 : 25;
 };
+#pragma pack()
 
+#pragma pack(2)
 struct S113 {
-    _Bool : 1;
-    struct BfNested f1;
+    struct BfNested f0;
     char : 6;
-    _Bool f3 : 1;
+};
+#pragma pack()
+
+union S114 {
+    char f0;
+    unsigned long long f1 : 47;
+    int f2;
 };
 
-struct S114 {
-    unsigned long : 0;
-    signed char f1 : 6;
-    short f2;
-    long long f3 : 16;
-    char : 7;
-};
-
+#pragma pack(4)
 union S115 {
-    double f0;
-    unsigned short : 12;
+    long long f0 : 16;
+    char : 7;
+    struct BfInner f2;
+    double f3;
 };
+#pragma pack()
 
-union S116 {
-    unsigned char f0 : 1;
-    long long f1;
-    _Bool f2 : 1;
-    _Bool f3 : 1;
-    _Bool : 1;
-    char f5;
-};
+struct S116 {
+    enum BfUnsigned f0 : 12;
+    unsigned char f1 : 1;
+} __attribute__((aligned(8)));
 
 struct S117 {
-    char f0 : 4;
-    enum BfUnsigned f1 : 19;
-    struct BfNested f2;
-    enum BfSigned f3 : 19;
-    struct BfInner f4;
-    int f5;
+    struct BfInner f0;
+    unsigned int : 29;
+    int f2;
+    signed char : 5;
 };
 
+#pragma pack(2)
 struct S118 {
-    long f0 : 25;
-    unsigned int : 3;
+    char f0 : 1;
+    unsigned short : 0;
 };
+#pragma pack()
 
-struct S119 {
-    unsigned short f0 : 7;
-    unsigned short f1 : 15;
+union S119 {
+    int f0 __attribute__((packed));
+    unsigned long long f1 : 21;
 };
 
 struct S120 {
-    long long f0;
-    short f1 : 2;
-    char f2;
-    long long f3 : 64;
-    unsigned long long f4 : 39;
-    long long f5 : 56;
+    unsigned int f0 : 14;
+    char f1 : 5;
+    long f2 : 7;
+    unsigned int f3 : 29;
 };
 
 struct S121 {
-    enum BfUnsigned f0 : 19;
-    unsigned long long f1 : 56;
+    short f0 : 15;
+    struct BfNested f1;
+    unsigned int f2 : 4;
 };
 
+#pragma pack(4)
 struct S122 {
-    short f0;
-    unsigned long f1 : 23;
+    unsigned long f0 : 4;
+    long long f1;
+    unsigned long long f2 : 56;
+    short f3 : 13;
+    unsigned long f4 : 23;
+    int f5;
 };
+#pragma pack()
 
-union S123 {
-    enum BfUnsigned : 1;
-    unsigned long : 1;
-    int f2[2];
-    long long f3 : 61;
-    int f4 : 7;
-    enum BfSigned f5 : 9;
+#pragma pack(2)
+struct S123 {
+    struct BfInner f0;
+    unsigned long long f1 : 57;
 };
+#pragma pack()
 
 struct S124 {
-    short f0;
-    unsigned long long f1 : 46;
-};
+    long long f0 : 9;
+    signed char f1 : 5;
+} __attribute__((aligned(32)));
 
 struct S125 {
-    unsigned int f0 : 4;
-    short : 9;
-    int f2 : 2;
-    short f3 : 16;
-    long long f4 : 59;
-    enum BfSigned f5 : 13;
+    unsigned int f0 : 9;
+    unsigned char f1 : 8;
+    _Bool f2 : 1;
 };
 
-union S126 {
-    struct BfNested f0;
-    struct BfInner f1;
-    short f2;
-    char f3 : 7;
-    unsigned char f4 : 2;
-    unsigned short : 1;
-};
+struct S126 {
+    int f0 : 2;
+    short f1 : 16;
+    long long f2 : 59;
+    enum BfSigned f3 : 13;
+    struct BfNested f4;
+    struct BfNested f5;
+} __attribute__((packed));
 
+#pragma pack(4)
 struct S127 {
-    long : 27;
-    _Bool f1 : 1;
-    unsigned short f2 : 13;
+    unsigned long long f0 : 22;
+    long long f1 : 18;
+    enum BfUnsigned f2 : 14;
+    signed char f3 : 3;
+    char f4 : 3;
 };
+#pragma pack()
 
-struct S128 {
-    double f0;
-    signed char f1 : 1;
+union S128 {
+    unsigned short : 13;
+    unsigned int f1 : 18;
     signed char f2 : 1;
-    unsigned long f3 : 7;
-    _Bool f4 : 1;
+    signed char f3 : 1;
 };
 
-struct S129 {
-    char f0 : 8;
-    unsigned long long : 38;
-    int : 5;
+union S129 {
+    _Bool f0 : 1;
+    enum BfSigned f1 : 2;
 };
 
-union S130 {
-    int f0;
-    unsigned long f1 : 8;
+struct S130 {
+    unsigned int f0 : 19;
+    signed char f1 : 5;
+    long long f2 __attribute__((aligned(8)));
+    int f3;
+    unsigned long f4 : 8;
+    short : 0;
 };
 
-struct S131 {
-    double f0;
-    enum BfUnsigned f1 : 6;
-    int f2;
-    unsigned short : 0;
-    enum BfUnsigned f4 : 26;
-    void * f5;
+#pragma pack(1)
+union S131 {
+    unsigned int f0 : 4;
+    char f1 : 1;
 };
+#pragma pack()
 
+#pragma pack(4)
 struct S132 {
     char f0 : 5;
     _Bool f1 : 1;
     short f2 : 11;
     enum BfUnsigned f3 : 20;
 };
+#pragma pack()
 
 struct S133 {
-    char f0;
-    signed char f1 : 3;
-    long f2 : 30;
-    unsigned long f3 : 3;
+    int f0 : 4;
+    char : 0;
+    unsigned long long : 35;
+    _Bool : 1;
+    int f4;
 };
 
-struct S134 {
-    unsigned short : 0;
-    unsigned int f1 : 24;
-    short f2;
+union S134 {
+    short f0 : 1;
+    double f1;
+    int f2[2] __attribute__((aligned(16)));
+    int f3 : 32;
+    unsigned char : 1;
+    short f5 : 16;
 };
 
+#pragma pack(2)
 struct S135 {
-    long long f0 : 42;
-    int f1[2];
-    int f2 : 32;
-    unsigned char : 0;
-    short f4 : 16;
-    unsigned long f5 : 18;
+    int f0;
+    enum BfSigned f1 : 16;
+    int f2[2];
 };
+#pragma pack()
 
 struct S136 {
-    int f0 : 28;
-    struct BfInner f1;
-    enum BfSigned f2 : 27;
-    long f3 : 16;
-    unsigned char f4 : 5;
+    char f0 : 6;
+    signed char f1 : 8;
+    unsigned short f2 : 13;
+    short f3 : 16;
+    enum BfSigned f4 : 19;
+    long long f5 : 50;
 };
 
+#pragma pack(1)
 struct S137 {
-    unsigned short f0 : 13;
-    short f1 : 16;
-    enum BfSigned f2 : 19;
+    unsigned long f0 : 2;
+    long f1 : 4;
+    struct BfInner f2;
+    long f3 : 3;
 };
+#pragma pack()
 
 struct S138 {
-    char : 0;
-    unsigned int f1 : 22;
-    unsigned short : 0;
-    unsigned char f3 : 2;
-    long f4 : 3;
-    unsigned short f5 : 7;
-};
-
-struct S139 {
-    signed char f0 : 5;
-    struct BfNested f1;
-    unsigned long long f2 : 15;
-};
-
-struct S140 {
-    double f0;
-    unsigned long f1 : 26;
-};
-
-struct S141 {
-    enum BfSigned f0 : 31;
-    long long f1;
-};
-
-struct S142 {
-    int f0 : 19;
+    unsigned long long f0 : 6;
     double f1;
-    int f2 : 10;
+    long long f2;
+    unsigned long f3 : 4;
 };
 
-struct S143 {
-    short f0;
-    short f1;
-};
-
-union S144 {
-    short f0;
-    short f1 : 13;
-    _Bool f2 : 1;
-    double f3;
-};
-
-struct S145 {
-    unsigned long long : 13;
-    double f1;
-    enum BfUnsigned : 30;
-};
-
-struct S146 {
-    long : 31;
-    unsigned int f1 : 1;
-    enum BfSigned : 0;
-    void * f3;
-    unsigned long long f4 : 16;
-};
-
-struct S147 {
-    struct BfNested f0;
-    enum BfUnsigned : 13;
-    unsigned int f2 : 19;
-    unsigned short : 7;
-    unsigned short : 0;
-    char f5 : 2;
-};
-
-struct S148 {
-    struct BfInner f0;
-    unsigned char f1 : 7;
-};
-
-union S149 {
-    int f0;
-    long long f1 : 22;
-    long f2 : 12;
-    unsigned long long f3 : 51;
-    unsigned long long f4 : 63;
-    long long : 1;
-};
-
-struct S150 {
-    signed char f0 : 7;
-    char f1;
-    char f2 : 1;
-};
-
-struct S151 {
-    struct BfInner f0;
-    long f1 : 22;
-    long f2 : 31;
-    unsigned long : 20;
-};
-
-struct S152 {
-    short : 8;
-    char f1;
-    unsigned long f2 : 27;
-    int f3 : 20;
-    char : 4;
-    enum BfUnsigned f5 : 5;
-};
-
-struct S153 {
-    unsigned long long f0 : 44;
-    short f1;
-    unsigned long f2 : 11;
-    enum BfSigned f3 : 28;
+union S139 {
+    unsigned long f0 : 26;
+    unsigned char f1 : 3;
+    long long f2 : 31;
+    unsigned long f3 : 9;
     _Bool f4 : 1;
 };
 
-struct S154 {
-    int f0[2];
-    unsigned short f1 : 16;
+struct S140 {
+    unsigned long f0 : 15;
+    short f1 __attribute__((packed));
+    struct BfInner f2;
 };
 
-struct S155 {
-    void * f0;
-    signed char f1 : 7;
-    short f2 : 8;
-    void * f3;
-    char f4;
-    enum BfUnsigned f5 : 31;
+struct S141 {
+    long long f0 __attribute__((aligned(16)));
+    _Bool f1 : 1;
+    double f2;
+    _Bool f3 : 1;
 };
+
+struct S142 {
+    char : 0;
+    short f1 : 5;
+    int : 1;
+    struct BfInner f3;
+    struct BfNested f4;
+} __attribute__((packed));
+
+union S143 {
+    unsigned long long f0 : 16;
+    signed char f1 : 1;
+    enum BfUnsigned : 13;
+};
+
+#pragma pack(1)
+struct S144 {
+    unsigned short : 7;
+    unsigned short : 0;
+    int f9 : 5;
+};
+#pragma pack()
+
+#pragma pack(4)
+struct S145 {
+    unsigned char : 0;
+    long f1 : 7;
+    _Bool f2 : 1;
+    unsigned int f3 : 22;
+    char f4 : 1;
+};
+#pragma pack()
+
+#pragma pack(2)
+struct S146 {
+    long f0 : 16;
+    struct BfInner f1;
+    long long : 0;
+    unsigned short f3 : 9;
+};
+#pragma pack()
+
+#pragma pack(4)
+struct S147 {
+    char f0 : 6;
+    long long f1;
+};
+#pragma pack()
+
+union S148 {
+    long f0 : 22;
+    long f1 : 31;
+    unsigned long : 20;
+    signed char f3 : 5;
+};
+
+#pragma pack(2)
+struct S149 {
+    int f0[2];
+    int f1 : 31;
+};
+#pragma pack()
+
+struct S150 {
+    char : 4;
+    enum BfUnsigned f1 : 5;
+    long long f2 : 16;
+    struct BfInner f3 __attribute__((packed));
+};
+
+#pragma pack(1)
+struct S151 {
+    long long : 0;
+    char f1 : 5;
+};
+#pragma pack()
+
+struct S152 {
+    long long f0;
+    unsigned int f1 : 28;
+    enum BfUnsigned f2 : 24;
+} __attribute__((aligned(8)));
+
+#pragma pack(1)
+struct S153 {
+    unsigned short : 0;
+    enum BfSigned f1 : 7;
+    char : 2;
+};
+#pragma pack()
+
+#pragma pack(4)
+struct S154 {
+    long : 9;
+    double f1;
+    struct BfInner f2;
+};
+#pragma pack()
+
+#pragma pack(4)
+struct S155 {
+    long long f0;
+    unsigned long long : 20;
+};
+#pragma pack()
 
 struct S156 {
-    unsigned int f0 : 6;
-    struct BfNested f1;
-    long long f2 : 6;
-    struct BfInner f3;
+    void * f0;
+    unsigned long long f1 : 58;
+    short f2 : 12;
+    char f3;
+    short f4 : 1;
+    void * f5;
 };
 
 struct S157 {
-    enum BfSigned f0 : 8;
-    long long f1 : 20;
-    int f2 : 1;
-    int f3;
+    unsigned char f0 : 1;
+    enum BfUnsigned f1 : 31;
+    short f2 : 8;
+    unsigned char f3 : 4;
 };
 
+#pragma pack(1)
 struct S158 {
-    long long f0 : 17;
-    long f1 : 12;
-    short f2 : 1;
-    unsigned long long f3 : 14;
-    int f4 : 24;
+    unsigned short f0 : 8;
+    long long f1 : 42;
 };
+#pragma pack()
 
 union S159 {
-    enum BfUnsigned f0 : 31;
-    short f1 : 8;
-    unsigned char f2 : 4;
-    unsigned char f3 : 1;
+    _Bool : 1;
+    _Bool f1 : 1;
 };
 
 struct S160 {
-    unsigned long long f0 : 53;
-    unsigned char f1 : 1;
-    char f2;
-    void * f3;
-    short f4 : 5;
+    signed char f0 : 8;
+    long long f1 : 56;
+    short f2 : 6;
+    short f3 : 9;
 };
 
+#pragma pack(4)
 struct S161 {
-    long long f0 : 17;
-    signed char f1 : 8;
-    long long f2 : 56;
-    short f3 : 6;
-    short f4 : 9;
-    signed char f5 : 8;
-};
-
-struct S162 {
-    void * f0;
+    signed char f0 : 7;
     unsigned short : 0;
     int : 9;
+    _Bool f3 : 1;
 };
+#pragma pack()
+
+#pragma pack(1)
+struct S162 {
+    unsigned int f0 : 3;
+    char f1;
+    unsigned long long f2 : 44;
+};
+#pragma pack()
 
 struct S163 {
-    char f0 : 3;
-    long long f1;
-    enum BfSigned f2 : 17;
+    char : 0;
+    enum BfUnsigned f1 : 15;
+    long long : 38;
+    unsigned long long f3 : 50;
+    short f4 : 3;
+    unsigned char f5 : 2;
 };
 
 struct S164 {
-    long f0 : 10;
-    unsigned int : 5;
-    struct BfNested f2;
-    int f3 : 14;
-    unsigned char f4 : 6;
-    unsigned long long f5 : 50;
+    enum BfUnsigned : 0;
+    unsigned int f1 : 30;
+    long f2 : 12;
+    _Bool f3 : 1;
+    signed char : 0;
+    double f5;
 };
 
 struct S165 {
-    signed char f0 : 2;
-    unsigned short f1 : 7;
-    signed char f2 : 2;
-    long long f3;
-    unsigned int f4 : 30;
-    long f5 : 12;
+    enum BfUnsigned : 0;
+    unsigned long long f1 : 15;
+    unsigned short f2 : 12;
+    unsigned int : 0;
+    short : 11;
+    unsigned short f5 : 9;
 };
 
-struct S166 {
-    long f0 : 25;
-    long f1 : 27;
-    unsigned long f2 : 24;
-    enum BfUnsigned f3 : 20;
-    int f4[2];
-    signed char f5 : 3;
+#pragma pack(4)
+union S166 {
+    signed char : 1;
+    struct BfInner f1;
+    enum BfSigned f2 : 21;
+};
+#pragma pack()
+
+union S167 {
+    signed char f0 : 5;
+    _Bool : 1;
+    unsigned long f2 : 25;
+    signed char f3 : 4;
 };
 
-struct S167 {
-    unsigned char f0 : 4;
-    unsigned char f1 : 6;
-    signed char f2 : 2;
-    long f3 : 19;
-    int f4;
-    signed char : 0;
+#pragma pack(1)
+struct S168 {
+    long long : 45;
+    signed char f1 : 3;
+    int f2 : 15;
+    unsigned char f3 : 2;
 };
+#pragma pack()
 
-union S168 {
-    enum BfSigned f0 : 21;
-    _Bool f1 : 1;
-    struct BfNested f2;
-};
-
-union S169 {
-    short f0 : 3;
-    unsigned long f1 : 25;
-    signed char f2 : 4;
+struct S169 {
+    int f0[2];
+    short f1 : 1;
+    long f2 : 8;
 };
 
 struct S170 {
-    signed char f0 : 7;
-    struct BfInner f1;
-    char f2;
-    long long f3;
-    unsigned long long : 0;
-};
+    char f0;
+    enum BfUnsigned f1 : 20;
+    signed char f2 : 8;
+    int f3 : 4;
+    long long f4;
+} __attribute__((packed));
 
 struct S171 {
-    unsigned short f0 : 2;
-    unsigned int f1 : 32;
-    short f2 : 1;
-    long f3 : 8;
-    unsigned long f4 : 26;
-    _Bool f5 : 1;
-};
-
-struct S172 {
-    long long f0 : 3;
-    short : 0;
-    signed char f2 : 1;
-};
-
-struct S173 {
     _Bool f0 : 1;
     unsigned short f1 : 15;
     signed char f2 : 4;
+} __attribute__((packed));
+
+struct S172 {
+    signed char f0 : 3;
+    enum BfUnsigned f1 : 1;
+    int f2;
+    unsigned long long f3 : 49;
+    short f4;
+    int f5 : 19;
 };
 
-union S174 {
-    unsigned long : 1;
-    unsigned char f1 : 3;
-};
-
-struct S175 {
-    long : 17;
-    short f1;
-    int f2 : 19;
-    unsigned short f3 : 14;
-};
-
-struct S176 {
-    char f0 : 3;
+#pragma pack(1)
+struct S173 {
+    char : 3;
     void * f1;
     _Bool f2 : 1;
     _Bool f3 : 1;
     unsigned char f4 : 8;
     unsigned short f5 : 6;
 };
+#pragma pack()
 
-struct S177 {
-    unsigned long long f0 : 48;
-    unsigned int : 9;
-};
+struct S174 {
+    _Bool : 0;
+    unsigned int f1 : 9;
+    long long f2;
+} __attribute__((packed));
 
-union S178 {
-    int f0[2];
-    unsigned long f1 : 6;
-    unsigned char f2 : 8;
-    unsigned int f3 : 6;
-};
-
-struct S179 {
+#pragma pack(1)
+struct S175 {
+    enum BfUnsigned f0 : 4;
+    int : 0;
+    unsigned long long : 29;
     long : 29;
-    int f1 : 8;
-    unsigned char f2 : 4;
-    _Bool f3 : 1;
+    int f4 : 8;
+    unsigned char f5 : 4;
 };
+#pragma pack()
 
-struct S180 {
-    long long f0;
-    _Bool f1 : 1;
+union S176 {
+    char f0 : 5;
+    unsigned int : 26;
     int f2;
     _Bool : 1;
-    signed char f4 : 5;
-    struct BfInner f5;
+} __attribute__((aligned(16)));
+
+union S177 {
+    short f0 : 10;
+    int f1;
+    unsigned short f2 : 5;
+    long long : 47;
+    unsigned int f4 : 18;
+    int : 2;
+};
+
+struct S178 {
+    double f0;
+    long f1 : 22;
+    short f2 __attribute__((packed));
+    enum BfUnsigned f3 : 4;
+};
+
+#pragma pack(4)
+union S179 {
+    char f0 : 3;
+    _Bool f1 : 1;
+    long long : 32;
+    enum BfUnsigned f3 : 13;
+    enum BfSigned f4 : 16;
+    unsigned long long f5 : 54;
+};
+#pragma pack()
+
+struct S180 {
+    unsigned long long : 51;
+    _Bool f1 : 1;
+    short f2 : 8;
+    int f3 : 3;
+    char f4 : 1;
+    int f5[2];
 };
 
 struct S181 {
-    unsigned int f0 : 11;
-    unsigned short f1 : 5;
-    long long : 47;
-    unsigned int f3 : 18;
-    int : 2;
-    unsigned int f5 : 2;
-};
+    char : 4;
+    unsigned long f1 : 11;
+    unsigned short f2 : 9;
+} __attribute__((packed));
 
-union S182 {
-    signed char f0 : 7;
-    int f1 : 16;
-    signed char : 1;
-    short f3 : 7;
-    long long : 63;
+#pragma pack(4)
+struct S182 {
+    unsigned short f0 : 10;
+    short f1 : 6;
 };
+#pragma pack()
 
+#pragma pack(2)
 struct S183 {
-    long long : 32;
-    enum BfUnsigned f1 : 13;
-    enum BfSigned f2 : 16;
-    unsigned long long f3 : 54;
-    unsigned short f4 : 10;
-    signed char f5 : 3;
+    int f0 : 29;
+    enum BfSigned f1 : 9;
+    _Bool f2 : 1;
 };
+#pragma pack()
 
 struct S184 {
-    unsigned long long f0 : 5;
-    unsigned short f1 : 11;
-};
-
-struct S185 {
-    char f0 : 1;
-    int f1[2];
-    char : 5;
-    char : 4;
-    unsigned long f4 : 11;
-    unsigned short f5 : 9;
-};
-
-union S186 {
-    struct BfInner f0;
-    enum BfSigned f1 : 30;
-    long long f2 : 44;
-    signed char f3 : 7;
-    long long f4;
-};
-
-struct S187 {
-    int f0 : 11;
-    char f1;
-    unsigned char f2 : 1;
-    char f3;
-    short : 11;
-};
-
-struct S188 {
     short f0;
-    unsigned char f1 : 4;
+    unsigned char f1 : 2;
+    signed char f2 : 1;
+    short f3;
+    unsigned char f4 : 4;
+    unsigned long f5 : 5;
+} __attribute__((aligned(16)));
+
+union S185 {
+    unsigned char f0 : 1;
+    signed char : 1;
+    unsigned char : 1;
 };
+
+struct S186 {
+    double f0;
+    long long f1;
+    enum BfSigned : 31;
+    long f3 : 29;
+    signed char f4 : 4;
+};
+
+#pragma pack(1)
+struct S187 {
+    char f0 : 6;
+    struct BfInner f1;
+    _Bool f2 : 1;
+};
+#pragma pack()
+
+union S188 {
+    unsigned short f0 : 1;
+    long long f1;
+} __attribute__((aligned(16)));
 
 struct S189 {
-    int f0 : 31;
-    _Bool f1 : 1;
-};
+    struct BfInner f0;
+    enum BfSigned f1 : 9;
+} __attribute__((packed));
 
 struct S190 {
-    enum BfSigned f0 : 13;
-    short f1 : 2;
-    short f2 : 4;
-    long f3 : 31;
+    enum BfSigned f0 : 16;
+    enum BfUnsigned f1 : 13;
 };
 
-union S191 {
-    enum BfSigned : 31;
-    long f1 : 29;
-    signed char f2 : 4;
+struct S191 {
+    unsigned long long f0 : 3;
+    _Bool f1 : 1;
+    unsigned long long f2 : 12;
+    long long f3 : 29;
+    struct BfInner f4;
 };
 
-struct S192 {
-    enum BfUnsigned f0 : 19;
-    long f1 : 5;
-    signed char f2 : 7;
-    char f3 : 6;
-    unsigned short f4 : 1;
-    long long f5;
-};
+union S192 {
+    unsigned long long f0 : 4;
+    unsigned int f1 : 19;
+} __attribute__((aligned(8)));
 
 struct S193 {
-    short f0 : 14;
-    struct BfInner f1;
-};
-
-struct S194 {
-    short f0 : 11;
-    signed char : 0;
-};
-
-struct S195 {
-    char f0 : 7;
-    enum BfSigned f1 : 22;
-    long f2 : 11;
-    short f3;
-};
-
-struct S196 {
-    enum BfSigned : 3;
-    long f1 : 27;
-    char f2 : 5;
-    unsigned int f3 : 18;
-    enum BfSigned f4 : 7;
-    unsigned char : 2;
-};
-
-struct S197 {
-    enum BfUnsigned f0 : 11;
+    long long : 39;
     unsigned long long f1 : 20;
-    int f2;
+    int f2 __attribute__((packed));
     int f3 : 13;
     unsigned long long : 0;
 };
 
-union S198 {
-    unsigned long f0 : 4;
-    void * f1;
-    unsigned long : 1;
+struct S194 {
+    unsigned long f0 : 20;
+    unsigned long : 0;
+    unsigned long f2 : 10;
+    short f3 : 14;
+    short f4 : 7;
+    int f5[2];
+} __attribute__((packed));
+
+#pragma pack(1)
+union S195 {
+    char : 8;
+    char f1;
+    char f2 : 3;
+};
+#pragma pack()
+
+struct S196 {
+    unsigned int f0 : 24;
+    long long f1 : 3;
+    short f2 : 3;
+    enum BfSigned : 0;
+    unsigned long long f4 : 63;
+};
+
+struct S197 {
+    int f0[2];
+    int f1[2];
+    void * f2;
     unsigned long f3 : 10;
+} __attribute__((packed));
+
+union S198 {
+    char f0;
+    long long f1 : 19;
+    int f2[2];
+    enum BfSigned : 1;
+    _Bool : 1;
 };
 
 struct S199 {
-    double f0;
-    short f1 : 7;
-    int f2[2];
-    long long f3;
-    int f4 : 24;
-    enum BfUnsigned f5 : 19;
-};
+    short f0 : 2;
+    unsigned long long f1 : 13;
+    signed char f2 : 2;
+    struct BfInner f3;
+    unsigned char f4 : 6;
+    long long : 0;
+} __attribute__((packed));
 
 static long long bf_query_000(int op, int k, long long value, unsigned char *out) {
     struct S000 v;
@@ -1507,28 +1594,23 @@ static long long bf_query_001(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S001);
     if (op == 1) return (long long) _Alignof(struct S001);
-    if (op == 2) return 5;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 1) return (long long) offsetof(struct S001, f1);
         if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
+        if (k == 3) return (long long) offsetof(struct S001, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (long long) value;
-    if (k == 1) v.f2 = (signed char) value;
-    if (k == 2) v.f3 = (unsigned long long) value;
-    if (k == 3) v.f4 = (unsigned long long) value;
-    if (k == 4) v.f5 = (_Bool) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 2) v.f2 = (unsigned short) value;
+    if (k == 3) v.f3 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -1538,29 +1620,22 @@ static long long bf_query_002(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S002);
     if (op == 1) return (long long) _Alignof(struct S002);
-    if (op == 2) return 6;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S002, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S002, f2);
-        if (k == 3) return (long long) offsetof(struct S002, f3);
-        if (k == 4) return -1;
-        if (k == 5) return (long long) offsetof(struct S002, f5);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 4) v.f4 = (unsigned long) value;
-    if (k == 5) v.f5 = (short) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 2) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -1570,6 +1645,29 @@ static long long bf_query_003(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S003);
     if (op == 1) return (long long) _Alignof(struct S003);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S003, f0);
+        if (k == 1) return (long long) offsetof(struct S003, f1);
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 2) v.f2 = (unsigned long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_004(int op, int k, long long value, unsigned char *out) {
+    struct S004 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S004);
+    if (op == 1) return (long long) _Alignof(struct S004);
     if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
@@ -1586,87 +1684,67 @@ static long long bf_query_003(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_004(int op, int k, long long value, unsigned char *out) {
-    struct S004 v;
+static long long bf_query_005(int op, int k, long long value, unsigned char *out) {
+    struct S005 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S004);
-    if (op == 1) return (long long) _Alignof(struct S004);
+    if (op == 0) return (long long) sizeof(struct S005);
+    if (op == 1) return (long long) _Alignof(struct S005);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S004, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_005(int op, int k, long long value, unsigned char *out) {
-    union S005 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S005);
-    if (op == 1) return (long long) _Alignof(union S005);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S005, f2);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (_Bool) value;
+    if (k == 0) v.f1 = (int) value;
+    if (k == 1) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_006(int op, int k, long long value, unsigned char *out) {
-    union S006 v;
+    struct S006 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S006);
-    if (op == 1) return (long long) _Alignof(union S006);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(struct S006);
+    if (op == 1) return (long long) _Alignof(struct S006);
+    if (op == 2) return 1;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S006, f3);
-        if (k == 2) return -1;
+        if (k == 0) return (long long) offsetof(struct S006, f0);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned char) value;
-    if (k == 1) v.f3 = (int) value;
-    if (k == 2) v.f4 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f3;
-    if (k == 2) return (long long) v.f4;
     return 0;
 }
 
 static long long bf_query_007(int op, int k, long long value, unsigned char *out) {
-    union S007 v;
+    struct S007 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S007);
-    if (op == 1) return (long long) _Alignof(union S007);
-    if (op == 2) return 1;
+    if (op == 0) return (long long) sizeof(struct S007);
+    if (op == 1) return (long long) _Alignof(struct S007);
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S007, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f9 = (int) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 2) v.f3 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f9;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -1676,19 +1754,23 @@ static long long bf_query_008(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S008);
     if (op == 1) return (long long) _Alignof(struct S008);
-    if (op == 2) return 2;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S008, f1);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S008, f4);
+        if (k == 3) return (long long) offsetof(struct S008, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (char) value;
+    if (k == 0) v.f1 = (unsigned char) value;
+    if (k == 1) v.f2 = (long long) value;
+    if (k == 3) v.f5 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 3) return (long long) v.f5;
     return 0;
 }
 
@@ -1698,20 +1780,28 @@ static long long bf_query_009(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S009);
     if (op == 1) return (long long) _Alignof(struct S009);
-    if (op == 2) return 3;
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S009, f1);
-        if (k == 2) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S009, f3);
+        if (k == 3) return -1;
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 2) v.f2 = (short) value;
+    if (k == 0) v.f1 = (unsigned short) value;
+    if (k == 1) v.f2 = (long long) value;
+    if (k == 2) v.f3 = (short) value;
+    if (k == 3) v.f4 = (long long) value;
+    if (k == 4) v.f5 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -1721,25 +1811,22 @@ static long long bf_query_010(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S010);
     if (op == 1) return (long long) _Alignof(union S010);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S010, f1);
+        if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (_Bool) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f3 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -1749,20 +1836,17 @@ static long long bf_query_011(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S011);
     if (op == 1) return (long long) _Alignof(union S011);
-    if (op == 2) return 3;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S011, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S011, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (_Bool) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f0;
     return 0;
 }
 
@@ -1772,63 +1856,6 @@ static long long bf_query_012(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S012);
     if (op == 1) return (long long) _Alignof(struct S012);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S012, f2);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned int) value;
-    if (k == 2) v.f3 = (unsigned long long) value;
-    if (k == 3) v.f4 = (unsigned char) value;
-    if (k == 4) v.f5 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_013(int op, int k, long long value, unsigned char *out) {
-    struct S013 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S013);
-    if (op == 1) return (long long) _Alignof(struct S013);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S013, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (_Bool) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_014(int op, int k, long long value, unsigned char *out) {
-    struct S014 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S014);
-    if (op == 1) return (long long) _Alignof(struct S014);
     if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
@@ -1839,15 +1866,62 @@ static long long bf_query_014(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (long) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
+    if (k == 1) v.f1 = (unsigned short) value;
+    if (k == 2) v.f2 = (signed char) value;
+    if (k == 3) v.f4 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_013(int op, int k, long long value, unsigned char *out) {
+    struct S013 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S013);
+    if (op == 1) return (long long) _Alignof(struct S013);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (short) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_014(int op, int k, long long value, unsigned char *out) {
+    struct S014 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S014);
+    if (op == 1) return (long long) _Alignof(struct S014);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (_Bool) value;
+    if (k == 1) v.f1 = (long) value;
+    if (k == 2) v.f2 = (enum BfSigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -1859,9 +1933,9 @@ static long long bf_query_015(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S015);
     if (op == 2) return 6;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S015, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S015, f1);
+        if (k == 2) return (long long) offsetof(struct S015, f2);
         if (k == 3) return -1;
         if (k == 4) return -1;
         if (k == 5) return -1;
@@ -1869,12 +1943,14 @@ static long long bf_query_015(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f3 = (int) value;
-    if (k == 4) v.f4 = (unsigned short) value;
-    if (k == 5) v.f5 = (long long) value;
+    if (k == 0) v.f0 = (unsigned char) value;
+    if (k == 1) v.f1 = (short) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f4 = (unsigned int) value;
+    if (k == 5) v.f5 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
@@ -1889,26 +1965,23 @@ static long long bf_query_016(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S016);
     if (op == 1) return (long long) _Alignof(struct S016);
-    if (op == 2) return 5;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return (long long) offsetof(struct S016, f0);
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S016, f2);
+        if (k == 2) return (long long) offsetof(struct S016, f3);
         if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S016, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (unsigned long long) value;
-    if (k == 3) v.f4 = (_Bool) value;
-    if (k == 4) v.f5 = (short) value;
+    if (k == 1) v.f2 = (_Bool) value;
+    if (k == 2) v.f3 = (short) value;
+    if (k == 3) v.f4 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -1918,15 +1991,14 @@ static long long bf_query_017(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S017);
     if (op == 1) return (long long) _Alignof(struct S017);
-    if (op == 2) return 2;
+    if (op == 2) return 1;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S017, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (_Bool) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     return 0;
@@ -1940,17 +2012,15 @@ static long long bf_query_018(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S018);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S018, f0);
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (_Bool) value;
-    if (k == 1) v.f2 = (char) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -1969,9 +2039,9 @@ static long long bf_query_019(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (char) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (short) value;
+    if (k == 2) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -1980,34 +2050,24 @@ static long long bf_query_019(int op, int k, long long value, unsigned char *out
 }
 
 static long long bf_query_020(int op, int k, long long value, unsigned char *out) {
-    struct S020 v;
+    union S020 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S020);
-    if (op == 1) return (long long) _Alignof(struct S020);
-    if (op == 2) return 6;
+    if (op == 0) return (long long) sizeof(union S020);
+    if (op == 1) return (long long) _Alignof(union S020);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(union S020, f0);
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S020, f2);
-        if (k == 3) return (long long) offsetof(struct S020, f3);
-        if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (unsigned short) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 4) v.f4 = (unsigned char) value;
-    if (k == 5) v.f5 = (enum BfSigned) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -2017,10 +2077,60 @@ static long long bf_query_021(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S021);
     if (op == 1) return (long long) _Alignof(struct S021);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (enum BfSigned) value;
+    if (k == 1) v.f2 = (unsigned long long) value;
+    if (k == 2) v.f3 = (unsigned long) value;
+    if (k == 3) v.f4 = (enum BfSigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_022(int op, int k, long long value, unsigned char *out) {
+    struct S022 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S022);
+    if (op == 1) return (long long) _Alignof(struct S022);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S022, f0);
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_023(int op, int k, long long value, unsigned char *out) {
+    struct S023 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S023);
+    if (op == 1) return (long long) _Alignof(struct S023);
     if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S021, f0);
-        if (k == 1) return (long long) offsetof(struct S021, f1);
+        if (k == 0) return (long long) offsetof(struct S023, f0);
+        if (k == 1) return (long long) offsetof(struct S023, f1);
         if (k == 2) return -1;
         return -1;
     }
@@ -2032,88 +2142,29 @@ static long long bf_query_021(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_022(int op, int k, long long value, unsigned char *out) {
-    union S022 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S022);
-    if (op == 1) return (long long) _Alignof(union S022);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S022, f1);
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S022, f3);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_023(int op, int k, long long value, unsigned char *out) {
-    struct S023 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S023);
-    if (op == 1) return (long long) _Alignof(struct S023);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S023, f1);
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S023, f3);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned int) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (unsigned short) value;
-    if (k == 3) v.f3 = (int) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
 static long long bf_query_024(int op, int k, long long value, unsigned char *out) {
     struct S024 v;
     unsigned char *p;
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S024);
     if (op == 1) return (long long) _Alignof(struct S024);
-    if (op == 2) return 5;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S024, f2);
+        if (k == 1) return (long long) offsetof(struct S024, f1);
         if (k == 2) return -1;
         if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    if (k == 1) v.f2 = (short) value;
-    if (k == 2) v.f3 = (int) value;
-    if (k == 3) v.f4 = (char) value;
-    if (k == 4) v.f5 = (short) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -2123,12 +2174,37 @@ static long long bf_query_025(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S025);
     if (op == 1) return (long long) _Alignof(union S025);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S025, f0);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_026(int op, int k, long long value, unsigned char *out) {
+    union S026 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S026);
+    if (op == 1) return (long long) _Alignof(union S026);
     if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S025, f3);
+        if (k == 3) return (long long) offsetof(union S026, f3);
         return -1;
     }
     p = (unsigned char *) &v;
@@ -2143,183 +2219,12 @@ static long long bf_query_025(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_026(int op, int k, long long value, unsigned char *out) {
-    struct S026 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S026);
-    if (op == 1) return (long long) _Alignof(struct S026);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S026, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (short) value;
-    if (k == 4) v.f4 = (unsigned long long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    return 0;
-}
-
 static long long bf_query_027(int op, int k, long long value, unsigned char *out) {
-    union S027 v;
+    struct S027 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S027);
-    if (op == 1) return (long long) _Alignof(union S027);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (_Bool) value;
-    if (k == 4) v.f4 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    return 0;
-}
-
-static long long bf_query_028(int op, int k, long long value, unsigned char *out) {
-    struct S028 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S028);
-    if (op == 1) return (long long) _Alignof(struct S028);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S028, f3);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_029(int op, int k, long long value, unsigned char *out) {
-    union S029 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S029);
-    if (op == 1) return (long long) _Alignof(union S029);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S029, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (unsigned int) value;
-    if (k == 2) v.f2 = (unsigned short) value;
-    if (k == 3) v.f3 = (long) value;
-    if (k == 4) v.f4 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    return 0;
-}
-
-static long long bf_query_030(int op, int k, long long value, unsigned char *out) {
-    struct S030 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S030);
-    if (op == 1) return (long long) _Alignof(struct S030);
-    if (op == 2) return 6;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S030, f1);
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S030, f3);
-        if (k == 4) return (long long) offsetof(struct S030, f4);
-        if (k == 5) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (_Bool) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
-    if (k == 3) v.f3 = (long long) value;
-    if (k == 4) v.f4 = (char) value;
-    if (k == 5) v.f5 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_031(int op, int k, long long value, unsigned char *out) {
-    union S031 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S031);
-    if (op == 1) return (long long) _Alignof(union S031);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (long long) value;
-    if (k == 1) v.f2 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_032(int op, int k, long long value, unsigned char *out) {
-    struct S032 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S032);
-    if (op == 1) return (long long) _Alignof(struct S032);
+    if (op == 0) return (long long) sizeof(struct S027);
+    if (op == 1) return (long long) _Alignof(struct S027);
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
@@ -2329,22 +2234,76 @@ static long long bf_query_032(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (short) value;
+    if (k == 0) v.f0 = (unsigned char) value;
+    if (k == 1) v.f2 = (short) value;
+    if (k == 2) v.f3 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
-static long long bf_query_033(int op, int k, long long value, unsigned char *out) {
-    union S033 v;
+static long long bf_query_028(int op, int k, long long value, unsigned char *out) {
+    struct S028 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S033);
-    if (op == 1) return (long long) _Alignof(union S033);
+    if (op == 0) return (long long) sizeof(struct S028);
+    if (op == 1) return (long long) _Alignof(struct S028);
+    if (op == 2) return 6;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S028, f1);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
+        if (k == 5) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (_Bool) value;
+    if (k == 4) v.f4 = (_Bool) value;
+    if (k == 5) v.f5 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_029(int op, int k, long long value, unsigned char *out) {
+    struct S029 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S029);
+    if (op == 1) return (long long) _Alignof(struct S029);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S029, f0);
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_030(int op, int k, long long value, unsigned char *out) {
+    struct S030 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S030);
+    if (op == 1) return (long long) _Alignof(struct S030);
     if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
@@ -2355,33 +2314,112 @@ static long long bf_query_033(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    if (k == 3) v.f3 = (enum BfUnsigned) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 2) v.f4 = (unsigned short) value;
+    if (k == 3) v.f5 = (long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f4;
+    if (k == 3) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_031(int op, int k, long long value, unsigned char *out) {
+    struct S031 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S031);
+    if (op == 1) return (long long) _Alignof(struct S031);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S031, f1);
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S031, f3);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (char) value;
+    if (k == 2) v.f2 = (_Bool) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_032(int op, int k, long long value, unsigned char *out) {
+    union S032 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S032);
+    if (op == 1) return (long long) _Alignof(union S032);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S032, f0);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (char) value;
+    if (k == 3) v.f3 = (unsigned long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
     return 0;
 }
 
-static long long bf_query_034(int op, int k, long long value, unsigned char *out) {
-    struct S034 v;
+static long long bf_query_033(int op, int k, long long value, unsigned char *out) {
+    struct S033 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S034);
-    if (op == 1) return (long long) _Alignof(struct S034);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(struct S033);
+    if (op == 1) return (long long) _Alignof(struct S033);
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S034, f0);
-        if (k == 1) return (long long) offsetof(struct S034, f1);
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S033, f1);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 2) v.f2 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_034(int op, int k, long long value, unsigned char *out) {
+    union S034 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S034);
+    if (op == 1) return (long long) _Alignof(union S034);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f2 = (enum BfUnsigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
@@ -2398,24 +2436,22 @@ static long long bf_query_035(int op, int k, long long value, unsigned char *out
         if (k == 2) return -1;
         if (k == 3) return -1;
         if (k == 4) return -1;
-        if (k == 5) return -1;
+        if (k == 5) return (long long) offsetof(struct S035, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (unsigned short) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (enum BfSigned) value;
-    if (k == 4) v.f4 = (int) value;
-    if (k == 5) v.f5 = (_Bool) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (_Bool) value;
+    if (k == 4) v.f4 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
     if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -2425,45 +2461,35 @@ static long long bf_query_036(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S036);
     if (op == 1) return (long long) _Alignof(struct S036);
-    if (op == 2) return 4;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S036, f1);
-        if (k == 2) return (long long) offsetof(struct S036, f2);
-        if (k == 3) return -1;
+        if (k == 0) return (long long) offsetof(struct S036, f0);
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long) value;
-    if (k == 3) v.f4 = (long) value;
+    if (k == 1) v.f1 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 3) return (long long) v.f4;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
 static long long bf_query_037(int op, int k, long long value, unsigned char *out) {
-    struct S037 v;
+    union S037 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S037);
-    if (op == 1) return (long long) _Alignof(struct S037);
-    if (op == 2) return 4;
+    if (op == 0) return (long long) sizeof(union S037);
+    if (op == 1) return (long long) _Alignof(union S037);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S037, f1);
-        if (k == 2) return (long long) offsetof(struct S037, f2);
-        if (k == 3) return (long long) offsetof(struct S037, f3);
+        if (k == 0) return (long long) offsetof(union S037, f0);
+        if (k == 1) return (long long) offsetof(union S037, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 2) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -2473,28 +2499,19 @@ static long long bf_query_038(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S038);
     if (op == 1) return (long long) _Alignof(struct S038);
-    if (op == 2) return 5;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S038, f0);
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S038, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (char) value;
-    if (k == 4) v.f4 = (short) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -2504,22 +2521,23 @@ static long long bf_query_039(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S039);
     if (op == 1) return (long long) _Alignof(struct S039);
-    if (op == 2) return 3;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 1) return (long long) offsetof(struct S039, f1);
+        if (k == 2) return (long long) offsetof(struct S039, f2);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 3) v.f5 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f5;
     return 0;
 }
 
@@ -2529,55 +2547,60 @@ static long long bf_query_040(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S040);
     if (op == 1) return (long long) _Alignof(struct S040);
-    if (op == 2) return 2;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S040, f1);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
+    if (k == 0) v.f0 = (_Bool) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (unsigned long) value;
+    if (k == 3) v.f3 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_041(int op, int k, long long value, unsigned char *out) {
-    union S041 v;
+    struct S041 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S041);
-    if (op == 1) return (long long) _Alignof(union S041);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(struct S041);
+    if (op == 1) return (long long) _Alignof(struct S041);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S041, f1);
-        if (k == 2) return -1;
+        if (k == 0) return (long long) offsetof(struct S041, f0);
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f3 = (char) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_042(int op, int k, long long value, unsigned char *out) {
-    union S042 v;
+    struct S042 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S042);
-    if (op == 1) return (long long) _Alignof(union S042);
+    if (op == 0) return (long long) sizeof(struct S042);
+    if (op == 1) return (long long) _Alignof(struct S042);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S042, f1);
-        if (k == 1) return (long long) offsetof(union S042, f2);
+        if (k == 0) return (long long) offsetof(struct S042, f0);
+        if (k == 1) return (long long) offsetof(struct S042, f2);
         return -1;
     }
     p = (unsigned char *) &v;
@@ -2592,22 +2615,22 @@ static long long bf_query_043(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S043);
     if (op == 1) return (long long) _Alignof(struct S043);
-    if (op == 2) return 3;
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S043, f0);
+        if (k == 1) return (long long) offsetof(struct S043, f1);
         if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S043, f3);
+        if (k == 4) return (long long) offsetof(struct S043, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 2) v.f2 = (long) value;
+    if (k == 2) v.f2 = (unsigned int) value;
+    if (k == 4) v.f4 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -2617,231 +2640,6 @@ static long long bf_query_044(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S044);
     if (op == 1) return (long long) _Alignof(struct S044);
-    if (op == 2) return 1;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S044, f1);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    return 0;
-}
-
-static long long bf_query_045(int op, int k, long long value, unsigned char *out) {
-    union S045 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S045);
-    if (op == 1) return (long long) _Alignof(union S045);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S045, f4);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (long long) value;
-    if (k == 1) v.f2 = (long long) value;
-    if (k == 2) v.f3 = (unsigned short) value;
-    if (k == 3) v.f4 = (char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    return 0;
-}
-
-static long long bf_query_046(int op, int k, long long value, unsigned char *out) {
-    struct S046 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S046);
-    if (op == 1) return (long long) _Alignof(struct S046);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_047(int op, int k, long long value, unsigned char *out) {
-    struct S047 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S047);
-    if (op == 1) return (long long) _Alignof(struct S047);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (int) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_048(int op, int k, long long value, unsigned char *out) {
-    struct S048 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S048);
-    if (op == 1) return (long long) _Alignof(struct S048);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S048, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned short) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_049(int op, int k, long long value, unsigned char *out) {
-    union S049 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S049);
-    if (op == 1) return (long long) _Alignof(union S049);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S049, f5);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f2 = (int) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_050(int op, int k, long long value, unsigned char *out) {
-    union S050 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S050);
-    if (op == 1) return (long long) _Alignof(union S050);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S050, f0);
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S050, f2);
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f3 = (unsigned long long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_051(int op, int k, long long value, unsigned char *out) {
-    struct S051 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S051);
-    if (op == 1) return (long long) _Alignof(struct S051);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S051, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_052(int op, int k, long long value, unsigned char *out) {
-    struct S052 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S052);
-    if (op == 1) return (long long) _Alignof(struct S052);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S052, f1);
-        if (k == 2) return (long long) offsetof(struct S052, f3);
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f3 = (char) value;
-    if (k == 3) v.f4 = (unsigned int) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    return 0;
-}
-
-static long long bf_query_053(int op, int k, long long value, unsigned char *out) {
-    struct S053 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S053);
-    if (op == 1) return (long long) _Alignof(struct S053);
     if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
@@ -2853,43 +2651,265 @@ static long long bf_query_053(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (unsigned long) value;
-    if (k == 3) v.f3 = (_Bool) value;
-    if (k == 4) v.f4 = (unsigned long) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (long long) value;
+    if (k == 4) v.f5 = (long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
-static long long bf_query_054(int op, int k, long long value, unsigned char *out) {
-    union S054 v;
+static long long bf_query_045(int op, int k, long long value, unsigned char *out) {
+    struct S045 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S054);
-    if (op == 1) return (long long) _Alignof(union S054);
+    if (op == 0) return (long long) sizeof(struct S045);
+    if (op == 1) return (long long) _Alignof(struct S045);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (long long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_046(int op, int k, long long value, unsigned char *out) {
+    struct S046 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S046);
+    if (op == 1) return (long long) _Alignof(struct S046);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S054, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S054, f2);
+        if (k == 2) return -1;
         if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned int) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (unsigned int) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 2) v.f3 = (enum BfUnsigned) value;
+    if (k == 3) v.f4 = (long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_047(int op, int k, long long value, unsigned char *out) {
+    struct S047 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S047);
+    if (op == 1) return (long long) _Alignof(struct S047);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (unsigned short) value;
+    if (k == 1) v.f2 = (short) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_048(int op, int k, long long value, unsigned char *out) {
+    union S048 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S048);
+    if (op == 1) return (long long) _Alignof(union S048);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(union S048, f3);
+        if (k == 4) return (long long) offsetof(union S048, f4);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 3) v.f3 = (char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
+    return 0;
+}
+
+static long long bf_query_049(int op, int k, long long value, unsigned char *out) {
+    struct S049 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S049);
+    if (op == 1) return (long long) _Alignof(struct S049);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S049, f3);
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (unsigned int) value;
+    if (k == 1) v.f2 = (int) value;
+    if (k == 3) v.f4 = (int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_050(int op, int k, long long value, unsigned char *out) {
+    struct S050 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S050);
+    if (op == 1) return (long long) _Alignof(struct S050);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (signed char) value;
+    if (k == 2) v.f2 = (char) value;
+    if (k == 3) v.f3 = (unsigned char) value;
+    if (k == 4) v.f5 = (unsigned long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_051(int op, int k, long long value, unsigned char *out) {
+    struct S051 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S051);
+    if (op == 1) return (long long) _Alignof(struct S051);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S051, f1);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    return 0;
+}
+
+static long long bf_query_052(int op, int k, long long value, unsigned char *out) {
+    struct S052 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S052);
+    if (op == 1) return (long long) _Alignof(struct S052);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_053(int op, int k, long long value, unsigned char *out) {
+    struct S053 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S053);
+    if (op == 1) return (long long) _Alignof(struct S053);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S053, f1);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (signed char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    return 0;
+}
+
+static long long bf_query_054(int op, int k, long long value, unsigned char *out) {
+    struct S054 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S054);
+    if (op == 1) return (long long) _Alignof(struct S054);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -2924,22 +2944,26 @@ static long long bf_query_056(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S056);
     if (op == 1) return (long long) _Alignof(struct S056);
-    if (op == 2) return 3;
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return (long long) offsetof(struct S056, f0);
         if (k == 1) return -1;
         if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f2 = (enum BfSigned) value;
-    if (k == 2) v.f3 = (long) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (long) value;
+    if (k == 3) v.f3 = (unsigned int) value;
+    if (k == 4) v.f4 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -2949,26 +2973,23 @@ static long long bf_query_057(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S057);
     if (op == 1) return (long long) _Alignof(struct S057);
-    if (op == 2) return 5;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S057, f4);
-        if (k == 4) return (long long) offsetof(struct S057, f5);
+        if (k == 2) return (long long) offsetof(struct S057, f2);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (_Bool) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
-    if (k == 4) v.f5 = (char) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 3) v.f3 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f5;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -2978,55 +2999,53 @@ static long long bf_query_058(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S058);
     if (op == 1) return (long long) _Alignof(struct S058);
-    if (op == 2) return 6;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S058, f1);
+        if (k == 1) return -1;
         if (k == 2) return (long long) offsetof(struct S058, f2);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_059(int op, int k, long long value, unsigned char *out) {
+    union S059 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S059);
+    if (op == 1) return (long long) _Alignof(union S059);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
         if (k == 3) return -1;
         if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (signed char) value;
-    if (k == 3) v.f3 = (unsigned short) value;
-    if (k == 4) v.f4 = (_Bool) value;
-    if (k == 5) v.f5 = (long long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_059(int op, int k, long long value, unsigned char *out) {
-    struct S059 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S059);
-    if (op == 1) return (long long) _Alignof(struct S059);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S059, f0);
-        if (k == 1) return (long long) offsetof(struct S059, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (short) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
     if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (unsigned char) value;
+    if (k == 3) v.f3 = (int) value;
+    if (k == 4) v.f4 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -3036,50 +3055,38 @@ static long long bf_query_060(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S060);
     if (op == 1) return (long long) _Alignof(struct S060);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S060, f0);
+        if (k == 1) return (long long) offsetof(struct S060, f1);
         if (k == 2) return -1;
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned short) value;
-    if (k == 1) v.f2 = (long) value;
-    if (k == 2) v.f3 = (enum BfUnsigned) value;
-    if (k == 3) v.f5 = (unsigned long long) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f5;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_061(int op, int k, long long value, unsigned char *out) {
-    union S061 v;
+    struct S061 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S061);
-    if (op == 1) return (long long) _Alignof(union S061);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(struct S061);
+    if (op == 1) return (long long) _Alignof(struct S061);
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 1) return (long long) offsetof(struct S061, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned long) value;
-    if (k == 1) v.f2 = (long) value;
-    if (k == 2) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (unsigned short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
+    if (k == 0) return (long long) v.f0;
     return 0;
 }
 
@@ -3089,6 +3096,32 @@ static long long bf_query_062(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S062);
     if (op == 1) return (long long) _Alignof(struct S062);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S062, f3);
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned char) value;
+    if (k == 1) v.f1 = (long) value;
+    if (k == 3) v.f4 = (unsigned char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_063(int op, int k, long long value, unsigned char *out) {
+    struct S063 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S063);
+    if (op == 1) return (long long) _Alignof(struct S063);
     if (op == 2) return 1;
     if (op == 3) {
         if (k == 0) return -1;
@@ -3096,33 +3129,9 @@ static long long bf_query_062(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
+    if (k == 0) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    return 0;
-}
-
-static long long bf_query_063(int op, int k, long long value, unsigned char *out) {
-    union S063 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S063);
-    if (op == 1) return (long long) _Alignof(union S063);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S063, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S063, f3);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
     return 0;
 }
 
@@ -3132,19 +3141,23 @@ static long long bf_query_064(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S064);
     if (op == 1) return (long long) _Alignof(struct S064);
-    if (op == 2) return 2;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 1) return (long long) offsetof(struct S064, f1);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (char) value;
+    if (k == 2) v.f2 = (unsigned int) value;
+    if (k == 3) v.f3 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -3179,55 +3192,48 @@ static long long bf_query_066(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S066);
     if (op == 1) return (long long) _Alignof(union S066);
-    if (op == 2) return 6;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(union S066, f0);
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (_Bool) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (unsigned long) value;
-    if (k == 4) v.f4 = (enum BfUnsigned) value;
-    if (k == 5) v.f5 = (enum BfUnsigned) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_067(int op, int k, long long value, unsigned char *out) {
+    struct S067 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S067);
+    if (op == 1) return (long long) _Alignof(struct S067);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S067, f3);
+        if (k == 4) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (enum BfUnsigned) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f5 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_067(int op, int k, long long value, unsigned char *out) {
-    union S067 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S067);
-    if (op == 1) return (long long) _Alignof(union S067);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S067, f4);
-        if (k == 3) return (long long) offsetof(union S067, f5);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (enum BfUnsigned) value;
-    if (k == 1) v.f3 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f3;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -3237,38 +3243,73 @@ static long long bf_query_068(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S068);
     if (op == 1) return (long long) _Alignof(union S068);
-    if (op == 2) return 5;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S068, f0);
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S068, f2);
-        if (k == 3) return (long long) offsetof(union S068, f3);
-        if (k == 4) return (long long) offsetof(union S068, f5);
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S068, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 3) v.f3 = (int) value;
-    if (k == 4) v.f5 = (long long) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
 static long long bf_query_069(int op, int k, long long value, unsigned char *out) {
-    struct S069 v;
+    union S069 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S069);
-    if (op == 1) return (long long) _Alignof(struct S069);
+    if (op == 0) return (long long) sizeof(union S069);
+    if (op == 1) return (long long) _Alignof(union S069);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S069, f0);
+        if (k == 1) return (long long) offsetof(union S069, f1);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    return 0;
+}
+
+static long long bf_query_070(int op, int k, long long value, unsigned char *out) {
+    struct S070 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S070);
+    if (op == 1) return (long long) _Alignof(struct S070);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_071(int op, int k, long long value, unsigned char *out) {
+    struct S071 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S071);
+    if (op == 1) return (long long) _Alignof(struct S071);
     if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S069, f2);
+        if (k == 2) return (long long) offsetof(struct S071, f2);
         if (k == 3) return -1;
         if (k == 4) return -1;
         return -1;
@@ -3289,87 +3330,28 @@ static long long bf_query_069(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_070(int op, int k, long long value, unsigned char *out) {
-    struct S070 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S070);
-    if (op == 1) return (long long) _Alignof(struct S070);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S070, f2);
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (signed char) value;
-    if (k == 4) v.f4 = (long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    return 0;
-}
-
-static long long bf_query_071(int op, int k, long long value, unsigned char *out) {
-    union S071 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S071);
-    if (op == 1) return (long long) _Alignof(union S071);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (unsigned int) value;
-    if (k == 3) v.f4 = (enum BfSigned) value;
-    if (k == 4) v.f5 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
-    return 0;
-}
-
 static long long bf_query_072(int op, int k, long long value, unsigned char *out) {
     union S072 v;
     unsigned char *p;
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S072);
     if (op == 1) return (long long) _Alignof(union S072);
-    if (op == 2) return 2;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 1) return (long long) offsetof(union S072, f1);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 0) v.f0 = (signed char) value;
     if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -3379,52 +3361,51 @@ static long long bf_query_073(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S073);
     if (op == 1) return (long long) _Alignof(struct S073);
-    if (op == 2) return 6;
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S073, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S073, f2);
-        if (k == 3) return (long long) offsetof(struct S073, f3);
-        if (k == 4) return -1;
-        if (k == 5) return (long long) offsetof(struct S073, f5);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return (long long) offsetof(struct S073, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 0) v.f0 = (long) value;
+    if (k == 1) v.f1 = (unsigned long) value;
+    if (k == 2) v.f2 = (_Bool) value;
     if (k == 3) v.f3 = (char) value;
-    if (k == 4) v.f4 = (short) value;
+    if (k == 4) v.f5 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
 static long long bf_query_074(int op, int k, long long value, unsigned char *out) {
-    struct S074 v;
+    union S074 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S074);
-    if (op == 1) return (long long) _Alignof(struct S074);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(union S074);
+    if (op == 1) return (long long) _Alignof(union S074);
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S074, f0);
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S074, f2);
-        if (k == 3) return (long long) offsetof(struct S074, f3);
-        if (k == 4) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S074, f3);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 4) v.f4 = (unsigned int) value;
+    if (k == 0) v.f1 = (unsigned long) value;
+    if (k == 2) v.f4 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
+    if (k == 0) return (long long) v.f1;
+    if (k == 2) return (long long) v.f4;
     return 0;
 }
 
@@ -3434,19 +3415,24 @@ static long long bf_query_075(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S075);
     if (op == 1) return (long long) _Alignof(struct S075);
-    if (op == 2) return 2;
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S075, f0);
         if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S075, f3);
+        if (k == 4) return (long long) offsetof(struct S075, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f3 = (int) value;
-    if (k == 1) v.f4 = (unsigned short) value;
+    if (k == 1) v.f1 = (unsigned short) value;
+    if (k == 2) v.f2 = (signed char) value;
+    if (k == 3) v.f3 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f3;
-    if (k == 1) return (long long) v.f4;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -3458,35 +3444,31 @@ static long long bf_query_076(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S076);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S076, f0);
+        if (k == 1) return (long long) offsetof(struct S076, f1);
         if (k == 2) return -1;
         if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
     if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f3 = (char) value;
+    if (k == 3) v.f5 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    if (k == 3) return (long long) v.f5;
     return 0;
 }
 
 static long long bf_query_077(int op, int k, long long value, unsigned char *out) {
-    union S077 v;
+    struct S077 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S077);
-    if (op == 1) return (long long) _Alignof(union S077);
+    if (op == 0) return (long long) sizeof(struct S077);
+    if (op == 1) return (long long) _Alignof(struct S077);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S077, f0);
         if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return -1;
@@ -3494,10 +3476,10 @@ static long long bf_query_077(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (long) value;
-    if (k == 3) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (int) value;
+    if (k == 3) v.f3 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -3507,57 +3489,45 @@ static long long bf_query_077(int op, int k, long long value, unsigned char *out
 }
 
 static long long bf_query_078(int op, int k, long long value, unsigned char *out) {
-    union S078 v;
+    struct S078 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S078);
-    if (op == 1) return (long long) _Alignof(union S078);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(struct S078);
+    if (op == 1) return (long long) _Alignof(struct S078);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S078, f2);
+        if (k == 0) return (long long) offsetof(struct S078, f0);
+        if (k == 1) return (long long) offsetof(struct S078, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 1) v.f2 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_079(int op, int k, long long value, unsigned char *out) {
-    struct S079 v;
+    union S079 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S079);
-    if (op == 1) return (long long) _Alignof(struct S079);
-    if (op == 2) return 6;
+    if (op == 0) return (long long) sizeof(union S079);
+    if (op == 1) return (long long) _Alignof(union S079);
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S079, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S079, f3);
-        if (k == 4) return -1;
-        if (k == 5) return -1;
+        if (k == 2) return (long long) offsetof(union S079, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (int) value;
-    if (k == 4) v.f4 = (unsigned int) value;
-    if (k == 5) v.f5 = (long long) value;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -3567,39 +3537,53 @@ static long long bf_query_080(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S080);
     if (op == 1) return (long long) _Alignof(struct S080);
-    if (op == 2) return 2;
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 1) return (long long) offsetof(struct S080, f1);
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S080, f3);
+        if (k == 4) return (long long) offsetof(struct S080, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (long) value;
-    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (unsigned char) value;
+    if (k == 3) v.f3 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_081(int op, int k, long long value, unsigned char *out) {
-    union S081 v;
+    struct S081 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S081);
-    if (op == 1) return (long long) _Alignof(union S081);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(struct S081);
+    if (op == 1) return (long long) _Alignof(struct S081);
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S081, f1);
-        if (k == 1) return (long long) offsetof(union S081, f2);
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S081, f1);
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S081, f3);
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f2 = (int) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f4 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f2;
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -3609,74 +3593,60 @@ static long long bf_query_082(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S082);
     if (op == 1) return (long long) _Alignof(struct S082);
-    if (op == 2) return 2;
+    if (op == 2) return 1;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S082, f0);
-        if (k == 1) return (long long) offsetof(struct S082, f3);
+        if (k == 0) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f3 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_083(int op, int k, long long value, unsigned char *out) {
-    struct S083 v;
+    union S083 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S083);
-    if (op == 1) return (long long) _Alignof(struct S083);
-    if (op == 2) return 4;
+    if (op == 0) return (long long) sizeof(union S083);
+    if (op == 1) return (long long) _Alignof(union S083);
+    if (op == 2) return 1;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S083, f2);
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_084(int op, int k, long long value, unsigned char *out) {
-    union S084 v;
+    struct S084 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S084);
-    if (op == 1) return (long long) _Alignof(union S084);
+    if (op == 0) return (long long) sizeof(struct S084);
+    if (op == 1) return (long long) _Alignof(struct S084);
     if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S084, f1);
+        if (k == 0) return (long long) offsetof(struct S084, f0);
+        if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(union S084, f4);
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (short) value;
-    if (k == 4) v.f4 = (short) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 3) v.f3 = (enum BfUnsigned) value;
+    if (k == 4) v.f4 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
@@ -3690,31 +3660,17 @@ static long long bf_query_085(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S085);
     if (op == 1) return (long long) _Alignof(struct S085);
-    if (op == 2) return 6;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S085, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S085, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (unsigned short) value;
-    if (k == 3) v.f3 = (short) value;
-    if (k == 4) v.f4 = (signed char) value;
-    if (k == 5) v.f5 = (unsigned long long) value;
+    if (k == 0) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
+    if (k == 0) return (long long) v.f1;
     return 0;
 }
 
@@ -3724,65 +3680,73 @@ static long long bf_query_086(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S086);
     if (op == 1) return (long long) _Alignof(union S086);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S086, f2);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_087(int op, int k, long long value, unsigned char *out) {
-    union S087 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S087);
-    if (op == 1) return (long long) _Alignof(union S087);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S087, f0);
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_088(int op, int k, long long value, unsigned char *out) {
-    union S088 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S088);
-    if (op == 1) return (long long) _Alignof(union S088);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (long) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (short) value;
+    if (k == 2) v.f2 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    return 0;
+}
+
+static long long bf_query_087(int op, int k, long long value, unsigned char *out) {
+    struct S087 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S087);
+    if (op == 1) return (long long) _Alignof(struct S087);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(struct S087, f3);
+        if (k == 4) return (long long) offsetof(struct S087, f4);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (enum BfSigned) value;
+    if (k == 1) v.f1 = (unsigned short) value;
+    if (k == 2) v.f2 = (unsigned char) value;
+    if (k == 4) v.f4 = (long long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 4) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_088(int op, int k, long long value, unsigned char *out) {
+    struct S088 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S088);
+    if (op == 1) return (long long) _Alignof(struct S088);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (unsigned long) value;
+    if (k == 1) v.f4 = (enum BfUnsigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f4;
     return 0;
 }
 
@@ -3817,56 +3781,31 @@ static long long bf_query_090(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S090);
     if (op == 1) return (long long) _Alignof(struct S090);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 1) return (long long) offsetof(struct S090, f3);
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S090, f3);
-        if (k == 4) return (long long) offsetof(struct S090, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (unsigned int) value;
-    if (k == 3) v.f3 = (long long) value;
-    if (k == 4) v.f4 = (long long) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f3 = (long long) value;
+    if (k == 2) v.f4 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
+    if (k == 1) return (long long) v.f3;
+    if (k == 2) return (long long) v.f4;
     return 0;
 }
 
 static long long bf_query_091(int op, int k, long long value, unsigned char *out) {
-    struct S091 v;
+    union S091 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S091);
-    if (op == 1) return (long long) _Alignof(struct S091);
-    if (op == 2) return 1;
-    if (op == 3) {
-        if (k == 0) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    return 0;
-}
-
-static long long bf_query_092(int op, int k, long long value, unsigned char *out) {
-    union S092 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S092);
-    if (op == 1) return (long long) _Alignof(union S092);
+    if (op == 0) return (long long) sizeof(union S091);
+    if (op == 1) return (long long) _Alignof(union S091);
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
@@ -3876,9 +3815,9 @@ static long long bf_query_092(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (short) value;
-    if (k == 1) v.f2 = (unsigned char) value;
-    if (k == 2) v.f3 = (short) value;
+    if (k == 0) v.f1 = (unsigned char) value;
+    if (k == 1) v.f2 = (long) value;
+    if (k == 2) v.f3 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f1;
     if (k == 1) return (long long) v.f2;
@@ -3886,58 +3825,74 @@ static long long bf_query_092(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_093(int op, int k, long long value, unsigned char *out) {
-    struct S093 v;
+static long long bf_query_092(int op, int k, long long value, unsigned char *out) {
+    struct S092 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S093);
-    if (op == 1) return (long long) _Alignof(struct S093);
-    if (op == 2) return 4;
+    if (op == 0) return (long long) sizeof(struct S092);
+    if (op == 1) return (long long) _Alignof(struct S092);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S093, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
+        if (k == 0) return (long long) offsetof(struct S092, f0);
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
-    if (k == 3) v.f4 = (unsigned long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 1) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_093(int op, int k, long long value, unsigned char *out) {
+    union S093 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S093);
+    if (op == 1) return (long long) _Alignof(union S093);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S093, f0);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(union S093, f5);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f3 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_094(int op, int k, long long value, unsigned char *out) {
-    union S094 v;
+    struct S094 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S094);
-    if (op == 1) return (long long) _Alignof(union S094);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(struct S094);
+    if (op == 1) return (long long) _Alignof(struct S094);
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S094, f3);
-        if (k == 4) return (long long) offsetof(union S094, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (unsigned char) value;
+    if (k == 0) v.f0 = (unsigned char) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f5 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 2) return (long long) v.f5;
     return 0;
 }
 
@@ -3947,21 +3902,19 @@ static long long bf_query_095(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S095);
     if (op == 1) return (long long) _Alignof(struct S095);
-    if (op == 2) return 4;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S095, f0);
-        if (k == 1) return (long long) offsetof(struct S095, f1);
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S095, f4);
+        if (k == 0) return -1;
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f4 = (long long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -3971,26 +3924,22 @@ static long long bf_query_096(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S096);
     if (op == 1) return (long long) _Alignof(struct S096);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S096, f4);
-        if (k == 4) return (long long) offsetof(struct S096, f5);
+        if (k == 1) return (long long) offsetof(struct S096, f1);
+        if (k == 2) return (long long) offsetof(struct S096, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
-    if (k == 3) v.f4 = (long long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f3 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -4015,55 +3964,49 @@ static long long bf_query_097(int op, int k, long long value, unsigned char *out
 }
 
 static long long bf_query_098(int op, int k, long long value, unsigned char *out) {
-    struct S098 v;
+    union S098 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S098);
-    if (op == 1) return (long long) _Alignof(struct S098);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(union S098);
+    if (op == 1) return (long long) _Alignof(union S098);
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned int) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (_Bool) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_099(int op, int k, long long value, unsigned char *out) {
-    struct S099 v;
+    union S099 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S099);
-    if (op == 1) return (long long) _Alignof(struct S099);
-    if (op == 2) return 4;
+    if (op == 0) return (long long) sizeof(union S099);
+    if (op == 1) return (long long) _Alignof(union S099);
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S099, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S099, f3);
-        if (k == 3) return -1;
+        if (k == 2) return (long long) offsetof(union S099, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
     if (k == 1) v.f1 = (unsigned long) value;
     if (k == 2) v.f3 = (long long) value;
-    if (k == 3) v.f4 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
     return 0;
 }
 
@@ -4073,25 +4016,22 @@ static long long bf_query_100(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S100);
     if (op == 1) return (long long) _Alignof(struct S100);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S100, f0);
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S100, f2);
-        if (k == 3) return -1;
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (unsigned char) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -4103,18 +4043,20 @@ static long long bf_query_101(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S101);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S101, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S101, f3);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (unsigned short) value;
-    if (k == 3) v.f3 = (int) value;
+    if (k == 0) v.f0 = (long) value;
+    if (k == 1) v.f1 = (unsigned short) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 3) v.f3 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
@@ -4131,18 +4073,24 @@ static long long bf_query_102(int op, int k, long long value, unsigned char *out
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return (long long) offsetof(struct S102, f1);
-        if (k == 2) return (long long) offsetof(struct S102, f2);
-        if (k == 3) return (long long) offsetof(struct S102, f3);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
         if (k == 4) return (long long) offsetof(struct S102, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 2) v.f2 = (char) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (unsigned short) value;
+    if (k == 3) v.f3 = (signed char) value;
+    if (k == 4) v.f4 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -4152,6 +4100,28 @@ static long long bf_query_103(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S103);
     if (op == 1) return (long long) _Alignof(union S103);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S103, f1);
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (char) value;
+    if (k == 1) v.f2 = (int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_104(int op, int k, long long value, unsigned char *out) {
+    struct S104 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S104);
+    if (op == 1) return (long long) _Alignof(struct S104);
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
@@ -4161,39 +4131,13 @@ static long long bf_query_103(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (unsigned char) value;
+    if (k == 0) v.f1 = (int) value;
+    if (k == 1) v.f2 = (signed char) value;
+    if (k == 2) v.f3 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_104(int op, int k, long long value, unsigned char *out) {
-    union S104 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S104);
-    if (op == 1) return (long long) _Alignof(union S104);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S104, f2);
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 3) v.f3 = (short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 3) return (long long) v.f3;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -4203,23 +4147,27 @@ static long long bf_query_105(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S105);
     if (op == 1) return (long long) _Alignof(struct S105);
-    if (op == 2) return 4;
+    if (op == 2) return 6;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S105, f2);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S105, f2);
+        if (k == 3) return (long long) offsetof(struct S105, f3);
+        if (k == 4) return -1;
+        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 2) v.f3 = (int) value;
-    if (k == 3) v.f4 = (short) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
+    if (k == 4) v.f4 = (int) value;
+    if (k == 5) v.f5 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
+    if (k == 1) return (long long) v.f1;
+    if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -4229,23 +4177,19 @@ static long long bf_query_106(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S106);
     if (op == 1) return (long long) _Alignof(struct S106);
-    if (op == 2) return 4;
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S106, f2);
-        if (k == 3) return -1;
+        if (k == 1) return (long long) offsetof(struct S106, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 3) v.f3 = (unsigned long long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -4259,46 +4203,52 @@ static long long bf_query_107(int op, int k, long long value, unsigned char *out
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S107, f2);
-        if (k == 3) return (long long) offsetof(struct S107, f3);
+        if (k == 2) return (long long) offsetof(struct S107, f3);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned long long) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (short) value;
+    if (k == 0) v.f1 = (enum BfUnsigned) value;
+    if (k == 1) v.f2 = (unsigned short) value;
+    if (k == 2) v.f3 = (int) value;
+    if (k == 3) v.f4 = (unsigned long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_108(int op, int k, long long value, unsigned char *out) {
+    union S108 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S108);
+    if (op == 1) return (long long) _Alignof(union S108);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S108, f1);
+        if (k == 2) return -1;
+        if (k == 3) return (long long) offsetof(union S108, f3);
+        if (k == 4) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (enum BfSigned) value;
+    if (k == 3) v.f3 = (char) value;
+    if (k == 4) v.f5 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_108(int op, int k, long long value, unsigned char *out) {
-    struct S108 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S108);
-    if (op == 1) return (long long) _Alignof(struct S108);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S108, f2);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -4311,7 +4261,7 @@ static long long bf_query_109(int op, int k, long long value, unsigned char *out
     if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S109, f2);
+        if (k == 1) return (long long) offsetof(struct S109, f1);
         if (k == 2) return -1;
         if (k == 3) return -1;
         if (k == 4) return -1;
@@ -4319,56 +4269,68 @@ static long long bf_query_109(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 2) v.f3 = (enum BfUnsigned) value;
-    if (k == 3) v.f4 = (unsigned int) value;
-    if (k == 4) v.f5 = (unsigned int) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 2) v.f2 = (enum BfUnsigned) value;
+    if (k == 3) v.f3 = (unsigned int) value;
+    if (k == 4) v.f4 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
 static long long bf_query_110(int op, int k, long long value, unsigned char *out) {
-    struct S110 v;
+    union S110 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S110);
-    if (op == 1) return (long long) _Alignof(struct S110);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(union S110);
+    if (op == 1) return (long long) _Alignof(union S110);
+    if (op == 2) return 6;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return (long long) offsetof(union S110, f4);
+        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f2 = (unsigned char) value;
-    if (k == 1) v.f3 = (unsigned int) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (unsigned char) value;
+    if (k == 3) v.f3 = (unsigned int) value;
+    if (k == 4) v.f4 = (long long) value;
+    if (k == 5) v.f5 = (unsigned short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f2;
-    if (k == 1) return (long long) v.f3;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
 static long long bf_query_111(int op, int k, long long value, unsigned char *out) {
-    union S111 v;
+    struct S111 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S111);
-    if (op == 1) return (long long) _Alignof(union S111);
+    if (op == 0) return (long long) sizeof(struct S111);
+    if (op == 1) return (long long) _Alignof(struct S111);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S111, f0);
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -4381,26 +4343,22 @@ static long long bf_query_112(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S112);
     if (op == 1) return (long long) _Alignof(struct S112);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S112, f3);
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (unsigned short) value;
-    if (k == 4) v.f4 = (int) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (unsigned int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -4410,42 +4368,39 @@ static long long bf_query_113(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S113);
     if (op == 1) return (long long) _Alignof(struct S113);
-    if (op == 2) return 2;
+    if (op == 2) return 1;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S113, f1);
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S113, f0);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f3 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_114(int op, int k, long long value, unsigned char *out) {
-    struct S114 v;
+    union S114 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S114);
-    if (op == 1) return (long long) _Alignof(struct S114);
+    if (op == 0) return (long long) sizeof(union S114);
+    if (op == 1) return (long long) _Alignof(union S114);
     if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S114, f2);
-        if (k == 2) return -1;
+        if (k == 0) return (long long) offsetof(union S114, f0);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(union S114, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (signed char) value;
-    if (k == 1) v.f2 = (short) value;
-    if (k == 2) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -4455,45 +4410,40 @@ static long long bf_query_115(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S115);
     if (op == 1) return (long long) _Alignof(union S115);
-    if (op == 2) return 1;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S115, f0);
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S115, f2);
+        if (k == 2) return (long long) offsetof(union S115, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     return 0;
 }
 
 static long long bf_query_116(int op, int k, long long value, unsigned char *out) {
-    union S116 v;
+    struct S116 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S116);
-    if (op == 1) return (long long) _Alignof(union S116);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(struct S116);
+    if (op == 1) return (long long) _Alignof(struct S116);
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S116, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(union S116, f5);
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (_Bool) value;
-    if (k == 4) v.f5 = (char) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
+    if (k == 1) v.f1 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -4503,27 +4453,17 @@ static long long bf_query_117(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S117);
     if (op == 1) return (long long) _Alignof(struct S117);
-    if (op == 2) return 6;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S117, f2);
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S117, f4);
-        if (k == 5) return (long long) offsetof(struct S117, f5);
+        if (k == 0) return (long long) offsetof(struct S117, f0);
+        if (k == 1) return (long long) offsetof(struct S117, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 3) v.f3 = (enum BfSigned) value;
-    if (k == 5) v.f5 = (int) value;
+    if (k == 1) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 3) return (long long) v.f3;
-    if (k == 5) return (long long) v.f5;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
@@ -4540,28 +4480,28 @@ static long long bf_query_118(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long) value;
+    if (k == 0) v.f0 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     return 0;
 }
 
 static long long bf_query_119(int op, int k, long long value, unsigned char *out) {
-    struct S119 v;
+    union S119 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S119);
-    if (op == 1) return (long long) _Alignof(struct S119);
+    if (op == 0) return (long long) sizeof(union S119);
+    if (op == 1) return (long long) _Alignof(union S119);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(union S119, f0);
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (unsigned short) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -4574,24 +4514,75 @@ static long long bf_query_120(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S120);
     if (op == 1) return (long long) _Alignof(struct S120);
-    if (op == 2) return 6;
+    if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S120, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S120, f2);
+        if (k == 2) return -1;
         if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (long long) value;
-    if (k == 4) v.f4 = (unsigned long long) value;
-    if (k == 5) v.f5 = (long long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (char) value;
+    if (k == 2) v.f2 = (long) value;
+    if (k == 3) v.f3 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    return 0;
+}
+
+static long long bf_query_121(int op, int k, long long value, unsigned char *out) {
+    struct S121 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S121);
+    if (op == 1) return (long long) _Alignof(struct S121);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S121, f1);
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 2) v.f2 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_122(int op, int k, long long value, unsigned char *out) {
+    struct S122 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S122);
+    if (op == 1) return (long long) _Alignof(struct S122);
+    if (op == 2) return 6;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S122, f1);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
+        if (k == 5) return (long long) offsetof(struct S122, f5);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f4 = (unsigned long) value;
+    if (k == 5) v.f5 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -4602,73 +4593,23 @@ static long long bf_query_120(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_121(int op, int k, long long value, unsigned char *out) {
-    struct S121 v;
+static long long bf_query_123(int op, int k, long long value, unsigned char *out) {
+    struct S123 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S121);
-    if (op == 1) return (long long) _Alignof(struct S121);
+    if (op == 0) return (long long) sizeof(struct S123);
+    if (op == 1) return (long long) _Alignof(struct S123);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S123, f0);
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
     if (k == 1) v.f1 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_122(int op, int k, long long value, unsigned char *out) {
-    struct S122 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S122);
-    if (op == 1) return (long long) _Alignof(struct S122);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S122, f0);
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_123(int op, int k, long long value, unsigned char *out) {
-    union S123 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S123);
-    if (op == 1) return (long long) _Alignof(union S123);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S123, f2);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f3 = (long long) value;
-    if (k == 2) v.f4 = (int) value;
-    if (k == 3) v.f5 = (enum BfSigned) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f3;
-    if (k == 2) return (long long) v.f4;
-    if (k == 3) return (long long) v.f5;
     return 0;
 }
 
@@ -4680,14 +4621,14 @@ static long long bf_query_124(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S124);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S124, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -4700,55 +4641,52 @@ static long long bf_query_125(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S125);
     if (op == 1) return (long long) _Alignof(struct S125);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (unsigned int) value;
-    if (k == 1) v.f2 = (int) value;
-    if (k == 2) v.f3 = (short) value;
-    if (k == 3) v.f4 = (long long) value;
-    if (k == 4) v.f5 = (enum BfSigned) value;
+    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 2) v.f2 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_126(int op, int k, long long value, unsigned char *out) {
-    union S126 v;
+    struct S126 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S126);
-    if (op == 1) return (long long) _Alignof(union S126);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(struct S126);
+    if (op == 1) return (long long) _Alignof(struct S126);
+    if (op == 2) return 6;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S126, f0);
-        if (k == 1) return (long long) offsetof(union S126, f1);
-        if (k == 2) return (long long) offsetof(union S126, f2);
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
         if (k == 3) return -1;
-        if (k == 4) return -1;
+        if (k == 4) return (long long) offsetof(struct S126, f4);
+        if (k == 5) return (long long) offsetof(struct S126, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (char) value;
-    if (k == 4) v.f4 = (unsigned char) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (short) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -4758,31 +4696,9 @@ static long long bf_query_127(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S127);
     if (op == 1) return (long long) _Alignof(struct S127);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (_Bool) value;
-    if (k == 1) v.f2 = (unsigned short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_128(int op, int k, long long value, unsigned char *out) {
-    struct S128 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S128);
-    if (op == 1) return (long long) _Alignof(struct S128);
     if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S128, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return -1;
@@ -4791,11 +4707,13 @@ static long long bf_query_128(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (unsigned long) value;
-    if (k == 4) v.f4 = (_Bool) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (enum BfUnsigned) value;
+    if (k == 3) v.f3 = (signed char) value;
+    if (k == 4) v.f4 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
@@ -4803,71 +4721,103 @@ static long long bf_query_128(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_129(int op, int k, long long value, unsigned char *out) {
-    struct S129 v;
+static long long bf_query_128(int op, int k, long long value, unsigned char *out) {
+    union S128 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S129);
-    if (op == 1) return (long long) _Alignof(struct S129);
-    if (op == 2) return 1;
+    if (op == 0) return (long long) sizeof(union S128);
+    if (op == 1) return (long long) _Alignof(union S128);
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
+    if (k == 0) v.f1 = (unsigned int) value;
+    if (k == 1) v.f2 = (signed char) value;
+    if (k == 2) v.f3 = (signed char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    return 0;
+}
+
+static long long bf_query_129(int op, int k, long long value, unsigned char *out) {
+    union S129 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S129);
+    if (op == 1) return (long long) _Alignof(union S129);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (_Bool) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
 static long long bf_query_130(int op, int k, long long value, unsigned char *out) {
-    union S130 v;
+    struct S130 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S130);
-    if (op == 1) return (long long) _Alignof(union S130);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(struct S130);
+    if (op == 1) return (long long) _Alignof(struct S130);
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S130, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S130, f2);
+        if (k == 3) return (long long) offsetof(struct S130, f3);
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (unsigned long) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (signed char) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (int) value;
+    if (k == 4) v.f4 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
 static long long bf_query_131(int op, int k, long long value, unsigned char *out) {
-    struct S131 v;
+    union S131 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S131);
-    if (op == 1) return (long long) _Alignof(struct S131);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(union S131);
+    if (op == 1) return (long long) _Alignof(union S131);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S131, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S131, f2);
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S131, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (enum BfUnsigned) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f4 = (enum BfUnsigned) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
     return 0;
 }
 
@@ -4905,47 +4855,46 @@ static long long bf_query_133(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S133);
     if (op == 1) return (long long) _Alignof(struct S133);
-    if (op == 2) return 4;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S133, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S133, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (long) value;
-    if (k == 3) v.f3 = (unsigned long) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f4 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    if (k == 1) return (long long) v.f4;
     return 0;
 }
 
 static long long bf_query_134(int op, int k, long long value, unsigned char *out) {
-    struct S134 v;
+    union S134 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S134);
-    if (op == 1) return (long long) _Alignof(struct S134);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(union S134);
+    if (op == 1) return (long long) _Alignof(union S134);
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S134, f2);
+        if (k == 1) return (long long) offsetof(union S134, f1);
+        if (k == 2) return (long long) offsetof(union S134, f2);
+        if (k == 3) return -1;
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned int) value;
-    if (k == 1) v.f2 = (short) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 3) v.f3 = (int) value;
+    if (k == 4) v.f5 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
+    if (k == 0) return (long long) v.f0;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -4955,26 +4904,20 @@ static long long bf_query_135(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S135);
     if (op == 1) return (long long) _Alignof(struct S135);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S135, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
+        if (k == 0) return (long long) offsetof(struct S135, f0);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S135, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f4 = (short) value;
-    if (k == 4) v.f5 = (unsigned long) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -4984,26 +4927,31 @@ static long long bf_query_136(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S136);
     if (op == 1) return (long long) _Alignof(struct S136);
-    if (op == 2) return 5;
+    if (op == 2) return 6;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S136, f1);
+        if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return -1;
         if (k == 4) return -1;
+        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 2) v.f2 = (enum BfSigned) value;
-    if (k == 3) v.f3 = (long) value;
-    if (k == 4) v.f4 = (unsigned char) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (signed char) value;
+    if (k == 2) v.f2 = (unsigned short) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f4 = (enum BfSigned) value;
+    if (k == 5) v.f5 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
     if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
     return 0;
 }
 
@@ -5013,22 +4961,23 @@ static long long bf_query_137(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S137);
     if (op == 1) return (long long) _Alignof(struct S137);
-    if (op == 2) return 3;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 2) return (long long) offsetof(struct S137, f2);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (enum BfSigned) value;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (long) value;
+    if (k == 3) v.f3 = (long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -5041,45 +4990,51 @@ static long long bf_query_138(int op, int k, long long value, unsigned char *out
     if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 1) return (long long) offsetof(struct S138, f1);
+        if (k == 2) return (long long) offsetof(struct S138, f2);
         if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned int) value;
-    if (k == 1) v.f3 = (unsigned char) value;
-    if (k == 2) v.f4 = (long) value;
-    if (k == 3) v.f5 = (unsigned short) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f3;
-    if (k == 2) return (long long) v.f4;
-    if (k == 3) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_139(int op, int k, long long value, unsigned char *out) {
-    struct S139 v;
+    union S139 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S139);
-    if (op == 1) return (long long) _Alignof(struct S139);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(union S139);
+    if (op == 1) return (long long) _Alignof(union S139);
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S139, f1);
+        if (k == 1) return -1;
         if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 2) v.f2 = (long long) value;
+    if (k == 3) v.f3 = (unsigned long) value;
+    if (k == 4) v.f4 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5089,16 +5044,19 @@ static long long bf_query_140(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S140);
     if (op == 1) return (long long) _Alignof(struct S140);
-    if (op == 2) return 2;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S140, f0);
-        if (k == 1) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S140, f1);
+        if (k == 2) return (long long) offsetof(struct S140, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned long) value;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f1 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     return 0;
 }
@@ -5109,19 +5067,23 @@ static long long bf_query_141(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S141);
     if (op == 1) return (long long) _Alignof(struct S141);
-    if (op == 2) return 2;
+    if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S141, f1);
+        if (k == 0) return (long long) offsetof(struct S141, f0);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S141, f2);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (long long) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 3) v.f3 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
+    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
@@ -5134,36 +5096,34 @@ static long long bf_query_142(int op, int k, long long value, unsigned char *out
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S142, f1);
-        if (k == 2) return -1;
+        if (k == 1) return (long long) offsetof(struct S142, f3);
+        if (k == 2) return (long long) offsetof(struct S142, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 2) v.f2 = (int) value;
+    if (k == 0) v.f1 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
     return 0;
 }
 
 static long long bf_query_143(int op, int k, long long value, unsigned char *out) {
-    struct S143 v;
+    union S143 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S143);
-    if (op == 1) return (long long) _Alignof(struct S143);
+    if (op == 0) return (long long) sizeof(union S143);
+    if (op == 1) return (long long) _Alignof(union S143);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S143, f0);
-        if (k == 1) return (long long) offsetof(struct S143, f1);
+        if (k == 0) return -1;
+        if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (short) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -5171,28 +5131,21 @@ static long long bf_query_143(int op, int k, long long value, unsigned char *out
 }
 
 static long long bf_query_144(int op, int k, long long value, unsigned char *out) {
-    union S144 v;
+    struct S144 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S144);
-    if (op == 1) return (long long) _Alignof(union S144);
-    if (op == 2) return 4;
+    if (op == 0) return (long long) sizeof(struct S144);
+    if (op == 1) return (long long) _Alignof(struct S144);
+    if (op == 2) return 1;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S144, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(union S144, f3);
+        if (k == 0) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (_Bool) value;
+    if (k == 0) v.f9 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f9;
     return 0;
 }
 
@@ -5202,14 +5155,25 @@ static long long bf_query_145(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S145);
     if (op == 1) return (long long) _Alignof(struct S145);
-    if (op == 2) return 1;
+    if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S145, f1);
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (long) value;
+    if (k == 1) v.f2 = (_Bool) value;
+    if (k == 2) v.f3 = (unsigned int) value;
+    if (k == 3) v.f4 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
     return 0;
 }
 
@@ -5222,17 +5186,17 @@ static long long bf_query_146(int op, int k, long long value, unsigned char *out
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S146, f3);
+        if (k == 1) return (long long) offsetof(struct S146, f1);
         if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned int) value;
-    if (k == 2) v.f4 = (unsigned long long) value;
+    if (k == 0) v.f0 = (long) value;
+    if (k == 2) v.f3 = (unsigned short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 2) return (long long) v.f4;
+    if (k == 0) return (long long) v.f0;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -5242,71 +5206,64 @@ static long long bf_query_147(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S147);
     if (op == 1) return (long long) _Alignof(struct S147);
-    if (op == 2) return 3;
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S147, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S147, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f2 = (unsigned int) value;
-    if (k == 2) v.f5 = (char) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
 static long long bf_query_148(int op, int k, long long value, unsigned char *out) {
-    struct S148 v;
+    union S148 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S148);
-    if (op == 1) return (long long) _Alignof(struct S148);
-    if (op == 2) return 2;
+    if (op == 0) return (long long) sizeof(union S148);
+    if (op == 1) return (long long) _Alignof(union S148);
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S148, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 0) v.f0 = (long) value;
+    if (k == 1) v.f1 = (long) value;
+    if (k == 2) v.f3 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_149(int op, int k, long long value, unsigned char *out) {
-    union S149 v;
+    struct S149 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S149);
-    if (op == 1) return (long long) _Alignof(union S149);
-    if (op == 2) return 5;
+    if (op == 0) return (long long) sizeof(struct S149);
+    if (op == 1) return (long long) _Alignof(struct S149);
+    if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S149, f0);
+        if (k == 0) return (long long) offsetof(struct S149, f0);
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (long) value;
-    if (k == 3) v.f3 = (unsigned long long) value;
-    if (k == 4) v.f4 = (unsigned long long) value;
+    if (k == 1) v.f1 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5319,19 +5276,17 @@ static long long bf_query_150(int op, int k, long long value, unsigned char *out
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S150, f1);
-        if (k == 2) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S150, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (char) value;
+    if (k == 0) v.f1 = (enum BfUnsigned) value;
+    if (k == 1) v.f2 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
@@ -5341,20 +5296,16 @@ static long long bf_query_151(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S151);
     if (op == 1) return (long long) _Alignof(struct S151);
-    if (op == 2) return 3;
+    if (op == 2) return 1;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S151, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
+        if (k == 0) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (long) value;
+    if (k == 0) v.f1 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
     return 0;
 }
 
@@ -5364,25 +5315,22 @@ static long long bf_query_152(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S152);
     if (op == 1) return (long long) _Alignof(struct S152);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S152, f1);
+        if (k == 0) return (long long) offsetof(struct S152, f0);
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (char) value;
-    if (k == 1) v.f2 = (unsigned long) value;
-    if (k == 2) v.f3 = (int) value;
-    if (k == 3) v.f5 = (enum BfUnsigned) value;
+    if (k == 0) v.f0 = (long long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    if (k == 2) v.f2 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -5392,28 +5340,16 @@ static long long bf_query_153(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S153);
     if (op == 1) return (long long) _Alignof(struct S153);
-    if (op == 2) return 5;
+    if (op == 2) return 1;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S153, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (unsigned long) value;
-    if (k == 3) v.f3 = (enum BfSigned) value;
-    if (k == 4) v.f4 = (_Bool) value;
+    if (k == 0) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
+    if (k == 0) return (long long) v.f1;
     return 0;
 }
 
@@ -5425,15 +5361,13 @@ static long long bf_query_154(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S154);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S154, f0);
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S154, f1);
+        if (k == 1) return (long long) offsetof(struct S154, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -5443,27 +5377,16 @@ static long long bf_query_155(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S155);
     if (op == 1) return (long long) _Alignof(struct S155);
-    if (op == 2) return 6;
+    if (op == 2) return 1;
     if (op == 3) {
         if (k == 0) return (long long) offsetof(struct S155, f0);
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S155, f3);
-        if (k == 4) return (long long) offsetof(struct S155, f4);
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 4) v.f4 = (char) value;
-    if (k == 5) v.f5 = (enum BfUnsigned) value;
+    if (k == 0) v.f0 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
     return 0;
 }
 
@@ -5473,21 +5396,27 @@ static long long bf_query_156(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S156);
     if (op == 1) return (long long) _Alignof(struct S156);
-    if (op == 2) return 4;
+    if (op == 2) return 6;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S156, f1);
+        if (k == 0) return (long long) offsetof(struct S156, f0);
+        if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return (long long) offsetof(struct S156, f3);
+        if (k == 4) return -1;
+        if (k == 5) return (long long) offsetof(struct S156, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned int) value;
-    if (k == 2) v.f2 = (long long) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (char) value;
+    if (k == 4) v.f4 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5502,15 +5431,15 @@ static long long bf_query_157(int op, int k, long long value, unsigned char *out
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S157, f3);
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f3 = (int) value;
+    if (k == 0) v.f0 = (unsigned char) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -5525,28 +5454,19 @@ static long long bf_query_158(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S158);
     if (op == 1) return (long long) _Alignof(struct S158);
-    if (op == 2) return 5;
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (unsigned long long) value;
-    if (k == 4) v.f4 = (int) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5556,6 +5476,25 @@ static long long bf_query_159(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(union S159);
     if (op == 1) return (long long) _Alignof(union S159);
+    if (op == 2) return 1;
+    if (op == 3) {
+        if (k == 0) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (_Bool) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    return 0;
+}
+
+static long long bf_query_160(int op, int k, long long value, unsigned char *out) {
+    struct S160 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S160);
+    if (op == 1) return (long long) _Alignof(struct S160);
     if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
@@ -5566,44 +5505,15 @@ static long long bf_query_159(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    if (k == 3) v.f3 = (unsigned char) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_160(int op, int k, long long value, unsigned char *out) {
-    struct S160 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S160);
-    if (op == 1) return (long long) _Alignof(struct S160);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S160, f2);
-        if (k == 3) return (long long) offsetof(struct S160, f3);
-        if (k == 4) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 4) v.f4 = (short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5613,31 +5523,19 @@ static long long bf_query_161(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S161);
     if (op == 1) return (long long) _Alignof(struct S161);
-    if (op == 2) return 6;
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (signed char) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (short) value;
-    if (k == 4) v.f4 = (short) value;
-    if (k == 5) v.f5 = (signed char) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f3 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
+    if (k == 1) return (long long) v.f3;
     return 0;
 }
 
@@ -5647,14 +5545,22 @@ static long long bf_query_162(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S162);
     if (op == 1) return (long long) _Alignof(struct S162);
-    if (op == 2) return 1;
+    if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S162, f0);
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S162, f1);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (char) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -5664,22 +5570,25 @@ static long long bf_query_163(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S163);
     if (op == 1) return (long long) _Alignof(struct S163);
-    if (op == 2) return 3;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S163, f1);
+        if (k == 1) return -1;
         if (k == 2) return -1;
+        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (long long) value;
-    if (k == 2) v.f2 = (enum BfSigned) value;
+    if (k == 0) v.f1 = (enum BfUnsigned) value;
+    if (k == 1) v.f3 = (unsigned long long) value;
+    if (k == 2) v.f4 = (short) value;
+    if (k == 3) v.f5 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f3;
+    if (k == 2) return (long long) v.f4;
+    if (k == 3) return (long long) v.f5;
     return 0;
 }
 
@@ -5689,26 +5598,23 @@ static long long bf_query_164(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S164);
     if (op == 1) return (long long) _Alignof(struct S164);
-    if (op == 2) return 5;
+    if (op == 2) return 4;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S164, f2);
+        if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
+        if (k == 3) return (long long) offsetof(struct S164, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long) value;
-    if (k == 2) v.f3 = (int) value;
-    if (k == 3) v.f4 = (unsigned char) value;
-    if (k == 4) v.f5 = (unsigned long long) value;
+    if (k == 0) v.f1 = (unsigned int) value;
+    if (k == 1) v.f2 = (long) value;
+    if (k == 2) v.f3 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -5718,126 +5624,76 @@ static long long bf_query_165(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S165);
     if (op == 1) return (long long) _Alignof(struct S165);
-    if (op == 2) return 6;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S165, f3);
-        if (k == 4) return -1;
-        if (k == 5) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (unsigned long long) value;
+    if (k == 1) v.f2 = (unsigned short) value;
+    if (k == 2) v.f5 = (unsigned short) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_166(int op, int k, long long value, unsigned char *out) {
+    union S166 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S166);
+    if (op == 1) return (long long) _Alignof(union S166);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S166, f1);
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f2 = (enum BfSigned) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 1) return (long long) v.f2;
+    return 0;
+}
+
+static long long bf_query_167(int op, int k, long long value, unsigned char *out) {
+    union S167 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S167);
+    if (op == 1) return (long long) _Alignof(union S167);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (unsigned short) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (long long) value;
-    if (k == 4) v.f4 = (unsigned int) value;
-    if (k == 5) v.f5 = (long) value;
+    if (k == 1) v.f2 = (unsigned long) value;
+    if (k == 2) v.f3 = (signed char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_166(int op, int k, long long value, unsigned char *out) {
-    struct S166 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S166);
-    if (op == 1) return (long long) _Alignof(struct S166);
-    if (op == 2) return 6;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S166, f4);
-        if (k == 5) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (unsigned long) value;
-    if (k == 3) v.f3 = (enum BfUnsigned) value;
-    if (k == 5) v.f5 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_167(int op, int k, long long value, unsigned char *out) {
-    struct S167 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S167);
-    if (op == 1) return (long long) _Alignof(struct S167);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(struct S167, f4);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned char) value;
-    if (k == 1) v.f1 = (unsigned char) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (long) value;
-    if (k == 4) v.f4 = (int) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_168(int op, int k, long long value, unsigned char *out) {
-    union S168 v;
+    struct S168 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S168);
-    if (op == 1) return (long long) _Alignof(union S168);
-    if (op == 2) return 3;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(union S168, f2);
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_169(int op, int k, long long value, unsigned char *out) {
-    union S169 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S169);
-    if (op == 1) return (long long) _Alignof(union S169);
+    if (op == 0) return (long long) sizeof(struct S168);
+    if (op == 1) return (long long) _Alignof(struct S168);
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
@@ -5847,11 +5703,34 @@ static long long bf_query_169(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned long) value;
-    if (k == 2) v.f2 = (signed char) value;
+    if (k == 0) v.f1 = (signed char) value;
+    if (k == 1) v.f2 = (int) value;
+    if (k == 2) v.f3 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    return 0;
+}
+
+static long long bf_query_169(int op, int k, long long value, unsigned char *out) {
+    struct S169 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S169);
+    if (op == 1) return (long long) _Alignof(struct S169);
+    if (op == 2) return 3;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S169, f0);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f1 = (short) value;
+    if (k == 2) v.f2 = (long) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     return 0;
@@ -5863,23 +5742,28 @@ static long long bf_query_170(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S170);
     if (op == 1) return (long long) _Alignof(struct S170);
-    if (op == 2) return 4;
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S170, f1);
-        if (k == 2) return (long long) offsetof(struct S170, f2);
-        if (k == 3) return (long long) offsetof(struct S170, f3);
+        if (k == 0) return (long long) offsetof(struct S170, f0);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return (long long) offsetof(struct S170, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 2) v.f2 = (char) value;
-    if (k == 3) v.f3 = (long long) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (signed char) value;
+    if (k == 3) v.f3 = (int) value;
+    if (k == 4) v.f4 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
     return 0;
 }
 
@@ -5889,62 +5773,6 @@ static long long bf_query_171(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S171);
     if (op == 1) return (long long) _Alignof(struct S171);
-    if (op == 2) return 6;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned short) value;
-    if (k == 1) v.f1 = (unsigned int) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (long) value;
-    if (k == 4) v.f4 = (unsigned long) value;
-    if (k == 5) v.f5 = (_Bool) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_172(int op, int k, long long value, unsigned char *out) {
-    struct S172 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S172);
-    if (op == 1) return (long long) _Alignof(struct S172);
-    if (op == 2) return 2;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f2 = (signed char) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f2;
-    return 0;
-}
-
-static long long bf_query_173(int op, int k, long long value, unsigned char *out) {
-    struct S173 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S173);
-    if (op == 1) return (long long) _Alignof(struct S173);
     if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
@@ -5964,22 +5792,88 @@ static long long bf_query_173(int op, int k, long long value, unsigned char *out
     return 0;
 }
 
-static long long bf_query_174(int op, int k, long long value, unsigned char *out) {
-    union S174 v;
+static long long bf_query_172(int op, int k, long long value, unsigned char *out) {
+    struct S172 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S174);
-    if (op == 1) return (long long) _Alignof(union S174);
-    if (op == 2) return 1;
+    if (op == 0) return (long long) sizeof(struct S172);
+    if (op == 1) return (long long) _Alignof(struct S172);
+    if (op == 2) return 6;
     if (op == 3) {
         if (k == 0) return -1;
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S172, f2);
+        if (k == 3) return -1;
+        if (k == 4) return (long long) offsetof(struct S172, f4);
+        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (unsigned char) value;
+    if (k == 0) v.f0 = (signed char) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
+    if (k == 2) v.f2 = (int) value;
+    if (k == 3) v.f3 = (unsigned long long) value;
+    if (k == 4) v.f4 = (short) value;
+    if (k == 5) v.f5 = (int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f3;
+    if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_173(int op, int k, long long value, unsigned char *out) {
+    struct S173 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S173);
+    if (op == 1) return (long long) _Alignof(struct S173);
+    if (op == 2) return 5;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S173, f1);
+        if (k == 1) return -1;
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f2 = (_Bool) value;
+    if (k == 2) v.f3 = (_Bool) value;
+    if (k == 3) v.f4 = (unsigned char) value;
+    if (k == 4) v.f5 = (unsigned short) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    if (k == 4) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_174(int op, int k, long long value, unsigned char *out) {
+    struct S174 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S174);
+    if (op == 1) return (long long) _Alignof(struct S174);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(struct S174, f2);
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (unsigned int) value;
+    if (k == 1) v.f2 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
@@ -5991,93 +5885,92 @@ static long long bf_query_175(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S175);
     if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S175, f1);
+        if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (short) value;
-    if (k == 1) v.f2 = (int) value;
-    if (k == 2) v.f3 = (unsigned short) value;
+    if (k == 0) v.f0 = (enum BfUnsigned) value;
+    if (k == 1) v.f4 = (int) value;
+    if (k == 2) v.f5 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f4;
+    if (k == 2) return (long long) v.f5;
     return 0;
 }
 
 static long long bf_query_176(int op, int k, long long value, unsigned char *out) {
-    struct S176 v;
+    union S176 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S176);
-    if (op == 1) return (long long) _Alignof(struct S176);
-    if (op == 2) return 6;
+    if (op == 0) return (long long) sizeof(union S176);
+    if (op == 1) return (long long) _Alignof(union S176);
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S176, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return -1;
+        if (k == 1) return (long long) offsetof(union S176, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
     if (k == 0) v.f0 = (char) value;
-    if (k == 2) v.f2 = (_Bool) value;
-    if (k == 3) v.f3 = (_Bool) value;
-    if (k == 4) v.f4 = (unsigned char) value;
-    if (k == 5) v.f5 = (unsigned short) value;
+    if (k == 1) v.f2 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_177(int op, int k, long long value, unsigned char *out) {
-    struct S177 v;
+    union S177 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S177);
-    if (op == 1) return (long long) _Alignof(struct S177);
-    if (op == 2) return 1;
-    if (op == 3) {
-        if (k == 0) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    return 0;
-}
-
-static long long bf_query_178(int op, int k, long long value, unsigned char *out) {
-    union S178 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S178);
-    if (op == 1) return (long long) _Alignof(union S178);
+    if (op == 0) return (long long) sizeof(union S177);
+    if (op == 1) return (long long) _Alignof(union S177);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S178, f0);
-        if (k == 1) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S177, f1);
         if (k == 2) return -1;
         if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (unsigned long) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    if (k == 3) v.f3 = (unsigned int) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (int) value;
+    if (k == 2) v.f2 = (unsigned short) value;
+    if (k == 3) v.f4 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_178(int op, int k, long long value, unsigned char *out) {
+    struct S178 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S178);
+    if (op == 1) return (long long) _Alignof(struct S178);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S178, f0);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(struct S178, f2);
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f1 = (long) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f3 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
@@ -6086,27 +5979,33 @@ static long long bf_query_178(int op, int k, long long value, unsigned char *out
 }
 
 static long long bf_query_179(int op, int k, long long value, unsigned char *out) {
-    struct S179 v;
+    union S179 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S179);
-    if (op == 1) return (long long) _Alignof(struct S179);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(union S179);
+    if (op == 1) return (long long) _Alignof(union S179);
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
+        if (k == 3) return -1;
+        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (int) value;
-    if (k == 1) v.f2 = (unsigned char) value;
-    if (k == 2) v.f3 = (_Bool) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 2) v.f3 = (enum BfUnsigned) value;
+    if (k == 3) v.f4 = (enum BfSigned) value;
+    if (k == 4) v.f5 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    if (k == 4) return (long long) v.f5;
     return 0;
 }
 
@@ -6118,23 +6017,23 @@ static long long bf_query_180(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S180);
     if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S180, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S180, f2);
+        if (k == 2) return -1;
         if (k == 3) return -1;
         if (k == 4) return (long long) offsetof(struct S180, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (long long) value;
-    if (k == 1) v.f1 = (_Bool) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f4 = (signed char) value;
+    if (k == 0) v.f1 = (_Bool) value;
+    if (k == 1) v.f2 = (short) value;
+    if (k == 2) v.f3 = (int) value;
+    if (k == 3) v.f4 = (char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     if (k == 3) return (long long) v.f4;
     return 0;
 }
@@ -6145,50 +6044,41 @@ static long long bf_query_181(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S181);
     if (op == 1) return (long long) _Alignof(struct S181);
-    if (op == 2) return 4;
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned int) value;
-    if (k == 1) v.f1 = (unsigned short) value;
-    if (k == 2) v.f3 = (unsigned int) value;
-    if (k == 3) v.f5 = (unsigned int) value;
+    if (k == 0) v.f1 = (unsigned long) value;
+    if (k == 1) v.f2 = (unsigned short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f5;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
 static long long bf_query_182(int op, int k, long long value, unsigned char *out) {
-    union S182 v;
+    struct S182 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(union S182);
-    if (op == 1) return (long long) _Alignof(union S182);
-    if (op == 2) return 3;
+    if (op == 0) return (long long) sizeof(struct S182);
+    if (op == 1) return (long long) _Alignof(struct S182);
+    if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (signed char) value;
-    if (k == 1) v.f1 = (int) value;
-    if (k == 2) v.f3 = (short) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -6198,28 +6088,22 @@ static long long bf_query_183(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S183);
     if (op == 1) return (long long) _Alignof(struct S183);
-    if (op == 2) return 5;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (enum BfUnsigned) value;
-    if (k == 1) v.f2 = (enum BfSigned) value;
-    if (k == 2) v.f3 = (unsigned long long) value;
-    if (k == 3) v.f4 = (unsigned short) value;
-    if (k == 4) v.f5 = (signed char) value;
+    if (k == 0) v.f0 = (int) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
+    if (k == 2) v.f2 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
-    if (k == 3) return (long long) v.f4;
-    if (k == 4) return (long long) v.f5;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     return 0;
 }
 
@@ -6229,74 +6113,76 @@ static long long bf_query_184(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S184);
     if (op == 1) return (long long) _Alignof(struct S184);
-    if (op == 2) return 2;
+    if (op == 2) return 6;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long long) value;
-    if (k == 1) v.f1 = (unsigned short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    return 0;
-}
-
-static long long bf_query_185(int op, int k, long long value, unsigned char *out) {
-    struct S185 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S185);
-    if (op == 1) return (long long) _Alignof(struct S185);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S185, f1);
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 2) v.f4 = (unsigned long) value;
-    if (k == 3) v.f5 = (unsigned short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f4;
-    if (k == 3) return (long long) v.f5;
-    return 0;
-}
-
-static long long bf_query_186(int op, int k, long long value, unsigned char *out) {
-    union S186 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S186);
-    if (op == 1) return (long long) _Alignof(union S186);
-    if (op == 2) return 5;
-    if (op == 3) {
-        if (k == 0) return (long long) offsetof(union S186, f0);
+        if (k == 0) return (long long) offsetof(struct S184, f0);
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return -1;
-        if (k == 4) return (long long) offsetof(union S186, f4);
+        if (k == 3) return (long long) offsetof(struct S184, f3);
+        if (k == 4) return -1;
+        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (long long) value;
-    if (k == 3) v.f3 = (signed char) value;
-    if (k == 4) v.f4 = (long long) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 2) v.f2 = (signed char) value;
+    if (k == 3) v.f3 = (short) value;
+    if (k == 4) v.f4 = (unsigned char) value;
+    if (k == 5) v.f5 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
     if (k == 4) return (long long) v.f4;
+    if (k == 5) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_185(int op, int k, long long value, unsigned char *out) {
+    union S185 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S185);
+    if (op == 1) return (long long) _Alignof(union S185);
+    if (op == 2) return 1;
+    if (op == 3) {
+        if (k == 0) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    return 0;
+}
+
+static long long bf_query_186(int op, int k, long long value, unsigned char *out) {
+    struct S186 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(struct S186);
+    if (op == 1) return (long long) _Alignof(struct S186);
+    if (op == 2) return 4;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(struct S186, f0);
+        if (k == 1) return (long long) offsetof(struct S186, f1);
+        if (k == 2) return -1;
+        if (k == 3) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f3 = (long) value;
+    if (k == 3) v.f4 = (signed char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
     return 0;
 }
 
@@ -6306,44 +6192,39 @@ static long long bf_query_187(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S187);
     if (op == 1) return (long long) _Alignof(struct S187);
-    if (op == 2) return 4;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return (long long) offsetof(struct S187, f1);
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S187, f3);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (char) value;
-    if (k == 2) v.f2 = (unsigned char) value;
-    if (k == 3) v.f3 = (char) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 2) v.f2 = (_Bool) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
     return 0;
 }
 
 static long long bf_query_188(int op, int k, long long value, unsigned char *out) {
-    struct S188 v;
+    union S188 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S188);
-    if (op == 1) return (long long) _Alignof(struct S188);
+    if (op == 0) return (long long) sizeof(union S188);
+    if (op == 1) return (long long) _Alignof(union S188);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S188, f0);
-        if (k == 1) return -1;
+        if (k == 0) return -1;
+        if (k == 1) return (long long) offsetof(union S188, f1);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    if (k == 1) v.f1 = (unsigned char) value;
+    if (k == 0) v.f0 = (unsigned short) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
@@ -6358,16 +6239,14 @@ static long long bf_query_189(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S189);
     if (op == 2) return 2;
     if (op == 3) {
-        if (k == 0) return -1;
+        if (k == 0) return (long long) offsetof(struct S189, f0);
         if (k == 1) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (int) value;
-    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 1) v.f1 = (enum BfSigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     return 0;
 }
@@ -6378,34 +6257,6 @@ static long long bf_query_190(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S190);
     if (op == 1) return (long long) _Alignof(struct S190);
-    if (op == 2) return 4;
-    if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
-        if (k == 2) return -1;
-        if (k == 3) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfSigned) value;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 2) v.f2 = (short) value;
-    if (k == 3) v.f3 = (long) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
-    return 0;
-}
-
-static long long bf_query_191(int op, int k, long long value, unsigned char *out) {
-    union S191 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(union S191);
-    if (op == 1) return (long long) _Alignof(union S191);
     if (op == 2) return 2;
     if (op == 3) {
         if (k == 0) return -1;
@@ -6414,45 +6265,62 @@ static long long bf_query_191(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (long) value;
-    if (k == 1) v.f2 = (signed char) value;
+    if (k == 0) v.f0 = (enum BfSigned) value;
+    if (k == 1) v.f1 = (enum BfUnsigned) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
-static long long bf_query_192(int op, int k, long long value, unsigned char *out) {
-    struct S192 v;
+static long long bf_query_191(int op, int k, long long value, unsigned char *out) {
+    struct S191 v;
     unsigned char *p;
     unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S192);
-    if (op == 1) return (long long) _Alignof(struct S192);
-    if (op == 2) return 6;
+    if (op == 0) return (long long) sizeof(struct S191);
+    if (op == 1) return (long long) _Alignof(struct S191);
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
         if (k == 3) return -1;
-        if (k == 4) return -1;
-        if (k == 5) return (long long) offsetof(struct S192, f5);
+        if (k == 4) return (long long) offsetof(struct S191, f4);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (long) value;
-    if (k == 2) v.f2 = (signed char) value;
-    if (k == 3) v.f3 = (char) value;
-    if (k == 4) v.f4 = (unsigned short) value;
-    if (k == 5) v.f5 = (long long) value;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (_Bool) value;
+    if (k == 2) v.f2 = (unsigned long long) value;
+    if (k == 3) v.f3 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
     if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
-    if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
+    return 0;
+}
+
+static long long bf_query_192(int op, int k, long long value, unsigned char *out) {
+    union S192 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S192);
+    if (op == 1) return (long long) _Alignof(union S192);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return -1;
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f0 = (unsigned long long) value;
+    if (k == 1) v.f1 = (unsigned int) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -6462,17 +6330,22 @@ static long long bf_query_193(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S193);
     if (op == 1) return (long long) _Alignof(struct S193);
-    if (op == 2) return 2;
+    if (op == 2) return 3;
     if (op == 3) {
         if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(struct S193, f1);
+        if (k == 1) return (long long) offsetof(struct S193, f2);
+        if (k == 2) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
+    if (k == 0) v.f1 = (unsigned long long) value;
+    if (k == 1) v.f2 = (int) value;
+    if (k == 2) v.f3 = (int) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
     return 0;
 }
 
@@ -6482,44 +6355,48 @@ static long long bf_query_194(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S194);
     if (op == 1) return (long long) _Alignof(struct S194);
-    if (op == 2) return 1;
-    if (op == 3) {
-        if (k == 0) return -1;
-        return -1;
-    }
-    p = (unsigned char *) &v;
-    for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (short) value;
-    for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    return 0;
-}
-
-static long long bf_query_195(int op, int k, long long value, unsigned char *out) {
-    struct S195 v;
-    unsigned char *p;
-    unsigned long i;
-    if (op == 0) return (long long) sizeof(struct S195);
-    if (op == 1) return (long long) _Alignof(struct S195);
-    if (op == 2) return 4;
+    if (op == 2) return 5;
     if (op == 3) {
         if (k == 0) return -1;
         if (k == 1) return -1;
         if (k == 2) return -1;
-        if (k == 3) return (long long) offsetof(struct S195, f3);
+        if (k == 3) return -1;
+        if (k == 4) return (long long) offsetof(struct S194, f5);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (char) value;
-    if (k == 1) v.f1 = (enum BfSigned) value;
-    if (k == 2) v.f2 = (long) value;
-    if (k == 3) v.f3 = (short) value;
+    if (k == 0) v.f0 = (unsigned long) value;
+    if (k == 1) v.f2 = (unsigned long) value;
+    if (k == 2) v.f3 = (short) value;
+    if (k == 3) v.f4 = (short) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
-    if (k == 3) return (long long) v.f3;
+    if (k == 1) return (long long) v.f2;
+    if (k == 2) return (long long) v.f3;
+    if (k == 3) return (long long) v.f4;
+    return 0;
+}
+
+static long long bf_query_195(int op, int k, long long value, unsigned char *out) {
+    union S195 v;
+    unsigned char *p;
+    unsigned long i;
+    if (op == 0) return (long long) sizeof(union S195);
+    if (op == 1) return (long long) _Alignof(union S195);
+    if (op == 2) return 2;
+    if (op == 3) {
+        if (k == 0) return (long long) offsetof(union S195, f1);
+        if (k == 1) return -1;
+        return -1;
+    }
+    p = (unsigned char *) &v;
+    for (i = 0; i < sizeof v; i++) p[i] = 0;
+    if (k == 0) v.f1 = (char) value;
+    if (k == 1) v.f2 = (char) value;
+    for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f1;
+    if (k == 1) return (long long) v.f2;
     return 0;
 }
 
@@ -6539,14 +6416,14 @@ static long long bf_query_196(int op, int k, long long value, unsigned char *out
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f1 = (long) value;
-    if (k == 1) v.f2 = (char) value;
-    if (k == 2) v.f3 = (unsigned int) value;
-    if (k == 3) v.f4 = (enum BfSigned) value;
+    if (k == 0) v.f0 = (unsigned int) value;
+    if (k == 1) v.f1 = (long long) value;
+    if (k == 2) v.f2 = (short) value;
+    if (k == 3) v.f4 = (unsigned long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f1;
-    if (k == 1) return (long long) v.f2;
-    if (k == 2) return (long long) v.f3;
+    if (k == 0) return (long long) v.f0;
+    if (k == 1) return (long long) v.f1;
+    if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f4;
     return 0;
 }
@@ -6559,22 +6436,16 @@ static long long bf_query_197(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(struct S197);
     if (op == 2) return 4;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return -1;
+        if (k == 0) return (long long) offsetof(struct S197, f0);
+        if (k == 1) return (long long) offsetof(struct S197, f1);
         if (k == 2) return (long long) offsetof(struct S197, f2);
         if (k == 3) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (enum BfUnsigned) value;
-    if (k == 1) v.f1 = (unsigned long long) value;
-    if (k == 2) v.f2 = (int) value;
-    if (k == 3) v.f3 = (int) value;
+    if (k == 3) v.f3 = (unsigned long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
-    if (k == 0) return (long long) v.f0;
-    if (k == 1) return (long long) v.f1;
-    if (k == 2) return (long long) v.f2;
     if (k == 3) return (long long) v.f3;
     return 0;
 }
@@ -6587,18 +6458,18 @@ static long long bf_query_198(int op, int k, long long value, unsigned char *out
     if (op == 1) return (long long) _Alignof(union S198);
     if (op == 2) return 3;
     if (op == 3) {
-        if (k == 0) return -1;
-        if (k == 1) return (long long) offsetof(union S198, f1);
-        if (k == 2) return -1;
+        if (k == 0) return (long long) offsetof(union S198, f0);
+        if (k == 1) return -1;
+        if (k == 2) return (long long) offsetof(union S198, f2);
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 0) v.f0 = (unsigned long) value;
-    if (k == 2) v.f3 = (unsigned long) value;
+    if (k == 0) v.f0 = (char) value;
+    if (k == 1) v.f1 = (long long) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
     if (k == 0) return (long long) v.f0;
-    if (k == 2) return (long long) v.f3;
+    if (k == 1) return (long long) v.f1;
     return 0;
 }
 
@@ -6608,27 +6479,26 @@ static long long bf_query_199(int op, int k, long long value, unsigned char *out
     unsigned long i;
     if (op == 0) return (long long) sizeof(struct S199);
     if (op == 1) return (long long) _Alignof(struct S199);
-    if (op == 2) return 6;
+    if (op == 2) return 5;
     if (op == 3) {
-        if (k == 0) return (long long) offsetof(struct S199, f0);
+        if (k == 0) return -1;
         if (k == 1) return -1;
-        if (k == 2) return (long long) offsetof(struct S199, f2);
+        if (k == 2) return -1;
         if (k == 3) return (long long) offsetof(struct S199, f3);
         if (k == 4) return -1;
-        if (k == 5) return -1;
         return -1;
     }
     p = (unsigned char *) &v;
     for (i = 0; i < sizeof v; i++) p[i] = 0;
-    if (k == 1) v.f1 = (short) value;
-    if (k == 3) v.f3 = (long long) value;
-    if (k == 4) v.f4 = (int) value;
-    if (k == 5) v.f5 = (enum BfUnsigned) value;
+    if (k == 0) v.f0 = (short) value;
+    if (k == 1) v.f1 = (unsigned long long) value;
+    if (k == 2) v.f2 = (signed char) value;
+    if (k == 4) v.f4 = (unsigned char) value;
     for (i = 0; i < sizeof v; i++) out[i] = p[i];
+    if (k == 0) return (long long) v.f0;
     if (k == 1) return (long long) v.f1;
-    if (k == 3) return (long long) v.f3;
+    if (k == 2) return (long long) v.f2;
     if (k == 4) return (long long) v.f4;
-    if (k == 5) return (long long) v.f5;
     return 0;
 }
 

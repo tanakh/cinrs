@@ -1,0 +1,20 @@
+error: 'asm' requires a GNU dialect (gnu99!); the spelling '__asm__' is available everywhere (this block is c99!)
+ --> tests/ui/gnu_dialect_required.rs:7:9
+  |
+7 |         asm("nop");
+  |         ^^^
+
+error: 'typeof' requires a GNU dialect (gnu99!) or C23 or later (this block is c99!)
+  --> tests/ui/gnu_dialect_required.rs:11:5
+   |
+11 |     typeof(int) x;
+   |     ^^^^^^
+
+error: expected a declaration, found identifier 'x'
+  --> tests/ui/gnu_dialect_required.rs:11:17
+   |
+11 |     typeof(int) x;
+   |                 ^
+
+error: aborting due to 3 previous errors
+

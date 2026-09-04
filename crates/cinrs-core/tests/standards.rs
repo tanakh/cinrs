@@ -297,7 +297,7 @@ fn anonymous_members_are_reached_through() {
 }
 
 #[test]
-fn alignas_is_honoured_where_the_layout_agrees() {
+fn alignas_is_honoured_on_a_member() {
     accepted(
         Standard::C11,
         "struct S { _Alignas(16) int a; char c; };\n\
@@ -305,21 +305,21 @@ fn alignas_is_honoured_where_the_layout_agrees() {
     );
     // A `union` puts every member at offset zero, so any alignment works.
     accepted(Standard::C11, "union U { _Alignas(16) int a; double d; };");
-    rejected(
+    // A member the alignment has to *move* is honoured too: explicit padding
+    // in the generated item puts it where C says it goes.
+    accepted(
         Standard::C11,
-        "struct S { char c; _Alignas(16) int a; };",
-        &[
-            "_Alignas on this member is not supported yet; the member's natural offset \
-           does not already satisfy the alignment asked for, and honouring it would \
-           change how Rust code reaches the field",
-        ],
+        "struct S { char c; _Alignas(16) int a; };\n\
+         int f(void) { return __builtin_offsetof(struct S, a) == 16 \
+                           && sizeof(struct S) == 32; }",
     );
     rejected(
         Standard::C11,
         "_Alignas(16) int global;",
         &[
-            "_Alignas on an object is not supported yet; it is honoured on the members \
-           of a struct or union, where the generated Rust type can carry the alignment",
+            "an alignment specifier on an object is not supported yet; '_Alignas' and \
+           '__attribute__((aligned))' are honoured on the members of a struct or union, \
+           where the generated Rust type can carry the alignment",
         ],
     );
     rejected(
@@ -389,7 +389,23 @@ fn c23_features_are_gated() {
         "'nullptr'",
     );
     since(Standard::C23, "constexpr int n = 4;", "'constexpr'");
-    since(Standard::C23, "typeof(int) x;", "'typeof'");
+    // `typeof` is the one C23 keyword a GNU dialect also has, so its message
+    // names both ways out; see `Gating::newer_keyword`.
+    accepted(Standard::C23, "typeof(int) x;");
+    for standard in [Standard::C99, Standard::C11, Standard::C17] {
+        let found = errors(standard, "typeof(int) x;");
+        assert_eq!(
+            found.first().map(String::as_str),
+            Some(
+                format!(
+                    "'typeof' requires a GNU dialect ({}) or C23 or later (this block is {})",
+                    standard.macro_name_in(cinrs_core::Dialect::Gnu),
+                    standard.macro_name()
+                )
+                .as_str()
+            ),
+        );
+    }
     since(
         Standard::C23,
         "struct S { alignas(16) int a; };",

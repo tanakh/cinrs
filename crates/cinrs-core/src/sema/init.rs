@@ -159,6 +159,7 @@ impl Sema {
                 exported: false,
             };
             let id = self.new_object(&item_name, ty, storage, is_const, range);
+            self.static_literals.insert(id, self.program.statics.len());
             self.program.statics.push(StaticVar {
                 object: id,
                 init: value,
@@ -306,7 +307,20 @@ impl Sema {
                     ..
                 })
             );
-        if braced || string || !(ty.is_array() || ty.is_record()) {
+        // A compound literal initialises the member *whole* rather than being
+        // the first of the values its members' braces were left out of —
+        // `struct S s = { (inner_t){}, 1 }` gives the first member the
+        // literal. c-testsuite `00216` writes exactly that for a member of an
+        // empty struct type, which has no members to fill from anything.
+        let whole = ty.is_record()
+            && matches!(
+                &item.init.kind,
+                ast::InitializerKind::Expr(ast::Expr {
+                    kind: ast::ExprKind::CompoundLiteral { .. },
+                    ..
+                })
+            );
+        if braced || string || whole || !(ty.is_array() || ty.is_record()) {
             let value = self.initializer(&item.init, ty, name);
             cursor.advance();
             return value;
@@ -349,6 +363,9 @@ impl Sema {
                 break;
             }
             let mut designated = false;
+            // The last element GNU's `[low ... high] = v` fills; a plain
+            // designator fills only the one it names.
+            let mut upto = None;
             if let Some(first) = item.designators.first() {
                 match first {
                     ast::Designator::Index(expr) => {
@@ -357,6 +374,27 @@ impl Sema {
                             continue;
                         };
                         index = value;
+                        designated = true;
+                    }
+                    // GNU's range designator, `[1 ... 5] = 0`, which fills
+                    // every element of the range with the same value.
+                    ast::Designator::Range(low, high) => {
+                        let (Some(low), Some(high)) =
+                            (self.designator_index(low), self.designator_index(high))
+                        else {
+                            cursor.advance();
+                            continue;
+                        };
+                        if high < low {
+                            self.error(
+                                item.range,
+                                "empty range designator: the last index is below the first",
+                            );
+                            cursor.advance();
+                            continue;
+                        }
+                        index = low;
+                        upto = Some(high);
                         designated = true;
                     }
                     ast::Designator::Field(field) => {
@@ -378,7 +416,8 @@ impl Sema {
                     continue;
                 }
             }
-            if len.is_some_and(|len| index >= len) || index >= MAX_INIT_ELEMENTS {
+            let last = upto.unwrap_or(index);
+            if len.is_some_and(|len| last >= len) || last >= MAX_INIT_ELEMENTS {
                 let item_range = item.range;
                 self.error(item_range, "array designator index is out of bounds");
                 cursor.advance();
@@ -392,12 +431,17 @@ impl Sema {
             } else {
                 self.fill_element(elem, cursor, name, item_range)?
             };
-            let slot = index as usize;
+            let slot = last as usize;
             if slot >= slots.len() {
                 slots.resize_with(slot + 1, || None);
             }
-            slots[slot] = Some(value);
-            index += 1;
+            // A range designator writes one checked value into every element
+            // it covers; the value is a constant in every use that matters,
+            // and C leaves the number of evaluations unspecified.
+            for slot in index..=last {
+                slots[slot as usize] = Some(value.clone());
+            }
+            index = last + 1;
         }
         let length = len.unwrap_or(slots.len() as u64);
         Some((slots, length))
@@ -497,6 +541,14 @@ impl Sema {
                         cursor.advance();
                         return None;
                     }
+                    ast::Designator::Range(low, _) => {
+                        self.error(
+                            low.range,
+                            "a range designator cannot initialize a union member",
+                        );
+                        cursor.advance();
+                        return None;
+                    }
                 }
                 if item.designators.len() > 1 {
                     self.error(
@@ -542,6 +594,13 @@ impl Sema {
             ));
         }
 
+        let flexible: Vec<bool> = self
+            .types()
+            .record(record)
+            .fields
+            .iter()
+            .map(|f| f.flexible)
+            .collect();
         let mut slots: Vec<Option<Expr>> = (0..fields.len()).map(|_| None).collect();
         let mut index = 0usize;
         while let Some(item) = cursor.peek() {
@@ -579,6 +638,14 @@ impl Sema {
                         cursor.advance();
                         continue;
                     }
+                    ast::Designator::Range(low, _) => {
+                        self.error(
+                            low.range,
+                            "a range designator cannot initialize a struct member",
+                        );
+                        cursor.advance();
+                        continue;
+                    }
                 }
                 if item.designators.len() > 1 {
                     self.error(
@@ -589,6 +656,20 @@ impl Sema {
                     cursor.advance();
                     continue;
                 }
+            }
+            // A flexible array member has no elements, so there is nothing an
+            // initialiser could put in it — C99 6.7.2.1p18 says so, and GCC
+            // agrees.
+            if flexible.get(index).copied().unwrap_or(false) {
+                let item_range = item.range;
+                self.error(
+                    item_range,
+                    "a flexible array member cannot be initialized; allocate the object with \
+                     room for the elements and fill them in",
+                );
+                cursor.advance();
+                index += 1;
+                continue;
             }
             let field_ty = if designated {
                 self.member_type(record, &path)

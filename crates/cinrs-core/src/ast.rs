@@ -228,6 +228,10 @@ pub enum TypeKind {
 }
 
 /// What `typeof` was applied to.
+//
+// The AST is built once per macro invocation and then walked; boxing the type
+// name to even the variants out would only make sema noisier to write.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeofOperand {
     /// `typeof(expr)`, whose operand is not evaluated.
@@ -282,6 +286,11 @@ pub struct RecordType {
     /// They are kept apart from the members because they declare nothing: a
     /// member list with one in it lays out exactly as it would without.
     pub asserts: Vec<StaticAssert>,
+    /// What `__attribute__((packed))` and friends asked of the whole record.
+    pub attrs: Attributes,
+    /// The member alignment `#pragma pack(N)` was asking for where the
+    /// specifier was written, if any.
+    pub pack: Option<u32>,
     /// Where the specifier was written.
     pub range: SourceRange,
 }
@@ -310,6 +319,8 @@ pub struct FieldDecl {
     pub ty: Type,
     /// The bit-field width, if any.
     pub bit_width: Option<Expr>,
+    /// What `__attribute__((…))` on this member asked for.
+    pub attrs: Attributes,
     /// Where the member was written.
     pub range: SourceRange,
 }
@@ -394,6 +405,60 @@ pub enum AlignmentKind {
     Type(Box<TypeName>),
 }
 
+/// What an attribute specifier sequence asked for.
+///
+/// Both spellings — GNU's `__attribute__((…))` and C23's `[[…]]` — produce
+/// this, because they say the same things. Everything the front end does not
+/// act on is dropped while it is parsed, which C23 6.7.13.1p3 explicitly
+/// allows and which GCC does with a warning this crate has no way to raise.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Attributes {
+    /// `noreturn` / `[[noreturn]]`, which says exactly what `_Noreturn` says.
+    pub noreturn: Option<SourceRange>,
+    /// `always_inline`.
+    pub always_inline: Option<SourceRange>,
+    /// `noinline`.
+    pub noinline: Option<SourceRange>,
+    /// `cold`; `hot` clears it again, as GCC's do.
+    pub cold: Option<SourceRange>,
+    /// `deprecated`, with the message it was given.
+    pub deprecated: Option<Spanned<Option<String>>>,
+    /// `packed`, on a record or on one member.
+    pub packed: Option<SourceRange>,
+    /// `aligned(N)`, which is the same request `_Alignas(N)` makes.
+    pub aligned: Option<Alignment>,
+    /// `section("…")`.
+    pub section: Option<Spanned<String>>,
+    /// `constructor`, whose priority is parsed and ignored.
+    pub constructor: Option<SourceRange>,
+    /// `destructor`, likewise.
+    pub destructor: Option<SourceRange>,
+}
+
+impl Attributes {
+    /// Whether nothing was asked for.
+    pub fn is_empty(&self) -> bool {
+        *self == Attributes::default()
+    }
+
+    /// Everything either sequence asked for.
+    ///
+    /// GCC lets the attributes of one declaration be spread over the
+    /// specifiers, the declarator and the definition, and takes the union.
+    pub fn merge(&mut self, other: Attributes) {
+        self.noreturn = self.noreturn.or(other.noreturn);
+        self.always_inline = self.always_inline.or(other.always_inline);
+        self.noinline = self.noinline.or(other.noinline);
+        self.cold = self.cold.or(other.cold);
+        self.deprecated = self.deprecated.take().or(other.deprecated);
+        self.packed = self.packed.or(other.packed);
+        self.aligned = self.aligned.take().or(other.aligned);
+        self.section = self.section.take().or(other.section);
+        self.constructor = self.constructor.or(other.constructor);
+        self.destructor = self.destructor.or(other.destructor);
+    }
+}
+
 /// The declaration specifiers shared by all declarators of one declaration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeclSpecifiers {
@@ -406,6 +471,8 @@ pub struct DeclSpecifiers {
     pub noreturn: Option<SourceRange>,
     /// The alignment specifier, if one was written.
     pub alignas: Option<Alignment>,
+    /// What `__attribute__((…))` and `[[…]]` asked for.
+    pub attrs: Attributes,
     /// The base type built from the type specifiers and qualifiers.
     pub base: Type,
     /// Where the specifiers were written.
@@ -445,6 +512,10 @@ pub struct InitDeclarator {
     pub ty: Type,
     /// The initialiser, if any.
     pub init: Option<Initializer>,
+    /// What `__attribute__((…))` written on *this* declarator asked for.
+    pub attrs: Attributes,
+    /// The symbol `__asm__("name")` renamed this declaration to.
+    pub asm_label: Option<Spanned<String>>,
     /// Where the declarator was written.
     pub range: SourceRange,
 }
@@ -481,10 +552,13 @@ pub struct InitItem {
 /// A C99 designator.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Designator {
-    /// `.name`
+    /// `.name`, and the pre-C99 `name:` GNU still accepts.
     Field(Ident),
     /// `[expr]`
     Index(Expr),
+    /// `[low ... high]` — GNU's range designator, which fills every element of
+    /// the range with the same value.
+    Range(Expr, Expr),
 }
 
 /// A type name, as written in a cast, `sizeof(T)` or a compound literal.
@@ -507,6 +581,11 @@ pub struct TypeName {
 pub struct Block {
     /// Declarations and statements, in source order (C99 allows mixing).
     pub items: Vec<BlockItem>,
+    /// The labels `__label__ a, b;` declared local to this block.
+    ///
+    /// C gives every label function scope, and so does this crate, so the
+    /// declaration is accepted and the labels behave as they would without it.
+    pub local_labels: Vec<Ident>,
     /// Where the block was written, including its braces.
     pub range: SourceRange,
 }
@@ -547,10 +626,12 @@ pub enum StmtKind {
         /// The labelled statement.
         body: Box<Stmt>,
     },
-    /// `case expr: stmt`
+    /// `case expr: stmt`, and GNU's `case low ... high: stmt`.
     Case {
-        /// The case value.
+        /// The case value, or the low end of a range.
         value: Expr,
+        /// The high end of a `case low ... high:` range.
+        upper: Option<Expr>,
         /// The labelled statement.
         body: Box<Stmt>,
     },
@@ -779,12 +860,13 @@ pub enum ExprKind {
         /// The assigned value.
         rhs: Box<Expr>,
     },
-    /// `cond ? then_expr : else_expr`
+    /// `cond ? then_expr : else_expr`, and GNU's `cond ?: else_expr`.
     Conditional {
         /// The condition.
         cond: Box<Expr>,
-        /// The value when the condition holds.
-        then_expr: Box<Expr>,
+        /// The value when the condition holds; `None` for `a ?: b`, where it
+        /// is the condition's own value and the condition is evaluated once.
+        then_expr: Option<Box<Expr>>,
         /// The value otherwise.
         else_expr: Box<Expr>,
     },
@@ -884,6 +966,35 @@ pub enum ExprKind {
         /// The initialiser elements.
         init: Vec<InitItem>,
     },
+    /// `({ … })` — GNU's statement expression, whose value is the value of the
+    /// last expression statement in the block.
+    StmtExpr(Box<Block>),
+    /// `__builtin_types_compatible_p(T1, T2)`, an integer constant.
+    TypesCompatible {
+        /// The first type.
+        lhs: Box<TypeName>,
+        /// The second type.
+        rhs: Box<TypeName>,
+    },
+    /// `__builtin_choose_expr(c, a, b)`.
+    ///
+    /// Only the operand the constant condition picks is type checked, which is
+    /// the whole point of the builtin.
+    ChooseExpr {
+        /// The controlling constant expression.
+        cond: Box<Expr>,
+        /// Chosen when it is non-zero.
+        then_expr: Box<Expr>,
+        /// Chosen otherwise.
+        else_expr: Box<Expr>,
+    },
+    /// `__real__ e` / `__imag__ e`, which need complex arithmetic.
+    ComplexPart {
+        /// Whether this is `__real__`.
+        real: bool,
+        /// The operand.
+        operand: Box<Expr>,
+    },
     /// Produced by error recovery.
     Error,
 }
@@ -916,6 +1027,10 @@ pub struct FunctionDef {
     /// Old-style parameter declarations (`int f(a) int a; { … }`). Empty for a
     /// prototype-style definition; sema decides whether to accept them.
     pub kr_decls: Vec<Decl>,
+    /// What `__attribute__((…))` written after the declarator asked for.
+    pub attrs: Attributes,
+    /// The symbol `__asm__("name")` renamed the definition to.
+    pub asm_label: Option<Spanned<String>>,
     /// The body.
     pub body: Block,
     /// Where the definition was written.
@@ -923,6 +1038,7 @@ pub struct FunctionDef {
 }
 
 /// A top-level item.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExternalDecl {
     /// A function definition.

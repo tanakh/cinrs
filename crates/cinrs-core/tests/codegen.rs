@@ -29,12 +29,29 @@ fn generate_for(standard: Standard, source: &str) -> String {
     // everywhere.
     let mut options = Options::new(standard);
     options.c_variadic = true;
+    // Whether the C checked out is asked of the front end rather than of the
+    // expansion's text: the expansion may hold a `compile_error!` of its own —
+    // the one a `constructor` puts behind a `cfg` for a target with no
+    // initialiser table — which says nothing about this source.
+    let analysis = cinrs_core::analyze(input.clone(), &options);
+    let failures = |diags: &cinrs_core::Diagnostics| {
+        diags
+            .sorted()
+            .into_iter()
+            .filter(|d| d.level == cinrs_core::Level::Error)
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut errors = failures(&analysis.diagnostics);
+    let (_program, sema_diagnostics) =
+        cinrs_core::sema::analyze(&analysis.unit, &options, analysis.source.unit_id());
+    errors.extend(failures(&sema_diagnostics));
+    assert!(
+        errors.is_empty(),
+        "expansion of\n{source}\nfailed: {errors:#?}"
+    );
     let output = expand(input, &options);
     let text = output.to_string();
-    assert!(
-        !text.contains("compile_error"),
-        "expansion of\n{source}\nfailed:\n{text}"
-    );
     let file: syn::File = match syn::parse2(output) {
         Ok(file) => file,
         Err(error) => panic!("the expansion must be valid Rust: {error}\n{text}"),
@@ -789,4 +806,110 @@ fn a_bare_literal_is_never_the_receiver_of_a_method() {
         let found = literal_method_receivers(output);
         assert!(found.is_empty(), "in\n{source}\nfound receivers {found:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// the GNU extensions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_statement_expression_becomes_a_rust_block() {
+    // GNU's `({ …; e; })` is what a Rust block expression already is, so the
+    // translation is direct — declarations and all.
+    insta::assert_snapshot!(generate(
+        r#"
+        int max(int a, int b) {
+            return ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; });
+        }
+
+        int side_effects(int n) {
+            return ({ int total = 0; for (int i = 0; i < n; i++) total += i; total; });
+        }
+
+        int elvis(int a, int b) { return a ?: b; }
+        "#
+    ));
+}
+
+#[test]
+fn the_function_attributes_become_rust_ones() {
+    insta::assert_snapshot!(generate(
+        r#"
+        __attribute__((always_inline)) int fast(int n) { return n + 1; }
+        __attribute__((noinline, cold)) int slow(int n) { return n + 2; }
+        __attribute__((deprecated("use fast"))) int old(int n) { return n; }
+        __attribute__((section(".text.hot"))) int placed(void) { return 1; }
+        int renamed(int n) __asm__("other_symbol");
+        int call_renamed(int n) { return renamed(n); }
+        "#
+    ));
+}
+
+#[test]
+fn a_packed_record_is_a_packed_rust_item() {
+    // The Rust item has to have the layout C computed, which `packed(N)` says
+    // directly and explicit padding fills in where a member was moved along.
+    insta::assert_snapshot!(generate(
+        r#"
+        struct __attribute__((packed)) Header {
+            unsigned char kind;
+            unsigned int length;
+            unsigned short flags : 12;
+        };
+
+        #pragma pack(2)
+        struct Halved { char c; int x; short s; };
+        #pragma pack()
+
+        struct Moved { char c; __attribute__((aligned(16))) int x; };
+
+        unsigned int length_of(struct Header *h) { return h->length; }
+        "#
+    ));
+}
+
+#[test]
+fn a_constructor_becomes_an_init_array_entry() {
+    insta::assert_snapshot!(generate(
+        r#"
+        static int started;
+        __attribute__((constructor)) static void begin(void) { started = 1; }
+        __attribute__((destructor)) static void end(void) { started = 0; }
+        int has_started(void) { return started; }
+        "#
+    ));
+}
+
+#[test]
+fn case_ranges_become_rust_range_patterns() {
+    insta::assert_snapshot!(generate(
+        r#"
+        int classify(int c) {
+            switch (c) {
+            case '0' ... '9': return 1;
+            case 'a' ... 'z':
+            case 'A' ... 'Z': return 2;
+            case '_': return 3;
+            default: return 0;
+            }
+        }
+        "#
+    ));
+}
+
+#[test]
+fn a_flexible_array_member_is_a_zero_length_tail() {
+    insta::assert_snapshot!(generate(
+        r#"
+        struct Buffer { int len; int data[]; };
+
+        int sum(struct Buffer *b) {
+            int total = 0;
+            for (int i = 0; i < b->len; i++) total += b->data[i];
+            return total;
+        }
+
+        unsigned long header_size(void) { return sizeof(struct Buffer); }
+        "#
+    ));
 }

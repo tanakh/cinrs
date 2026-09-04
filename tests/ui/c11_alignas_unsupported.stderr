@@ -1,14 +1,8 @@
-error: _Alignas on this member is not supported yet; the member's natural offset does not already satisfy the alignment asked for, and honouring it would change how Rust code reaches the field
- --> tests/ui/c11_alignas_unsupported.rs:8:9
-  |
-8 |         _Alignas(16) int x;
-  |         ^^^^^^^^
-
-error: _Alignas on an object is not supported yet; it is honoured on the members of a struct or union, where the generated Rust type can carry the alignment
-  --> tests/ui/c11_alignas_unsupported.rs:11:5
+error: an alignment specifier on an object is not supported yet; '_Alignas' and '__attribute__((aligned))' are honoured on the members of a struct or union, where the generated Rust type can carry the alignment
+  --> tests/ui/c11_alignas_unsupported.rs:15:5
    |
-11 |     _Alignas(16) int object;
+15 |     _Alignas(16) int object;
    |     ^^^^^^^^
 
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error
 

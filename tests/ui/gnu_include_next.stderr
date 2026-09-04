@@ -1,0 +1,8 @@
+error: #include_next is not supported; cinrs never searches the platform's include directories, so there is no next header to reach
+ --> tests/ui/gnu_include_next.rs:5:5
+  |
+5 |     #include_next <stdio.h>
+  |     ^
+
+error: aborting due to 1 previous error
+

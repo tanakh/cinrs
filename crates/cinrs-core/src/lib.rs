@@ -86,6 +86,7 @@ pub mod cfg;
 pub mod codegen;
 pub mod diag;
 pub mod dump;
+pub mod gnu;
 pub mod include;
 pub mod ir;
 pub mod lex;
@@ -137,11 +138,20 @@ impl Standard {
 
     /// The macro that selects this standard, as a diagnostic names it.
     pub fn macro_name(self) -> &'static str {
-        match self {
-            Standard::C99 => "c99!",
-            Standard::C11 => "c11!",
-            Standard::C17 => "c17!",
-            Standard::C23 => "c23!",
+        self.macro_name_in(Dialect::Iso)
+    }
+
+    /// The macro that selects this standard in `dialect`.
+    pub fn macro_name_in(self, dialect: Dialect) -> &'static str {
+        match (dialect, self) {
+            (Dialect::Iso, Standard::C99) => "c99!",
+            (Dialect::Iso, Standard::C11) => "c11!",
+            (Dialect::Iso, Standard::C17) => "c17!",
+            (Dialect::Iso, Standard::C23) => "c23!",
+            (Dialect::Gnu, Standard::C99) => "gnu99!",
+            (Dialect::Gnu, Standard::C11) => "gnu11!",
+            (Dialect::Gnu, Standard::C17) => "gnu17!",
+            (Dialect::Gnu, Standard::C23) => "gnu23!",
         }
     }
 
@@ -158,6 +168,33 @@ impl Standard {
             needed.as_str(),
             self.macro_name()
         )
+    }
+}
+
+/// Whether the GNU extensions that need a plain spelling are switched on.
+///
+/// GCC draws the same line between `-std=c99` and `-std=gnu99`: everything
+/// spelled with a double underscore (`__typeof__`, `__attribute__`,
+/// `__builtin_*`, `__extension__`) is available either way, because those names
+/// are reserved and cannot collide with a user's own; only the plain spellings
+/// — `typeof`, `asm` — need the GNU dialect, and only there is a feature of a
+/// *newer* revision accepted without a diagnostic (GCC takes `_Static_assert`
+/// in `gnu99`).
+///
+/// See `doc/gnu-extensions.md` for the whole catalogue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Dialect {
+    /// Strict ISO C: `c99!`, `c11!`, `c17!`, `c23!`.
+    #[default]
+    Iso,
+    /// ISO C plus the GNU extensions: `gnu99!`, `gnu11!`, `gnu17!`, `gnu23!`.
+    Gnu,
+}
+
+impl Dialect {
+    /// Whether this is a GNU dialect.
+    pub fn is_gnu(self) -> bool {
+        self == Dialect::Gnu
     }
 }
 
@@ -184,6 +221,9 @@ pub const C_VARIADIC_SUPPORTED: bool = false;
 pub struct Options {
     /// Which standard to accept.
     pub standard: Standard,
+    /// Whether the plain-spelled GNU extensions are switched on, and whether a
+    /// feature of a newer revision is accepted silently. See [`Dialect`].
+    pub dialect: Dialect,
     /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`.
     pub dollar_in_identifiers: bool,
     /// Directories `#include` searches, after the ones the unit itself names
@@ -214,15 +254,104 @@ impl Default for Options {
 }
 
 impl Options {
-    /// Default options for `standard`.
+    /// Default options for `standard`, in the strict ISO dialect.
     pub fn new(standard: Standard) -> Self {
+        Self::with_dialect(standard, Dialect::Iso)
+    }
+
+    /// Default options for `standard` in the GNU dialect — what `gnu99!` and
+    /// friends use.
+    pub fn gnu(standard: Standard) -> Self {
+        Self::with_dialect(standard, Dialect::Gnu)
+    }
+
+    /// Default options for `standard` in `dialect`.
+    pub fn with_dialect(standard: Standard, dialect: Dialect) -> Self {
         Self {
             standard,
+            dialect,
             dollar_in_identifiers: false,
             include_paths: Vec::new(),
             target: TargetModel::host(),
             c_variadic: C_VARIADIC_SUPPORTED,
         }
+    }
+
+    /// The macro that selects this entry point, as a diagnostic names it.
+    pub fn macro_name(&self) -> &'static str {
+        self.standard.macro_name_in(self.dialect)
+    }
+
+    /// How a pass gates the features of a newer revision.
+    pub fn gating(&self) -> Gating {
+        Gating {
+            standard: self.standard,
+            dialect: self.dialect,
+        }
+    }
+}
+
+/// The pair every pass needs to answer "may this block write that?".
+///
+/// A GNU dialect answers yes to everything a later revision added, exactly as
+/// GCC's `-std=gnu99` does; the strict entry points keep the diagnostic that
+/// names the macro to write instead.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Gating {
+    /// The revision the block is written in.
+    pub standard: Standard,
+    /// Whether the GNU extensions are switched on.
+    pub dialect: Dialect,
+}
+
+impl Gating {
+    /// The message a feature from a newer revision gets here, or `None` when it
+    /// is accepted.
+    pub fn requires(self, what: &str, needed: Standard) -> Option<String> {
+        if self.dialect.is_gnu() || self.standard >= needed {
+            return None;
+        }
+        Some(format!(
+            "{what} requires {} or later (this block is {})",
+            needed.as_str(),
+            self.standard.macro_name_in(self.dialect)
+        ))
+    }
+
+    /// The gate message for `name`, if another entry point would have made it
+    /// a keyword.
+    ///
+    /// `nullptr`, `bool` and the rest are ordinary identifiers before C23 — the
+    /// bundled `<stdbool.h>` writes `#define bool _Bool` — so a `c11!` block
+    /// that uses one gets told what it would have meant. A GNU dialect says
+    /// nothing about those: GCC's `gnu11` has no `bool` keyword either, so
+    /// "use of undeclared identifier" is the honest answer there.
+    ///
+    /// `typeof` and `asm` are the two the *dialect* decides, so their message
+    /// names the entry point that has them.
+    pub fn newer_keyword(self, name: &str) -> Option<String> {
+        if self.dialect.is_gnu() {
+            return None;
+        }
+        let gnu = self.standard.macro_name_in(Dialect::Gnu);
+        let here = self.standard.macro_name_in(self.dialect);
+        match name {
+            "typeof" | "typeof_unqual" if self.standard < Standard::C23 => {
+                return Some(format!(
+                    "'{name}' requires a GNU dialect ({gnu}) or C23 or later \
+                     (this block is {here})"
+                ));
+            }
+            "asm" => {
+                return Some(format!(
+                    "'{name}' requires a GNU dialect ({gnu}); the spelling '__asm__' is \
+                     available everywhere (this block is {here})"
+                ));
+            }
+            _ => {}
+        }
+        let needed = crate::lex::Keyword::from_str(name, Standard::C23)?.since();
+        self.requires(&format!("'{name}'"), needed)
     }
 }
 
@@ -345,8 +474,10 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         link_libraries,
         export,
         module,
+        pack_events,
     } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
-    let unit = parse::parse(&tokens, unit_range, &options, &mut diagnostics);
+    let packing = pp::PackMap::new(pack_events);
+    let unit = parse::parse(&tokens, unit_range, &packing, &options, &mut diagnostics);
     // Annotate here rather than at the end: every diagnostic is annotated
     // exactly once, right after the pass that produced it.
     expansions.annotate(&mut diagnostics);

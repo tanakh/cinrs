@@ -242,7 +242,9 @@ fn attributes_are_accepted_and_ignored() {
 
     unsafe {
         assert_eq!(important(1), 42);
-        assert_eq!(old_name(), 42);
+        #[allow(deprecated)]
+        let value = old_name();
+        assert_eq!(value, 42);
         assert_eq!(fallthrough(0), 11);
         assert_eq!(fallthrough(1), 10);
         assert_eq!(fallthrough(2), -1);

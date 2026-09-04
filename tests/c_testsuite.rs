@@ -142,6 +142,11 @@ enum Standard {
     C99,
     C11,
     C23,
+    /// `gnu99!`, which is `c99!` with the GNU extensions switched on. It sorts
+    /// above every strict revision because it accepts what all of them do.
+    Gnu99,
+    Gnu11,
+    Gnu23,
 }
 
 impl Standard {
@@ -152,6 +157,9 @@ impl Standard {
             Standard::C99 => "c99",
             Standard::C11 => "c11",
             Standard::C23 => "c23",
+            Standard::Gnu99 => "gnu99",
+            Standard::Gnu11 => "gnu11",
+            Standard::Gnu23 => "gnu23",
         }
     }
 
@@ -160,8 +168,12 @@ impl Standard {
             "c99" => Ok(Standard::C99),
             "c11" => Ok(Standard::C11),
             "c23" => Ok(Standard::C23),
+            "gnu99" => Ok(Standard::Gnu99),
+            "gnu11" => Ok(Standard::Gnu11),
+            "gnu23" => Ok(Standard::Gnu23),
             other => Err(eyre!(
-                "CINRS_CTESTSUITE_STANDARD={other}: expected c99, c11 or c23"
+                "CINRS_CTESTSUITE_STANDARD={other}: expected c99, c11, c23, gnu99, gnu11 \
+                 or gnu23"
             )),
         }
     }
@@ -179,6 +191,15 @@ impl Standard {
             "c23" => Some(Standard::C23),
             _ => None,
         }
+    }
+
+    /// Whether a case tagged for `needs` may be translated by this entry
+    /// point.
+    ///
+    /// A GNU dialect accepts everything a later revision added, so every case
+    /// is eligible for one however it is tagged.
+    fn accepts(self, needs: Standard) -> bool {
+        matches!(self, Standard::Gnu99 | Standard::Gnu11 | Standard::Gnu23) || self >= needs
     }
 }
 
@@ -272,7 +293,7 @@ fn is_selected(test: &Test, standard: Standard) -> bool {
         || arch_tags().any(|tag| *tag == host_arch);
 
     let needs = test.tags.iter().filter_map(|t| Standard::of_tag(t)).max();
-    let recent_enough = needs.is_none_or(|needs| needs <= standard);
+    let recent_enough = needs.is_none_or(|needs| standard.accepts(needs));
 
     runs_here && recent_enough
 }

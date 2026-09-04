@@ -1,0 +1,26 @@
+error: the condition of '__builtin_choose_expr' is not a compile-time constant expression
+ --> tests/ui/gnu_builtin_errors.rs:5:38
+  |
+5 |         return __builtin_choose_expr(n, 1, 2);
+  |                                      ^
+
+error: the third argument of '__builtin_add_overflow' must be a pointer to an integer, not 'int'
+ --> tests/ui/gnu_builtin_errors.rs:9:45
+  |
+9 |         return __builtin_add_overflow(a, b, c);
+  |                                             ^
+
+error: empty case range: '5' is above '1', so nothing can enter here
+  --> tests/ui/gnu_builtin_errors.rs:14:9
+   |
+14 |         case 5 ... 1:
+   |         ^^^^
+
+error: empty range designator: the last index is below the first
+  --> tests/ui/gnu_builtin_errors.rs:22:39
+   |
+22 |         static const int table[8] = { [5 ... 1] = 3 };
+   |                                       ^
+
+error: aborting due to 4 previous errors
+

@@ -2,9 +2,10 @@
 
 [c-testsuite](https://github.com/c-testsuite/c-testsuite) is a collaborative
 database of C compiler test cases. `cinrs` runs its `single-exec` suite through
-the `c99!`, `c11!` and `c23!` entry points, so that "how much of C does the
-front end actually get right" is a number that a test run can hold on to
-rather than an impression.
+any of its entry points — `c99!`, `c11!`, `c23!` and the GNU dialects
+`gnu99!`, `gnu11!` and `gnu23!` — so that "how much of C does the front end
+actually get right" is a number that a test run can hold on to rather than an
+impression.
 
 The harness is `tests/c_testsuite.rs`; the corpus is a git submodule at
 `third_party/c-testsuite`, pinned to
@@ -100,7 +101,7 @@ the one-line classification as the note for a new one.
 | variable | effect |
 | --- | --- |
 | `CINRS_CTESTSUITE_REQUIRED=1` | a missing corpus is a failure, not a skip |
-| `CINRS_CTESTSUITE_STANDARD=c99\|c11\|c23` | which entry point to translate with, and which cases are eligible; default `c99` |
+| `CINRS_CTESTSUITE_STANDARD=c99\|c11\|c23\|gnu99\|gnu11\|gnu23` | which entry point to translate with, and which cases are eligible; default `c99` |
 | `CINRS_CTESTSUITE_FILTER=<substring>` | only the cases whose id contains it |
 | `CINRS_CTESTSUITE_REPORT=1` | report mode |
 | `CINRS_CTESTSUITE_STRICT=1` | a stale expected-failure entry is a failure |
@@ -108,13 +109,13 @@ the one-line classification as the note for a new one.
 | `CINRS_CTESTSUITE_TIMEOUT=<seconds>` | per-case timeout, 20 by default; `0` disables it |
 
 The expected-failure list for `c99!` is
-`tests/c-testsuite/expected-failures.txt`; the other entry points have
-`expected-failures-c11.txt` and `expected-failures-c23.txt`, because a case
-that needs C11 fails under `c99!` and passes under `c11!` and one list cannot
-say both. The format is one id per line with a note after it and `#` for a
-comment; an id written `?NNNNN` passes or fails depending on the *toolchain*
-and is guarded neither way — `00140` defines a variadic function, which needs
-Rust 1.99.
+`tests/c-testsuite/expected-failures.txt`; every other entry point has one of
+its own — `expected-failures-c11.txt`, `-c23.txt`, `-gnu99.txt`, `-gnu11.txt`
+and `-gnu23.txt` — because a case that needs C11 fails under `c99!` and passes
+under `c11!` and one list cannot say both. The format is one id per line with a
+note after it and `#` for a comment; an id written `?NNNNN` passes or fails
+depending on the *toolchain* and is guarded neither way — `00140` defines a
+variadic function, which needs Rust 1.99.
 
 ## Which cases are selected
 
@@ -126,7 +127,9 @@ Two rules, both out of the corpus's own tags:
 * **It must not need a newer revision of C than the entry point.** `c89` and
   `c99` both mean "C99 is enough" (the corpus documents `c89` as implying
   `c99`, and `c99` as implying `c11`), so `c99!` takes 218 of the 220 and
-  leaves the two `c11`-tagged ones; `c11!` and `c23!` take all 220.
+  leaves the two `c11`-tagged ones; `c11!` and `c23!` take all 220. A GNU
+  dialect accepts everything a later revision added, so `gnu99!` takes all 220
+  as well.
 
 Nothing is excluded by the other two tags. `needs-cpp` is fine — `cinrs` has
 the whole C99 preprocessor — and so is `needs-libc`, since the bundled headers
@@ -208,66 +211,57 @@ corpus revision.
 
 | entry point | selected | passed | rate |
 | --- | ---: | ---: | ---: |
-| `c99!` | 218 | 204 | **93.6 %** |
-| `c11!` | 220 | 207 | **94.1 %** |
-| `c23!` | 220 | 207 | **94.1 %** |
+| `c99!` | 218 | 209 | **95.9 %** |
+| `c11!` | 220 | 212 | **96.4 %** |
+| `c23!` | 220 | 212 | **96.4 %** |
+| `gnu99!` | 220 | 212 | **96.4 %** |
+| `gnu11!` | 220 | 212 | **96.4 %** |
+| `gnu23!` | 220 | 212 | **96.4 %** |
 
 Per tag, under `c11!` (the run that selects everything):
 
 | tag | passed | rate |
 | --- | ---: | ---: |
-| `portable` | 207/220 | 94.1 % |
-| `c89` | 164/174 | 94.3 % |
+| `portable` | 212/220 | 96.4 % |
+| `c89` | 169/174 | 97.1 % |
 | `c99` | 41/43 | 95.3 % |
 | `c11` | 2/2 | 100 % |
-| `needs-cpp` | 90/98 | 91.8 % |
-| `needs-libc` | 57/63 | 90.5 % |
+| `needs-cpp` | 93/98 | 94.9 % |
+| `needs-libc` | 59/63 | 93.7 % |
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
-fails on 1.97.1. The table above counts it as a failure; on 1.99 the rows are
-205/218 (94.0 %) for `c99!` and 208/220 (94.5 %) for `c11!` and `c23!`.
+fails on 1.97.1. The tables above count it as a failure; on 1.99 the rows are
+210/218 (96.3 %) for `c99!` and 213/220 (96.8 %) for every entry point that
+selects all 220.
+
+The GNU dialects select all 220 cases and pass the same 212 as `c11!`: nothing
+in the corpus needs a *plain*-spelled GNU keyword, so switching the dialect on
+buys eligibility rather than passes.
 
 ### The failures, by cause
 
-Thirteen cases fail under `c11!` — twelve to compile and one at run time — and
-`c99!` adds `00219`, which wants a later entry point. None of them is a `cinrs`
-bug any more: the four the first measurement found — `00110`, `00159`, `00200`
-and `00219` — are fixed and have regression tests of their own, and so are the
-two that wanted compound literals (`00149` and `00150`) and the one that wanted
-bit-fields (`00218`).
+Eight cases fail under `c11!`, all of them to compile, and `c99!` adds `00219`,
+which wants a later entry point. None of them is a `cinrs` bug: the seven
+earlier measurements found — `00110`, `00149`, `00150`, `00159`, `00200`,
+`00218` and `00219` — are fixed and have regression tests of their own, and so
+are the six the GNU extensions closed (`00095`, `00170`, `00206`, `00210` and
+`00214`, plus `00209`'s incomplete `enum`).
 
-**A GCC extension the case relies on (6).** `cinrs` implements C, and refuses
-these with a located diagnostic rather than mistranslating them. Several of the
-cases say so in their own comments.
-
-| case | what it uses |
-| --- | --- |
-| `00095` | converting a function pointer to `void *` (`return &main;` from a `void *` function), a constraint violation in ISO C |
-| `00170`, `00209` | a forward-declared, incomplete `enum` — `00170`'s comment calls it "not ISO C … accepted by GCC" |
-| `00210` | `__attribute__((packed))`, `__attribute__((stdcall))`, `__attribute__((__noinline__))` |
-| `00213` | a statement expression, `({ … })` |
-| `00214` | a statement expression and `__builtin_expect` |
-
-**Something `cinrs` has not implemented yet (4).**
+**Something `cinrs` has not implemented (6).**
 
 | case | what it needs |
 | --- | --- |
 | `00204` | `va_arg` with a struct type |
 | `00207` | a variable length array |
-| `00216` | an empty `struct` as a member of an initialised aggregate (a GCC extension: C99 has no empty structs), GCC's range designators `[1 ... 5]`, and flexible array members |
+| `00209` | a function declarator with *no prototype* — `int (*fp)();` called with an argument. C23 removed the form and `cinrs` applies that rule in every mode, so `int f()` is `int f(void)` and the call has one argument too many. |
+| `00213` | a `goto` out of a statement expression, and a `?:` one of whose operands is `void`. The `goto` is the hard half: whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. |
+| `00216` | initialising a flexible array member, which GCC allows with a warning by over-allocating the object — the Rust item would have to have a different type from the one `sizeof` reports. Under `c99!` the case also needs the C23 empty initialiser `{}`, which `gnu99!` and `c23!` accept. |
 | `00220` | `<wchar.h>`, which is not among the bundled headers |
 
 **Wanted a later entry point (1, `c99!` only).** `00219` uses `_Generic` and is
-tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under `c11!` and
-`c23!` it passes, and is not on their lists.
-
-**A miscompile (1).** `00206` is the only case that compiles and runs and
-prints the wrong thing: it uses `#pragma push_macro("abort")` and
-`#pragma pop_macro`, which `cinrs` ignores as 6.10.6 says an unknown pragma
-should be ignored, so the macro is never restored and the output differs from
-the third line on. They are a GCC and MSVC extension rather than standard C,
-but implementing them would be cheap.
+tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under every other
+entry point — including `gnu99!`, which accepts what C11 added — it passes.
 
 **A documented deviation (1).** `00152` writes `#line line` with `line` a macro
 expanding to `1000` and then checks `__LINE__`. `cinrs` makes `__LINE__` the
@@ -281,6 +275,8 @@ cargo test --test c_testsuite                                   # guard, c99
 CINRS_CTESTSUITE_REPORT=1 cargo test --test c_testsuite          # report, c99
 CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_STANDARD=c11 \
     cargo test --test c_testsuite                                # report, c11
+CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_STANDARD=gnu99 \
+    cargo test --test c_testsuite                                # report, gnu99
 ```
 
 A full run of all 220 cases — generate, compile, execute, diff — takes about

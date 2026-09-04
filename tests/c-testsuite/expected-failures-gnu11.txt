@@ -1,0 +1,22 @@
+# The c-testsuite cases `cinrs` does not pass under `gnu11!`.
+#
+# Guard mode — the default, and what `cargo test` runs — skips these and
+# requires every other selected case to pass. It also runs them, so that
+# one which has started passing is reported and the line can go. See
+# `doc/c-testsuite.md` for what the causes are.
+#
+# One test id per line, with a note after it. An id written `?NNNNN`
+# passes or fails depending on the toolchain, and is guarded neither
+# way. Regenerate with
+#
+#     CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_UPDATE_EXPECTED=1 \
+#         CINRS_CTESTSUITE_STANDARD=gnu11 cargo test --test c_testsuite
+
+?00140  variadic function definition; needs Rust 1.99, so it passes there and not before
+00152   deviation: `__LINE__` names the .rs line, and `#line` does not redirect it
+00204   unsupported: `va_arg` with a struct type
+00207   unsupported: variable length array
+00209   unsupported: a function declarator with no prototype, which C23 removed and cinrs applies in every mode
+00213   unsupported: a `goto` out of a statement expression, and `?:` with one `void` operand
+00216   unsupported: initializing a flexible array member; under `c99!` also the C23 empty initializer `{}`
+00220   missing header: <wchar.h> is not bundled

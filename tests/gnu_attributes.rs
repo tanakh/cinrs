@@ -1,0 +1,335 @@
+//! `__attribute__((…))` and `#pragma pack`: what is honoured, and what it does.
+
+use cinrs::c99;
+
+// ---------------------------------------------------------------------------
+// packing
+// ---------------------------------------------------------------------------
+
+c99! {
+    #include <stddef.h>
+
+    /* A protocol header, which is the reason `packed` exists. */
+    struct __attribute__((packed)) Ethernet {
+        unsigned char dst[6];
+        unsigned char src[6];
+        unsigned short ethertype;
+        unsigned int crc;
+    };
+
+    struct Mixed { char c; int x; };
+    struct __attribute__((packed)) MixedPacked { char c; int x; };
+
+    /* Per-member packing, which only unaligns the member it is on. */
+    struct MemberPacked { char c; int x __attribute__((packed)); short s; };
+
+    #pragma pack(2)
+    struct Pack2 { char c; int x; short s; };
+    struct Pack2Bits { char c; long long b : 40; int z : 5; };
+    #pragma pack(push, 1)
+    struct Pack1 { char c; int x; };
+    #pragma pack(pop)
+    struct Pack2Again { char c; int x; short s; };
+    #pragma pack()
+    struct Natural { char c; int x; short s; };
+
+    unsigned long sizes(int which) {
+        switch (which) {
+        case 0: return sizeof(struct Ethernet);
+        case 1: return sizeof(struct Mixed);
+        case 2: return sizeof(struct MixedPacked);
+        case 3: return sizeof(struct MemberPacked);
+        case 4: return sizeof(struct Pack2);
+        case 5: return sizeof(struct Pack1);
+        case 6: return sizeof(struct Pack2Again);
+        case 7: return sizeof(struct Natural);
+        case 8: return sizeof(struct Pack2Bits);
+        default: return 0;
+        }
+    }
+
+    unsigned long offsets(int which) {
+        switch (which) {
+        case 0: return offsetof(struct Ethernet, ethertype);
+        case 1: return offsetof(struct Ethernet, crc);
+        case 2: return offsetof(struct MixedPacked, x);
+        case 3: return offsetof(struct MemberPacked, x);
+        case 4: return offsetof(struct MemberPacked, s);
+        case 5: return offsetof(struct Pack2, x);
+        case 6: return offsetof(struct Pack2, s);
+        default: return 0;
+        }
+    }
+
+    /* Reading and writing a packed member through a pointer, which must not
+     * take a reference to it. */
+    unsigned int ethertype_of(struct Ethernet *e) { return e->ethertype; }
+    void set_crc(struct Ethernet *e, unsigned int crc) { e->crc = crc; }
+
+    /* Bit-fields inside a packed struct follow GCC: the allocation-unit rule
+     * is switched off, so a field starts at the next free bit. */
+    struct __attribute__((packed)) PackedBits { char c; int x : 20; int y : 20; };
+    unsigned long packed_bits_size(void) { return sizeof(struct PackedBits); }
+    int packed_bits_roundtrip(int v) {
+        struct PackedBits b;
+        b.x = v;
+        return b.x;
+    }
+}
+
+#[test]
+fn packed_records_have_the_layout_gcc_gives_them() {
+    // Verified against gcc 15 on x86-64; see tests/bitfield_layout.rs for the
+    // differential test that keeps the whole corpus honest.
+    assert_eq!(unsafe { sizes(0) }, 6 + 6 + 2 + 4);
+    assert_eq!(unsafe { sizes(1) }, 8);
+    assert_eq!(unsafe { sizes(2) }, 5);
+    assert_eq!(unsafe { sizes(3) }, 8);
+    assert_eq!(unsafe { sizes(4) }, 8);
+    assert_eq!(unsafe { sizes(5) }, 5);
+    assert_eq!(unsafe { sizes(6) }, 8);
+    assert_eq!(unsafe { sizes(7) }, 12);
+    assert_eq!(unsafe { sizes(8) }, 8);
+    assert_eq!(unsafe { offsets(0) }, 12);
+    assert_eq!(unsafe { offsets(1) }, 14);
+    assert_eq!(unsafe { offsets(2) }, 1);
+    assert_eq!(unsafe { offsets(3) }, 1);
+    assert_eq!(unsafe { offsets(4) }, 6);
+    assert_eq!(unsafe { offsets(5) }, 2);
+    assert_eq!(unsafe { offsets(6) }, 6);
+
+    // The Rust item really has that layout, which is what makes the two sides
+    // agree about the same bytes.
+    assert_eq!(size_of::<Ethernet>(), 18);
+    assert_eq!(align_of::<Ethernet>(), 1);
+
+    let mut e = Ethernet {
+        dst: [0; 6],
+        src: [0; 6],
+        ethertype: 0x0800,
+        crc: 0,
+    };
+    assert_eq!(unsafe { ethertype_of(&raw mut e) }, 0x0800);
+    unsafe { set_crc(&raw mut e, 0xdead_beef) };
+    assert_eq!({ e.crc }, 0xdead_beef);
+
+    assert_eq!(unsafe { packed_bits_size() }, 6);
+    assert_eq!(unsafe { packed_bits_roundtrip(-1) }, -1);
+    assert_eq!(unsafe { packed_bits_roundtrip(0x5_5555) }, 0x5_5555);
+}
+
+// ---------------------------------------------------------------------------
+// aligned
+// ---------------------------------------------------------------------------
+
+c99! {
+    #include <stddef.h>
+
+    struct __attribute__((aligned(32))) CacheLine { int a; };
+    struct Moved { char c; __attribute__((aligned(16))) int x; };
+
+    unsigned long cache_line_size(void) { return sizeof(struct CacheLine); }
+    unsigned long cache_line_align(void) { return __alignof__(struct CacheLine); }
+    unsigned long moved_offset(void) { return offsetof(struct Moved, x); }
+    unsigned long moved_size(void) { return sizeof(struct Moved); }
+}
+
+#[test]
+fn aligned_raises_a_records_alignment_and_moves_a_member() {
+    assert_eq!(unsafe { cache_line_size() }, 32);
+    assert_eq!(unsafe { cache_line_align() }, 32);
+    assert_eq!(align_of::<CacheLine>(), 32);
+    assert_eq!(unsafe { moved_offset() }, 16);
+    assert_eq!(unsafe { moved_size() }, 32);
+    assert_eq!(size_of::<Moved>(), 32);
+}
+
+// ---------------------------------------------------------------------------
+// function attributes
+// ---------------------------------------------------------------------------
+
+c99! {
+    __attribute__((always_inline)) int hot_path(int n) { return n + 1; }
+    __attribute__((noinline)) int cold_path(int n) { return n + 2; }
+    __attribute__((cold)) int unlikely_path(int n) { return n + 3; }
+    int pure_ish(int n) __attribute__((pure, nothrow, leaf, warn_unused_result));
+    int pure_ish(int n) { return n * 2; }
+
+    /* An attribute nobody has heard of is ignored, exactly as C23 requires. */
+    __attribute__((no_such_attribute("with", 1, arguments))) int ignored(int n) {
+        return n;
+    }
+
+    __attribute__((noreturn)) void never_comes_back(void);
+    void never_comes_back(void) { for (;;) { } }
+    int ends_with_a_noreturn_call(int n) {
+        if (n) return n;
+        never_comes_back();
+    }
+
+    __attribute__((section(".cinrs_test_text"))) int in_a_section(void) { return 7; }
+
+    __attribute__((deprecated("use replacement instead"))) int obsolete(void) { return 1; }
+    int replacement(void) { return 2; }
+}
+
+#[test]
+fn the_function_attributes_are_honoured_or_ignored() {
+    assert_eq!(unsafe { hot_path(1) }, 2);
+    assert_eq!(unsafe { cold_path(1) }, 3);
+    assert_eq!(unsafe { unlikely_path(1) }, 4);
+    assert_eq!(unsafe { pure_ish(21) }, 42);
+    assert_eq!(unsafe { ignored(5) }, 5);
+    assert_eq!(unsafe { ends_with_a_noreturn_call(5) }, 5);
+    assert_eq!(unsafe { in_a_section() }, 7);
+    assert_eq!(unsafe { replacement() }, 2);
+    #[allow(deprecated)]
+    {
+        assert_eq!(unsafe { obsolete() }, 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// constructors and destructors
+// ---------------------------------------------------------------------------
+
+c99! {
+    static int startup_count;
+
+    __attribute__((constructor)) static void run_first(void) { startup_count += 1; }
+    __attribute__((constructor(101))) static void run_first_too(void) {
+        startup_count += 10;
+    }
+    __attribute__((destructor)) static void run_last(void) { startup_count -= 1; }
+
+    int startup_ran(void) { return startup_count; }
+}
+
+#[test]
+fn a_constructor_has_already_run_by_the_time_a_test_does() {
+    // Both constructors ran before `main`, so the counter is 11 before the
+    // first statement of any test.
+    assert_eq!(unsafe { startup_ran() }, 11);
+}
+
+// ---------------------------------------------------------------------------
+// asm labels
+// ---------------------------------------------------------------------------
+
+c99! {
+    /* An `asm` label renames a declaration's symbol, which is how a program
+     * reaches a libc function under a name of its own. A declaration the unit
+     * does not define is renamed apart in the generated `extern` block, so the
+     * C calls it and Rust asks the C. */
+    unsigned long my_strlen(const char *s) __asm__("strlen");
+    int my_abs(int n) __asm__("abs");
+
+    unsigned long length_of(const char *s) { return my_strlen(s); }
+    int magnitude(int n) { return my_abs(n); }
+}
+
+#[test]
+fn an_asm_label_points_a_declaration_at_another_symbol() {
+    assert_eq!(unsafe { length_of(c"hello".as_ptr()) }, 5);
+    assert_eq!(unsafe { magnitude(-7) }, 7);
+}
+
+// ---------------------------------------------------------------------------
+// fallthrough, unused and the statement attributes
+// ---------------------------------------------------------------------------
+
+c99! {
+    int fallthrough_sum(int n) {
+        int total = 0;
+        switch (n) {
+        case 3:
+            total += 3;
+            __attribute__((fallthrough));
+        case 2:
+            total += 2;
+            __attribute__((fallthrough));
+        case 1:
+            total += 1;
+            break;
+        }
+        return total;
+    }
+
+    int unused_things(int used) {
+        int spare __attribute__((unused)) = 0;
+        return used;
+    }
+}
+
+#[test]
+fn statement_and_variable_attributes_are_accepted() {
+    assert_eq!(unsafe { fallthrough_sum(3) }, 6);
+    assert_eq!(unsafe { fallthrough_sum(1) }, 1);
+    assert_eq!(unsafe { unused_things(4) }, 4);
+}
+
+// ---------------------------------------------------------------------------
+// the portability idioms
+// ---------------------------------------------------------------------------
+
+mod disabled {
+    // `#define __attribute__(x)` is what every portability header writes for a
+    // compiler that has no attributes, and it has to keep working: the
+    // spelling is an ordinary identifier until the tokens reach the parser, so
+    // a macro of that name defines and expands like any other.
+    cinrs::c99! {
+        #define __attribute__(x)
+        struct Ignored { char c; int x; } __attribute__((packed));
+        unsigned long size(void) { return sizeof(struct Ignored); }
+    }
+
+    #[test]
+    fn a_macro_named_attribute_wins() {
+        assert_eq!(unsafe { size() }, 8);
+    }
+}
+
+c99! {
+    #pragma cinrs module "declarators"
+
+    /* An attribute after a `typedef`'d record's member list. */
+    typedef struct { char c; int x; } __attribute__((packed)) Packed;
+    unsigned long packed_size(void) { return sizeof(Packed); }
+
+    /* And one *inside* a declarator, which is where GCC puts a calling
+     * convention — the position that used to garble the whole type. */
+    typedef int (__attribute__((stdcall)) *Fn)(int);
+    static int twice(int n) { return n * 2; }
+    int through_a_pointer(int n) { Fn f = twice; return f(n); }
+}
+
+#[test]
+fn attributes_in_every_position_gcc_accepts_them() {
+    assert_eq!(unsafe { declarators::packed_size() }, 5);
+    assert_eq!(unsafe { declarators::through_a_pointer(21) }, 42);
+}
+
+mod exported {
+    /// An `asm` label on a *definition* names the symbol the item takes, which
+    /// only means something for a unit that asks for real C symbols at all.
+    mod library {
+        cinrs::c99! {
+            #pragma cinrs export
+            int cinrs_gnu_test_add(int a, int b) __asm__("cinrs_gnu_test_plus");
+            int cinrs_gnu_test_add(int a, int b) { return a + b; }
+        }
+    }
+
+    mod user {
+        cinrs::c99! {
+            int cinrs_gnu_test_plus(int a, int b);
+            int use_it(int a, int b) { return cinrs_gnu_test_plus(a, b); }
+        }
+    }
+
+    #[test]
+    fn an_asm_label_renames_an_exported_definition() {
+        assert_eq!(unsafe { library::cinrs_gnu_test_add(1, 2) }, 3);
+        assert_eq!(unsafe { user::use_it(20, 22) }, 42);
+    }
+}

@@ -1,0 +1,57 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        struct __attribute__((packed)) Header {\n            unsigned char kind;\n            unsigned int length;\n            unsigned short flags : 12;\n        };\n\n        #pragma pack(2)\n        struct Halved { char c; int x; short s; };\n        #pragma pack()\n\n        struct Moved { char c; __attribute__((aligned(16))) int x; };\n\n        unsigned int length_of(struct Header *h) { return h->length; }\n        \"#)"
+---
+mod __cinrs_unit_a87d9fcd {
+    #[allow(…)]
+    #[repr(C, packed)]
+    #[derive(Copy, Clone)]
+    pub struct Header {
+        pub kind: ::core::ffi::c_uchar,
+        pub length: ::core::ffi::c_uint,
+        pub __cinrs_bits0: [u8; 2],
+    }
+    #[allow(…)]
+    impl Header {
+        #[inline]
+        pub fn flags(&self) -> ::core::ffi::c_ushort {
+            let raw: u64 = (self.__cinrs_bits0[0] as u64)
+                | ((self.__cinrs_bits0[1] as u64) << 8);
+            let value: u64 = raw & 0xfff;
+            value as ::core::ffi::c_ushort
+        }
+        #[inline]
+        pub fn set_flags(&mut self, value: ::core::ffi::c_ushort) {
+            let bits: u64 = (value as u64) & 0xfff;
+            let raw: u64 = (self.__cinrs_bits0[0] as u64)
+                | ((self.__cinrs_bits0[1] as u64) << 8);
+            let raw: u64 = (raw & 0xfffffffffffff000) | bits;
+            self.__cinrs_bits0[0] = raw as u8;
+            self.__cinrs_bits0[1] = (raw >> 8) as u8;
+        }
+    }
+    #[allow(…)]
+    #[repr(C, packed(2))]
+    #[derive(Copy, Clone)]
+    pub struct Halved {
+        pub c: ::core::ffi::c_char,
+        pub x: ::core::ffi::c_int,
+        pub s: ::core::ffi::c_short,
+    }
+    #[allow(…)]
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct Moved {
+        pub c: ::core::ffi::c_char,
+        pub __cinrs_pad0: [u8; 15],
+        pub x: ::core::ffi::c_int,
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn length_of(mut h: *mut Header) -> ::core::ffi::c_uint {
+        unsafe {
+            return (*h).length;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_a87d9fcd::*;

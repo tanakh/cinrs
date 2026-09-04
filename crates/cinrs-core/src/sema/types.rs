@@ -57,12 +57,30 @@ struct Member {
     is_const: bool,
     /// The width and signedness of a bit-field.
     bits: Option<(u32, bool)>,
-    /// What `_Alignas` asked for.
+    /// What `_Alignas` or `__attribute__((aligned(N)))` asked for.
     align_request: Option<u64>,
-    /// Where it asked for it.
-    align_range: Option<SourceRange>,
+    /// Whether `__attribute__((packed))` applies to this member, from the
+    /// member itself or from the record.
+    packed: bool,
+    /// Whether this is the flexible array member.
+    flexible: bool,
     range: SourceRange,
 }
+
+/// What packing a record asked for.
+///
+/// `Some(n)` is a maximum member alignment in bytes: `__attribute__((packed))`
+/// is `Some(1)` and `#pragma pack(N)` is `Some(N)`. `None` means natural
+/// alignment throughout.
+///
+/// The distinction matters twice. A member's alignment becomes
+/// `min(natural, n)`, and so does the record's; and — the part that is easy to
+/// miss — *any* packing switches off the bit-field allocation-unit rule, so a
+/// field is placed at the next free bit however wide its type is. That is
+/// GCC's own condition (`maximum_field_alignment == 0` in `stor-layout.cc`),
+/// and it is what makes `#pragma pack(16)` change a layout it looks like it
+/// should leave alone.
+type Packing = Option<u64>;
 
 /// Where a member ends up.
 enum Spot {
@@ -84,10 +102,13 @@ struct LaidOut {
     fields: Vec<Field>,
     rust_fields: Vec<RustField>,
     layout: Layout,
+    /// The alignment the generated Rust item really has, which a packed record
+    /// leaves at one; see [`ir::RecordDef::rust_align`].
+    rust_align: u64,
     /// The alignment the generated item needs `#[repr(C, align(N))]` for.
     align_attr: Option<u64>,
-    /// The members whose `_Alignas` could not be honoured.
-    unsupported: Vec<usize>,
+    /// The maximum field alignment the item needs `#[repr(C, packed(N))]` for.
+    packed_attr: Option<u64>,
 }
 
 impl Sema {
@@ -427,7 +448,7 @@ impl Sema {
         // Registered before the members are resolved, so that a member of type
         // `struct S *` inside `struct S` finds the tag it is inside.
         self.record_by_range.insert(key, id);
-        self.define_record(id, fields);
+        self.define_record(id, spec, fields);
         for assert in &spec.asserts {
             self.static_assert(assert);
         }
@@ -464,19 +485,50 @@ impl Sema {
             complete: false,
             layout: None,
             align: None,
+            packed: None,
+            rust_align: 1,
+            flexible: false,
             emit: true,
             range,
         })
     }
 
     /// Resolves a member list and computes the record's layout.
-    fn define_record(&mut self, id: RecordId, fields: &[ast::FieldDecl]) {
+    fn define_record(&mut self, id: RecordId, spec: &ast::RecordType, fields: &[ast::FieldDecl]) {
         let kind = self.types().record(id).kind;
+        // What the record asks of every member: `packed` is a maximum
+        // alignment of one byte, and `#pragma pack(N)` one of N.
+        let packing: Packing = if spec.attrs.packed.is_some() {
+            Some(1)
+        } else {
+            spec.pack.map(u64::from)
+        };
+        let record_align = self.alignment_of(spec.attrs.aligned.as_ref());
         let mut members: Vec<Member> = Vec::with_capacity(fields.len());
         let mut anonymous = 0u32;
-        for field in fields {
-            let Some(ty) = self.ty_of(&field.ty) else {
-                continue;
+        let last = fields.len().saturating_sub(1);
+        for (position, field) in fields.iter().enumerate() {
+            // A flexible array member — `int data[];` as the last member —
+            // is a `[T; 0]` tail the object is expected to be over-allocated
+            // for. `int data[0];` is GNU's older spelling of the same thing
+            // and needs nothing special: it already has a length.
+            let flexible = matches!(
+                field.ty.kind,
+                ast::TypeKind::Array {
+                    size: ast::ArraySize::Unspecified,
+                    ..
+                }
+            );
+            let ty = if flexible {
+                match self.flexible_member_ty(field, kind, position == last) {
+                    Some(ty) => ty,
+                    None => continue,
+                }
+            } else {
+                match self.ty_of(&field.ty) {
+                    Some(ty) => ty,
+                    None => continue,
+                }
             };
             // Rust's `VaList` borrows the caller's frame; a member would have
             // to name that lifetime, and the record would stop being a plain
@@ -484,17 +536,26 @@ impl Sema {
             if self.reject_va_list(ty, field.range) {
                 continue;
             }
-            let align_request = self.alignment_of(field.specifiers.alignas.as_ref());
-            let align_range = field.specifiers.alignas.as_ref().map(|a| a.range);
+            let requested = field
+                .attrs
+                .aligned
+                .as_ref()
+                .or(field.specifiers.alignas.as_ref());
+            let align_request = self.alignment_of(requested);
+            let align_range = requested.map(|a| a.range);
+            // Only the member's *own* `packed` makes it one-byte aligned; a
+            // `#pragma pack(N)` caps every member at N instead, which
+            // `packing` says on its own.
+            let packed = field.attrs.packed.is_some();
 
             if let Some(width) = &field.bit_width {
-                if align_request.is_some() {
-                    // Which is what GCC says too: a bit-field has no address,
-                    // so there is nothing for an alignment to apply to.
-                    self.error(
-                        align_range.unwrap_or(field.range),
-                        "'_Alignas' cannot be applied to a bit-field",
-                    );
+                if let Some(range) = align_range
+                    && field.specifiers.alignas.is_some()
+                {
+                    // Which is what GCC says too: `_Alignas` may not be
+                    // applied to a bit-field. Its own `aligned` attribute may,
+                    // and moves the field to that boundary.
+                    self.error(range, "'_Alignas' cannot be applied to a bit-field");
                 }
                 let Some(bits) = self.bit_field_width(field, ty, width) else {
                     continue;
@@ -521,8 +582,9 @@ impl Sema {
                     ty,
                     is_const: field.ty.qualifiers.is_const,
                     bits: Some(bits),
-                    align_request: None,
-                    align_range: None,
+                    align_request: field.attrs.aligned.as_ref().and(align_request),
+                    packed,
+                    flexible: false,
                     range,
                 });
                 continue;
@@ -565,7 +627,8 @@ impl Sema {
                     is_const: field.ty.qualifiers.is_const,
                     bits: None,
                     align_request,
-                    align_range,
+                    packed,
+                    flexible: false,
                     range: field.range,
                 });
                 anonymous += 1;
@@ -598,21 +661,39 @@ impl Sema {
                 is_const: field.ty.qualifiers.is_const,
                 bits: None,
                 align_request,
-                align_range,
+                packed,
+                flexible,
                 range: name.range,
             });
         }
 
-        let laid_out = self.lay_out(kind, &members);
-        for index in laid_out.unsupported {
-            // Report at the `_Alignas` rather than at the member: the
-            // specifier is what has to change.
-            let range = members[index].align_range.unwrap_or(members[index].range);
+        let flexible = members.last().is_some_and(|m| m.flexible);
+        let mut laid_out = self.lay_out(kind, &members, packing);
+        // `__attribute__((aligned(N)))` on the record raises its alignment,
+        // and the size with it.
+        if let Some(want) = record_align
+            && want > laid_out.layout.align
+        {
+            laid_out.layout.align = want;
+            laid_out.layout.size = round_up(laid_out.layout.size, want);
+            laid_out.align_attr = Some(want);
+        }
+        // Rust refuses a packed type that transitively holds a
+        // `#[repr(align)]` one, and C is perfectly happy to pack such a
+        // member; the inner records swap the attribute for a zero-sized field
+        // that says the same thing, which is not a `repr(align)` type.
+        if laid_out.packed_attr.is_some() {
+            for member in &members {
+                self.demote_alignment(member.ty, spec.range);
+            }
+        }
+        if laid_out.align_attr.is_some() && laid_out.packed_attr.is_some() {
+            // Rust refuses `#[repr(C, packed, align(N))]` outright (`E0587`),
+            // and there is no second way to say it.
             self.error(
-                range,
-                "_Alignas on this member is not supported yet; the member's natural \
-                 offset does not already satisfy the alignment asked for, and honouring \
-                 it would change how Rust code reaches the field",
+                spec.range,
+                "a record cannot be both packed and given a stricter alignment; Rust has \
+                 no representation for that combination",
             );
         }
         let record = self.program.types.record_mut(id);
@@ -621,6 +702,103 @@ impl Sema {
         record.complete = true;
         record.layout = Some(laid_out.layout);
         record.align = laid_out.align_attr;
+        record.packed = laid_out.packed_attr;
+        record.rust_align = laid_out.rust_align;
+        record.flexible = flexible;
+    }
+
+    /// Replaces `#[repr(C, align(N))]` with a zero-sized field of that
+    /// alignment, wherever a record reached from `ty` carries one.
+    ///
+    /// See [`ir::RustField::Align`] for why. Only a record inside a *packed*
+    /// one is ever demoted, so the ordinary item keeps the attribute, which is
+    /// both shorter and one field fewer for Rust code to write out.
+    fn demote_alignment(&mut self, ty: Ty, range: SourceRange) {
+        let id = match ty {
+            Ty::Record(id) => id,
+            Ty::Array(id) => {
+                let elem = self.types().array_type(id).elem;
+                return self.demote_alignment(elem, range);
+            }
+            _ => return,
+        };
+        let members: Vec<Ty> = self
+            .types()
+            .record(id)
+            .fields
+            .iter()
+            .map(|field| field.ty)
+            .collect();
+        if let Some(align) = self.types().record(id).align {
+            if align > MAX_MARKER_ALIGN {
+                self.error(
+                    range,
+                    format!(
+                        "a packed record cannot hold '{}', whose alignment of {align} needs                          '#[repr(align)]' — which Rust does not allow inside a packed type",
+                        self.tyname(ty)
+                    ),
+                );
+            } else {
+                let name = format!("__cinrs_align{}", self.types().record(id).rust_fields.len());
+                let record = self.program.types.record_mut(id);
+                record.align = None;
+                record
+                    .rust_fields
+                    .push(ir::RustField::Align { name, align });
+            }
+        }
+        for member in members {
+            self.demote_alignment(member, range);
+        }
+    }
+
+    /// The type of a flexible array member, `int data[];`.
+    ///
+    /// It is an array of no elements: `sizeof` the record leaves it out, and
+    /// indexing it is pointer arithmetic past the end of the object, which is
+    /// what the C program is over-allocating for. C99 6.7.2.1p16 asks for it
+    /// to be the last member of a `struct` with at least one other member;
+    /// GCC is more relaxed, and so is this — only "last member" is required,
+    /// because nothing else can be laid out at all.
+    fn flexible_member_ty(
+        &mut self,
+        field: &ast::FieldDecl,
+        kind: RecordKind,
+        last: bool,
+    ) -> Option<Ty> {
+        let ast::TypeKind::Array { elem, .. } = &field.ty.kind else {
+            unreachable!("the caller matched an array of unspecified size");
+        };
+        if !last {
+            self.error(
+                field.range,
+                "a flexible array member must be the last member of the struct",
+            );
+            return None;
+        }
+        if kind == RecordKind::Union {
+            self.error(
+                field.range,
+                "a flexible array member is not allowed in a union",
+            );
+            return None;
+        }
+        let element = self.ty_of(elem)?;
+        if element.is_func() || !self.types().is_complete(element) {
+            self.error(
+                field.range,
+                format!(
+                    "a flexible array member has incomplete element type '{}'",
+                    self.tyname(element)
+                ),
+            );
+            return None;
+        }
+        Some(
+            self.program
+                .types
+                .array(element, 0, elem.qualifiers.is_const),
+        )
     }
 
     /// Checks the width of a bit-field, and works out whether reading it
@@ -806,24 +984,62 @@ impl Sema {
     /// Places the members and builds both views of the record: the C member
     /// list, and the fields of the Rust item that has to have the same layout.
     ///
-    /// A member's `_Alignas` is honoured by raising the *record's* alignment,
-    /// which is what `#[repr(C, align(N))]` says: Rust then lays the members
-    /// out by their own natural alignment, so the offset our layout computes
-    /// and the offset the generated item really has only agree while the
-    /// member's natural offset already satisfies what it asked for. Where it
-    /// does not — `struct { char c; _Alignas(16) int x; }` — the two would
-    /// disagree, and the member is reported instead.
+    /// The two views are reconciled by *choosing the Rust fields*, not by
+    /// hoping they agree: explicit `[u8; M]` padding goes wherever `#[repr(C)]`
+    /// would otherwise put a field too early — before a bit-field run, before
+    /// a member an `aligned(N)` moved along, after a trailing `:0` — and
+    /// `#[repr(C, align(N))]` says an alignment no Rust field of the item
+    /// carries. Packing goes the other way: `#[repr(C, packed(N))]` is exactly
+    /// `#pragma pack(N)`, so the field alignments Rust uses are the ones the C
+    /// layout used.
     ///
-    /// Bit-fields need the same reconciliation, and get it the other way
-    /// round: the *Rust* fields are chosen so that `#[repr(C)]` reproduces the
-    /// offsets C asked for, with explicit padding wherever it would place one
-    /// too early and `#[repr(C, align(N))]` wherever a bit-field's type made
-    /// the record stricter than any Rust field of it is.
-    fn lay_out(&self, kind: RecordKind, members: &[Member]) -> LaidOut {
+    /// `packing` is the maximum member alignment; see [`Packing`] for the two
+    /// things it changes.
+    fn lay_out(&self, kind: RecordKind, members: &[Member], packing: Packing) -> LaidOut {
         let target = &self.target;
         let mut align = 1u64;
         let mut raised: Option<u64> = None;
-        let mut unsupported = Vec::new();
+
+        // The alignment a member is really placed by: its own, capped by the
+        // packing and then raised by whatever it asked for.
+        let effective = |member: &Member, item: Layout| -> u64 {
+            let mut want = if member.packed {
+                1
+            } else {
+                match packing {
+                    Some(max) => item.align.min(max),
+                    None => item.align,
+                }
+            };
+            if let Some(request) = member.align_request {
+                want = want.max(request);
+            }
+            want.max(1)
+        };
+
+        // What the *generated Rust item* will have to say about itself, which
+        // is decided before either pass: `#[repr(C, packed(N))]` is needed as
+        // soon as one member field would otherwise be placed by an alignment
+        // stricter than the layout used, whether that came from the record's
+        // own packing or from a `packed` on the member alone.
+        let uncapped = members
+            .iter()
+            .filter(|m| m.bits.is_none())
+            .map(|m| self.rust_align_of(m.ty))
+            .max()
+            .unwrap_or(1);
+        let member_packed = members
+            .iter()
+            .any(|m| m.packed && m.bits.is_none() && self.rust_align_of(m.ty) > 1);
+        let rust_packing: Option<u64> = match packing {
+            Some(max) if max < uncapped => Some(max),
+            _ if member_packed => Some(1),
+            _ => None,
+        };
+        let capped = |want: u64| match rust_packing {
+            Some(max) => want.min(max),
+            None => want,
+        };
 
         // Pass one: where every member goes, and which storage run each
         // bit-field belongs to.
@@ -837,25 +1053,19 @@ impl Sema {
                 .types()
                 .size_align(member.ty, target)
                 .unwrap_or(Layout { size: 0, align: 1 });
+            let want = effective(member, item);
             if kind == RecordKind::Union {
                 off = 0;
             }
             let Some((width, _)) = member.bits else {
-                align = align.max(item.align);
+                align = align.max(want);
+                if want > item.align {
+                    raised = Some(raised.unwrap_or(1).max(want));
+                }
                 let offset = match kind {
-                    RecordKind::Struct => round_up(off.div_ceil(8), item.align),
+                    RecordKind::Struct => round_up(off.div_ceil(8), want),
                     RecordKind::Union => 0,
                 };
-                if let Some(want) = member.align_request
-                    && want > item.align
-                {
-                    if offset % want == 0 {
-                        align = align.max(want);
-                        raised = Some(raised.unwrap_or(1).max(want));
-                    } else {
-                        unsupported.push(index);
-                    }
-                }
                 spots.push(Spot::Byte(offset));
                 match kind {
                     RecordKind::Struct => off = offset.saturating_add(item.size).saturating_mul(8),
@@ -865,17 +1075,27 @@ impl Sema {
             };
             // A bit-field never straddles a unit of its own type: if it would,
             // it starts at the next unit boundary instead. Width zero is the
-            // request for that boundary and nothing else.
+            // request for that boundary and nothing else — and it asks for it
+            // however the record is packed, which is the one part of the rule
+            // packing does not switch off.
             let unit = item.size.saturating_mul(8).max(1);
             let w = u64::from(width);
-            if w == 0 || off / unit != (off + w - 1) / unit {
+            let unit_rule = packing.is_none() && !member.packed && member.align_request.is_none();
+            if w == 0 {
+                off = round_up(off, unit);
+            } else if let Some(request) = member.align_request {
+                off = round_up(off, request.saturating_mul(8));
+            } else if unit_rule && off / unit != (off + w - 1) / unit {
                 off = round_up(off, unit);
             }
             let (start, end) = (off, off + w);
             off = end;
             // Only a named bit-field makes the record stricter.
             if member.name.is_some() {
-                align = align.max(item.align);
+                align = align.max(want);
+                if want > item.align {
+                    raised = Some(raised.unwrap_or(1).max(want));
+                }
             }
             spots.push(Spot::Bits { start });
             // In a union every member starts at bit zero, so no two of them
@@ -925,9 +1145,13 @@ impl Sema {
         let mut emitted = vec![false; runs.len()];
         let mut natural = 1u64;
         let mut pos = 0u64;
+        // The end of the widest member of a union, which is the size Rust
+        // gives the item before any rounding.
+        let mut widest = 0u64;
         let mut pads = 0u32;
         for (index, member) in members.iter().enumerate() {
             if kind == RecordKind::Union {
+                widest = widest.max(pos);
                 pos = 0;
             }
             match spots[index] {
@@ -936,11 +1160,16 @@ impl Sema {
                         .types()
                         .size_align(member.ty, target)
                         .unwrap_or(Layout { size: 0, align: 1 });
-                    natural = natural.max(item.align);
+                    // The alignment Rust will place the field by: the one the
+                    // *generated item* for its type really has, capped by what
+                    // the record says about itself.
+                    let rust_align = capped(self.rust_align_of(member.ty));
+                    natural = natural.max(rust_align);
                     // `#[repr(C)]` inserts the padding an alignment calls for
                     // on its own; only a member C put *further* along than
-                    // that needs a field of its own to get there.
-                    if offset > round_up(pos, item.align) {
+                    // that — because `aligned(N)` moved it — needs a field of
+                    // its own to get there.
+                    if offset > round_up(pos, rust_align) {
                         rust_fields.push(RustField::Pad {
                             name: format!("__cinrs_pad{pads}"),
                             bytes: offset - pos,
@@ -955,6 +1184,7 @@ impl Sema {
                         is_const: member.is_const,
                         offset,
                         bits: None,
+                        flexible: member.flexible,
                         range: member.range,
                     });
                     pos = offset.saturating_add(item.size);
@@ -1004,6 +1234,7 @@ impl Sema {
                             getter: String::new(),
                             setter: String::new(),
                         }),
+                        flexible: false,
                         range: member.range,
                     });
                 }
@@ -1011,27 +1242,75 @@ impl Sema {
         }
         // A trailing bit-field can push the record's size past its last Rust
         // field without leaving any storage behind — `struct { int a; long
-        // long : 0; }` is four bytes of `a` and twelve of nothing. Only an
-        // explicit field can make `#[repr(C)]` reproduce that.
-        if kind == RecordKind::Struct && bytes > pos {
+        // long : 0; }` is four bytes of `a` and twelve of nothing — and a
+        // packed record has no alignment left to round its own size up with.
+        // Only an explicit field can make `#[repr(C)]` reproduce either.
+        let want_end = if rust_packing.is_some() {
+            layout.size
+        } else {
+            bytes
+        };
+        widest = widest.max(pos);
+        // A packed item has no alignment left to round its own size up with,
+        // so a union grows by a member of its own; every other case is Rust's
+        // own rounding.
+        let end = if kind == RecordKind::Struct {
+            pos
+        } else {
+            widest
+        };
+        if want_end > end {
+            // A union's members all start at zero, so the filler has to *be*
+            // the size rather than make up the difference.
+            let bytes = if kind == RecordKind::Struct {
+                want_end - end
+            } else {
+                want_end
+            };
             rust_fields.push(RustField::Pad {
                 name: format!("__cinrs_pad{pads}"),
-                bytes: bytes - pos,
+                bytes,
             });
         }
         name_accessors(&mut fields);
+        // A record whose alignment comes from a bit-field's type — or from an
+        // `aligned(N)` — has no Rust field that strict, so the item has to say
+        // so itself. A packed one cannot: Rust refuses `packed` and `align`
+        // together, so the generated item is left one byte aligned and
+        // [`RecordDef::rust_align`] records that, which is what an enclosing
+        // record's padding is then computed from.
+        let align_attr = if rust_packing.is_some() {
+            None
+        } else if layout.align > natural {
+            Some(layout.align)
+        } else {
+            raised
+        };
         LaidOut {
+            rust_align: align_attr.unwrap_or(natural),
             fields,
             rust_fields,
-            // A record whose alignment comes from a bit-field's type has no
-            // Rust field that strict, so the item has to say so itself.
-            align_attr: if layout.align > natural {
-                Some(layout.align)
-            } else {
-                raised
-            },
+            align_attr,
+            packed_attr: rust_packing,
             layout,
-            unsupported,
+        }
+    }
+
+    /// The alignment the *generated Rust item* for a type really has.
+    ///
+    /// Usually the C alignment, and not always: a packed record's item cannot
+    /// carry one, because Rust refuses `#[repr(C, packed)]` together with
+    /// `align(N)`. Laying an enclosing record out has to know which of the two
+    /// numbers Rust will use, or the padding it inserts would be computed from
+    /// an offset the item does not have.
+    fn rust_align_of(&self, ty: Ty) -> u64 {
+        match ty {
+            Ty::Record(id) => self.types().record(id).rust_align.max(1),
+            Ty::Array(id) => self.rust_align_of(self.types().array_type(id).elem),
+            other => self
+                .types()
+                .size_align(other, &self.target)
+                .map_or(1, |layout| layout.align),
         }
     }
 
@@ -1066,7 +1345,7 @@ impl Sema {
         let Some(enumerators) = &spec.enumerators else {
             let name = spec.name.as_ref().expect("the parser requires a tag here");
             return match self.lookup_tag(&name.name) {
-                Some(TagEntry::Enum { ty, unsigned }) => {
+                Some(TagEntry::Enum { ty, unsigned, .. }) => {
                     self.enum_by_range.insert(key, ty);
                     self.enum_unsigned.insert(key, unsigned);
                     Ok(ty)
@@ -1079,33 +1358,45 @@ impl Sema {
                     ),
                 )),
                 // C23 allows an enum with a fixed underlying type to be
-                // declared before it is defined; nothing else can be.
-                None => match underlying {
-                    Some(ty) => {
-                        let unsigned = !ty.is_signed(&self.target);
-                        self.insert_tag(&name.name, TagEntry::Enum { ty, unsigned });
-                        self.enum_by_range.insert(key, ty);
-                        self.enum_unsigned.insert(key, unsigned);
-                        Ok(ty)
-                    }
-                    None => Err(TypeError::at(
-                        spec.range,
-                        format!(
-                            "'enum {}' has not been defined; C99 has no incomplete enum types",
-                            name.name
-                        ),
-                    )),
-                },
+                // declared before it is defined, and GNU allows *any*
+                // enumeration to be — `enum e; enum e *p;` is common in code
+                // that only passes the values around. Until the list is seen
+                // the type is `int`, which is what an enumeration compiles to
+                // here anyway; the tag then keeps that type when it is
+                // completed rather than gaining an alias of its own, so that
+                // the two mentions never disagree.
+                None => {
+                    let ty = underlying.unwrap_or(Ty::Int);
+                    let unsigned = !ty.is_signed(&self.target);
+                    self.insert_tag(
+                        &name.name,
+                        TagEntry::Enum {
+                            ty,
+                            unsigned,
+                            complete: false,
+                        },
+                    );
+                    self.enum_by_range.insert(key, ty);
+                    self.enum_unsigned.insert(key, unsigned);
+                    Ok(ty)
+                }
             };
         };
 
-        if let Some(name) = &spec.name
-            && let Some(TagEntry::Enum { .. }) = self.tag_here(&name.name)
-        {
-            return Err(TypeError::at(
-                spec.range,
-                format!("redefinition of 'enum {}'", name.name),
-            ));
+        // An enumeration this scope has only *declared* is completed here; one
+        // it defined is a redefinition.
+        let mut declared: Option<Ty> = None;
+        if let Some(name) = &spec.name {
+            match self.tag_here(&name.name) {
+                Some(TagEntry::Enum { complete: true, .. }) => {
+                    return Err(TypeError::at(
+                        spec.range,
+                        format!("redefinition of 'enum {}'", name.name),
+                    ));
+                }
+                Some(TagEntry::Enum { ty, .. }) => declared = Some(ty),
+                _ => {}
+            }
         }
 
         // Only a file-scope `enum` becomes a named alias; one declared inside a
@@ -1114,6 +1405,9 @@ impl Sema {
         let file_scope = self.at_file_scope();
         let tag_name = spec.name.as_ref().map(|n| n.name.clone());
         let ty = match (file_scope, tag_name, underlying) {
+            // The tag was declared incomplete first, so it already has a type
+            // and every earlier mention of it used that one.
+            _ if declared.is_some() => declared.expect("just checked"),
             // A fixed underlying type is the enumeration's type; the tag is
             // an alias for it rather than an `enum` item of its own.
             (true, Some(tag), Some(fixed)) => {
@@ -1154,6 +1448,7 @@ impl Sema {
                 TagEntry::Enum {
                     ty,
                     unsigned: false,
+                    complete: true,
                 },
             );
         }
@@ -1224,7 +1519,14 @@ impl Sema {
             }
         }
         if let Some(name) = &spec.name {
-            self.insert_tag(&name.name, TagEntry::Enum { ty, unsigned });
+            self.insert_tag(
+                &name.name,
+                TagEntry::Enum {
+                    ty,
+                    unsigned,
+                    complete: true,
+                },
+            );
         }
         if let Ty::Enum(id) = ty {
             self.program.types.enum_mut(id).unsigned = unsigned;
@@ -1270,6 +1572,14 @@ fn name_accessors(fields: &mut [Field]) {
         }
     }
 }
+
+/// The strictest alignment a zero-sized marker field can carry.
+///
+/// `u64` is the widest integer whose Rust alignment is its size on every
+/// target this crate supports; `u128` is 16-byte aligned on x86-64 and 8-byte
+/// aligned elsewhere, which is exactly the kind of difference a layout must
+/// not depend on.
+const MAX_MARKER_ALIGN: u64 = 8;
 
 /// Rounds `value` up to a multiple of `align`.
 fn round_up(value: u64, align: u64) -> u64 {

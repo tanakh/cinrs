@@ -19,8 +19,15 @@ Statuses:
   inherit from libc/Rust, or freedom we do not exercise).
 
 Entry points: `c99!`, `c11!`, `c17!`, `c23!`. A feature of a newer standard used
-in an older entry point is rejected with `requires C11/C23 or later`; see
-`doc/gnu-extensions.md` for the proposed relaxed (`gnu*`) modes.
+in an older entry point is rejected with `requires C11/C23 or later`. The GNU
+entry points — `gnu99!`, `gnu11!`, `gnu17!`, `gnu23!` — accept those features
+instead, exactly as `gcc -std=gnu99` does, and add the GNU extensions on top;
+[`doc/gnu-extensions.md`](gnu-extensions.md) is the catalogue for both.
+
+Two of the rows below are answered by the *entry point* rather than by the
+front end: `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
+`__STDC_NO_COMPLEX__` are all predefined, so the four features they name are
+conforming omissions rather than gaps.
 
 ## C99
 
@@ -29,8 +36,8 @@ in an older entry point is rejected with `requires C11/C23 or later`; see
 | Restricted character set support via digraphs and `<iso646.h>` | | Partial | Digraphs are lexed; `<iso646.h>` is not bundled yet. Trigraphs are not supported in any mode (removed in C23). |
 | More precise aliasing rules via effective type | | N/A | |
 | Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits. |
-| Variable length arrays | N683 | No | No stack allocation with a dynamic size in Rust. `__STDC_NO_VLA__` should be predefined (C11 makes VLAs optional). |
-| Flexible array members | | No | Planned: `[T; 0]` tail member. |
+| Variable length arrays | N683 | No | No stack allocation with a dynamic size in Rust. `__STDC_NO_VLA__` is predefined, which C11 makes the conforming way to leave them out. |
+| Flexible array members | | Yes | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is pointer arithmetic. Initialising one — which GCC allows with a warning — is refused. |
 | `static` and type qualifiers in parameter array declarators | | Accepted | Parsed; no effect on codegen. |
 | Complex and imaginary support in `<complex.h>` | N693 | No | `_Complex` is rejected. |
 | Type-generic math macros in `<tgmath.h>` | N693 | No | Would be built on `_Generic`. |
@@ -58,10 +65,10 @@ in an older entry point is rejected with `requires C11/C23 or later`; see
 | Boolean type in `<stdbool.h>` | N815 | Yes | |
 | Idempotent type qualifiers | N505 | Unverified | |
 | Empty macro arguments | N570 | Yes | |
-| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`; `__STDC_ISO_10646__`, `__STDC_IEC_559__` absent. |
-| `_Pragma` preprocessing operator | N634 | No | Planned. |
+| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, and the four `__STDC_NO_*` subsetting macros; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. |
+| `_Pragma` preprocessing operator | N634 | Yes | Destringized and executed as the directive it spells, so a macro can produce one. |
 | Standard pragmas (`STDC FP_CONTRACT`, …) | N631, N696 | Accepted | Ignored. |
-| `__func__` predefined identifier | N611 | No | Planned. |
+| `__func__` predefined identifier | N611 | Yes | A `const char[]` in every function body, so `sizeof(__func__)` is the name's length; GCC's `__FUNCTION__` and `__PRETTY_FUNCTION__` are the same thing. |
 | `va_copy` macro | N671 | Yes | `<stdarg.h>`. |
 | Remove deprecation of aliased array parameters | | N/A | |
 | Conversion of array to pointer not limited to lvalues | N835 | Unverified | |
@@ -101,12 +108,12 @@ Also standard C99 but absent from Clang's list:
 | Contractions and expression evaluation methods | N1367 | N/A | |
 | Floating-point to int/`_Bool` conversions | N1391 | Yes | |
 | Wide function returns | N1396 | N/A | |
-| Alignment (`_Alignas`, `_Alignof`, `<stdalign.h>`, `aligned_alloc`) | N1397, N1447 | Partial | `_Alignof` yes; `_Alignas` only where the natural layout already satisfies it; `aligned_alloc` unverified. |
+| Alignment (`_Alignas`, `_Alignof`, `<stdalign.h>`, `aligned_alloc`) | N1397, N1447 | Partial | `_Alignof` yes; `_Alignas` on a *member* moves it to the boundary it asks for, with explicit padding in the generated item, and on an *object* is refused; `aligned_alloc` unverified. |
 | Anonymous member-structures and unions | N1406 | Yes | |
 | Completeness of types | N1439 | N/A | |
 | Generic macro facility (`_Generic`) | N1441 | Yes | |
 | Dependency ordering for C memory model | N1444 | N/A | |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | No | Planned: predefine all four, which makes the absent features conforming omissions. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. |
 | Assumed types in F.9.2 | N1468 | N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | Yes | |
 | Updates to the memory model | N1480 | N/A | |
@@ -136,7 +143,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | `maybe_unused` attribute | N2270 | Accepted | |
 | TS 18661 integration (`_FloatN`, decimal floating types) | N2314, N2341, N2359, N2546, N2640, N2755, N2931, N2754 | No | No stable Rust types. |
 | Preprocessor line numbers unspecified | N2322 | N/A | |
-| `deprecated` attribute | N2334 | Accepted | Could be honoured with `#[deprecated]`. |
+| `deprecated` attribute | N2334 | Yes | `#[deprecated]`, with the message it was given, so Rust code that calls the function is warned. |
 | Attributes (`[[…]]` syntax) | N2335, N2554 | Yes | Unknown attributes ignored, as required. |
 | Defining new types in `offsetof` | N2350 | Unverified | |
 | `fallthrough` attribute | N2408 | Yes | |
@@ -146,7 +153,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Annex F.8 update | N2384 | N/A | |
 | Allowing unnamed parameters in function definitions | N2480 | Unverified | |
 | Free positioning of labels inside compound statements | N2508 | Yes | |
-| Querying attribute support (`__has_c_attribute`) | N2553 | No | Planned with `__has_include`. |
+| Querying attribute support (`__has_c_attribute`) | N2553 | Yes | `202311L` for the attributes this crate honours, 0 otherwise. `__has_include`, `__has_attribute`, `__has_builtin`, `__has_feature` and `__has_extension` are answered from the same tables. |
 | Binary literals | N2549 | Yes | |
 | Allow duplicate attributes | N2557 | Accepted | |
 | Character encoding of diagnostic text | N2563 | N/A | |
@@ -210,11 +217,12 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Memory layout of unions | N2929 | N/A | |
 | Improved tag compatibility | N3037 | Unverified | |
 | `#embed` | N3017 | No | |
-| `__has_include` | N2799 | No | Planned. |
+| `__has_include` | N2799 | Yes | Resolved exactly as `#include` is. GNU's `__has_include_next` too. |
 
 ## C2y
 
-Nothing from C2y is implemented; `c2y!` does not exist. Of the C2y features
-Clang lists, case ranges (N3370), `_Countof` (N3369), named loops (N3355) and
-`if` declarations (N3356) would be the natural first candidates when a `c2y!`
-entry point is added; case ranges also appear in `doc/gnu-extensions.md`.
+Nothing from C2y is implemented as C2y; `c2y!` does not exist. One of the
+features Clang lists is already here under another name: case ranges (N3370)
+are GNU's `case 1 ... 5:`, which every entry point accepts. `_Countof` (N3369),
+named loops (N3355) and `if` declarations (N3356) would be the natural first
+candidates when a `c2y!` entry point is added.

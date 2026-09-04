@@ -22,7 +22,7 @@
 //!
 //! Each macro invocation is one translation unit.
 //!
-//! # Standards
+//! # Standards and dialects
 //!
 //! [`c99!`], [`c11!`], [`c17!`] and [`c23!`] are the same macro for four
 //! revisions of the language; `__STDC_VERSION__` is `199901L`, `201112L`,
@@ -33,6 +33,10 @@
 //! ```text
 //! error: '_Static_assert' requires C11 or later (this block is c99!)
 //! ```
+//!
+//! [`gnu99!`], [`gnu11!`], [`gnu17!`] and [`gnu23!`] are those four with the
+//! GNU extensions switched on; see [GNU extensions](#gnu-extensions) for what
+//! that changes and what it does not.
 //!
 //! ## What `c11!` adds
 //!
@@ -111,17 +115,20 @@
 //! ## What the later revisions add and this crate does not do
 //!
 //! `_Thread_local`/`thread_local` (Rust's `#[thread_local]` is unstable),
-//! `_Atomic`, `_BitInt`, `#embed`, `__has_include`, and C11's `u8"…"`, `u"…"`
-//! and `U"…"` literals with their `char16_t`/`char32_t`: each is a located
-//! error rather than a silent mistranslation. Three things are simplifications rather than
-//! omissions:
+//! `_Atomic`, `_BitInt`, `#embed`, and C11's `u8"…"`, `u"…"` and `U"…"`
+//! literals with their `char16_t`/`char32_t`: each is a located error rather
+//! than a silent mistranslation. C11's four subsetting macros —
+//! `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
+//! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
+//! saying that those parts are left out. Three things are simplifications
+//! rather than omissions:
 //!
-//! * `_Alignas` is honoured on a member by raising the alignment of the
-//!   *record* — `#[repr(C, align(N))]` on the generated item — which only
-//!   works while the member's natural offset already satisfies it. A member
-//!   that would have to move (`struct { char c; _Alignas(16) int x; }`) is
-//!   refused rather than laid out differently from the Rust type Rust code
-//!   sees. On an object `_Alignas` is not supported at all.
+//! * An alignment specifier — `_Alignas(N)` or
+//!   `__attribute__((aligned(N)))` — is honoured on the members of a `struct`
+//!   or `union`: the member moves to the boundary it asks for, and the
+//!   generated item gets `#[repr(C, align(N))]` and explicit padding so that
+//!   Rust puts it in the same place. On an *object* it is not supported at
+//!   all.
 //! * A `constexpr` object is a constant: its value is folded wherever the
 //!   name is used, so it may be an array bound or a `case` label, and there
 //!   is nothing to take the address of. Only the arithmetic types are
@@ -129,6 +136,76 @@
 //! * `nullptr` has type `void *` rather than a `nullptr_t` of its own, and
 //!   `<stddef.h>`'s `nullptr_t` is a `typedef` for `void *`. The difference
 //!   only shows where C distinguishes them, such as in `_Generic`.
+//!
+//! # GNU extensions
+//!
+//! Real C is written for GCC, so `cinrs` implements the GNU extensions as
+//! well, and draws the line between "always" and "only in a GNU block" exactly
+//! where GCC draws it.
+//!
+//! **Everything spelled with a leading double underscore works in every entry
+//! point**, including [`c99!`]: `__typeof__`, `__attribute__`, `__extension__`,
+//! `__inline__`, `__restrict`, `__alignof__`, `__auto_type`, `__label__` and
+//! the whole `__builtin_*` family. Those names are reserved to the
+//! implementation, so nothing a program may legally call its own is taken away
+//! — which is why GCC's own `-std=c99` keeps them too.
+//!
+//! ```
+//! cinrs::c99! {
+//!     /* The kernel's `max`, which evaluates each operand exactly once. */
+//!     #define max(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; })
+//!     #define unlikely(x) __builtin_expect(!!(x), 0)
+//!
+//!     struct __attribute__((packed)) Header { unsigned char kind; unsigned int length; };
+//!
+//!     int biggest(int a, int b) { return max(a, b); }
+//!     int bits(unsigned int n) { return __builtin_popcount(n); }
+//!     unsigned long header_size(void) { return sizeof(struct Header); }
+//!     const char *whoami(void) { return __func__; }
+//!
+//!     int classify(int c) {
+//!         switch (c) {
+//!         case '0' ... '9': return 1;
+//!         case 'a' ... 'z': return 2;
+//!         default: return unlikely(c < 0) ? -1 : 0;
+//!         }
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { biggest(3, 9) }, 9);
+//! assert_eq!(unsafe { bits(0b1011) }, 3);
+//! assert_eq!(unsafe { header_size() }, 5);
+//! assert_eq!(unsafe { classify('7' as i32) }, 1);
+//! ```
+//!
+//! **The plain spellings need a GNU entry point.** `typeof` and `asm` are
+//! ordinary identifiers in ISO C, so they are keywords only in [`gnu99!`],
+//! [`gnu11!`], [`gnu17!`] and [`gnu23!`] — `typeof` is C23's own keyword too,
+//! so [`c23!`] has it as well. A GNU block also **accepts what a later
+//! revision added** without the gate: `_Static_assert`, `_Generic`, `0b`
+//! literals and the rest, exactly as `gcc -std=gnu99` does.
+//!
+//! ```
+//! cinrs::gnu99! {
+//!     _Static_assert(sizeof(int) == 4, "C11 in a C99 block");
+//!     typeof(int) identity(int n) { return n; }
+//! }
+//!
+//! assert_eq!(unsafe { identity(7) }, 7);
+//! ```
+//!
+//! `__GNUC__` is `4`, `__GNUC_MINOR__` `2` and `__GNUC_PATCHLEVEL__` `1` in
+//! every entry point — Clang's own precedent, and for the same reason: a
+//! program guards `__attribute__` and `__builtin_expect` behind
+//! `#if defined(__GNUC__) && __GNUC__ >= 4`, and those work here.
+//! `__STRICT_ANSI__` is defined in the strict entry points only.
+//!
+//! `doc/gnu-extensions.md` in the repository is the catalogue: every extension,
+//! how common it is, and whether it is supported, accepted and ignored, refused
+//! with a reason, or still to come. The short version of what is *refused* —
+//! recognised and reported rather than mistranslated — is inline assembly,
+//! `__attribute__((weak))`, `alias`, `cleanup`, `vector_size`, `mode`,
+//! `__builtin_alloca`, `__complex__` and `#include_next`.
 //!
 //! `unreachable()` becomes [`core::hint::unreachable_unchecked`], which is
 //! exactly the promise C attaches to it: reaching it is undefined behaviour.
@@ -398,15 +475,22 @@
 //! ## Predefined macros
 //!
 //! `__STDC__`, `__STDC_HOSTED__` and `__STDC_VERSION__` (which follows the
-//! entry point: `199901L`, `201112L`, `201710L` or `202311L`),
-//! `__cinrs__`, `__FILE__` and `__LINE__` — which name the *`.rs` file* and
-//! the line in it, so that they point where the user is looking — plus
-//! `__DATE__` and `__TIME__` as the fixed placeholders `"??? ?? ????"` and
-//! `"??:??:??"`, because a build has to give the same output twice. On top of
-//! those comes a short set of target description macros (`__x86_64__`,
-//! `__linux__`, `__unix__`, `__LP64__`, `__SIZEOF_INT__`, `__BYTE_ORDER__`, …)
-//! taken from the machine the code is being compiled for. Nothing claims to be
-//! another compiler: there is no `__GNUC__`.
+//! entry point: `199901L`, `201112L`, `201710L` or `202311L`), the four
+//! `__STDC_NO_*` subsetting macros, `__cinrs__`, `__FILE__` and `__LINE__` —
+//! which name the *`.rs` file* and the line in it, so that they point where the
+//! user is looking — plus `__DATE__`, `__TIME__` and `__TIMESTAMP__` as fixed
+//! placeholders, because a build has to give the same output twice. GNU adds
+//! `__GNUC__` and friends, `__VERSION__`, `__STRICT_ANSI__` (strict entry
+//! points only), `__BASE_FILE__`, `__FILE_NAME__`, `__INCLUDE_LEVEL__` and
+//! `__COUNTER__`. On top of those comes a short set of target description
+//! macros (`__x86_64__`, `__linux__`, `__unix__`, `__LP64__`,
+//! `__SIZEOF_INT__`, `__BYTE_ORDER__`, …) taken from the machine the code is
+//! being compiled for. Nothing claims to be Clang.
+//!
+//! `__has_include`, `__has_include_next`, `__has_attribute`,
+//! `__has_c_attribute`, `__has_builtin`, `__has_feature` and `__has_extension`
+//! are answered from this crate's own tables, so a program that guards a
+//! construct with one is told the truth about *this* implementation.
 //!
 //! # Headers
 //!
@@ -593,10 +677,14 @@
 //! C11 and C23 added on top of that is listed under [Standards](#standards),
 //! entry point by entry point.
 //!
+//! On top of that come the [GNU extensions](#gnu-extensions), which real C
+//! leans on: statement expressions, `typeof`, `__attribute__`, `#pragma pack`,
+//! the `__builtin_*` family, case ranges, flexible array members and the rest.
+//!
 //! Deliberately never: variable length arrays, `_Complex`,
 //! old-style (K&R) definitions, `setjmp`/`longjmp`, `_Thread_local`,
-//! `_Atomic`, `_BitInt`, `#embed`, `__has_include`, C11's `u8`/`u`/`U`
-//! literals, and
+//! `_Atomic`, `_BitInt`, `#embed`, C11's `u8`/`u`/`U`
+//! literals, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
 //! implies). Each of them is a clear, located error rather than a silent
 //! mistranslation.
@@ -612,4 +700,4 @@
 #![warn(missing_docs)]
 #![no_std]
 
-pub use cinrs_macros::{c11, c17, c23, c99};
+pub use cinrs_macros::{c11, c17, c23, c99, gnu11, gnu17, gnu23, gnu99};

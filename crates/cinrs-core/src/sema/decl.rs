@@ -83,7 +83,17 @@ impl Sema {
 
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
         if let ast::TypeKind::Function(func) = &declarator.ty.kind {
-            self.declare_function(decl, name, func, declarator.ty.range, None);
+            let mut attrs = declarator.attrs.clone();
+            attrs.merge(decl.specifiers.attrs.clone());
+            self.declare_function(
+                decl,
+                name,
+                func,
+                declarator.ty.range,
+                &attrs,
+                declarator.asm_label.as_ref(),
+                None,
+            );
             return Vec::new();
         }
 
@@ -95,10 +105,15 @@ impl Sema {
         if let Some(alignment) = &decl.specifiers.alignas {
             self.error(
                 alignment.range,
-                "_Alignas on an object is not supported yet; it is honoured on the \
-                 members of a struct or union, where the generated Rust type can carry \
-                 the alignment",
+                "an alignment specifier on an object is not supported yet; '_Alignas' and \
+                 '__attribute__((aligned))' are honoured on the members of a struct or \
+                 union, where the generated Rust type can carry the alignment",
             );
+        }
+        let mut attrs = declarator.attrs.clone();
+        attrs.merge(decl.specifiers.attrs.clone());
+        if let Some(range) = attrs.packed {
+            self.error(range, "'packed' is only meaningful on a record or a member");
         }
 
         if storage == Some(ast::StorageClass::ThreadLocal) {
@@ -116,6 +131,9 @@ impl Sema {
         }
         if storage == Some(ast::StorageClass::Extern) {
             self.declare_extern_object(name, declarator);
+            if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
+                self.apply_object_attributes(id, &attrs, declarator);
+            }
             return Vec::new();
         }
 
@@ -144,9 +162,26 @@ impl Sema {
                 ty
             };
             self.declare_static_object(name, ty, is_const, is_static, file_scope, declarator, init);
+            if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
+                self.apply_object_attributes(id, &attrs, declarator);
+            }
             return Vec::new();
         }
 
+        if let Some(label) = &declarator.asm_label {
+            self.error(
+                label.range,
+                "an 'asm' label on a local variable is not supported; it names a register \
+                 or a symbol, and neither has a place in the generated Rust",
+            );
+        }
+        if let Some(section) = &attrs.section {
+            self.error(
+                section.range,
+                "'section' is only meaningful on a function or an object with static \
+                 storage duration",
+            );
+        }
         self.check_redefinition(name);
         let id = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
         self.insert(&name.name, Entry::Object(id));
@@ -182,6 +217,22 @@ impl Sema {
             init,
             explicit,
         }]
+    }
+
+    /// Puts what `__asm__("symbol")` and `__attribute__((section("…")))`
+    /// asked for onto an object with static storage duration.
+    fn apply_object_attributes(
+        &mut self,
+        id: ObjectId,
+        attrs: &ast::Attributes,
+        declarator: &ast::InitDeclarator,
+    ) {
+        if let Some(label) = &declarator.asm_label {
+            self.program.objects[id.0 as usize].asm_label = Some(label.node.clone());
+        }
+        if let Some(section) = &attrs.section {
+            self.program.objects[id.0 as usize].section = Some(section.node.clone());
+        }
     }
 
     /// Declares a C23 `constexpr` object.
@@ -594,19 +645,44 @@ impl Sema {
     ///
     /// `definition` carries the parameter declarations of a *definition*, which
     /// is what turns the check into "this is the definition".
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn declare_function(
         &mut self,
         decl: &ast::Decl,
         name: &ast::Ident,
         func: &ast::FunctionType,
         range: SourceRange,
+        attrs: &ast::Attributes,
+        asm_label: Option<&ast::Spanned<String>>,
         definition: Option<&ast::FunctionDef>,
     ) -> Option<FuncId> {
         let specifiers = &decl.specifiers;
         let is_static =
             specifiers.storage.as_ref().map(|s| s.node) == Some(ast::StorageClass::Static);
         let is_inline = specifiers.inline;
-        let is_noreturn = specifiers.noreturn.is_some();
+        let is_noreturn = specifiers.noreturn.is_some() || attrs.noreturn.is_some();
+        let inline_hint = match (attrs.always_inline.is_some(), attrs.noinline.is_some()) {
+            (true, false) => Some(ir::InlineHint::Always),
+            (false, true) => Some(ir::InlineHint::Never),
+            _ => None,
+        };
+        let init_kind = match (attrs.constructor.is_some(), attrs.destructor.is_some()) {
+            (true, _) => Some(ir::InitKind::Constructor),
+            (false, true) => Some(ir::InitKind::Destructor),
+            _ => None,
+        };
+        if let Some(alignment) = &attrs.aligned {
+            self.error(
+                alignment.range,
+                "'aligned' is not supported on a function; Rust has no way to say it",
+            );
+        }
+        if let Some(packed) = attrs.packed {
+            self.error(
+                packed,
+                "'packed' is only meaningful on a record or a member",
+            );
+        }
         // C23 has no `constexpr` functions, and neither has this: a constant
         // here is a value, folded wherever its name is used.
         if let Some(storage) = &specifiers.storage
@@ -746,6 +822,21 @@ impl Sema {
                 entry.is_static |= is_static;
                 entry.is_inline |= is_inline;
                 entry.noreturn |= is_noreturn;
+                entry.cold |= attrs.cold.is_some();
+                entry.inline_hint = entry.inline_hint.or(inline_hint);
+                entry.init_kind = entry.init_kind.or(init_kind);
+                entry.deprecated = entry
+                    .deprecated
+                    .take()
+                    .or_else(|| attrs.deprecated.as_ref().map(|d| d.node.clone()));
+                entry.section = entry
+                    .section
+                    .take()
+                    .or_else(|| attrs.section.as_ref().map(|s| s.node.clone()));
+                entry.asm_label = entry
+                    .asm_label
+                    .take()
+                    .or_else(|| asm_label.map(|label| label.node.clone()));
                 if definition.is_some() {
                     entry.range = name.range;
                     entry.param_names = param_names;
@@ -762,6 +853,13 @@ impl Sema {
                     is_static,
                     is_inline,
                     noreturn: is_noreturn,
+                    inline_hint,
+                    cold: attrs.cold.is_some(),
+                    deprecated: attrs.deprecated.as_ref().map(|d| d.node.clone()),
+                    section: attrs.section.as_ref().map(|s| s.node.clone()),
+                    asm_label: asm_label.map(|label| label.node.clone()),
+                    init_kind,
+                    locals: Vec::new(),
                     body: None,
                     range: name.range,
                 });
@@ -782,8 +880,17 @@ impl Sema {
             declarators: Vec::new(),
             range: def.range,
         };
-        let Some(id) = self.declare_function(&decl, &def.name, func, def.ty.range, Some(def))
-        else {
+        let mut attrs = def.attrs.clone();
+        attrs.merge(def.specifiers.attrs.clone());
+        let Some(id) = self.declare_function(
+            &decl,
+            &def.name,
+            func,
+            def.ty.range,
+            &attrs,
+            def.asm_label.as_ref(),
+            Some(def),
+        ) else {
             return;
         };
 
@@ -837,6 +944,11 @@ impl Sema {
         }
         self.func_params = params.clone();
 
+        // Every automatic object the body declares — including the ones
+        // buried in a statement expression, which no walk over the statements
+        // would find — is the function's, so the range of ids the body used is
+        // what code generation names its locals from.
+        let first_object = self.program.objects.len() as u32;
         let mut body = self.block_items(&def.body.items);
         let ret = self.ret_ty;
         // A C function may fall off its end; the value is then whatever the ABI
@@ -861,8 +973,14 @@ impl Sema {
         } else {
             ir::Body::Structured(body)
         };
+        let last_object = self.program.objects.len() as u32;
+        let locals: Vec<ObjectId> = (first_object..last_object)
+            .map(ObjectId)
+            .filter(|id| self.program.object(*id).storage == Storage::Automatic)
+            .collect();
         let entry = &mut self.program.functions[id.0 as usize];
         entry.params = params;
+        entry.locals = locals;
         entry.body = Some(body);
     }
 
@@ -922,6 +1040,18 @@ impl Sema {
                 ))
             }
             ExprKind::Zeroed => Some(Expr::new(ExprKind::Zeroed, ty, range)),
+            // A compound literal at file scope is an object of its own, and
+            // reading one where a constant expression has to go is reading a
+            // value that was constant when it was written. ISO C does not
+            // allow it; GCC does, and c-testsuite `00216` writes it.
+            ExprKind::Load(Place {
+                kind: PlaceKind::Object(id),
+                ..
+            }) if self.static_literals.contains_key(&id) => {
+                let at = self.static_literals[&id];
+                let value = self.program.statics[at].init.clone();
+                self.static_init(value, what)
+            }
             _ if ty.is_arithmetic() => {
                 let value = self.const_eval_at(&expr, what)?;
                 Some(self.const_to_expr(value, ty, range))

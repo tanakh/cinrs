@@ -43,10 +43,11 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::capture::SourceRange;
 use crate::diag::Diagnostics;
+use crate::gnu;
 use crate::ir::VA_LIST_NAMES;
 use crate::lex::{Keyword, Punct, StrKind, StrLit, TokenKind};
-use crate::pp::{Origin, Token};
-use crate::{Options, Standard};
+use crate::pp::{Origin, PackMap, Token};
+use crate::{Gating, Options, Standard};
 
 /// The spelling of `_Noreturn` that every standard accepts.
 ///
@@ -56,6 +57,20 @@ use crate::{Options, Standard};
 /// declaration specifier in every mode and means exactly what `_Noreturn`
 /// means.
 pub const NORETURN_BUILTIN: &str = "__cinrs_noreturn";
+
+/// An integer constant expression the parser synthesises.
+fn int_expr(value: u128, range: SourceRange) -> Expr {
+    Expr {
+        kind: ExprKind::Int(crate::lex::IntLit {
+            value,
+            base: crate::lex::NumBase::Decimal,
+            unsigned: false,
+            long: crate::lex::LongKind::None,
+            text: value.to_string(),
+        }),
+        range,
+    }
+}
 
 /// Signals that the current external declaration cannot be parsed further.
 #[derive(Debug)]
@@ -91,6 +106,7 @@ struct Scope {
 pub fn parse(
     tokens: &[Token],
     unit_range: SourceRange,
+    packing: &PackMap,
     options: &Options,
     diags: &mut Diagnostics,
 ) -> TranslationUnit {
@@ -127,6 +143,8 @@ pub fn parse(
         diags,
         scopes: vec![builtins],
         standard: options.standard,
+        gating: options.gating(),
+        packing,
         last_range,
         depth: 0,
     };
@@ -148,6 +166,10 @@ struct Parser<'a> {
     scopes: Vec<Scope>,
     /// Which revision's grammar to accept; see [`Parser::require_standard`].
     standard: Standard,
+    /// How that revision gates a newer one's features.
+    gating: Gating,
+    /// What `#pragma pack` was asking for, by token position.
+    packing: &'a PackMap,
     /// Range of the most recently consumed token, used to close node ranges.
     last_range: SourceRange,
     /// Current recursion depth; reset at every external declaration.
@@ -274,11 +296,9 @@ impl Parser<'_> {
     /// carrying on means one diagnostic that says exactly what to change
     /// instead of a cascade of syntax errors after it.
     fn require_standard(&mut self, needed: Standard, what: &str, range: SourceRange) {
-        if self.standard >= needed {
-            return;
+        if let Some(message) = self.gating.requires(what, needed) {
+            self.error(range, message);
         }
-        let message = self.standard.requires(what, needed);
-        self.error(range, message);
     }
 
     /// Reports a keyword the block's own standard does not have.
@@ -290,22 +310,8 @@ impl Parser<'_> {
     /// The gate message for the identifier at the current position, if a
     /// newer revision would have made it a keyword.
     fn newer_keyword_here(&self) -> Option<String> {
-        let name = self.peek().ident()?;
-        let needed = Keyword::from_str(name, Standard::C23)?.since();
-        (needed > self.standard).then(|| self.standard.requires(&format!("'{name}'"), needed))
+        self.gating.newer_keyword(self.peek().ident()?)
     }
-}
-
-/// What an attribute specifier sequence asked for.
-///
-/// C23 says an implementation may ignore any attribute it does not know, and
-/// this one ignores all but `noreturn`: `[[maybe_unused]]`, `[[deprecated]]`,
-/// `[[nodiscard]]` and `[[fallthrough]]` are accepted and dropped, and so is
-/// anything else, standard or not.
-#[derive(Clone, Copy, Default, Debug)]
-struct Attributes {
-    /// Where `[[noreturn]]` was written, if it was.
-    noreturn: Option<SourceRange>,
 }
 
 // ---------------------------------------------------------------------------
@@ -344,51 +350,227 @@ impl Parser<'_> {
 
 impl Parser<'_> {
     /// Whether an attribute specifier sequence starts here.
+    ///
+    /// Both spellings count: C23's `[[…]]` and GNU's `__attribute__((…))`,
+    /// which mean the same things and are parsed by the same code.
     fn at_attributes(&self) -> bool {
-        self.at_punct(Punct::LBracket) && self.nth(1).is_punct(Punct::LBracket)
+        (self.at_punct(Punct::LBracket) && self.nth(1).is_punct(Punct::LBracket))
+            || self.at_keyword(Keyword::Attribute)
     }
 
-    /// Consumes `[[…]] [[…]] …`, keeping only what the front end acts on.
+    /// Consumes every attribute specifier here, keeping what is acted on.
     ///
-    /// The contents are skipped as balanced token soup rather than parsed:
-    /// C23 lets an implementation ignore any attribute it does not recognise,
-    /// and an attribute argument clause may hold anything at all.
+    /// An attribute the front end does not know is dropped, which C23
+    /// 6.7.13.1p3 explicitly allows and which is what GCC does with a warning
+    /// this crate has no way to raise; one it knows but cannot honour —
+    /// `weak`, `cleanup`, `vector_size` — is refused, because ignoring it
+    /// would change what the program means.
     fn parse_attributes(&mut self) -> PResult<Attributes> {
         let mut attrs = Attributes::default();
-        while self.at_attributes() {
-            let start = self.cur_range();
-            self.require_standard(Standard::C23, "an attribute specifier", start);
-            self.advance(); // `[`
-            self.advance(); // `[`
-            let mut depth = 2i32;
-            loop {
-                if self.at_eof() {
-                    return Err(self.error_bail(start, "unterminated attribute specifier"));
+        loop {
+            if self.at_keyword(Keyword::Attribute) {
+                let start = self.bump_range();
+                self.expect_punct(Punct::LParen, " after '__attribute__'")?;
+                self.expect_punct(Punct::LParen, " after '__attribute__('")?;
+                self.parse_attribute_list(&mut attrs, Punct::RParen)?;
+                self.expect_punct(Punct::RParen, " to close '__attribute__'")?;
+                self.expect_punct(Punct::RParen, " to close '__attribute__'")?;
+                let _ = start;
+                continue;
+            }
+            if self.at_punct(Punct::LBracket) && self.nth(1).is_punct(Punct::LBracket) {
+                let start = self.cur_range();
+                self.require_standard(Standard::C23, "an attribute specifier", start);
+                self.advance(); // `[`
+                self.advance(); // `[`
+                self.parse_attribute_list(&mut attrs, Punct::RBracket)?;
+                self.expect_punct(Punct::RBracket, " to close an attribute specifier")?;
+                self.expect_punct(Punct::RBracket, " to close an attribute specifier")?;
+                continue;
+            }
+            return Ok(attrs);
+        }
+    }
+
+    /// `name (args)? , name (args)? , …`, up to `close`.
+    fn parse_attribute_list(&mut self, attrs: &mut Attributes, close: Punct) -> PResult<()> {
+        loop {
+            if self.at_punct(close) || self.at_eof() {
+                return Ok(());
+            }
+            // An empty element is legal in GNU's list: `__attribute__((,))`.
+            if self.eat_punct(Punct::Comma).is_some() {
+                continue;
+            }
+            self.parse_one_attribute(attrs, close)?;
+            if self.eat_punct(Punct::Comma).is_none() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One attribute, with its argument clause if it has one.
+    fn parse_one_attribute(&mut self, attrs: &mut Attributes, close: Punct) -> PResult<()> {
+        let start = self.cur_range();
+        // The name may be a keyword — `__attribute__((const))`, `[[noreturn]]`
+        // — and C23 allows a `vendor::` prefix, which is skipped.
+        let mut name = match &self.peek().kind {
+            TokenKind::Ident(name) => name.clone(),
+            TokenKind::Keyword(k) => k.as_str().to_owned(),
+            _ => {
+                let found = self.describe_cur();
+                return Err(self.error_bail(start, format!("expected an attribute, found {found}")));
+            }
+        };
+        self.advance();
+        if self.at_punct(Punct::Colon) && self.nth(1).is_punct(Punct::Colon) {
+            self.advance();
+            self.advance();
+            let prefix = std::mem::take(&mut name);
+            name = match &self.peek().kind {
+                TokenKind::Ident(name) => name.clone(),
+                TokenKind::Keyword(k) => k.as_str().to_owned(),
+                _ => {
+                    let found = self.describe_cur();
+                    return Err(
+                        self.error_bail(start, format!("expected an attribute, found {found}"))
+                    );
                 }
-                match &self.peek().kind {
-                    TokenKind::Punct(Punct::LBracket | Punct::LParen | Punct::LBrace) => {
-                        depth += 1;
-                    }
-                    TokenKind::Punct(Punct::RBracket | Punct::RParen | Punct::RBrace) => {
-                        depth -= 1;
-                    }
-                    _ => {}
+            };
+            self.advance();
+            // Only the GNU namespace names attributes this front end knows;
+            // anything else is another vendor's and is ignored.
+            if prefix != "gnu" && prefix != "clang" {
+                self.skip_attribute_args()?;
+                return Ok(());
+            }
+        }
+
+        let known = gnu::attribute(&name);
+        // Only three attributes have arguments this front end reads; every
+        // other clause may hold anything at all — `format(printf, 1, 2)` names
+        // a *mode* rather than a value — and is skipped as balanced tokens.
+        match known {
+            Some(gnu::Attribute::Aligned) => {
+                let alignment = if self.at_punct(Punct::LParen) {
+                    self.advance();
+                    let expr = self.parse_conditional_expr()?;
+                    self.expect_punct(Punct::RParen, " after the alignment")?;
+                    AlignmentKind::Expr(expr)
+                } else {
+                    // Bare `aligned` asks for the biggest alignment any type on
+                    // the target needs, which is 16 on every ABI here.
+                    AlignmentKind::Expr(int_expr(16, start))
+                };
+                let range = self.span_to_here(start);
+                attrs.aligned = Some(Alignment {
+                    kind: alignment,
+                    range,
+                });
+                return Ok(());
+            }
+            Some(gnu::Attribute::Deprecated) => {
+                let message = self.attribute_string()?;
+                let range = self.span_to_here(start);
+                attrs.deprecated = Some(Spanned::new(message, range));
+                return Ok(());
+            }
+            Some(gnu::Attribute::Section) => {
+                let name = self.attribute_string()?;
+                let range = self.span_to_here(start);
+                match name {
+                    Some(name) => attrs.section = Some(Spanned::new(name, range)),
+                    None => self.error(range, "'section' takes one string literal"),
                 }
-                // `[[noreturn]]` is the one attribute with a meaning here; it
-                // says exactly what `_Noreturn` says.
-                let is_noreturn = depth == 2
-                    && (self.peek().ident() == Some("noreturn")
-                        || self.peek().is_keyword(Keyword::Noreturn));
-                let range = self.bump_range();
-                if is_noreturn && attrs.noreturn.is_none() {
-                    attrs.noreturn = Some(range);
-                }
+                return Ok(());
+            }
+            _ => {}
+        }
+        self.skip_attribute_args()?;
+        let range = self.span_to_here(start);
+        match known {
+            Some(gnu::Attribute::Noreturn) => attrs.noreturn = attrs.noreturn.or(Some(range)),
+            Some(gnu::Attribute::AlwaysInline) => {
+                attrs.always_inline = attrs.always_inline.or(Some(range));
+            }
+            Some(gnu::Attribute::NoInline) => attrs.noinline = attrs.noinline.or(Some(range)),
+            Some(gnu::Attribute::Cold) => attrs.cold = attrs.cold.or(Some(range)),
+            // GCC's `hot` is the opposite of `cold`, and the two cancel.
+            Some(gnu::Attribute::Hot) => attrs.cold = None,
+            Some(gnu::Attribute::Packed) => attrs.packed = attrs.packed.or(Some(range)),
+            Some(gnu::Attribute::Constructor) => {
+                attrs.constructor = attrs.constructor.or(Some(range));
+            }
+            Some(gnu::Attribute::Destructor) => {
+                attrs.destructor = attrs.destructor.or(Some(range));
+            }
+            // A statement attribute with nothing to say here: a `switch` group
+            // falls through in the generated Rust either way.
+            Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}
+            Some(gnu::Attribute::Unsupported) => {
+                let reason = gnu::unsupported_reason(&name).unwrap_or("is not supported");
+                self.error(range, format!("'{name}' {reason}"));
+            }
+            // Everything above was handled; an unknown attribute is ignored,
+            // as C23 requires.
+            _ => {}
+        }
+        let _ = close;
+        Ok(())
+    }
+
+    /// The single string literal an attribute's argument clause holds, if it
+    /// has one at all.
+    fn attribute_string(&mut self) -> PResult<Option<String>> {
+        if !self.at_punct(Punct::LParen) {
+            return Ok(None);
+        }
+        self.advance();
+        let mut text = None;
+        if let TokenKind::Str(lit) = self.peek().kind.clone() {
+            let range = self.cur_range();
+            let literal = self.parse_string_literal(lit, range);
+            if let ExprKind::Str(lit) = literal.kind {
+                text = String::from_utf8(lit.values.iter().map(|v| *v as u8).collect()).ok();
+            }
+        }
+        // Anything else — a priority, an unknown option — is skipped.
+        let mut depth = 1i32;
+        while depth > 0 && !self.at_eof() {
+            if self.at_punct(Punct::LParen) {
+                depth += 1;
+            } else if self.at_punct(Punct::RParen) {
+                depth -= 1;
                 if depth == 0 {
+                    self.advance();
                     break;
                 }
             }
+            self.advance();
         }
-        Ok(attrs)
+        Ok(text)
+    }
+
+    /// Skips a balanced argument clause without looking inside it.
+    fn skip_attribute_args(&mut self) -> PResult<()> {
+        if !self.at_punct(Punct::LParen) {
+            return Ok(());
+        }
+        let start = self.cur_range();
+        let mut depth = 0i32;
+        while !self.at_eof() {
+            if self.at_punct(Punct::LParen) {
+                depth += 1;
+            } else if self.at_punct(Punct::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    return Ok(());
+                }
+            }
+            self.advance();
+        }
+        Err(self.error_bail(start, "unterminated attribute argument list"))
     }
 
     /// Whether a `_Static_assert` declaration starts here.
@@ -513,12 +695,16 @@ impl Parser<'_> {
 
     fn parse_external_decl(&mut self) -> PResult<ExternalDecl> {
         let start = self.cur_range();
+        // `__extension__` marks what follows as a GNU extension and asks for
+        // the pedantic warnings to be held back; there are none to hold back.
+        while self.eat_keyword(Keyword::Extension).is_some() {}
         let attrs = self.parse_attributes()?;
         if self.at_static_assert() {
             return Ok(ExternalDecl::StaticAssert(self.parse_static_assert()?));
         }
         let mut specs = self.parse_decl_specifiers(true)?;
-        specs.noreturn = specs.noreturn.or(attrs.noreturn);
+        specs.attrs.merge(attrs);
+        specs.noreturn = specs.noreturn.or(specs.attrs.noreturn);
 
         if let Some(semi) = self.eat_punct(Punct::Semi) {
             return Ok(ExternalDecl::Decl(Decl {
@@ -528,7 +714,8 @@ impl Parser<'_> {
             }));
         }
 
-        let first = self.parse_declarator(specs.base.clone(), false)?;
+        let mut first = self.parse_declarator(specs.base.clone(), false)?;
+        self.parse_declarator_tail(&mut first)?;
 
         let looks_like_definition = matches!(first.ty.kind, TypeKind::Function(_))
             && (self.at_punct(Punct::LBrace) || self.starts_declaration());
@@ -538,6 +725,41 @@ impl Parser<'_> {
 
         let decl = self.finish_declaration(specs, Some(first), start)?;
         Ok(ExternalDecl::Decl(decl))
+    }
+
+    /// `__asm__("symbol")` and `__attribute__((…))`, which may follow any
+    /// declarator and in that order.
+    fn parse_declarator_tail(&mut self, declarator: &mut DeclaratorResult) -> PResult<()> {
+        loop {
+            if self.at_keyword(Keyword::Asm) {
+                let start = self.cur_range();
+                self.advance();
+                self.expect_punct(Punct::LParen, " after 'asm'")?;
+                let range = self.cur_range();
+                let TokenKind::Str(lit) = self.peek().kind.clone() else {
+                    let found = self.describe_cur();
+                    return Err(self.error_bail(
+                        range,
+                        format!("expected the symbol name as a string literal, found {found}"),
+                    ));
+                };
+                let literal = self.parse_string_literal(lit, range);
+                self.expect_punct(Punct::RParen, " after the symbol name")?;
+                if let ExprKind::Str(lit) = literal.kind
+                    && let Ok(name) =
+                        String::from_utf8(lit.values.iter().map(|v| *v as u8).collect())
+                {
+                    declarator.asm_label = Some(Spanned::new(name, self.span_to_here(start)));
+                }
+                continue;
+            }
+            if self.at_attributes() {
+                let attrs = self.parse_attributes()?;
+                declarator.attrs.merge(attrs);
+                continue;
+            }
+            return Ok(());
+        }
     }
 
     fn finish_function_def(
@@ -598,6 +820,8 @@ impl Parser<'_> {
             name,
             ty: declarator.ty,
             kr_decls,
+            attrs: declarator.attrs,
+            asm_label: declarator.asm_label,
             body,
             range: self.span_to_here(start),
         }))
@@ -614,9 +838,13 @@ impl Parser<'_> {
         let mut declarators = Vec::new();
         let mut pending = first;
         loop {
-            let declarator = match pending.take() {
+            let mut declarator = match pending.take() {
                 Some(d) => d,
-                None => self.parse_declarator(specs.base.clone(), false)?,
+                None => {
+                    let mut d = self.parse_declarator(specs.base.clone(), false)?;
+                    self.parse_declarator_tail(&mut d)?;
+                    d
+                }
             };
             if let Some(name) = &declarator.name {
                 let kind = if is_typedef {
@@ -631,11 +859,18 @@ impl Parser<'_> {
             } else {
                 None
             };
+            // GCC lets the attributes come after the initialiser too.
+            if self.at_attributes() {
+                let attrs = self.parse_attributes()?;
+                declarator.attrs.merge(attrs);
+            }
             let range = self.span_to_here(declarator.range);
             declarators.push(InitDeclarator {
                 name: declarator.name,
                 ty: declarator.ty,
                 init,
+                attrs: declarator.attrs,
+                asm_label: declarator.asm_label,
                 range,
             });
             if self.eat_punct(Punct::Comma).is_none() {
@@ -652,9 +887,11 @@ impl Parser<'_> {
 
     fn parse_declaration(&mut self) -> PResult<Decl> {
         let start = self.cur_range();
+        while self.eat_keyword(Keyword::Extension).is_some() {}
         let attrs = self.parse_attributes()?;
         let mut specs = self.parse_decl_specifiers(true)?;
-        specs.noreturn = specs.noreturn.or(attrs.noreturn);
+        specs.attrs.merge(attrs);
+        specs.noreturn = specs.noreturn.or(specs.attrs.noreturn);
         if let Some(semi) = self.eat_punct(Punct::Semi) {
             return Ok(Decl {
                 specifiers: specs,
@@ -753,6 +990,12 @@ impl Parser<'_> {
                     | Keyword::Typeof
                     | Keyword::TypeofUnqual
                     | Keyword::BoolName
+                    | Keyword::Attribute
+                    | Keyword::Extension
+                    | Keyword::TypeofGnu
+                    | Keyword::TypeofUnqualGnu
+                    | Keyword::AutoType
+                    | Keyword::ThreadGnu
             );
         }
         match tok.ident() {
@@ -800,18 +1043,27 @@ impl Parser<'_> {
         let mut inline = false;
         let mut noreturn: Option<SourceRange> = None;
         let mut alignas: Option<Alignment> = None;
+        let mut attributes = Attributes::default();
         let mut quals = TypeQualifiers::NONE;
         let mut counts = SpecCounts::default();
         let mut tag: Option<Type> = None;
         let mut typedef_name: Option<Ident> = None;
+        let mut auto_type: Option<SourceRange> = None;
         let mut consumed_any = false;
 
         loop {
             let has_type = counts.any() || tag.is_some() || typedef_name.is_some();
-            // C23 allows an attribute specifier sequence among the specifiers.
+            // C23 allows an attribute specifier sequence among the specifiers,
+            // and GNU's `__attribute__((…))` goes in the same places.
             if self.at_attributes() {
                 let attrs = self.parse_attributes()?;
                 noreturn = noreturn.or(attrs.noreturn);
+                attributes.merge(attrs);
+                consumed_any = true;
+                continue;
+            }
+            if self.at_keyword(Keyword::Extension) {
+                self.advance();
                 consumed_any = true;
                 continue;
             }
@@ -822,7 +1074,7 @@ impl Parser<'_> {
                     Keyword::Static => Some(StorageClass::Static),
                     Keyword::Auto => Some(StorageClass::Auto),
                     Keyword::Register => Some(StorageClass::Register),
-                    Keyword::ThreadLocal | Keyword::ThreadLocalName => {
+                    Keyword::ThreadLocal | Keyword::ThreadLocalName | Keyword::ThreadGnu => {
                         Some(StorageClass::ThreadLocal)
                     }
                     Keyword::Constexpr => Some(StorageClass::Constexpr),
@@ -877,7 +1129,21 @@ impl Parser<'_> {
                     consumed_any = true;
                     continue;
                 }
-                if matches!(k, Keyword::Typeof | Keyword::TypeofUnqual) {
+                // GNU's `__auto_type`, which is C23's `auto` under another
+                // name and needs no entry point of its own.
+                if k == Keyword::AutoType {
+                    let range = self.bump_range();
+                    auto_type = auto_type.or(Some(range));
+                    consumed_any = true;
+                    continue;
+                }
+                if matches!(
+                    k,
+                    Keyword::Typeof
+                        | Keyword::TypeofUnqual
+                        | Keyword::TypeofGnu
+                        | Keyword::TypeofUnqualGnu
+                ) {
                     let ty = self.parse_typeof_specifier(k)?;
                     if tag.is_some() || has_type {
                         self.error(ty.range, "two or more data types in declaration specifiers");
@@ -996,30 +1262,34 @@ impl Parser<'_> {
         }
 
         let specs_range = self.span_to_here(start);
-        // C23's `auto x = e;`: a declaration with `auto` and no type
-        // specifier at all takes its type from the initialiser.
-        let inferred = self.standard >= Standard::C23
-            && !counts.any()
-            && tag.is_none()
-            && typedef_name.is_none()
-            && matches!(
-                storage,
-                Some(Spanned {
-                    node: StorageClass::Auto,
-                    ..
-                })
-            );
+        // C23's `auto x = e;` and GNU's `__auto_type x = e;`: a declaration
+        // with no type specifier at all takes its type from the initialiser.
+        let no_type = !counts.any() && tag.is_none() && typedef_name.is_none();
+        let inferred = no_type
+            && (auto_type.is_some()
+                || (self.standard >= Standard::C23
+                    && matches!(
+                        storage,
+                        Some(Spanned {
+                            node: StorageClass::Auto,
+                            ..
+                        })
+                    )));
         let base = if inferred {
             Type::new(TypeKind::Auto, quals, specs_range)
         } else {
             self.build_base_type(&counts, tag, typedef_name, quals, specs_range)
         };
+        // `__attribute__((aligned(N)))` on a declaration says exactly what
+        // `_Alignas(N)` says, so the two go through one path.
+        let alignas = alignas.or_else(|| attributes.aligned.clone());
 
         Ok(DeclSpecifiers {
             storage,
             inline,
             noreturn,
             alignas,
+            attrs: attributes,
             base,
             range: specs_range,
         })
@@ -1154,13 +1424,16 @@ impl Parser<'_> {
             } else {
                 TypeKind::Float(size)
             }
-        } else {
-            if counts.complex > 0 || counts.imaginary > 0 {
-                self.error(
-                    range,
-                    "'_Complex' and '_Imaginary' require a floating type specifier",
-                );
+        } else if counts.complex > 0 || counts.imaginary > 0 {
+            // `__complex__ x;` on its own means `double _Complex` in GNU C,
+            // and saying so gets the honest "complex types are not supported"
+            // rather than a complaint about a missing type specifier.
+            if counts.complex > 0 {
+                TypeKind::Complex(FloatSize::Double)
+            } else {
+                TypeKind::Imaginary(FloatSize::Double)
             }
+        } else {
             let size = if counts.short > 0 {
                 if counts.long > 0 {
                     self.error(range, "cannot combine 'short' with 'long'");
@@ -1216,14 +1489,16 @@ impl SpecCounts {
 impl Parser<'_> {
     fn parse_record_specifier(&mut self) -> PResult<Type> {
         let start = self.cur_range();
+        // What `#pragma pack` was asking for *here* is what applies to this
+        // record; a pragma written after it changes nothing about it.
+        let pack = self.packing.at(self.pos);
         let kind = match self.peek().keyword() {
             Some(Keyword::Struct) => RecordKind::Struct,
             Some(Keyword::Union) => RecordKind::Union,
             _ => unreachable!("caller checked the keyword"),
         };
         self.advance();
-        // An attribute specifier sequence is allowed here and ignored.
-        let _ = self.parse_attributes()?;
+        let mut attrs = self.parse_attributes()?;
         let name = self.eat_ident();
         let mut asserts = Vec::new();
         let fields = if self.at_punct(Punct::LBrace) {
@@ -1244,6 +1519,12 @@ impl Parser<'_> {
             }
             None
         };
+        // GCC lets `__attribute__((packed))` come after the member list too,
+        // which is where most code writes it.
+        if self.at_attributes() {
+            let after = self.parse_attributes()?;
+            attrs.merge(after);
+        }
         let range = self.span_to_here(start);
         Ok(Type::plain(
             TypeKind::Record(Box::new(RecordType {
@@ -1251,6 +1532,8 @@ impl Parser<'_> {
                 name,
                 fields,
                 asserts,
+                attrs,
+                pack,
                 range,
             })),
             range,
@@ -1274,9 +1557,10 @@ impl Parser<'_> {
                 continue;
             }
             let start = self.cur_range();
-            // An attribute specifier sequence is allowed here and ignored.
-            let _ = self.parse_attributes()?;
-            let specs = self.parse_decl_specifiers(false)?;
+            while self.eat_keyword(Keyword::Extension).is_some() {}
+            let leading = self.parse_attributes()?;
+            let mut specs = self.parse_decl_specifiers(false)?;
+            specs.attrs.merge(leading);
 
             if self.at_punct(Punct::Semi) {
                 // An anonymous struct/union member: C11 6.7.2.1p13.
@@ -1284,6 +1568,7 @@ impl Parser<'_> {
                 self.require_standard(Standard::C11, "an anonymous struct or union member", range);
                 fields.push(FieldDecl {
                     ty: specs.base.clone(),
+                    attrs: specs.attrs.clone(),
                     specifiers: specs,
                     name: None,
                     bit_width: None,
@@ -1294,23 +1579,36 @@ impl Parser<'_> {
             }
 
             loop {
-                let (name, ty, dstart) = if self.at_punct(Punct::Colon) {
-                    (None, specs.base.clone(), self.cur_range())
+                let (name, ty, dstart, mut attrs) = if self.at_punct(Punct::Colon) {
+                    (
+                        None,
+                        specs.base.clone(),
+                        self.cur_range(),
+                        Attributes::default(),
+                    )
                 } else {
-                    let d = self.parse_declarator(specs.base.clone(), true)?;
-                    (d.name, d.ty, d.range)
+                    let mut d = self.parse_declarator(specs.base.clone(), true)?;
+                    self.parse_declarator_tail(&mut d)?;
+                    (d.name, d.ty, d.range, d.attrs)
                 };
                 let bit_width = if self.eat_punct(Punct::Colon).is_some() {
                     Some(self.parse_conditional_expr()?)
                 } else {
                     None
                 };
+                // A member's attributes may follow its width.
+                if self.at_attributes() {
+                    let after = self.parse_attributes()?;
+                    attrs.merge(after);
+                }
+                attrs.merge(specs.attrs.clone());
                 let range = self.span_to_here(dstart);
                 fields.push(FieldDecl {
                     specifiers: specs.clone(),
                     name,
                     ty,
                     bit_width,
+                    attrs,
                     range,
                 });
                 if self.eat_punct(Punct::Comma).is_none() {
@@ -1406,6 +1704,10 @@ pub struct DeclaratorResult {
     pub name: Option<Ident>,
     /// The type the declarator builds from the base type.
     pub ty: Type,
+    /// What `__attribute__((…))` on the declarator asked for.
+    pub attrs: Attributes,
+    /// The symbol `__asm__("name")` renamed it to.
+    pub asm_label: Option<Spanned<String>>,
     /// Where the declarator was written.
     pub range: SourceRange,
 }
@@ -1428,13 +1730,21 @@ impl Parser<'_> {
         allow_abstract: bool,
     ) -> PResult<DeclaratorResult> {
         let start = self.cur_range();
+        // GNU allows an attribute at the head of a declarator, which is where
+        // a calling convention is usually written.
+        let leading = self.parse_attributes()?;
         let mut ty = base;
 
         // `* qual* ` repeated: the leftmost `*` becomes the innermost pointer,
         // so `int * const * p` is "pointer to const pointer to int".
         while self.at_punct(Punct::Star) {
             let star = self.bump_range();
-            let quals = self.parse_type_qualifiers();
+            let mut quals = self.parse_type_qualifiers();
+            // GNU allows `int * __attribute__((x)) p;` and mixes the two.
+            while self.at_attributes() {
+                let _ = self.parse_attributes()?;
+                quals = quals.merge(self.parse_type_qualifiers());
+            }
             let range = self.span_to_here(star);
             ty = Type::new(TypeKind::Pointer(Box::new(ty)), quals, range);
         }
@@ -1461,9 +1771,13 @@ impl Parser<'_> {
             }
             self.pos = after;
             self.last_range = self.tokens[after - 1].range;
+            let mut attrs = inner.attrs;
+            attrs.merge(leading);
             return Ok(DeclaratorResult {
                 name: inner.name,
                 ty: inner.ty,
+                attrs,
+                asm_label: inner.asm_label,
                 range: self.span_to_here(start),
             });
         }
@@ -1481,20 +1795,65 @@ impl Parser<'_> {
             }
         };
         // C23 allows an attribute specifier sequence after the declared name
-        // (`int x [[deprecated]];`), which is ignored like every other.
-        let _ = self.parse_attributes()?;
+        // (`int x [[deprecated]];`), and so does GNU.
+        let mut attrs = self.parse_attributes()?;
+        attrs.merge(leading);
         let ty = self.parse_type_suffix(ty)?;
         Ok(DeclaratorResult {
             name,
             ty,
+            attrs,
+            asm_label: None,
             range: self.span_to_here(start),
         })
     }
 
     /// At a `(` that begins a direct-declarator: does it group a nested
     /// declarator, or is it a parameter list?
+    ///
+    /// An attribute may stand at the head of either — `int (__attribute__((x))
+    /// *)(void)` groups a declarator and `int (__attribute__((x)) int)` is a
+    /// parameter list — so the question is asked of what follows it.
     fn is_grouping_paren(&self) -> bool {
-        !self.nth(1).is_punct(Punct::RParen) && !self.starts_decl_specifier(1)
+        let after = self.after_attributes(1);
+        !self.nth(after).is_punct(Punct::RParen) && !self.starts_decl_specifier(after)
+    }
+
+    /// The offset of the first token after any attribute specifiers at `n`.
+    ///
+    /// Used for lookahead only, so it never reports: an unbalanced clause
+    /// stops at the end of the input and the caller's own parse reports it.
+    fn after_attributes(&self, mut n: usize) -> usize {
+        loop {
+            let brackets =
+                self.nth(n).is_punct(Punct::LBracket) && self.nth(n + 1).is_punct(Punct::LBracket);
+            if !self.nth(n).is_keyword(Keyword::Attribute) && !brackets {
+                return n;
+            }
+            let (open, close) = if brackets {
+                (Punct::LBracket, Punct::RBracket)
+            } else {
+                (Punct::LParen, Punct::RParen)
+            };
+            let mut i = if brackets { n } else { n + 1 };
+            let mut depth = 0i32;
+            while !self.nth(i).is_eof() {
+                if self.nth(i).is_punct(open) {
+                    depth += 1;
+                } else if self.nth(i).is_punct(close) {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            if i <= n {
+                return n;
+            }
+            n = i;
+        }
     }
 
     /// From the current `(`, skips to just past its matching `)`.
@@ -1713,19 +2072,38 @@ impl Parser<'_> {
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
             let start = self.cur_range();
             let mut designators = Vec::new();
+            // The obsolete `name:` designator GNU still accepts, which is what
+            // pre-C99 code writes for `.name =`.
+            let mut old_style = false;
+            if self.peek().ident().is_some() && self.nth(1).is_punct(Punct::Colon) {
+                let field = self.eat_ident().expect("checked above");
+                self.advance();
+                designators.push(Designator::Field(field));
+                old_style = true;
+            }
             loop {
+                if old_style {
+                    break;
+                }
                 if self.eat_punct(Punct::Dot).is_some() {
                     let field = self.expect_ident(" after '.' in designator")?;
                     designators.push(Designator::Field(field));
                 } else if self.eat_punct(Punct::LBracket).is_some() {
                     let index = self.parse_conditional_expr()?;
-                    self.expect_punct(Punct::RBracket, " after array designator")?;
-                    designators.push(Designator::Index(index));
+                    // GNU's range designator, `[low ... high] = v`.
+                    if self.eat_punct(Punct::Ellipsis).is_some() {
+                        let high = self.parse_conditional_expr()?;
+                        self.expect_punct(Punct::RBracket, " after array designator")?;
+                        designators.push(Designator::Range(index, high));
+                    } else {
+                        self.expect_punct(Punct::RBracket, " after array designator")?;
+                        designators.push(Designator::Index(index));
+                    }
                 } else {
                     break;
                 }
             }
-            if !designators.is_empty() {
+            if !designators.is_empty() && !old_style {
                 self.expect_punct(Punct::Assign, " after designator")?;
             }
             let init = self.parse_initializer()?;
@@ -1751,6 +2129,29 @@ impl Parser<'_> {
     fn parse_compound_stmt(&mut self) -> PResult<Block> {
         let start = self.expect_punct(Punct::LBrace, " to open a block")?;
         self.push_scope();
+        // GNU's `__label__ a, b;` declares labels local to the block. Every
+        // label already has function scope here and no two may share a name,
+        // so the declaration is accepted and changes nothing.
+        let mut local_labels = Vec::new();
+        while self.at_keyword(Keyword::Label) {
+            self.advance();
+            loop {
+                match self.expect_ident(" in a '__label__' declaration") {
+                    Ok(name) => local_labels.push(name),
+                    Err(bail) => {
+                        self.pop_scope();
+                        return Err(bail);
+                    }
+                }
+                if self.eat_punct(Punct::Comma).is_none() {
+                    break;
+                }
+            }
+            if let Err(bail) = self.expect_punct(Punct::Semi, " after '__label__'") {
+                self.pop_scope();
+                return Err(bail);
+            }
+        }
         let mut items = Vec::new();
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
             let before = self.pos;
@@ -1790,6 +2191,7 @@ impl Parser<'_> {
         let end = self.expect_punct(Punct::RBrace, " to close a block")?;
         Ok(Block {
             items,
+            local_labels,
             range: start.join(end),
         })
     }
@@ -1804,8 +2206,18 @@ impl Parser<'_> {
     fn parse_stmt_inner(&mut self) -> PResult<Stmt> {
         let start = self.cur_range();
         // A statement may carry attributes of its own: `[[fallthrough]];`,
-        // `[[likely]] if (…)`. They are consumed and dropped.
+        // `__attribute__((fallthrough));`, `[[likely]] if (…)`. They are
+        // consumed and dropped — a `switch` group falls through either way.
         let _ = self.parse_attributes()?;
+        // `__extension__ stmt` asks for the pedantic warnings to be held
+        // back; there are none.
+        while self.eat_keyword(Keyword::Extension).is_some() {}
+
+        // Inline assembly, which has no honest translation. Recognising the
+        // whole statement is what turns it into one clear diagnostic.
+        if self.at_keyword(Keyword::Asm) {
+            return self.parse_asm_stmt();
+        }
 
         if self.at_punct(Punct::LBrace) {
             let block = self.parse_compound_stmt()?;
@@ -1855,11 +2267,19 @@ impl Parser<'_> {
                 Keyword::Case => {
                     self.advance();
                     let value = self.parse_conditional_expr()?;
+                    // GNU's `case low ... high:`, which is one label for every
+                    // value in the range.
+                    let upper = if self.eat_punct(Punct::Ellipsis).is_some() {
+                        Some(self.parse_conditional_expr()?)
+                    } else {
+                        None
+                    };
                     self.expect_punct(Punct::Colon, " after 'case' label")?;
                     let body = self.parse_stmt()?;
                     return Ok(Stmt {
                         kind: StmtKind::Case {
                             value,
+                            upper,
                             body: Box::new(body),
                         },
                         range: self.span_to_here(start),
@@ -1976,6 +2396,35 @@ impl Parser<'_> {
         Ok(Stmt {
             kind: StmtKind::Expr(Some(expr)),
             range: self.span_to_here(start),
+        })
+    }
+
+    /// `asm [qualifiers] ( … ) ;` — an inline assembly statement.
+    ///
+    /// Rust has `core::arch::asm!`, but its operand constraints are a language
+    /// of their own and mapping GCC's onto them is a project rather than a
+    /// feature; half a translation of assembly would be worse than none. The
+    /// whole statement is consumed so that the diagnostic is about the `asm`
+    /// rather than about the tokens inside it.
+    fn parse_asm_stmt(&mut self) -> PResult<Stmt> {
+        let start = self.cur_range();
+        self.advance();
+        // `volatile`, `inline` and `goto` may qualify it.
+        while matches!(
+            self.peek().keyword(),
+            Some(Keyword::Volatile | Keyword::Const | Keyword::Inline | Keyword::Goto)
+        ) {
+            self.advance();
+        }
+        if self.at_punct(Punct::LParen) {
+            self.skip_attribute_args()?;
+        }
+        self.eat_punct(Punct::Semi);
+        let range = self.span_to_here(start);
+        self.error(range, "inline assembly is not supported");
+        Ok(Stmt {
+            kind: StmtKind::Error,
+            range,
         })
     }
 
@@ -2159,14 +2608,20 @@ impl Parser<'_> {
         if self.eat_punct(Punct::Question).is_none() {
             return Ok(cond);
         }
-        let then_expr = self.parse_expr()?;
+        // GNU's `a ?: b`: the middle operand is the condition itself, and the
+        // condition is evaluated exactly once.
+        let then_expr = if self.at_punct(Punct::Colon) {
+            None
+        } else {
+            Some(Box::new(self.parse_expr()?))
+        };
         self.expect_punct(Punct::Colon, " in conditional expression")?;
         let else_expr = self.parse_conditional_expr()?;
         let range = cond.range.join(else_expr.range);
         Ok(Expr {
             kind: ExprKind::Conditional {
                 cond: Box::new(cond),
-                then_expr: Box::new(then_expr),
+                then_expr,
                 else_expr: Box::new(else_expr),
             },
             range,
@@ -2322,7 +2777,34 @@ impl Parser<'_> {
             });
         }
 
-        if let Some(k @ (Keyword::Alignof | Keyword::AlignofName)) = self.peek().keyword() {
+        // `__extension__ expr` holds back the pedantic warnings there are none
+        // of, and `__real__`/`__imag__` need complex arithmetic.
+        if self.eat_keyword(Keyword::Extension).is_some() {
+            return self.parse_unary_expr();
+        }
+        if let Some(k @ (Keyword::RealGnu | Keyword::ImagGnu)) = self.peek().keyword() {
+            self.advance();
+            let operand = self.parse_cast_expr()?;
+            let range = start.join(operand.range);
+            self.error(
+                range,
+                format!(
+                    "'{}' is not supported; complex types are not supported",
+                    k.as_str()
+                ),
+            );
+            return Ok(Expr {
+                kind: ExprKind::ComplexPart {
+                    real: k == Keyword::RealGnu,
+                    operand: Box::new(operand),
+                },
+                range,
+            });
+        }
+
+        if let Some(k @ (Keyword::Alignof | Keyword::AlignofName | Keyword::AlignofGnu)) =
+            self.peek().keyword()
+        {
             self.require_keyword(k, start);
             self.advance();
             if self.at_paren_type_name() {
@@ -2351,8 +2833,65 @@ impl Parser<'_> {
         if self.at_builtin("__builtin_offsetof") {
             return self.parse_offsetof();
         }
+        if self.at_builtin("__builtin_types_compatible_p") {
+            return self.parse_types_compatible();
+        }
+        if self.at_builtin("__builtin_choose_expr") {
+            return self.parse_choose_expr();
+        }
 
         self.parse_postfix_expr()
+    }
+
+    /// `__builtin_types_compatible_p(T1, T2)`, whose operands are type names.
+    fn parse_types_compatible(&mut self) -> PResult<Expr> {
+        let start = self.cur_range();
+        self.advance(); // the name
+        self.advance(); // `(`
+        let lhs = self.parse_type_name()?;
+        self.expect_punct(
+            Punct::Comma,
+            " after the first type of '__builtin_types_compatible_p'",
+        )?;
+        let rhs = self.parse_type_name()?;
+        self.expect_punct(
+            Punct::RParen,
+            " after the second type of '__builtin_types_compatible_p'",
+        )?;
+        let expr = Expr {
+            kind: ExprKind::TypesCompatible {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            range: self.span_to_here(start),
+        };
+        self.parse_postfix_suffixes(expr)
+    }
+
+    /// `__builtin_choose_expr(c, a, b)`, whose unchosen operand is never even
+    /// type checked — which is why it needs the parser's help.
+    fn parse_choose_expr(&mut self) -> PResult<Expr> {
+        let start = self.cur_range();
+        self.advance(); // the name
+        self.advance(); // `(`
+        let cond = self.parse_assignment_expr()?;
+        self.expect_punct(
+            Punct::Comma,
+            " after the condition of '__builtin_choose_expr'",
+        )?;
+        let then_expr = self.parse_assignment_expr()?;
+        self.expect_punct(Punct::Comma, " in '__builtin_choose_expr'")?;
+        let else_expr = self.parse_assignment_expr()?;
+        self.expect_punct(Punct::RParen, " to close '__builtin_choose_expr'")?;
+        let expr = Expr {
+            kind: ExprKind::ChooseExpr {
+                cond: Box::new(cond),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            },
+            range: self.span_to_here(start),
+        };
+        self.parse_postfix_suffixes(expr)
     }
 
     /// Whether the next tokens invoke the named builtin.
@@ -2585,6 +3124,18 @@ impl Parser<'_> {
             TokenKind::Str(first) => Ok(self.parse_string_literal(first, range)),
             TokenKind::Punct(Punct::LParen) => {
                 self.advance();
+                // GNU's statement expression, `({ … })`: a compound statement
+                // where an expression goes, whose value is the value of the
+                // last expression statement in it.
+                if self.at_punct(Punct::LBrace) {
+                    let block = self.parse_compound_stmt()?;
+                    let rp =
+                        self.expect_punct(Punct::RParen, " to close a statement expression")?;
+                    return Ok(Expr {
+                        kind: ExprKind::StmtExpr(Box::new(block)),
+                        range: range.join(rp),
+                    });
+                }
                 let inner = self.parse_expr()?;
                 let rp = self.expect_punct(Punct::RParen, " after parenthesized expression")?;
                 Ok(Expr {

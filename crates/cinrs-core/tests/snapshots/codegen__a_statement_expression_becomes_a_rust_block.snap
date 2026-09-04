@@ -1,0 +1,56 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        int max(int a, int b) {\n            return ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; });\n        }\n\n        int side_effects(int n) {\n            return ({ int total = 0; for (int i = 0; i < n; i++) total += i; total; });\n        }\n\n        int elvis(int a, int b) { return a ?: b; }\n        \"#)"
+---
+mod __cinrs_unit_7b2b5b9a {
+    #[allow(…)]
+    pub unsafe extern "C" fn max(
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let mut _a: ::core::ffi::c_int = a;
+                let mut _b: ::core::ffi::c_int = b;
+                if _a > _b { _a } else { _b }
+            };
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn side_effects(
+        mut n: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let mut total: ::core::ffi::c_int = 0;
+                {
+                    let mut i: ::core::ffi::c_int = 0;
+                    'l0: loop {
+                        if !(i < n) {
+                            break 'l0;
+                        }
+                        'l0_body: {
+                            total = total.wrapping_add(i);
+                        }
+                        i = i.wrapping_add(1);
+                    }
+                }
+                total
+            };
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn elvis(
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let __cinrs_tmp0: ::core::ffi::c_int = a;
+                if __cinrs_tmp0 != 0 { __cinrs_tmp0 } else { b }
+            };
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_7b2b5b9a::*;

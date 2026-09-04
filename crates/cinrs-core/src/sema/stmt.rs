@@ -1,8 +1,6 @@
 //! Statements: the lowering of `switch` into fallthrough groups, and the
 //! decision between the structured and the [CFG](crate::cfg) form.
 
-use std::collections::HashMap;
-
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
@@ -66,6 +64,93 @@ impl Sema {
         prologue
     }
 
+    /// GNU's statement expression, `({ …; e; })`.
+    ///
+    /// Its value and type are the last *expression statement*'s, and `void`
+    /// when the block ends with anything else. Everything a block may hold is
+    /// allowed in it, including declarations — which is what makes the
+    /// kernel's `max()` evaluate its operands once.
+    ///
+    /// In the structured lowering it becomes a Rust block expression, where
+    /// `break`, `continue` and `return` all still mean what C said. A function
+    /// lowered through a [control-flow graph](crate::cfg) has no Rust loop to
+    /// leave, so a jump out of the statement expression is refused there.
+    pub(super) fn stmt_expr(&mut self, block: &ast::Block, range: SourceRange) -> Option<Expr> {
+        self.check_stmt_expr_jumps(block);
+        self.push_scope();
+        // The value is the last expression statement, which is checked apart
+        // from the rest so that its type survives.
+        let (items, tail) = match block.items.split_last() {
+            Some((ast::BlockItem::Stmt(last), rest)) => match &last.kind {
+                ast::StmtKind::Expr(Some(expr)) => (rest, Some(expr)),
+                _ => (&block.items[..], None),
+            },
+            _ => (&block.items[..], None),
+        };
+        let mut stmts = self.block_items(items);
+        let value = tail.and_then(|expr| self.expr(expr));
+        // An expression the block ended with that did not check out leaves the
+        // statement expression with no value, and one diagnostic has been
+        // reported already.
+        if tail.is_some() && value.is_none() {
+            self.pop_scope();
+            return None;
+        }
+        // A hoisted compound literal belongs to this block, and `block_items`
+        // has already put its definition at the head of `stmts`.
+        if let Some(value) = &value
+            && value.ty.is_va_list()
+        {
+            self.error(range, super::VA_LIST_PLACEMENT);
+            self.pop_scope();
+            return None;
+        }
+        self.pop_scope();
+        let ty = value.as_ref().map_or(Ty::Void, |v| v.ty);
+        if ty.is_record() && !self.types().is_complete(ty) {
+            stmts.clear();
+        }
+        Some(Expr::new(
+            ExprKind::StmtExpr {
+                stmts,
+                value: value.map(Box::new),
+            },
+            ty,
+            range,
+        ))
+    }
+
+    /// Refuses the jumps a statement expression may not make.
+    ///
+    /// A label — and therefore a `goto` — inside one is refused in every mode:
+    /// the decision to lower a function through a
+    /// [control-flow graph](crate::cfg) is made from the *statements* of its
+    /// body, so a jump buried in an expression would be silently dropped
+    /// rather than lowered. `break` and `continue` that leave the statement
+    /// expression are fine in the structured mode, where a Rust block
+    /// expression is exactly what a statement expression is, and refused in
+    /// CFG mode, where there is no loop left to leave.
+    fn check_stmt_expr_jumps(&mut self, block: &ast::Block) {
+        let mut bad: Vec<(SourceRange, Escape)> = Vec::new();
+        collect_escaping_jumps(&block.items, 0, &mut bad);
+        let cfg_mode = self.cfg_mode;
+        for (range, escape) in bad {
+            let message = match escape {
+                Escape::Label(what) => format!(
+                    "{what} cannot appear inside a statement expression; nothing outside the \
+                     expression can jump to it"
+                ),
+                Escape::Leaves(what) if cfg_mode => format!(
+                    "{what} inside a statement expression is not supported in a function that \
+                     also uses 'goto': the function is lowered into a state machine, and there \
+                     is no enclosing loop left to leave"
+                ),
+                Escape::Leaves(_) => continue,
+            };
+            self.error(range, message);
+        }
+    }
+
     pub(super) fn stmt(&mut self, stmt: &ast::Stmt) -> Stmt {
         match &stmt.kind {
             ast::StmtKind::Labeled { label, body } => {
@@ -84,7 +169,9 @@ impl Sema {
                     _ => *body,
                 }
             }
-            ast::StmtKind::Case { value, body } => self.case_label(Some(value), body, stmt.range),
+            ast::StmtKind::Case { value, upper, body } => {
+                self.case_label(Some((value, upper.as_ref())), body, stmt.range)
+            }
             ast::StmtKind::Default { body } => self.case_label(None, body, stmt.range),
             ast::StmtKind::Compound(block) => Stmt::Block(self.block(block)),
             ast::StmtKind::Expr(None) => Stmt::Nop,
@@ -374,7 +461,7 @@ impl Sema {
         self.switch_stack.push(SwitchState {
             id,
             ty: scrutinee.ty,
-            seen: HashMap::new(),
+            seen: Vec::new(),
             default: None,
         });
         self.push_scope();
@@ -393,7 +480,7 @@ impl Sema {
     /// Checks a `case` or `default` label that stays where it was written.
     fn case_label(
         &mut self,
-        value: Option<&ast::Expr>,
+        value: Option<(&ast::Expr, Option<&ast::Expr>)>,
         body: &ast::Stmt,
         range: SourceRange,
     ) -> Stmt {
@@ -406,23 +493,28 @@ impl Sema {
         };
         let (switch, ty) = (state.id, state.ty);
         let value = match value {
-            Some(expr) => {
-                let Some(v) = self.case_value(expr, ty) else {
+            Some((expr, upper)) => {
+                let Some(v) = self.case_range(expr, upper, ty, range) else {
                     return self.stmt(body);
                 };
                 let state = self.switch_stack.last_mut().expect("checked above");
-                if let Some(previous) = state.seen.insert(v, range) {
+                let clash = state
+                    .seen
+                    .iter()
+                    .find(|(seen, _)| seen.overlaps(v))
+                    .map(|(_, at)| *at);
+                if let Some(previous) = clash {
+                    let rendered = render_case_range(v, ty, &self.target);
                     self.error_note(
                         range,
-                        format!(
-                            "duplicate case value '{}'",
-                            render_case_value(v, ty, &self.target)
-                        ),
+                        format!("duplicate case value '{rendered}'"),
                         previous,
                         "previous case is",
                     );
                     return self.stmt(body);
                 }
+                let state = self.switch_stack.last_mut().expect("checked above");
+                state.seen.push((v, range));
                 Some(v)
             }
             None => {
@@ -484,7 +576,7 @@ impl Sema {
         let mut groups: Vec<ir::SwitchGroup> = Vec::new();
         let mut default_group: Option<usize> = None;
         let mut default_range: Option<SourceRange> = None;
-        let mut seen: HashMap<i128, SourceRange> = HashMap::new();
+        let mut seen: Vec<(ir::CaseRange, SourceRange)> = Vec::new();
 
         for item in items {
             match item {
@@ -498,11 +590,15 @@ impl Sema {
                 }
                 ast::BlockItem::Stmt(stmt) => {
                     let mut current = stmt;
-                    let mut labels: Vec<(Option<&ast::Expr>, SourceRange)> = Vec::new();
+                    #[allow(clippy::type_complexity)]
+                    let mut labels: Vec<(
+                        Option<(&ast::Expr, Option<&ast::Expr>)>,
+                        SourceRange,
+                    )> = Vec::new();
                     loop {
                         match &current.kind {
-                            ast::StmtKind::Case { value, body } => {
-                                labels.push((Some(value), current.range));
+                            ast::StmtKind::Case { value, upper, body } => {
+                                labels.push((Some((value, upper.as_ref())), current.range));
                                 current = body;
                             }
                             ast::StmtKind::Default { body } => {
@@ -524,19 +620,26 @@ impl Sema {
                         let index = groups.len() - 1;
                         for (value, range) in labels {
                             match value {
-                                Some(expr) => {
-                                    if let Some(v) = self.case_value(expr, promoted) {
-                                        match seen.insert(v, range) {
+                                Some((expr, upper)) => {
+                                    if let Some(v) = self.case_range(expr, upper, promoted, range) {
+                                        let clash = seen
+                                            .iter()
+                                            .find(|(seen, _)| seen.overlaps(v))
+                                            .map(|(_, at)| *at);
+                                        match clash {
                                             Some(previous) => self.error_note(
                                                 range,
                                                 format!(
                                                     "duplicate case value '{}'",
-                                                    render_case_value(v, promoted, &self.target)
+                                                    render_case_range(v, promoted, &self.target)
                                                 ),
                                                 previous,
                                                 "previous case is",
                                             ),
-                                            None => groups[index].values.push(v),
+                                            None => {
+                                                seen.push((v, range));
+                                                groups[index].values.push(v);
+                                            }
                                         }
                                     }
                                 }
@@ -649,6 +752,121 @@ impl Sema {
             ConstValue::Int(v) => Some(ty.wrap(v, &self.target)),
             ConstValue::Float(_) => None,
         }
+    }
+
+    /// Evaluates `case low:` or GNU's `case low ... high:`.
+    ///
+    /// GCC merely warns about an empty range and then matches nothing, which
+    /// is a `switch` arm that silently never runs; this refuses it, because
+    /// the only way to write one is by mistake.
+    fn case_range(
+        &mut self,
+        expr: &ast::Expr,
+        upper: Option<&ast::Expr>,
+        ty: Ty,
+        range: SourceRange,
+    ) -> Option<ir::CaseRange> {
+        let low = self.case_value(expr, ty)?;
+        let Some(upper) = upper else {
+            return Some(ir::CaseRange::single(low));
+        };
+        let high = self.case_value(upper, ty)?;
+        let signed = ty.is_signed(&self.target);
+        let ordered = if signed {
+            low <= high
+        } else {
+            (low as u128) <= (high as u128)
+        };
+        if !ordered {
+            self.error(
+                range,
+                format!(
+                    "empty case range: '{}' is above '{}', so nothing can enter here",
+                    render_case_value(low, ty, &self.target),
+                    render_case_value(high, ty, &self.target)
+                ),
+            );
+            return None;
+        }
+        Some(ir::CaseRange { low, high })
+    }
+}
+
+/// A `case` label the way it should read in a diagnostic.
+fn render_case_range(value: ir::CaseRange, ty: Ty, target: &crate::TargetModel) -> String {
+    if value.is_single() {
+        return render_case_value(value.low, ty, target);
+    }
+    format!(
+        "{} ... {}",
+        render_case_value(value.low, ty, target),
+        render_case_value(value.high, ty, target)
+    )
+}
+
+/// What a jump found inside a statement expression does.
+enum Escape {
+    /// A label or a `goto`, which is refused in every mode.
+    Label(&'static str),
+    /// A `break` or a `continue` that leaves the statement expression.
+    Leaves(&'static str),
+}
+
+/// Collects the jumps inside a statement expression that would leave it.
+///
+/// `depth` counts the loops and `switch`es the statement sits in *within* the
+/// statement expression; a `break` or `continue` at depth zero leaves it.
+fn collect_escaping_jumps(
+    items: &[ast::BlockItem],
+    depth: u32,
+    out: &mut Vec<(SourceRange, Escape)>,
+) {
+    for item in items {
+        if let ast::BlockItem::Stmt(stmt) = item {
+            escaping_jumps(stmt, depth, out);
+        }
+    }
+}
+
+fn escaping_jumps(stmt: &ast::Stmt, depth: u32, out: &mut Vec<(SourceRange, Escape)>) {
+    match &stmt.kind {
+        ast::StmtKind::Break if depth == 0 => out.push((stmt.range, Escape::Leaves("a 'break'"))),
+        ast::StmtKind::Continue if depth == 0 => {
+            out.push((stmt.range, Escape::Leaves("a 'continue'")));
+        }
+        ast::StmtKind::Goto(_) => out.push((stmt.range, Escape::Label("a 'goto'"))),
+        ast::StmtKind::Labeled { body, .. } => {
+            out.push((stmt.range, Escape::Label("a label")));
+            escaping_jumps(body, depth, out);
+        }
+        ast::StmtKind::Case { body, .. } => {
+            if depth == 0 {
+                out.push((stmt.range, Escape::Label("a 'case' label")));
+            }
+            escaping_jumps(body, depth, out);
+        }
+        ast::StmtKind::Default { body } => {
+            if depth == 0 {
+                out.push((stmt.range, Escape::Label("a 'default' label")));
+            }
+            escaping_jumps(body, depth, out);
+        }
+        ast::StmtKind::Compound(block) => collect_escaping_jumps(&block.items, depth, out),
+        ast::StmtKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            escaping_jumps(then_branch, depth, out);
+            if let Some(branch) = else_branch {
+                escaping_jumps(branch, depth, out);
+            }
+        }
+        ast::StmtKind::While { body, .. }
+        | ast::StmtKind::DoWhile { body, .. }
+        | ast::StmtKind::For { body, .. }
+        | ast::StmtKind::Switch { body, .. } => escaping_jumps(body, depth + 1, out),
+        _ => {}
     }
 }
 

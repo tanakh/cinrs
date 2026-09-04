@@ -337,18 +337,7 @@ impl Dumper {
             InitializerKind::Expr(e) => self.expr(e),
             InitializerKind::List(items) => self.under("init-list", |d| {
                 for item in items {
-                    let mut label = String::from("element");
-                    for designator in &item.designators {
-                        match designator {
-                            Designator::Field(f) => label.push_str(&format!(" .{}", f.name)),
-                            Designator::Index(e) => match &e.kind {
-                                ExprKind::Int(lit) => {
-                                    label.push_str(&format!(" [{}]", lit.value));
-                                }
-                                _ => label.push_str(" [expr]"),
-                            },
-                        }
-                    }
+                    let label = element_label(&item.designators);
                     d.under(&label, |dd| dd.initializer(&item.init));
                 }
             }),
@@ -370,8 +359,11 @@ impl Dumper {
             StmtKind::Labeled { label, body } => {
                 self.under(&format!("label '{}'", label.name), |d| d.stmt(body));
             }
-            StmtKind::Case { value, body } => self.under("case", |d| {
+            StmtKind::Case { value, upper, body } => self.under("case", |d| {
                 d.under("value", |dd| dd.expr(value));
+                if let Some(upper) = upper {
+                    d.under("upto", |dd| dd.expr(upper));
+                }
                 d.stmt(body);
             }),
             StmtKind::Default { body } => self.under("default", |d| d.stmt(body)),
@@ -499,7 +491,9 @@ impl Dumper {
                 else_expr,
             } => self.under("conditional", |d| {
                 d.under("cond", |dd| dd.expr(cond));
-                d.under("then", |dd| dd.expr(then_expr));
+                if let Some(then_expr) = then_expr {
+                    d.under("then", |dd| dd.expr(then_expr));
+                }
                 d.under("else", |dd| dd.expr(else_expr));
             }),
             ExprKind::Comma { lhs, rhs } => self.under("comma", |d| {
@@ -570,23 +564,54 @@ impl Dumper {
                 &format!("compound-literal {}", type_to_string(&ty.ty)),
                 |d| {
                     for item in init {
-                        let mut label = String::from("element");
-                        for designator in &item.designators {
-                            match designator {
-                                Designator::Field(f) => label.push_str(&format!(" .{}", f.name)),
-                                Designator::Index(e) => match &e.kind {
-                                    ExprKind::Int(lit) => {
-                                        label.push_str(&format!(" [{}]", lit.value));
-                                    }
-                                    _ => label.push_str(" [expr]"),
-                                },
-                            }
-                        }
+                        let label = element_label(&item.designators);
                         d.under(&label, |dd| dd.initializer(&item.init));
                     }
                 },
             ),
+            ExprKind::StmtExpr(block) => self.under("stmt-expr", |d| {
+                for item in &block.items {
+                    d.block_item(item);
+                }
+            }),
+            ExprKind::TypesCompatible { lhs, rhs } => self.line(format!(
+                "types-compatible {} {}",
+                type_to_string(&lhs.ty),
+                type_to_string(&rhs.ty)
+            )),
+            ExprKind::ChooseExpr {
+                cond,
+                then_expr,
+                else_expr,
+            } => self.under("choose-expr", |d| {
+                d.under("cond", |dd| dd.expr(cond));
+                d.under("then", |dd| dd.expr(then_expr));
+                d.under("else", |dd| dd.expr(else_expr));
+            }),
+            ExprKind::ComplexPart { real, operand } => {
+                let name = if *real { "__real__" } else { "__imag__" };
+                self.under(name, |d| d.expr(operand));
+            }
             ExprKind::Error => self.line("<error-expr>"),
         }
     }
+}
+
+/// The label one element of an initialiser list is dumped under.
+fn element_label(designators: &[Designator]) -> String {
+    let mut label = String::from("element");
+    let index = |e: &Expr| match &e.kind {
+        ExprKind::Int(lit) => lit.value.to_string(),
+        _ => "expr".to_owned(),
+    };
+    for designator in designators {
+        match designator {
+            Designator::Field(f) => label.push_str(&format!(" .{}", f.name)),
+            Designator::Index(e) => label.push_str(&format!(" [{}]", index(e))),
+            Designator::Range(low, high) => {
+                label.push_str(&format!(" [{} ... {}]", index(low), index(high)));
+            }
+        }
+    }
+    label
 }

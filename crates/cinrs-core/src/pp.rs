@@ -146,9 +146,11 @@ use std::sync::Arc;
 use crate::capture::{Pos, SourceRange};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::include;
-use crate::lex::{self, IntLit, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind};
+use crate::lex::{
+    self, IntLit, Keyword, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind,
+};
 use crate::target::TargetModel;
-use crate::{Options, Standard};
+use crate::{Dialect, Gating, Options, Standard};
 
 // ---------------------------------------------------------------------------
 // the tokens the parser sees
@@ -429,6 +431,12 @@ enum Builtin {
     Line,
     /// `__FILE__`, likewise: inside an `#include`d file it names the header.
     File,
+    /// `__FILE_NAME__` — GNU's `__FILE__` without the directory.
+    FileName,
+    /// `__INCLUDE_LEVEL__` — how many `#include`s deep the use is.
+    IncludeLevel,
+    /// `__COUNTER__` — a fresh integer at every use.
+    Counter,
 }
 
 /// One `#define`.
@@ -438,6 +446,9 @@ struct MacroDef {
     params: Option<Vec<String>>,
     /// Whether the parameter list ended with `...`.
     variadic: bool,
+    /// The name GNU's `#define log(fmt, args...)` gave the variable arguments,
+    /// which is then another spelling of `__VA_ARGS__`.
+    va_name: Option<String>,
     /// The replacement list.
     body: Vec<PTok>,
     /// Where the macro's name was written.
@@ -453,7 +464,10 @@ impl MacroDef {
     /// the same kind, the same parameter spellings, and replacement lists that
     /// agree token for token *and* on where the white space was.
     fn same_as(&self, other: &MacroDef) -> bool {
-        if self.params != other.params || self.variadic != other.variadic {
+        if self.params != other.params
+            || self.variadic != other.variadic
+            || self.va_name != other.va_name
+        {
             return false;
         }
         if self.body.len() != other.body.len() {
@@ -472,14 +486,59 @@ impl MacroDef {
         if let Some(i) = params.iter().position(|p| p == name) {
             return Some(i);
         }
-        (self.variadic && name == VA_ARGS).then_some(params.len())
+        let variable = name == VA_ARGS || self.va_name.as_deref() == Some(name);
+        (self.variadic && variable).then_some(params.len())
     }
+
+    /// The index the variable arguments occupy, if there are any.
+    fn va_index(&self) -> Option<usize> {
+        self.variadic
+            .then(|| self.params.as_ref().map_or(0, Vec::len))
+    }
+}
+
+/// The pieces of a parsed macro parameter list.
+struct ParamList {
+    params: Vec<String>,
+    variadic: bool,
+    va_name: Option<String>,
+    /// How many tokens the list occupied, including its parentheses.
+    used: usize,
 }
 
 const VA_ARGS: &str = "__VA_ARGS__";
 
 /// C23's conditional-expansion operator (6.10.5.2).
 const VA_OPT: &str = "__VA_OPT__";
+
+/// C99's `_Pragma` operator (6.10.9).
+const PRAGMA_OPERATOR: &str = "_Pragma";
+
+/// Undoes what `#` did: `L"a\"b\\c"` becomes `a"b\c`.
+fn destringize(text: &str) -> String {
+    let inner = text
+        .strip_prefix("L\"")
+        .or_else(|| text.strip_prefix('"'))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(text);
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(next @ ('"' | '\\')) => out.push(next),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
 
 // ---------------------------------------------------------------------------
 // limits
@@ -604,6 +663,36 @@ pub struct Preprocessed {
     pub export: bool,
     /// The module name `#pragma cinrs module` asked for.
     pub module: Option<String>,
+    /// Every `#pragma pack` the unit wrote, as `(token index, alignment)`.
+    ///
+    /// A pragma is not a token, so the change is recorded against the position
+    /// in [`Preprocessed::tokens`] it takes effect at; [`PackMap`] answers what
+    /// was in force where a `struct` was defined.
+    pub pack_events: Vec<(usize, Option<u32>)>,
+}
+
+/// What `#pragma pack` asked for, at every point of the token list.
+#[derive(Clone, Debug, Default)]
+pub struct PackMap {
+    events: Vec<(usize, Option<u32>)>,
+}
+
+impl PackMap {
+    /// Builds the map from the preprocessor's events, which are in order.
+    pub fn new(events: Vec<(usize, Option<u32>)>) -> Self {
+        Self { events }
+    }
+
+    /// Whether any `#pragma pack` was written at all.
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// The maximum member alignment in force at token `index`.
+    pub fn at(&self, index: usize) -> Option<u32> {
+        let at = self.events.partition_point(|(pos, _)| *pos <= index);
+        self.events[..at].last().and_then(|(_, value)| *value)
+    }
 }
 
 /// Runs the preprocessor over a lexed translation unit.
@@ -627,6 +716,7 @@ pub fn preprocess(
         link_libraries: pp.link_libraries,
         export: pp.export,
         module: pp.module,
+        pack_events: pp.pack_events,
     }
 }
 
@@ -728,9 +818,9 @@ struct Pp<'a> {
     /// its own is reported.
     base: Pos,
     lex_options: LexOptions,
-    /// Which revision the block is written in, which gates `__VA_OPT__` and
-    /// `#elifdef`.
-    standard: Standard,
+    /// How a construct of a newer revision is gated, and whether the plain GNU
+    /// spellings are on.
+    gating: Gating,
     depth: u32,
     /// Tokens still allowed to come out of macro replacement.
     budget: usize,
@@ -745,6 +835,20 @@ struct Pp<'a> {
     search: include::SearchPaths,
     /// The files `#pragma once` has closed for good.
     once: HashSet<String>,
+    /// The stacks `#pragma push_macro("X")` pushed, by macro name.
+    macro_stacks: HashMap<String, Vec<Option<Arc<MacroDef>>>>,
+    /// The identifiers `#pragma GCC poison` made unusable.
+    poisoned: HashSet<String>,
+    /// The next value `__COUNTER__` expands to.
+    counter: u64,
+    /// The member alignment `#pragma pack` is currently asking for.
+    pack: Option<u32>,
+    /// What `#pragma pack(push)` saved.
+    pack_stack: Vec<Option<u32>>,
+    /// Every change of that value, by the index in `out` it takes effect at.
+    pack_events: Vec<(usize, Option<u32>)>,
+    /// The name of the outermost file, which `__BASE_FILE__` reports.
+    base_file: String,
     /// The include guard of a file that has one: its name, and the macro that
     /// makes reading it again pointless.
     guards: HashMap<String, String>,
@@ -796,7 +900,7 @@ impl<'a> Pp<'a> {
             reported: HashSet::new(),
             base: ctx.base,
             lex_options: options.into(),
-            standard: options.standard,
+            gating: options.gating(),
             depth: 0,
             budget: MAX_EXPANDED_TOKENS,
             aborted: false,
@@ -804,6 +908,13 @@ impl<'a> Pp<'a> {
             included: Vec::new(),
             search: include::SearchPaths::new(&options.include_paths),
             once: HashSet::new(),
+            macro_stacks: HashMap::new(),
+            poisoned: HashSet::new(),
+            counter: 0,
+            pack: None,
+            pack_stack: Vec::new(),
+            pack_events: Vec::new(),
+            base_file: ctx.file_name.clone(),
             guards: HashMap::new(),
             user_headers: Vec::new(),
             link_libraries: Vec::new(),
@@ -915,8 +1026,48 @@ impl<'a> Pp<'a> {
             if tok.name().is_some() && self.try_expand(&tok, true) {
                 continue;
             }
+            if tok.name() == Some(PRAGMA_OPERATOR) && self.pragma_operator(&tok) {
+                continue;
+            }
             self.emit(tok);
         }
+    }
+
+    /// C99's `_Pragma ( string-literal )`, which is a pragma written where an
+    /// expression could go — and therefore the only way a *macro* can produce
+    /// one.
+    ///
+    /// Returns whether it really was one: the name on its own is an ordinary
+    /// identifier.
+    fn pragma_operator(&mut self, tok: &PTok) -> bool {
+        if !self.peek(true).is_some_and(|t| t.is_punct(Punct::LParen)) {
+            return false;
+        }
+        self.bump(true);
+        let literal = self.bump(true);
+        let Some(text) = literal.as_ref().and_then(|t| match &t.kind {
+            TokenKind::Str(lit) => Some(destringize(&lit.text)),
+            _ => None,
+        }) else {
+            self.diags
+                .error(tok.range, "'_Pragma' takes one string literal");
+            return true;
+        };
+        if !self.bump(true).is_some_and(|t| t.is_punct(Punct::RParen)) {
+            self.diags.error(tok.range, "missing ')' after '_Pragma'");
+            return true;
+        }
+        // The destringized text is a directive line without its `#pragma`, so
+        // it is lexed and handed to the same code the directive uses. The
+        // tokens are placed at the `_Pragma` itself, which is where a
+        // diagnostic about them belongs.
+        let tokens: Vec<PTok> = lex::lex_text(&text, tok.range.start, &self.lex_options)
+            .iter()
+            .filter(|t| !matches!(t.kind, TokenKind::Eof))
+            .map(PTok::from_lexed)
+            .collect();
+        self.pragma(&tokens, tok.range);
+        true
     }
 
     /// Leaves an `#include`d file, reporting the conditionals it left open.
@@ -940,12 +1091,31 @@ impl<'a> Pp<'a> {
         self.emit(eof);
     }
 
-    fn emit(&mut self, tok: PTok) {
+    fn emit(&mut self, mut tok: PTok) {
         self.report_errors(&tok);
         if matches!(tok.kind, TokenKind::Error(_)) {
             // Not a C token at all: reported above, and dropped so that the
             // parser never has to have an opinion about it.
             return;
+        }
+        // The GNU keywords are recognised *here*, on the way to the parser,
+        // rather than in the lexer: until this point `__attribute__` is an
+        // ordinary identifier, so `#define __attribute__(x)` — which every
+        // portability header writes — defines and expands a macro of that
+        // name, and `#ifdef __restrict` answers about the name that was
+        // written.
+        if let TokenKind::Ident(name) = &tok.kind {
+            if self.poisoned.contains(name) {
+                let range = tok.range;
+                let name = name.clone();
+                self.diags.error(
+                    range,
+                    format!("attempt to use the poisoned identifier '{name}'"),
+                );
+            }
+            if let Some(keyword) = gnu_keyword(name, self.gating.dialect) {
+                tok.kind = TokenKind::Keyword(keyword);
+            }
         }
         self.out.push(Token {
             kind: tok.kind,
@@ -997,6 +1167,39 @@ impl<'a> Pp<'a> {
         let end = to.saturating_sub(file.base) as usize;
         file.text.get(start..end).unwrap_or("")
     }
+}
+
+/// The GNU keyword an identifier spells, if it spells one.
+///
+/// Everything with a leading double underscore is available in every entry
+/// point, exactly as it is in GCC's `-std=c99`: the names are reserved, so
+/// nothing a program may legally call its own is taken away. The two *plain*
+/// spellings GCC keeps for its `gnu*` modes — `typeof` and `asm` — need a GNU
+/// dialect, and `typeof` is already a keyword of its own in `c23!`.
+fn gnu_keyword(name: &str, dialect: Dialect) -> Option<Keyword> {
+    let keyword = match name {
+        "__inline" | "__inline__" => Keyword::Inline,
+        "__const" | "__const__" => Keyword::Const,
+        "__signed" | "__signed__" => Keyword::Signed,
+        "__volatile" | "__volatile__" => Keyword::Volatile,
+        "__restrict" | "__restrict__" => Keyword::Restrict,
+        "__complex__" | "__complex" => Keyword::Complex,
+        "__attribute" | "__attribute__" => Keyword::Attribute,
+        "__extension__" => Keyword::Extension,
+        "__alignof" | "__alignof__" => Keyword::AlignofGnu,
+        "__typeof" | "__typeof__" => Keyword::TypeofGnu,
+        "__typeof_unqual__" | "__typeof_unqual" => Keyword::TypeofUnqualGnu,
+        "__asm" | "__asm__" => Keyword::Asm,
+        "__label__" => Keyword::Label,
+        "__auto_type" => Keyword::AutoType,
+        "__thread" => Keyword::ThreadGnu,
+        "__real" | "__real__" => Keyword::RealGnu,
+        "__imag" | "__imag__" => Keyword::ImagGnu,
+        "asm" if dialect.is_gnu() => Keyword::Asm,
+        "typeof" if dialect.is_gnu() => Keyword::TypeofGnu,
+        _ => return None,
+    };
+    Some(keyword)
 }
 
 /// The end-of-file token an empty file still has to produce.
@@ -1285,6 +1488,32 @@ impl Pp<'_> {
                 continue;
             }
 
+            // GNU's comma elision, `printf(fmt, ## __VA_ARGS__)`: the `##`
+            // between a comma and the variable arguments deletes the comma
+            // when the invocation passed none, and does nothing at all when it
+            // passed some — the arguments are then macro-replaced as usual,
+            // which is what makes it different from an ordinary paste.
+            // `__VA_OPT__` is C23's way of saying the same thing.
+            if tok.is_punct(Punct::Comma)
+                && body.get(i + 1).is_some_and(|t| t.is_punct(Punct::HashHash))
+                && let Some(index) = body
+                    .get(i + 2)
+                    .and_then(PTok::name)
+                    .and_then(|n| def.param_index(n))
+                && Some(index) == def.va_index()
+            {
+                if !args.get(index).is_empty() {
+                    let mut comma = tok.clone();
+                    comma.range = invocation;
+                    comma.origin = Origin::Expansion(exp.clone());
+                    pieces.push(Piece::Tok(comma));
+                    let arg = self.expanded_arg(args, index);
+                    pieces.extend(arg.into_iter().map(Piece::Tok));
+                }
+                i += 3;
+                continue;
+            }
+
             // `## something` — pasting.
             if tok.is_punct(Punct::HashHash)
                 && let Some(next) = body.get(i + 1)
@@ -1474,6 +1703,20 @@ impl Pp<'_> {
                 let file = self.file_name_of(tok.range.start).to_owned();
                 string_token_kind(&file)
             }
+            Builtin::FileName => {
+                let file = self.file_name_of(tok.range.start);
+                let base = file
+                    .rsplit_once(['/', '\\'])
+                    .map_or(file, |(_, base)| base)
+                    .to_owned();
+                string_token_kind(&base)
+            }
+            Builtin::IncludeLevel => int_token_kind((self.open.len() - 1) as u128),
+            Builtin::Counter => {
+                let value = self.counter;
+                self.counter += 1;
+                int_token_kind(u128::from(value))
+            }
         };
         let exp = self.expansion_of(name, tok.range, def, tok);
         PTok {
@@ -1554,6 +1797,17 @@ fn paste_operand(def: &MacroDef, args: &Args, tok: &PTok) -> Vec<Piece> {
         return vec![Piece::Placemarker];
     }
     arg.iter().cloned().map(Piece::Tok).collect()
+}
+
+/// The decimal integer token a built-in macro expands to.
+fn int_token_kind(value: u128) -> TokenKind {
+    TokenKind::Int(IntLit {
+        value,
+        base: NumBase::Decimal,
+        unsigned: false,
+        long: LongKind::None,
+        text: value.to_string(),
+    })
 }
 
 /// The narrow string literal token a predefined macro expands to.
@@ -1647,6 +1901,16 @@ impl Pp<'_> {
             "define" => self.define(rest, range),
             "undef" => self.undef(rest, range),
             "include" => self.include(&line, range),
+            // `#include_next` exists to reach the *next* header of a name on
+            // the search path, which only makes sense when the system
+            // directories are on it — and they never are here.
+            "include_next" => {
+                self.diags.error(
+                    range,
+                    "#include_next is not supported; cinrs never searches the platform's \
+                     include directories, so there is no next header to reach",
+                );
+            }
             "error" => {
                 let text = self.directive_text(&line, 1);
                 let message = if text.is_empty() {
@@ -1676,6 +1940,10 @@ impl Pp<'_> {
                 // positions in the user's `.rs` file, which no `#line` in the
                 // C text can usefully move.
             }
+            // `#ident "string"` and `#sccs` put a string into a section of the
+            // object file that nothing here has; GCC ignores them too when the
+            // target has no such section.
+            "ident" | "sccs" => {}
             other => {
                 self.diags
                     .error(range, format!("invalid preprocessing directive #{other}"));
@@ -1724,8 +1992,171 @@ impl Pp<'_> {
                 self.once.insert(key);
             }
             Some("cinrs") => self.cinrs_pragma(&rest[1..], range),
+            Some("pack") => self.pack_pragma(&rest[1..], range),
+            Some("push_macro") => self.push_macro_pragma(&rest[1..], range, true),
+            Some("pop_macro") => self.push_macro_pragma(&rest[1..], range, false),
+            Some("GCC") => self.gcc_pragma(&rest[1..], range),
+            // `#pragma message`, `#pragma region` / `#pragma endregion`,
+            // `#pragma weak` and everything else are ignored, which 6.10.6 is
+            // explicit about. `weak` is the one worth knowing about: it asks
+            // for weak linkage, which stable Rust cannot express at all, so
+            // ignoring it is the same answer `__attribute__((weak))` gets —
+            // see `doc/gnu-extensions.md`.
             _ => {}
         }
+    }
+
+    /// `#pragma GCC …`.
+    fn gcc_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        match rest.first().and_then(PTok::name) {
+            // A program that poisons a name means it never to be written
+            // again, and honouring that costs one lookup per identifier.
+            Some("poison") => {
+                for tok in &rest[1..] {
+                    match tok.name() {
+                        Some(name) => {
+                            self.poisoned.insert(name.to_owned());
+                        }
+                        None => self.diags.error(
+                            tok.range,
+                            format!(
+                                "'#pragma GCC poison' takes identifiers, found {}",
+                                tok.kind.describe()
+                            ),
+                        ),
+                    }
+                }
+            }
+            Some("error") => {
+                let text = self.pragma_message(&rest[1..]);
+                self.diags.error(range, format!("#pragma GCC error {text}"));
+            }
+            Some("warning") => {
+                let text = self.pragma_message(&rest[1..]);
+                self.diags
+                    .warning(range, format!("#pragma GCC warning {text}"));
+            }
+            // `diagnostic push/pop/ignored/warning/error`, `system_header`,
+            // `visibility` and the rest: there are no warnings of ours to
+            // suppress and no visibility to set, so they are accepted and
+            // ignored.
+            _ => {}
+        }
+    }
+
+    /// The text of a pragma that carries a message.
+    fn pragma_message(&self, rest: &[PTok]) -> String {
+        match rest.first() {
+            Some(tok) => tok.spelling().to_owned(),
+            None => String::new(),
+        }
+    }
+
+    /// `#pragma push_macro("X")` and `#pragma pop_macro("X")`.
+    ///
+    /// MSVC's, and in GCC since 4.4: a header that has to redefine a macro for
+    /// a few lines saves the old definition and puts it back. c-testsuite's
+    /// `00206` is exactly that, and it is the reason this is here.
+    fn push_macro_pragma(&mut self, rest: &[PTok], range: SourceRange, push: bool) {
+        let what = if push { "push_macro" } else { "pop_macro" };
+        // The name is a *string literal*, which is then read as an identifier.
+        let inner = match rest {
+            [tok] if tok.is_punct(Punct::LParen) => None,
+            _ => rest
+                .iter()
+                .find_map(|tok| match &tok.kind {
+                    TokenKind::Str(lit) => lit.as_bytes(),
+                    _ => None,
+                })
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        };
+        let Some(name) = inner.filter(|name| !name.is_empty()) else {
+            self.diags.error(
+                range,
+                format!("#pragma {what} needs a string literal naming a macro"),
+            );
+            return;
+        };
+        if push {
+            let saved = self.macros.get(&name).cloned();
+            self.macro_stacks.entry(name).or_default().push(saved);
+            return;
+        }
+        match self.macro_stacks.get_mut(&name).and_then(Vec::pop) {
+            Some(Some(def)) => {
+                self.macros.insert(name, def);
+            }
+            Some(None) => {
+                self.macros.remove(&name);
+            }
+            // GCC ignores a `pop_macro` with nothing pushed.
+            None => {}
+        }
+    }
+
+    /// `#pragma pack(…)`, which changes the alignment a record's members are
+    /// laid out with until the next one.
+    ///
+    /// The value in effect where a `struct` is *defined* is what applies to it;
+    /// [`Preprocessed::pack_events`] carries the changes to the parser, which
+    /// records the one each specifier saw.
+    fn pack_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        let bad = |pp: &mut Self, at: SourceRange| {
+            pp.diags.error(
+                at,
+                "#pragma pack expects '(N)', '(push, N)', '(push)', '(pop)' or '()', \
+                 where N is a power of two up to 16",
+            );
+        };
+        if !rest.first().is_some_and(|t| t.is_punct(Punct::LParen))
+            || !rest.last().is_some_and(|t| t.is_punct(Punct::RParen))
+            || rest.len() < 2
+        {
+            bad(self, range);
+            return;
+        }
+        let inner = &rest[1..rest.len() - 1];
+        let value = |pp: &mut Self, tok: &PTok| -> Option<u32> {
+            let TokenKind::Int(lit) = &tok.kind else {
+                bad(pp, tok.range);
+                return None;
+            };
+            let n = u32::try_from(lit.value)
+                .ok()
+                .filter(|n| n.is_power_of_two() && *n <= 16);
+            if n.is_none() {
+                bad(pp, tok.range);
+            }
+            n
+        };
+        let next = match inner {
+            [] => Some(None),
+            [tok] if tok.name() == Some("pop") => match self.pack_stack.pop() {
+                Some(value) => Some(value),
+                None => {
+                    self.diags
+                        .error(range, "#pragma pack(pop) with nothing pushed");
+                    return;
+                }
+            },
+            [tok] if tok.name() == Some("push") => {
+                self.pack_stack.push(self.pack);
+                Some(self.pack)
+            }
+            [tok] => value(self, tok).map(Some),
+            [push, comma, tok] if push.name() == Some("push") && comma.is_punct(Punct::Comma) => {
+                self.pack_stack.push(self.pack);
+                value(self, tok).map(Some)
+            }
+            _ => {
+                bad(self, range);
+                return;
+            }
+        };
+        let Some(next) = next else { return };
+        self.pack = next;
+        let at = self.out.len();
+        self.pack_events.push((at, next));
     }
 
     /// The identity of the file being read, for `#pragma once`.
@@ -2071,11 +2502,9 @@ impl Pp<'_> {
 
     /// Reports a directive the block's own standard does not have.
     fn require_standard(&mut self, needed: Standard, what: &str, range: SourceRange) {
-        if self.standard >= needed {
-            return;
+        if let Some(message) = self.gating.requires(what, needed) {
+            self.diags.error(range, message);
         }
-        let message = self.standard.requires(what, needed);
-        self.diags.error(range, message);
     }
 
     fn else_(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2150,20 +2579,21 @@ impl Pp<'_> {
         let function_like = rest
             .first()
             .is_some_and(|t| t.is_punct(Punct::LParen) && !t.space);
-        let (params, variadic) = if function_like {
-            let Some((params, variadic, used)) = self.parse_params(rest, range) else {
+        let (params, variadic, va_name) = if function_like {
+            let Some(parsed) = self.parse_params(rest, range) else {
                 return;
             };
-            rest = &rest[used..];
-            (Some(params), variadic)
+            rest = &rest[parsed.used..];
+            (Some(parsed.params), parsed.variadic, parsed.va_name)
         } else {
-            (None, false)
+            (None, false, None)
         };
 
         let body = fuse_hash_hash(rest);
         let def = MacroDef {
             params,
             variadic,
+            va_name,
             body,
             name_range: name_tok.range,
             predefined: false,
@@ -2189,18 +2619,19 @@ impl Pp<'_> {
         self.macros.insert(name, Arc::new(def));
     }
 
-    /// Parses `( a, b, ... )`, returning the names, whether `...` was there,
-    /// and how many tokens were consumed.
-    fn parse_params(
-        &mut self,
-        rest: &[PTok],
-        range: SourceRange,
-    ) -> Option<(Vec<String>, bool, usize)> {
+    /// Parses `( a, b, ... )`, or GNU's `( a, rest... )`.
+    fn parse_params(&mut self, rest: &[PTok], range: SourceRange) -> Option<ParamList> {
         let mut params: Vec<String> = Vec::new();
         let mut variadic = false;
+        let mut va_name = None;
         let mut i = 1; // past the `(`
         if rest.get(i).is_some_and(|t| t.is_punct(Punct::RParen)) {
-            return Some((params, variadic, i + 1));
+            return Some(ParamList {
+                params,
+                variadic,
+                va_name,
+                used: i + 1,
+            });
         }
         loop {
             let Some(tok) = rest.get(i) else {
@@ -2235,6 +2666,14 @@ impl Pp<'_> {
                     .error(tok.range, format!("duplicate macro parameter '{name}'"));
                 return None;
             }
+            // GNU's named variable arguments: `args...` makes `args` another
+            // spelling of `__VA_ARGS__` rather than one more parameter.
+            if rest.get(i + 1).is_some_and(|t| t.is_punct(Punct::Ellipsis)) {
+                variadic = true;
+                va_name = Some(name.to_owned());
+                i += 2;
+                break;
+            }
             params.push(name.to_owned());
             i += 1;
             match rest.get(i) {
@@ -2258,7 +2697,12 @@ impl Pp<'_> {
             }
         }
         match rest.get(i) {
-            Some(t) if t.is_punct(Punct::RParen) => Some((params, variadic, i + 1)),
+            Some(t) if t.is_punct(Punct::RParen) => Some(ParamList {
+                params,
+                variadic,
+                va_name,
+                used: i + 1,
+            }),
             _ => {
                 self.diags
                     .error(range, "missing ')' in the parameter list of a macro");
@@ -2627,16 +3071,20 @@ impl Pp<'_> {
         let mut i = 0;
         while i < line.len() {
             let tok = &line[i];
-            // C23's `__has_include` and `__has_embed` are answered before
-            // macro replacement too, and neither is implemented; saying so
-            // beats the syntax error the header name inside them would
-            // otherwise produce.
-            if let Some(name @ ("__has_include" | "__has_embed" | "__has_c_attribute")) = tok.name()
+            // The `__has_…` family is answered here too, for the same reason
+            // `defined` is: their operands are names and header names, not
+            // things a macro may rewrite.
+            if let Some(name) = tok.name()
+                && name.starts_with("__has_")
             {
-                let range = tok.range;
-                self.diags
-                    .error(range, format!("'{name}' is not supported yet"));
-                return None;
+                let (value, end) = self.has_operator(name, line, i)?;
+                let mut answer = tok.clone();
+                answer.kind = int_token_kind(value);
+                answer.hide = answer.hide.add(name);
+                answer.errors.clear();
+                out.push(answer);
+                i = end;
+                continue;
             }
             if tok.name() != Some("defined") {
                 out.push(tok.clone());
@@ -2676,6 +3124,112 @@ impl Pp<'_> {
             i = end;
         }
         Some(out)
+    }
+
+    /// Answers one `__has_…(…)` operator, returning its value and the index
+    /// just past its closing `)`.
+    ///
+    /// Everything here is answered from `cinrs`'s own tables (see
+    /// [`crate::gnu`]) rather than from GCC's, which is the point: a program
+    /// that writes `#if __has_attribute(cleanup)` must be told *no*, because
+    /// this implementation does not have it.
+    fn has_operator(&mut self, name: &str, line: &[PTok], at: usize) -> Option<(u128, usize)> {
+        let range = line[at].range;
+        if !line.get(at + 1).is_some_and(|t| t.is_punct(Punct::LParen)) {
+            // An identifier that is not an invocation is an ordinary one, and
+            // 6.10.1p4 turns it into 0 like any other.
+            return Some((0, at + 1));
+        }
+        let mut depth = 0i32;
+        let mut end = at + 1;
+        while end < line.len() {
+            if line[end].is_punct(Punct::LParen) {
+                depth += 1;
+            } else if line[end].is_punct(Punct::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    end += 1;
+                    break;
+                }
+            }
+            end += 1;
+        }
+        if depth != 0 {
+            self.diags
+                .error(range, format!("missing ')' after '{name}'"));
+            return None;
+        }
+        let inner = &line[at + 2..end - 1];
+        let value = match name {
+            // The header name is spelled as it is in an `#include`, so it is
+            // read out of the source text rather than out of the tokens.
+            "__has_include" | "__has_include_next" => {
+                let Some((header, form)) = self.operand_header_name(inner) else {
+                    self.diags.error(
+                        range,
+                        format!("'{name}' expects \"FILENAME\" or <FILENAME>"),
+                    );
+                    return None;
+                };
+                // `__has_include_next` looks past the file the directive is
+                // written in, which for us is the angled search alone.
+                let form = if name == "__has_include_next" {
+                    include::Form::Angled
+                } else {
+                    form
+                };
+                let origin = self.cur().origin.clone();
+                u128::from(include::resolve(&header, form, &origin, &self.search).is_ok())
+            }
+            "__has_attribute" | "__has_declspec_attribute" => u128::from(
+                inner
+                    .first()
+                    .and_then(PTok::name)
+                    .is_some_and(crate::gnu::has_attribute),
+            ),
+            "__has_c_attribute" => inner
+                .first()
+                .and_then(PTok::name)
+                .map_or(0, |n| u128::from(crate::gnu::has_c_attribute(n))),
+            "__has_builtin" => u128::from(
+                inner
+                    .first()
+                    .and_then(PTok::name)
+                    .is_some_and(crate::gnu::has_builtin),
+            ),
+            "__has_feature" | "__has_extension" => u128::from(
+                inner
+                    .first()
+                    .and_then(PTok::name)
+                    .is_some_and(crate::gnu::has_feature),
+            ),
+            // `#embed` is not implemented, and 6.10.3p2's "not found" answer
+            // is exactly the honest one.
+            "__has_embed" => 0,
+            _ => 0,
+        };
+        Some((value, end))
+    }
+
+    /// The header name written inside `__has_include(…)`.
+    fn operand_header_name(&mut self, inner: &[PTok]) -> Option<(String, include::Form)> {
+        let first = inner.first()?;
+        let last = inner.last()?;
+        let text = self.raw_text(first.range.start, last.range.end).trim();
+        if let Some(found) = parse_header_name(text) {
+            return Some(found);
+        }
+        // The name came out of a macro, so there is no source text to read: it
+        // is rebuilt from the spellings, exactly as `#include MACRO` is.
+        let expanded = self.expand_sequence(inner.to_vec());
+        let mut spelled = String::new();
+        for (i, tok) in expanded.iter().enumerate() {
+            if i > 0 && tok.space {
+                spelled.push(' ');
+            }
+            spelled.push_str(tok.spelling());
+        }
+        parse_header_name(&spelled)
     }
 }
 
@@ -3002,14 +3556,73 @@ impl Pp<'_> {
         self.define_object("__STDC_HOSTED__", "1");
         self.define_object("__STDC_VERSION__", options.standard.stdc_version());
         self.define_object("__cinrs__", "1");
+        // C11 6.10.8.3 makes four parts of the language optional and gives an
+        // implementation a macro to say it left each one out. `cinrs` has left
+        // all four out, so saying so turns them from gaps into conforming
+        // omissions — and lets a portable program take the other branch.
+        self.define_object("__STDC_NO_ATOMICS__", "1");
+        self.define_object("__STDC_NO_COMPLEX__", "1");
+        self.define_object("__STDC_NO_THREADS__", "1");
+        self.define_object("__STDC_NO_VLA__", "1");
+        // Only a strict entry point is `-std=c99`; a GNU one is `-std=gnu99`.
+        if !options.dialect.is_gnu() {
+            self.define_object("__STRICT_ANSI__", "1");
+        }
+        // The GNU extensions this crate implements are the ones a program
+        // guards with `#if defined(__GNUC__) && __GNUC__ >= 4`, so claiming
+        // 4.2.1 is what makes those guards take the branch that uses them.
+        // Clang set the same precedent for the same reason.
+        self.define_object("__GNUC__", "4");
+        self.define_object("__GNUC_MINOR__", "2");
+        self.define_object("__GNUC_PATCHLEVEL__", "1");
+        self.define_string(
+            "__VERSION__",
+            &format!("cinrs {}", env!("CARGO_PKG_VERSION")),
+        );
         // Fixed placeholders: a build has to give the same output twice.
         self.define_string("__DATE__", "??? ?? ????");
         self.define_string("__TIME__", "??:??:??");
+        self.define_string("__TIMESTAMP__", "??? ??? ?? ??:??:?? ????");
+        let base_file = self.base_file.clone();
+        self.define_string("__BASE_FILE__", &base_file);
         self.define_builtin("__LINE__", Builtin::Line);
         self.define_builtin("__FILE__", Builtin::File);
+        self.define_builtin("__FILE_NAME__", Builtin::FileName);
+        self.define_builtin("__INCLUDE_LEVEL__", Builtin::IncludeLevel);
+        self.define_builtin("__COUNTER__", Builtin::Counter);
+        // GCC's `__builtin_LINE()`, `__builtin_FILE()` and
+        // `__builtin_FUNCTION()` say what `__LINE__`, `__FILE__` and
+        // `__func__` say; being macros rather than builtins is what makes
+        // them report the *use* rather than the definition, exactly as GCC's
+        // do for a default argument.
+        self.define_function("__builtin_LINE", "__LINE__");
+        self.define_function("__builtin_FILE", "__FILE__");
+        self.define_function("__builtin_FUNCTION", "__func__");
         for (name, value) in target_macros(&options.target) {
             self.define_object(name, &value);
         }
+    }
+
+    /// Defines a predefined function-like macro that takes no arguments.
+    fn define_function(&mut self, name: &str, body: &str) {
+        let tokens = lex::lex_text(body, self.base, &self.lex_options);
+        let body: Vec<PTok> = tokens
+            .iter()
+            .filter(|t| !matches!(t.kind, TokenKind::Eof))
+            .map(PTok::from_lexed)
+            .collect();
+        self.macros.insert(
+            name.to_owned(),
+            Arc::new(MacroDef {
+                params: Some(Vec::new()),
+                variadic: false,
+                va_name: None,
+                body,
+                name_range: SourceRange::at(self.base),
+                predefined: true,
+                builtin: None,
+            }),
+        );
     }
 
     /// Defines a predefined object-like macro from the C text of its body.
@@ -3048,6 +3661,7 @@ impl Pp<'_> {
             Arc::new(MacroDef {
                 params: None,
                 variadic: false,
+                va_name: None,
                 body,
                 name_range: SourceRange::at(self.base),
                 predefined: true,

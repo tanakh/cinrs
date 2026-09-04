@@ -54,6 +54,7 @@
 //! Rust" error never compete for the same construct, and so that a broken
 //! program is diagnosed identically on every toolchain.
 
+mod builtins;
 mod decl;
 mod expr;
 mod init;
@@ -63,6 +64,7 @@ mod va;
 
 use std::collections::{HashMap, HashSet};
 
+use crate::Options;
 use crate::ast;
 use crate::capture::{Pos, SourceRange};
 use crate::diag::{Diagnostic, Diagnostics};
@@ -71,7 +73,6 @@ use crate::ir::{
     SwitchId, Ty, Types, VA_LIST_NAMES,
 };
 use crate::target::TargetModel;
-use crate::{Options, Standard};
 
 /// Runs semantic analysis over a parsed translation unit.
 ///
@@ -162,6 +163,9 @@ enum TagEntry {
         /// Whether the enumeration's underlying type is unsigned, which is
         /// only observable through a bit-field of the type.
         unsigned: bool,
+        /// Whether an enumerator list has been seen. GNU allows `enum e;`
+        /// before one, which C99 does not have at all.
+        complete: bool,
     },
 }
 
@@ -197,7 +201,9 @@ struct SwitchState {
     /// The type the controlling expression was promoted to, which every label
     /// is converted to.
     ty: Ty,
-    seen: HashMap<i128, SourceRange>,
+    /// The label values already claimed. A [range](ir::CaseRange) can overlap
+    /// another one, so this is a list rather than a set.
+    seen: Vec<(ir::CaseRange, SourceRange)>,
     default: Option<SourceRange>,
 }
 
@@ -235,9 +241,10 @@ struct Sema {
     gate_diags: Vec<Diagnostic>,
     /// Whether the toolchain supports `va_list` and variadic definitions.
     c_variadic: bool,
-    /// Which revision the block is written in, which is what an identifier a
-    /// newer one would have made a keyword is reported against.
-    standard: Standard,
+    /// Which revision the block is written in, and whether the GNU extensions
+    /// are on; an identifier another entry point would have made a keyword is
+    /// reported against it.
+    gating: crate::Gating,
     /// Whether the `va_list` gate has already been reported once. One mention
     /// of the type is enough to make the point.
     va_list_gate_reported: bool,
@@ -277,6 +284,13 @@ struct Sema {
     /// expression could not offer. [`Sema::block_items`] empties this list into
     /// definitions at the head of the block it belongs to.
     compound_literals: Vec<ObjectId>,
+    /// The file-scope compound literals, by the `statics` entry holding their
+    /// value.
+    ///
+    /// A literal written where a constant expression has to go — inside
+    /// another object's initialiser — is the value it was written with, and
+    /// this is what lets `static_init` reach it. (c-testsuite `00216`.)
+    static_literals: HashMap<ObjectId, usize>,
     /// Return type of the function being checked.
     ret_ty: Ty,
     /// Name of the function being checked, for diagnostics and for mangling.
@@ -311,7 +325,7 @@ impl Sema {
             diags: Diagnostics::new(),
             gate_diags: Vec::new(),
             c_variadic: options.c_variadic,
-            standard: options.standard,
+            gating: options.gating(),
             va_list_gate_reported: false,
             target: options.target,
             program: Program {
@@ -327,6 +341,7 @@ impl Sema {
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
+            static_literals: HashMap::new(),
             ret_ty: Ty::Void,
             func_name: String::new(),
             func_variadic: false,
@@ -410,9 +425,7 @@ impl Sema {
     /// C11 block that uses one gets "use of undeclared identifier" unless
     /// somebody says what is really going on.
     fn newer_keyword(&self, name: &str) -> Option<String> {
-        let keyword = crate::lex::Keyword::from_str(name, Standard::C23)?;
-        let needed = keyword.since();
-        (needed > self.standard).then(|| self.standard.requires(&format!("'{name}'"), needed))
+        self.gating.newer_keyword(name)
     }
 
     fn error_note(
@@ -568,6 +581,8 @@ impl Sema {
             ty,
             storage,
             is_const,
+            asm_label: None,
+            section: None,
             range,
         });
         id

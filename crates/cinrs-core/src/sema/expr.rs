@@ -44,6 +44,11 @@ impl Sema {
                     None
                 }
                 None => {
+                    // `__func__` and its two GNU spellings are predeclared in
+                    // every function body, and nowhere else.
+                    if let Some(place) = self.function_name_literal(&name.name, range) {
+                        return Some(self.load_or_decay(place, range));
+                    }
                     self.report_undeclared(name);
                     None
                 }
@@ -68,7 +73,7 @@ impl Sema {
                 cond,
                 then_expr,
                 else_expr,
-            } => self.conditional(cond, then_expr, else_expr, range),
+            } => self.conditional(cond, then_expr.as_deref(), else_expr, range),
             ast::ExprKind::Comma { lhs, rhs } => {
                 let lhs = self.expr(lhs)?;
                 let rhs = self.expr(rhs)?;
@@ -96,6 +101,10 @@ impl Sema {
                             return None;
                         }
                         return Some(Expr::new(ExprKind::Unreachable, Ty::Void, range));
+                    }
+                    // Everything else GCC spells `__builtin_…`.
+                    if let Some(result) = self.builtin_call(&name.name, args, range) {
+                        return result;
                     }
                 }
                 self.call(callee, args, range)
@@ -144,8 +153,91 @@ impl Sema {
                 let place = self.compound_literal(ty, init, range)?;
                 Some(self.load_or_decay(place, range))
             }
+            ast::ExprKind::StmtExpr(block) => self.stmt_expr(block, range),
+            ast::ExprKind::TypesCompatible { lhs, rhs } => {
+                let lhs = self.ty_of(&lhs.ty)?;
+                let rhs = self.ty_of(&rhs.ty)?;
+                // The types are compared after the adjustments C makes to a
+                // type name, which is exactly `Ty` equality here — `Ty` is
+                // interned, and it carries no top-level qualifiers.
+                Some(Expr::int(i128::from(lhs == rhs), Ty::Int, range))
+            }
+            ast::ExprKind::ChooseExpr {
+                cond,
+                then_expr,
+                else_expr,
+            } => self.choose_expr(cond, then_expr, else_expr, range),
+            // Reported by the parser, which knows the spelling that was used.
+            ast::ExprKind::ComplexPart { .. } => None,
             ast::ExprKind::Error => None,
         }
+    }
+
+    /// `__builtin_choose_expr(c, a, b)`: the unchosen operand is not even
+    /// type checked, which is what makes the builtin usable in a macro that
+    /// has to work for several types.
+    fn choose_expr(
+        &mut self,
+        cond: &ast::Expr,
+        then_expr: &ast::Expr,
+        else_expr: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let value = self.expr(cond)?;
+        if !value.ty.is_integer() {
+            self.error(
+                cond.range,
+                format!(
+                    "the condition of '__builtin_choose_expr' must have an integer type, not '{}'",
+                    self.tyname(value.ty)
+                ),
+            );
+            return None;
+        }
+        let constant = match self.const_eval(&value) {
+            Some(constant) => constant,
+            None => {
+                self.error(
+                    cond.range,
+                    "the condition of '__builtin_choose_expr' is not a compile-time constant \
+                     expression",
+                );
+                return None;
+            }
+        };
+        let chosen = if super::is_true(constant) {
+            then_expr
+        } else {
+            else_expr
+        };
+        let value = self.expr(chosen)?;
+        Some(Expr::new(value.kind, value.ty, range))
+    }
+
+    /// The string literal `__func__` stands for inside a function body.
+    ///
+    /// C99 6.4.2.2 declares it as `static const char __func__[] = "name";`, and
+    /// a string literal is exactly that object: it has the array type, so
+    /// `sizeof` gives the length, and it decays like any other array.
+    /// `__FUNCTION__` and `__PRETTY_FUNCTION__` are GCC's spellings of the same
+    /// thing in C.
+    pub(super) fn function_name_literal(
+        &mut self,
+        name: &str,
+        range: SourceRange,
+    ) -> Option<Place> {
+        if !matches!(name, "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__") {
+            return None;
+        }
+        if self.func_name.is_empty() {
+            return None;
+        }
+        let lit = StrLit {
+            kind: StrKind::Narrow,
+            values: self.func_name.bytes().map(u32::from).collect(),
+            text: String::new(),
+        };
+        Some(self.string_place(&lit, range))
     }
 
     /// "use of undeclared identifier", unless the name is a keyword a newer
@@ -330,7 +422,17 @@ impl Sema {
     /// between reading it and taking its address.
     pub(super) fn is_lvalue_form(&self, expr: &ast::Expr) -> bool {
         match &expr.kind {
-            ast::ExprKind::Ident(name) => matches!(self.lookup(&name.name), Some(Entry::Object(_))),
+            ast::ExprKind::Ident(name) => {
+                matches!(self.lookup(&name.name), Some(Entry::Object(_)))
+                    // `__func__` is an object too, which is what makes
+                    // `sizeof(__func__)` the length of the name.
+                    || (self.lookup(&name.name).is_none()
+                        && !self.func_name.is_empty()
+                        && matches!(
+                            name.name.as_str(),
+                            "__func__" | "__FUNCTION__" | "__PRETTY_FUNCTION__"
+                        ))
+            }
             ast::ExprKind::Unary {
                 op: ast::UnaryOp::Deref,
                 ..
@@ -363,6 +465,9 @@ impl Sema {
                     None
                 }
                 None => {
+                    if let Some(place) = self.function_name_literal(&name.name, range) {
+                        return Some(place);
+                    }
                     self.report_undeclared(name);
                     None
                 }
@@ -1183,10 +1288,15 @@ impl Sema {
     fn conditional(
         &mut self,
         cond: &ast::Expr,
-        then_expr: &ast::Expr,
+        then_expr: Option<&ast::Expr>,
         else_expr: &ast::Expr,
         range: SourceRange,
     ) -> Option<Expr> {
+        // GNU's `a ?: b` is `a ? a : b` with `a` evaluated once, so the two
+        // share everything but the node they end up in.
+        let Some(then_expr) = then_expr else {
+            return self.conditional_default(cond, else_expr, range);
+        };
         let cond = self.condition(cond)?;
         let then_value = self.expr(then_expr)?;
         let else_value = self.expr(else_expr)?;
@@ -1233,6 +1343,47 @@ impl Sema {
         None
     }
 
+    /// GNU's `a ?: b`, whose first operand is both the condition and the
+    /// result — and is evaluated exactly once, which is the whole reason the
+    /// extension exists.
+    fn conditional_default(
+        &mut self,
+        cond: &ast::Expr,
+        else_expr: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let value = self.condition(cond)?;
+        let other = self.expr(else_expr)?;
+        let build = |value: Expr, other: Expr, ty: Ty| {
+            Expr::new(
+                ExprKind::CondDefault {
+                    value: Box::new(value),
+                    else_expr: Box::new(other),
+                },
+                ty,
+                range,
+            )
+        };
+        if value.ty.is_arithmetic() && other.ty.is_arithmetic() {
+            let (value, other, common) = self.balance(value, other);
+            return Some(build(value, other, common));
+        }
+        if let Some(common) = self.common_pointer(&value, &other) {
+            let value = self.convert(value, common);
+            let other = self.convert(other, common);
+            return Some(build(value, other, common));
+        }
+        self.error(
+            range,
+            format!(
+                "the operands of '?:' have incompatible types '{}' and '{}'",
+                self.tyname(value.ty),
+                self.tyname(other.ty)
+            ),
+        );
+        None
+    }
+
     /// The type C gives `cond ? p : q` when pointers are involved.
     fn common_pointer(&mut self, lhs: &Expr, rhs: &Expr) -> Option<Ty> {
         if lhs.ty == rhs.ty {
@@ -1262,7 +1413,12 @@ impl Sema {
         None
     }
 
-    fn call(&mut self, callee: &ast::Expr, args: &[ast::Expr], range: SourceRange) -> Option<Expr> {
+    pub(super) fn call(
+        &mut self,
+        callee: &ast::Expr,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
         let (target, sig, name) = self.callee(callee)?;
 
         let mut values = Vec::with_capacity(args.len());
@@ -1364,13 +1520,16 @@ impl Sema {
                     return None;
                 }
                 None => {
-                    self.error(
-                        callee.range,
+                    // A name another entry point would have made a keyword is
+                    // almost always that keyword rather than a function nobody
+                    // declared — `asm("nop")` looks exactly like a call.
+                    let message = self.gating.newer_keyword(&name.name).unwrap_or_else(|| {
                         format!(
                             "implicit declaration of function '{}' is invalid in C99",
                             name.name
-                        ),
-                    );
+                        )
+                    });
+                    self.error(callee.range, message);
                     return None;
                 }
             }
@@ -1780,13 +1939,32 @@ impl Sema {
         let to_func = self.types().is_func_pointer(to);
         let from_func = self.types().is_func_pointer(from);
         if to_func || from_func {
-            // A function pointer converts only to its own type; `void *` is
-            // not interchangeable with one in standard C.
-            return to == from;
+            // Standard C keeps function pointers and `void *` apart; POSIX
+            // requires the conversion, `dlsym` is built on it, and GCC allows
+            // it. `cinrs` follows GCC — the two have the same size on every
+            // target it supports, and codegen makes the reinterpretation
+            // explicit.
+            return to == from
+                || self.types().is_void_pointer(to)
+                || self.types().is_void_pointer(from);
         }
-        self.types().is_void_pointer(to)
-            || self.types().is_void_pointer(from)
-            || self.types().same_pointee(to, from)
+        if self.types().is_void_pointer(to) || self.types().is_void_pointer(from) {
+            return true;
+        }
+        if self.types().same_pointee(to, from) {
+            return true;
+        }
+        // C99 6.7.2.2p4 makes an enumerated type compatible with an
+        // implementation-defined integer type; GCC and Clang pick `unsigned
+        // int` when no enumerator is negative and `int` otherwise, and a
+        // pointer to one is then a pointer to the other. c-testsuite `00170`
+        // is exactly that.
+        let (Some(a), Some(b)) = (self.pointee(to), self.pointee(from)) else {
+            return false;
+        };
+        matches!((a.is_enum(), b.is_enum()), (true, false) | (false, true))
+            && matches!(a, Ty::Int | Ty::UInt | Ty::Enum(_))
+            && matches!(b, Ty::Int | Ty::UInt | Ty::Enum(_))
     }
 
     /// Whether an expression is C's null pointer constant.

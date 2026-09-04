@@ -7,10 +7,7 @@ use cinrs_core::lex::{
 };
 
 fn opts() -> LexOptions {
-    LexOptions {
-        standard: Standard::C99,
-        dollar_in_identifiers: false,
-    }
+    LexOptions::new(Standard::C99)
 }
 
 /// Every message of the given level the lexer attached to `tokens`.
@@ -166,14 +163,7 @@ fn later_keywords_are_recognised_where_they_belong() {
     ];
     for word in c23 {
         assert_eq!(one(word), TokenKind::Ident(word.to_owned()));
-        let tokens = lex_text(
-            word,
-            0,
-            &LexOptions {
-                standard: Standard::C23,
-                dollar_in_identifiers: false,
-            },
-        );
+        let tokens = lex_text(word, 0, &LexOptions::new(Standard::C23));
         let TokenKind::Keyword(k) = tokens[0].kind.clone() else {
             panic!("{word} is a keyword in C23");
         };
@@ -247,10 +237,7 @@ fn integer_suffixes() {
 
 /// The same as [`int`], for a lexer told to accept C23.
 fn int_c23(src: &str) -> (u128, NumBase, bool, LongKind) {
-    let options = LexOptions {
-        standard: Standard::C23,
-        dollar_in_identifiers: false,
-    };
+    let options = LexOptions::new(Standard::C23);
     let mut tokens = lex_text(src, 0, &options);
     let errors = messages(&tokens, Level::Error);
     assert_eq!(
@@ -289,14 +276,7 @@ fn c23_binary_constants_and_digit_separators() {
         (0b1010_1010, NumBase::Binary, false, LongKind::None)
     );
     // The spelling `#` reproduces keeps the separators.
-    let mut tokens = lex_text(
-        "1'000",
-        0,
-        &LexOptions {
-            standard: Standard::C23,
-            dollar_in_identifiers: false,
-        },
-    );
+    let mut tokens = lex_text("1'000", 0, &LexOptions::new(Standard::C23));
     tokens.pop();
     assert_eq!(tokens[0].kind.spelling(), "1'000");
 

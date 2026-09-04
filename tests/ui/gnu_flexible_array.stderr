@@ -1,0 +1,20 @@
+error: a flexible array member must be the last member of the struct
+ --> tests/ui/gnu_flexible_array.rs:7:13
+  |
+7 |         int data[];
+  |             ^^^^
+
+error: a flexible array member is not allowed in a union
+  --> tests/ui/gnu_flexible_array.rs:13:13
+   |
+13 |         int data[];
+   |             ^^^^
+
+error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
+  --> tests/ui/gnu_flexible_array.rs:18:33
+   |
+18 |     struct Buffer filled = { 2, { 1, 2 } };
+   |                                 ^
+
+error: aborting due to 3 previous errors
+
