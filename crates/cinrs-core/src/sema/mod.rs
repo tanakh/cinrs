@@ -66,7 +66,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::Options;
 use crate::ast;
-use crate::capture::{Pos, SourceRange};
+use crate::capture::SourceRange;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
     self, ConstValue, Expr, ExprKind, FuncId, LoopId, ObjectId, Place, Program, RecordId,
@@ -89,7 +89,7 @@ pub fn analyze(
     options: &Options,
     unit_id: u64,
 ) -> (Program, Diagnostics) {
-    let mut sema = Sema::new(options, unit_id);
+    let mut sema = Sema::new(unit, options, unit_id);
     sema.run(unit);
     let Sema {
         mut diags,
@@ -233,7 +233,10 @@ impl TypeError {
 // the analyser
 // ---------------------------------------------------------------------------
 
-struct Sema {
+struct Sema<'a> {
+    /// The unit being analysed, which the tag specifiers a [`ast::Type`] names
+    /// are looked up in; see [`ast::RecordSpecId`].
+    unit: &'a ast::TranslationUnit,
     diags: Diagnostics,
     /// Diagnostics about what the compiling toolchain cannot do, which are
     /// only reported when the program is otherwise well formed; see
@@ -252,20 +255,21 @@ struct Sema {
     program: Program,
     scopes: Vec<Scope>,
     tags: Vec<HashMap<String, TagEntry>>,
-    /// Tags keyed by the source range of the specifier that defined them.
+    /// The tag each `struct`/`union` specifier resolved to, by its id.
     ///
-    /// The parser resolves declarators eagerly, which means it *clones* the
-    /// `struct { … }` specifier into the type of every declarator that shares
-    /// it: `struct S { int x; } a, b;` arrives as two identical trees. They are
-    /// one type, and the range they were written at is what says so.
-    record_by_range: HashMap<(Pos, Pos), RecordId>,
-    enum_by_range: HashMap<(Pos, Pos), Ty>,
+    /// The parser resolves declarators eagerly, so one specifier is named by
+    /// several types: `struct S { int x; } a, b;` is the declaration's
+    /// specifiers plus the type of each declarator, and all three carry the
+    /// same [`ast::RecordSpecId`]. They are one type, and this is what says so.
+    record_by_spec: Vec<Option<RecordId>>,
+    /// The same, for the type an `enum` specifier resolved to.
+    enum_by_spec: Vec<Option<Ty>>,
     /// Whether the enumeration a specifier names has an unsigned underlying
-    /// type, keyed the same way as `enum_by_range`.
+    /// type, indexed the same way as `enum_by_spec`.
     ///
     /// It decides whether a bit-field of the type sign-extends when it is read,
     /// which is the only place the choice shows; see `Sema::bit_field_signed`.
-    enum_unsigned: HashMap<(Pos, Pos), bool>,
+    enum_unsigned: Vec<Option<bool>>,
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
@@ -351,9 +355,10 @@ struct Sema {
     next_anon: u32,
 }
 
-impl Sema {
-    fn new(options: &Options, unit_id: u64) -> Self {
+impl<'a> Sema<'a> {
+    fn new(unit: &'a ast::TranslationUnit, options: &Options, unit_id: u64) -> Self {
         let mut sema = Self {
+            unit,
             diags: Diagnostics::new(),
             gate_diags: Vec::new(),
             c_variadic: options.c_variadic,
@@ -366,9 +371,9 @@ impl Sema {
             },
             scopes: vec![Scope::default()],
             tags: vec![HashMap::new()],
-            record_by_range: HashMap::new(),
-            enum_by_range: HashMap::new(),
-            enum_unsigned: HashMap::new(),
+            record_by_spec: vec![None; unit.records.len()],
+            enum_by_spec: vec![None; unit.enums.len()],
+            enum_unsigned: vec![None; unit.enums.len()],
             defined_functions: HashSet::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
@@ -529,6 +534,26 @@ impl Sema {
         if let Some(scope) = self.tags.last_mut() {
             scope.insert(name.to_owned(), entry);
         }
+    }
+
+    // -- tag specifiers -----------------------------------------------------
+
+    /// The `struct`/`union` specifier a type names.
+    ///
+    /// The borrow is of the *unit*, not of `self`, so a caller may keep it
+    /// while it goes on analysing.
+    fn record_spec(&self, id: ast::RecordSpecId) -> &'a ast::RecordSpec {
+        self.unit.record(id)
+    }
+
+    /// The `enum` specifier a type names.
+    fn enum_spec(&self, id: ast::EnumSpecId) -> &'a ast::EnumSpec {
+        self.unit.enum_spec(id)
+    }
+
+    /// The operand of a `typeof` specifier.
+    fn typeof_operand(&self, id: ast::TypeofId) -> &'a ast::TypeofOperand {
+        self.unit.typeof_operand(id)
     }
 
     // -- convenience over the type arena ------------------------------------

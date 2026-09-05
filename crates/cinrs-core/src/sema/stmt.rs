@@ -10,7 +10,7 @@ use crate::ir::{
 
 use super::{Breakable, ConvContext, Label, Sema, SwitchState, render_case_value};
 
-impl Sema {
+impl Sema<'_> {
     pub(super) fn block(&mut self, block: &ast::Block) -> Vec<Stmt> {
         self.push_scope();
         let out = self.block_items(&block.items);
@@ -195,9 +195,15 @@ impl Sema {
                 then_branch,
                 else_branch,
             } => {
+                // C99 6.8.4p3: a selection statement is a block of its own,
+                // so a tag declared in the controlling expression —
+                // `if (sizeof(enum { a, b }))` — is scoped to the `if` and
+                // does not leak into the enclosing block.
+                self.push_scope();
                 let cond = self.condition(cond);
                 let then_branch = Box::new(self.stmt(then_branch));
                 let else_branch = else_branch.as_ref().map(|s| Box::new(self.stmt(s)));
+                self.pop_scope();
                 match cond {
                     Some(cond) => Stmt::If {
                         cond,
@@ -209,10 +215,14 @@ impl Sema {
             }
             ast::StmtKind::While { cond, body } => {
                 let id = self.new_loop();
+                // C99 6.8.5p5: an iteration statement is a block of its own,
+                // for the reason `if` is one just above.
+                self.push_scope();
                 let cond = self.condition(cond);
                 self.breakables.push(Breakable::Loop(id));
                 let body = Box::new(self.stmt(body));
                 self.breakables.pop();
+                self.pop_scope();
                 match cond {
                     Some(cond) => Stmt::While {
                         id,
@@ -225,10 +235,12 @@ impl Sema {
             }
             ast::StmtKind::DoWhile { body, cond } => {
                 let id = self.new_loop();
+                self.push_scope();
                 self.breakables.push(Breakable::Loop(id));
                 let body = Box::new(self.stmt(body));
                 self.breakables.pop();
                 let cond = self.condition(cond);
+                self.pop_scope();
                 match cond {
                     Some(cond) => Stmt::DoWhile {
                         id,
@@ -473,7 +485,11 @@ impl Sema {
     /// — rather than by splitting the body, which is what lets one sit inside
     /// a loop the `switch` wraps.
     fn switch_tree(&mut self, cond: &ast::Expr, body: &ast::Stmt, range: SourceRange) -> Stmt {
+        // C99 6.8.4p3: the whole selection statement, controlling expression
+        // and all, is a block of its own.
+        self.push_scope();
         let Some(scrutinee) = self.scrutinee(cond) else {
+            self.pop_scope();
             return Stmt::Nop;
         };
         let id = self.new_switch();
@@ -484,7 +500,6 @@ impl Sema {
             seen: Vec::new(),
             default: None,
         });
-        self.push_scope();
         self.switch_vla_depths.push(self.vla_scopes.len());
         let body = self.stmt(body);
         self.switch_vla_depths.pop();
@@ -574,7 +589,9 @@ impl Sema {
         if self.cfg_mode {
             return self.switch_tree(cond, body, range);
         }
+        self.push_scope();
         let Some(scrutinee) = self.scrutinee(cond) else {
+            self.pop_scope();
             return Stmt::Nop;
         };
         let promoted = scrutinee.ty;
@@ -592,7 +609,6 @@ impl Sema {
         };
 
         self.breakables.push(Breakable::Switch(id));
-        self.push_scope();
         self.switch_vla_depths.push(self.vla_scopes.len());
 
         let mut hoisted = Vec::new();
@@ -952,6 +968,17 @@ fn escaping_jumps(stmt: &ast::Stmt, depth: u32, out: &mut Vec<(SourceRange, Esca
     }
 }
 
+/// How many `case` groups a `switch` may have before it is lowered through a
+/// control-flow graph instead.
+///
+/// The structured lowering emits one labelled block per group, each inside the
+/// last (see [`crate::codegen`]), and `rustc`'s own parser recurses once per
+/// level of that: it reads four hundred of them and dies on the stack at
+/// around eight hundred. C23 5.2.5.2p1 asks for 1023 `case` labels in one
+/// `switch`, so a big one takes the other path — the state machine the CFG
+/// lowering makes, whose `match` is flat however many states it has.
+const MAX_SWITCH_GROUPS: usize = 200;
+
 /// Whether any statement of `block` forces the CFG lowering.
 ///
 /// `switch_depth` counts the `switch` bodies the block sits in and `at_top`
@@ -994,10 +1021,46 @@ fn stmt_needs_cfg(stmt: &ast::Stmt, switch_depth: u32, at_top: bool) -> bool {
         ast::StmtKind::While { body, .. }
         | ast::StmtKind::DoWhile { body, .. }
         | ast::StmtKind::For { body, .. } => stmt_needs_cfg(body, switch_depth, false),
-        ast::StmtKind::Switch { body, .. } => match &body.kind {
-            ast::StmtKind::Compound(block) => block_needs_cfg(block, switch_depth + 1, true),
-            _ => stmt_needs_cfg(body, switch_depth + 1, true),
-        },
+        ast::StmtKind::Switch { body, .. } => {
+            if switch_groups(body) > MAX_SWITCH_GROUPS {
+                return true;
+            }
+            match &body.kind {
+                ast::StmtKind::Compound(block) => block_needs_cfg(block, switch_depth + 1, true),
+                _ => stmt_needs_cfg(body, switch_depth + 1, true),
+            }
+        }
         _ => false,
+    }
+}
+
+/// How many groups the structured lowering would split a `switch` body into.
+///
+/// One per statement that carries at least one `case` or `default` label,
+/// however many labels that is: `case 1: case 2: case 3: x = 1;` is one group,
+/// and one labelled block in the generated Rust.
+fn switch_groups(body: &ast::Stmt) -> usize {
+    let items: &[ast::BlockItem] = match &body.kind {
+        ast::StmtKind::Compound(block) => &block.items,
+        _ => return usize::from(starts_with_case(body)),
+    };
+    items
+        .iter()
+        .filter(|item| match item {
+            ast::BlockItem::Stmt(stmt) => starts_with_case(stmt),
+            _ => false,
+        })
+        .count()
+}
+
+/// Whether a statement carries a `case` or `default` label of its own.
+fn starts_with_case(stmt: &ast::Stmt) -> bool {
+    let mut stmt = stmt;
+    loop {
+        match &stmt.kind {
+            ast::StmtKind::Case { .. } | ast::StmtKind::Default { .. } => return true,
+            ast::StmtKind::Labeled { body, .. } => stmt = body,
+            _ => return false,
+        }
     }
 }

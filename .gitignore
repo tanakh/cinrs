@@ -3,3 +3,10 @@
 # insta writes these next to the blessed snapshots when one fails
 *.snap.new
 *.pending-snap
+
+# The conformance corpora `scripts/fetch-testsuites.sh` fetches. GCC and LLVM
+# are far too large to vendor and too large to be submodules of a small crate,
+# so each is a blobless, sparse checkout of one directory, pinned in the
+# script. (c-testsuite *is* a submodule, and stays checked in as one.)
+/third_party/gcc
+/third_party/llvm-project

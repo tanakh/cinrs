@@ -32,7 +32,7 @@ fn object_size_answer(mode: i128) -> i128 {
     if mode & 2 == 0 { -1 } else { 0 }
 }
 
-impl Sema {
+impl Sema<'_> {
     /// Checks a call to a `__builtin_*` form.
     ///
     /// `None` means the name is not one of ours and the call is an ordinary

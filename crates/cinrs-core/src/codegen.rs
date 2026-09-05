@@ -1970,22 +1970,41 @@ impl<'a> Codegen<'a> {
             ExprKind::Unreachable => {
                 quote_spanned! {span=> ::core::hint::unreachable_unchecked(); }
             }
-            ExprKind::Comma { lhs, rhs } => {
-                let lhs = self.expr_stmt(lhs);
-                let rhs = self.expr_stmt(rhs);
-                quote_spanned! {span=> #lhs #rhs }
-            }
-            ExprKind::Cond {
-                cond,
-                then_expr,
-                else_expr,
-            } => {
-                let cond_tokens = self.condition(cond).at_condition(span);
-                let then_tokens = self.expr_stmt(then_expr);
-                let else_tokens = self.expr_stmt(else_expr);
-                quote_spanned! {span=>
-                    if #cond_tokens { #then_tokens } else { #else_tokens }
+            ExprKind::Comma { .. } => {
+                // A chain of comma operators is a flat sequence of statements
+                // — and one stack frame per operand if it is walked
+                // recursively, which a four-thousand-character logical source
+                // line cannot afford. See [`Codegen::binary_chain`].
+                let mut out = TokenStream::new();
+                for operand in comma_operands(expr) {
+                    out.extend(self.expr_stmt(operand));
                 }
+                out
+            }
+            ExprKind::Cond { .. } => {
+                // A chain of them is `if … else if … else …`, built without
+                // recursing down the chain; see [`Codegen::cond_chain`].
+                let mut spine = Vec::new();
+                let mut node = expr;
+                while let ExprKind::Cond {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } = &node.kind
+                {
+                    let span = self.sp(node.range);
+                    let cond_tokens = self.condition(cond).at_condition(span);
+                    let then_tokens = self.expr_stmt(then_expr);
+                    spine.push((cond_tokens, then_tokens, span));
+                    node = else_expr;
+                }
+                let mut tokens = self.expr_stmt(node);
+                while let Some((cond_tokens, then_tokens, span)) = spine.pop() {
+                    tokens = quote_spanned! {span=>
+                        if #cond_tokens { #then_tokens } else { #tokens }
+                    };
+                }
+                tokens
             }
             // `(void)x;` evaluates and discards, which is what the fall-through
             // below does anyway; unwrapping keeps the output tidy.
@@ -2022,18 +2041,7 @@ impl<'a> Codegen<'a> {
                 }
                 // The arms of a conditional may stay bare here, because
                 // whatever fixes this expression's type fixes theirs.
-                ExprKind::Cond {
-                    cond,
-                    then_expr,
-                    else_expr,
-                } => {
-                    let cond_tokens = self.condition(cond).at_condition(span);
-                    let then_tokens = self.expr_at(then_expr, expected);
-                    let else_tokens = self.expr_at(else_expr, expected);
-                    return quote_spanned! {span=>
-                        if #cond_tokens { #then_tokens } else { #else_tokens }
-                    };
-                }
+                ExprKind::Cond { .. } => return self.cond_chain_at(expr, expected),
                 _ => {}
             }
         }
@@ -2075,20 +2083,7 @@ impl<'a> Codegen<'a> {
                     prec::CALL,
                 )
             }
-            ExprKind::Assign { place, value } => {
-                let lowered = self.place(place, true);
-                let value = self.expr_at(value, place.ty);
-                let store = self.write(&lowered, value, span);
-                // The value of an assignment is the value stored, which for a
-                // place is exactly what reading it back gives — including for
-                // a bit-field, where reading back is what truncates.
-                let read = self.read(&lowered, span).at(prec::LOWEST, span);
-                let setup = &lowered.setup;
-                Value::new(
-                    quote_spanned! {span=> { #setup #store #read } },
-                    prec::BLOCK,
-                )
-            }
+            ExprKind::Assign { .. } => self.assign_chain(expr),
             ExprKind::CompoundAssign {
                 place,
                 op,
@@ -2154,10 +2149,7 @@ impl<'a> Codegen<'a> {
                 let tokens = value.at(prec::UNARY, span);
                 Value::new(quote_spanned! {span=> !#tokens }, prec::UNARY).type_end(ends_with_type)
             }
-            ExprKind::Binary { op, lhs, rhs } => {
-                let (lhs_value, rhs_value) = self.operands(lhs, rhs, *op);
-                self.binary(*op, lhs_value, rhs_value, expr.ty, span)
-            }
+            ExprKind::Binary { .. } => self.binary_chain(expr),
             ExprKind::PtrOffset { ptr, index, sub } => {
                 let base = self.expr(ptr).at(prec::CALL, span);
                 let offset = self.offset_argument(index, *sub, span);
@@ -2192,21 +2184,7 @@ impl<'a> Codegen<'a> {
             // does for the receiver of `wrapping_mul` (`E0689`). The bare form
             // is still used from [`Codegen::expr_at`], where the context says
             // what the type is.
-            ExprKind::Cond {
-                cond,
-                then_expr,
-                else_expr,
-            } => {
-                let cond_tokens = self.condition(cond).at_condition(span);
-                let then_tokens = self.expr(then_expr).at(prec::LOWEST, span);
-                let else_tokens = self.expr(else_expr).at(prec::LOWEST, span);
-                Value::new(
-                    quote_spanned! {span=>
-                        if #cond_tokens { #then_tokens } else { #else_tokens }
-                    },
-                    prec::BLOCK,
-                )
-            }
+            ExprKind::Cond { .. } => self.cond_chain(expr),
             ExprKind::Comma { lhs, rhs } => {
                 let lhs = self.expr_stmt(lhs);
                 let rhs = self.expr(rhs).at(prec::LOWEST, span);
@@ -2865,18 +2843,7 @@ impl<'a> Codegen<'a> {
                 Value::new(quote_spanned! {span=> #lhs #op #rhs }, prec::CMP)
                     .type_end(ends_with_type)
             }
-            ExprKind::Logical { op, lhs, rhs } => {
-                let (level, tokens) = match op {
-                    LogicalOp::And => (prec::AND, quote_spanned! {span=> && }),
-                    LogicalOp::Or => (prec::OR, quote_spanned! {span=> || }),
-                };
-                let lhs = self.condition(lhs).at(level, span);
-                let rhs = self.condition(rhs);
-                let ends_with_type = rhs.ends_with_type;
-                let rhs = rhs.at(level + 1, span);
-                Value::new(quote_spanned! {span=> #lhs #tokens #rhs }, level)
-                    .type_end(ends_with_type)
-            }
+            ExprKind::Logical { .. } => self.logical_chain(expr),
             ExprKind::Int(value) => {
                 let ident = Ident::new(if *value != 0 { "true" } else { "false" }, span);
                 Value::atom(quote_spanned! {span=> #ident })
@@ -2973,6 +2940,21 @@ impl<'a> Codegen<'a> {
     /// receiver of a method call, where a bare integer literal followed by a
     /// `.` would not survive being printed back out as text.
     fn operands(&mut self, lhs: &Expr, rhs: &Expr, op: BinOp) -> (Value, Value) {
+        self.operands_with(None, lhs, rhs, op)
+    }
+
+    /// [`Codegen::operands`] with the left operand possibly already emitted.
+    ///
+    /// `folded` is what [`Codegen::binary_chain`] has built so far. It is only
+    /// ever a binary operation, and [`constant_of`] answers `None` for one, so
+    /// the bare-literal reasoning below is unaffected by it.
+    fn operands_with(
+        &mut self,
+        folded: Option<Value>,
+        lhs: &Expr,
+        rhs: &Expr,
+        op: BinOp,
+    ) -> (Value, Value) {
         let uses_method = matches!(
             op,
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Shl | BinOp::Shr
@@ -2983,9 +2965,10 @@ impl<'a> Codegen<'a> {
         // At most one side may be bare, and it is never the left one where a
         // method call follows.
         let lhs_bare = lhs_constant.is_some() && !uses_method && rhs_constant.is_none();
-        let lhs_value = match lhs_constant {
-            Some(value) if lhs_bare => self.bare_value(value, lhs.ty, self.sp(lhs.range)),
-            _ => self.expr(lhs),
+        let lhs_value = match (folded, lhs_constant) {
+            (Some(value), _) => value,
+            (None, Some(value)) if lhs_bare => self.bare_value(value, lhs.ty, self.sp(lhs.range)),
+            (None, _) => self.expr(lhs),
         };
         let rhs_value = match rhs_constant {
             // The shift amount is converted to `u32` whatever its C type is,
@@ -3018,6 +3001,192 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// A chain of conditional operators, folded without recursing down it.
+    ///
+    /// `a ? b : c ? d : e` is right-associative, so unlike the chains
+    /// [`Codegen::binary_chain`] handles this one really is nesting: what
+    /// comes out is `if … { … } else { if … }`, one level per operator, and
+    /// that is as it should be. What must not be one level per operator is
+    /// the *walk*, which runs on the eight mebibytes `rustc` gives macro
+    /// expansion.
+    ///
+    /// The condition and the `then` arm of each level are emitted on the way
+    /// down and the tree is built on the way back up, which is the order the
+    /// recursive walk had — so the tokens, and the numbering of any
+    /// temporaries in them, are exactly what it produced.
+    fn cond_chain(&mut self, expr: &Expr) -> Value {
+        let mut spine = Vec::new();
+        let mut node = expr;
+        while let ExprKind::Cond {
+            cond,
+            then_expr,
+            else_expr,
+        } = &node.kind
+        {
+            let span = self.sp(node.range);
+            let cond_tokens = self.condition(cond).at_condition(span);
+            let then_tokens = self.expr(then_expr).at(prec::LOWEST, span);
+            spine.push((cond_tokens, then_tokens, span));
+            node = else_expr;
+        }
+        // The innermost `else` is parenthesised against the span of the
+        // conditional it belongs to, which is the innermost one on the spine.
+        let inner = spine
+            .last()
+            .map_or_else(|| self.sp(expr.range), |(_, _, span)| *span);
+        let mut tokens = self.expr(node).at(prec::LOWEST, inner);
+        while let Some((cond_tokens, then_tokens, span)) = spine.pop() {
+            tokens = quote_spanned! {span=>
+                if #cond_tokens { #then_tokens } else { #tokens }
+            };
+        }
+        Value::new(tokens, prec::BLOCK)
+    }
+
+    /// [`Codegen::cond_chain`] where the surrounding context fixes the type.
+    ///
+    /// The chain ends wherever a level's own type is no longer `expected`,
+    /// which is where [`Codegen::expr_at`] would have stopped treating the
+    /// arms as bare anyway.
+    fn cond_chain_at(&mut self, expr: &Expr, expected: Ty) -> TokenStream {
+        let mut spine = Vec::new();
+        let mut node = expr;
+        while let ExprKind::Cond {
+            cond,
+            then_expr,
+            else_expr,
+        } = &node.kind
+        {
+            if node.ty != expected {
+                break;
+            }
+            let span = self.sp(node.range);
+            let cond_tokens = self.condition(cond).at_condition(span);
+            let then_tokens = self.expr_at(then_expr, expected);
+            spine.push((cond_tokens, then_tokens, span));
+            node = else_expr;
+        }
+        let mut tokens = self.expr_at(node, expected);
+        while let Some((cond_tokens, then_tokens, span)) = spine.pop() {
+            tokens = quote_spanned! {span=>
+                if #cond_tokens { #then_tokens } else { #tokens }
+            };
+        }
+        tokens
+    }
+
+    /// A chain of assignments, folded without recursing down it.
+    ///
+    /// `a = b = c` is right-associative, so this is nesting in the same way
+    /// [`Codegen::cond_chain`] is, and the same bargain applies: the shape of
+    /// the output is unchanged and only the walk is flattened. Each place is
+    /// lowered on the way down — which is where the recursive walk lowered it,
+    /// and therefore where it took any temporary it needed — and the blocks
+    /// are built on the way back up, innermost first, exactly as the
+    /// recursion unwound.
+    fn assign_chain(&mut self, expr: &Expr) -> Value {
+        let mut spine = Vec::new();
+        let mut node = expr;
+        while let ExprKind::Assign { place, value } = &node.kind {
+            let span = self.sp(node.range);
+            let lowered = self.place(place, true);
+            spine.push((lowered, place.ty, span));
+            node = value;
+        }
+        let (_, innermost, _) = spine
+            .last()
+            .expect("assign_chain is only entered on an assignment");
+        let mut tokens = self.expr_at(node, *innermost);
+        while let Some((lowered, _, span)) = spine.pop() {
+            let store = self.write(&lowered, tokens, span);
+            // The value of an assignment is the value stored, which for a
+            // place is exactly what reading it back gives — including for a
+            // bit-field, where reading back is what truncates.
+            let read = self.read(&lowered, span).at(prec::LOWEST, span);
+            let setup = &lowered.setup;
+            tokens = quote_spanned! {span=> { #setup #store #read } };
+        }
+        Value::new(tokens, prec::BLOCK)
+    }
+
+    /// A chain of binary operators, folded without recursing down it.
+    ///
+    /// `a + b + c + …` is left-associative, so the tree it leaves behind is
+    /// one node per operand with the whole of the rest hanging off its left.
+    /// Walking that recursively is one stack frame per operand — and code
+    /// generation runs on the caller's thread, which is the eight mebibytes
+    /// `rustc` gives macro expansion, where a chain of about eight hundred is
+    /// a "fatal runtime error: stack overflow" with no diagnostic at all.
+    ///
+    /// C23 5.2.5.2p1 asks every implementation to accept a logical source
+    /// line of 4095 characters, which is well past that, so the spine is
+    /// collected into a vector and folded back up in a loop: one frame,
+    /// however long the chain. The tokens that come out are the same ones the
+    /// recursive walk produced, and in the same order — `a.wrapping_add(b)
+    /// .wrapping_add(c)` is a receiver chain, which is *flat*, so neither is
+    /// the output deeply nested.
+    ///
+    /// Nesting — `a + (b + (c + …))`, which is one level of parentheses per
+    /// operand — still costs a frame per level, and is what
+    /// `parse::MAX_RECURSION_DEPTH` bounds.
+    fn binary_chain(&mut self, expr: &Expr) -> Value {
+        let mut spine = vec![expr];
+        let mut node = expr;
+        while let ExprKind::Binary { lhs, .. } = &node.kind {
+            node = lhs;
+            if matches!(node.kind, ExprKind::Binary { .. }) {
+                spine.push(node);
+            }
+        }
+        let mut folded = None;
+        while let Some(node) = spine.pop() {
+            let ExprKind::Binary { op, lhs, rhs } = &node.kind else {
+                unreachable!("the spine holds binary operations only");
+            };
+            let span = self.sp(node.range);
+            let (lhs_value, rhs_value) = self.operands_with(folded, lhs, rhs, *op);
+            folded = Some(self.binary(*op, lhs_value, rhs_value, node.ty, span));
+        }
+        folded.expect("the chain has at least the node it started from")
+    }
+
+    /// A chain of `&&` or `||`, folded without recursing down it.
+    ///
+    /// The same shape and the same reason as [`Codegen::binary_chain`]; these
+    /// live on the `bool` side of code generation, so the fold is over
+    /// [`Codegen::condition`] rather than over `expr`.
+    fn logical_chain(&mut self, expr: &Expr) -> Value {
+        let mut spine = vec![expr];
+        let mut node = expr;
+        while let ExprKind::Logical { lhs, .. } = &node.kind {
+            node = lhs;
+            if matches!(node.kind, ExprKind::Logical { .. }) {
+                spine.push(node);
+            }
+        }
+        // `node` is now the innermost left operand, which is not itself a
+        // logical operator; emitting it first keeps the order the recursive
+        // walk had, which is source order.
+        let mut folded = self.condition(node);
+        while let Some(node) = spine.pop() {
+            let ExprKind::Logical { op, rhs, .. } = &node.kind else {
+                unreachable!("the spine holds logical operations only");
+            };
+            let span = self.sp(node.range);
+            let (level, tokens) = match op {
+                LogicalOp::And => (prec::AND, quote_spanned! {span=> && }),
+                LogicalOp::Or => (prec::OR, quote_spanned! {span=> || }),
+            };
+            let mut out = folded.at(level, span);
+            let rhs = self.condition(rhs);
+            let ends_with_type = rhs.ends_with_type;
+            let rhs = rhs.at(level + 1, span);
+            out.extend(quote_spanned! {span=> #tokens #rhs });
+            folded = Value::new(out, level).type_end(ends_with_type);
+        }
+        folded
+    }
+
     fn binary(&mut self, op: BinOp, lhs: Value, rhs: Value, ty: Ty, span: Span) -> Value {
         if ty.is_floating() {
             let (level, tokens) = match op {
@@ -3029,10 +3198,14 @@ impl<'a> Codegen<'a> {
                 _ => (prec::PRODUCT, quote_spanned! {span=> % }),
             };
             let ends_with_type = rhs.ends_with_type;
-            let lhs = lhs.at(level, span);
+            let mut out = lhs.at(level, span);
             let rhs = rhs.at(level + 1, span);
-            return Value::new(quote_spanned! {span=> #lhs #tokens #rhs }, level)
-                .type_end(ends_with_type);
+            // Appended in place rather than built into a fresh stream around
+            // the left operand: a chain of a thousand would otherwise copy
+            // the whole of it a thousand times over. See
+            // [`Codegen::binary_chain`].
+            out.extend(quote_spanned! {span=> #tokens #rhs });
+            return Value::new(out, level).type_end(ends_with_type);
         }
 
         // `+`, `-`, `*` and the shifts go through the wrapping methods:
@@ -3048,7 +3221,7 @@ impl<'a> Codegen<'a> {
             _ => None,
         };
         if let Some(method) = method {
-            let receiver = lhs.at(prec::CALL, span);
+            let mut receiver = lhs.at(prec::CALL, span);
             let method = Ident::new(method, span);
             let argument = if op.is_shift() && !rhs.bare_integer {
                 // `wrapping_shl` takes the shift amount as a `u32` whatever the
@@ -3059,7 +3232,8 @@ impl<'a> Codegen<'a> {
                 rhs.at(prec::LOWEST, span)
             };
             let args = parenthesize(argument, span);
-            return Value::new(quote_spanned! {span=> #receiver.#method #args }, prec::CALL);
+            receiver.extend(quote_spanned! {span=> .#method #args });
+            return Value::new(receiver, prec::CALL);
         }
 
         // `/` and `%` stay plain: Rust truncates towards zero and takes the
@@ -3074,9 +3248,10 @@ impl<'a> Codegen<'a> {
             _ => unreachable!("every other operator was handled above"),
         };
         let ends_with_type = rhs.ends_with_type;
-        let lhs = lhs.at(level, span);
+        let mut out = lhs.at(level, span);
         let rhs = rhs.at(level + 1, span);
-        Value::new(quote_spanned! {span=> #lhs #tokens #rhs }, level).type_end(ends_with_type)
+        out.extend(quote_spanned! {span=> #tokens #rhs });
+        Value::new(out, level).type_end(ends_with_type)
     }
 
     /// The value `place op= value` stores.
@@ -3864,6 +4039,24 @@ fn bare_float_literal(value: f64, span: Span) -> TokenStream {
 ///
 /// Sema folds conversions of constants, so a constant is always a bare `Int`
 /// or `Float` node rather than a cast wrapping one.
+/// The operands of a chain of comma operators, in source order.
+///
+/// `a, b, c` is `Comma(Comma(a, b), c)`, so this walks down the left spine
+/// into a vector and hands it back the right way round. Iterating rather than
+/// recursing is what lets a logical source line hold the 4095 characters C23
+/// 5.2.5.2p1 asks for; see [`Codegen::binary_chain`].
+fn comma_operands(expr: &Expr) -> Vec<&Expr> {
+    let mut out = Vec::new();
+    let mut node = expr;
+    while let ExprKind::Comma { lhs, rhs } = &node.kind {
+        out.push(&**rhs);
+        node = lhs;
+    }
+    out.push(node);
+    out.reverse();
+    out
+}
+
 fn constant_of(expr: &Expr) -> Option<ConstValue> {
     match &expr.kind {
         ExprKind::Int(value) => Some(ConstValue::Int(*value)),

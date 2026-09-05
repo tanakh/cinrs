@@ -45,7 +45,7 @@ types do.
 | Complex and imaginary support in `<complex.h>` | N693 | No | `_Complex` is rejected. |
 | Type-generic math macros in `<tgmath.h>` | N693 | No | Would be built on `_Generic`. |
 | The `long long int` type | N601 | Yes | |
-| Increase minimum translation limits | N590 | Yes | Nesting limits are 200 levels, above the minimums. |
+| Increase minimum translation limits | N590 | Yes | Every minimum in C23 5.2.5.2p1 is measured by `crates/cinrs-core/tests/limits.rs` and `tests/limits.rs`, allocation traffic and all. A left-associative chain — `a, b, c, …`, `a + b + …`, `a && b && …` — is bounded by nothing but memory, which is what lets a logical source line hold the 4095 characters the clause asks for; 4000 operands are accepted and run. *Nesting* is bounded at 200 levels, three times the 63 the clause asks for and close to Clang's own `-fbracket-depth` default of 256, and the right-associative `a ? b : c ? d : e` and `a = b = c`, and a run of postfix operators, count against it because each operator really is a level. |
 | Additional floating-point characteristics in `<float.h>` | | Partial | The common `FLT_*`/`DBL_*` macros; `FLT_EVAL_METHOD`, `DECIMAL_DIG` unverified. |
 | Remove implicit `int` | N635, N692, N722 | Yes | Error. |
 | Reliable integer division | N617 | Yes | Truncation toward zero (Rust `/`, `%`). |
@@ -58,7 +58,7 @@ types do.
 | Extended integer types and library functions in `<inttypes.h>` and `<stdint.h>` | | Yes | Bundled headers. |
 | Remove implicit function declaration | N636 | Yes | Error. |
 | Preprocessor arithmetic done in `intmax_t`/`uintmax_t` | N736 | Yes | |
-| Mixed declarations and code; new block scopes for selection and iteration statements | N740 | Yes | |
+| Mixed declarations and code; new block scopes for selection and iteration statements | N740 | Yes | `if`, `switch`, `while` and `do` are each a block of their own (6.8.4p3, 6.8.5p5), so a tag declared in a controlling expression — `if (sizeof(enum { a, b }))` — is scoped to the statement and does not leak into the enclosing block, which is what C89 did. Clang's `C99/block-scopes.c` is that test. |
 | Integer constant type rules | N629 | Yes | |
 | Integer promotion rules | N725 | Yes | |
 | Macros with a variable number of arguments | N707 | Yes | |
@@ -68,7 +68,7 @@ types do.
 | Boolean type in `<stdbool.h>` | N815 | Yes | |
 | Idempotent type qualifiers | N505 | Unverified | |
 | Empty macro arguments | N570 | Yes | |
-| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, and the four `__STDC_NO_*` subsetting macros; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. |
+| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, and the four `__STDC_NO_*` subsetting macros; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). Absent on purpose: `__SIZEOF_INT128__` (there is no `__int128`), `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
 | `_Pragma` preprocessing operator | N634 | Yes | Destringized and executed as the directive it spells, so a macro can produce one. |
 | Standard pragmas (`STDC FP_CONTRACT`, …) | N631, N696 | Accepted | Ignored. |
 | `__func__` predefined identifier | N611 | Yes | A `const char[]` in every function body, so `sizeof(__func__)` is the name's length; GCC's `__FUNCTION__` and `__PRETTY_FUNCTION__` are the same thing. |
@@ -87,6 +87,8 @@ Also standard C99 but absent from Clang's list:
 | Function declarators without a prototype (6.7.5.3p14, 6.5.2.2p6) | Yes | In `c99!`, `c11!`, `c17!` and the matching `gnu*!` dialects, `int f();` and `int (*fp)();` declare a function whose parameters are *unspecified*: a call may pass any number of arguments, each gets the default argument promotions, and the callee is invoked through the signature they make. A *definition* written `int f() { … }` takes no parameters, as 6.9.1p7 says, and calls to it through the unprototyped type are still legal. Two declarations of one function are compatible when the prototyped one is not variadic and no parameter type is changed by the promotions (6.7.5.3p15), which is also what `_Generic`, `__builtin_types_compatible_p` and assignment between function pointers use. `c23!` and `gnu23!` follow N2841 instead. |
 | Old-style (K&R) function definitions (obsolescent) | No | Rejected in every mode; removed in C23. `int f();` is *not* one of these — see the row above. |
 | `#line` and GCC's `# N "file" flags…` line marker (6.10.4) | Yes | Both forms, the macro-expanded one included, per file. Only `__LINE__`, `__FILE__` and `__FILE_NAME__` move: a diagnostic still points at the token that was really written, which is the whole point of the crate. `__BASE_FILE__` names the file the unit started in and is unaffected. A number outside 1…2147483647 is an error, which is what `-pedantic-errors` makes it. |
+| Translation phase 2 (line splicing, 5.1.1.2p1) | Yes | A backslash-newline is deleted *before* the source is split into tokens, so one may sit in the middle of an identifier: `__LI\<newline>NE__` is the one identifier `__LINE__`, which is what Clang's `drs/dr464.c` and `C99/n590.c` require. A splice needs string-literal input (see the README), because Rust's own lexer will not hand a line continuation over in raw-token form. A splice inside a *number* or a *punctuator* — `1\<newline>2`, `+\<newline>=` — is still a token boundary, which no real program depends on. |
+| `#include` of a computed header name, `#include __FILE__` | Yes | The name a header is known by is written relative to the working directory, so a header that includes itself by `__FILE__` asks for `some/dir/thing.h` from a directive written inside `some/dir`. A quoted include whose name *is* a path — it holds a directory separator — is therefore also looked for from the working directory, after the including file's own directory and the search path and before the bundled headers. A bare name never is, so nothing lying about can shadow the bundled `<stdio.h>`. |
 | `<wchar.h>` and `<wctype.h>` | Yes | Bundled. `wchar_t` is `int` (from `<stddef.h>`) on every target, which is what the front end gives `L'x'` and `L"…"`; `mbstate_t` is spelled the way each platform's library lays it out. `wcstold` is left out with `long double`. |
 | `setjmp`/`longjmp` | No | `<setjmp.h>` is bundled only to `#error`. |
 | `long double` | Partial | Mapped to `double`; the ABI of `long double` arguments is therefore wrong. |

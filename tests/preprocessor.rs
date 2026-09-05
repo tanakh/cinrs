@@ -430,3 +430,106 @@ fn a_shadowing_name_survives_the_state_machine_lowering() {
         assert_eq!({ limit }, 5);
     }
 }
+
+// ---------------------------------------------------------------------------
+// the GCC predefined macros, and phase 2
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_gcc_limit_and_type_macros_have_the_right_values() {
+    // `__INT_MAX__`, `__SIZE_TYPE__` and the rest of that family are what a
+    // program written for an unknown compiler tests before it has included
+    // anything, and a program that finds one undefined does not fail to
+    // compile — it silently takes the wrong branch. So the values are checked
+    // against `<limits.h>` and against `sizeof`, which is the only way to
+    // find out that one of them is *wrong* rather than merely present.
+    c99! {
+        #include <limits.h>
+        #include <stddef.h>
+        #include <stdint.h>
+
+        int int_max_agrees(void) { return __INT_MAX__ == INT_MAX; }
+        int long_max_agrees(void) { return __LONG_MAX__ == LONG_MAX; }
+        int schar_max_agrees(void) { return __SCHAR_MAX__ == SCHAR_MAX; }
+        int shrt_max_agrees(void) { return __SHRT_MAX__ == SHRT_MAX; }
+
+        /* The type macros are spelled out as types, so a `sizeof` of one is
+         * the check that it names the same type the header does. */
+        int size_type_agrees(void) {
+            return sizeof(__SIZE_TYPE__) == sizeof(size_t)
+                && (__SIZE_TYPE__)-1 > 0;
+        }
+        int ptrdiff_type_agrees(void) {
+            return sizeof(__PTRDIFF_TYPE__) == sizeof(ptrdiff_t)
+                && (__PTRDIFF_TYPE__)-1 < 0;
+        }
+        int intptr_type_agrees(void) {
+            return sizeof(__INTPTR_TYPE__) == sizeof(void *);
+        }
+        int exact_widths_agree(void) {
+            return sizeof(__INT8_TYPE__) == 1
+                && sizeof(__INT16_TYPE__) == 2
+                && sizeof(__INT32_TYPE__) == 4
+                && sizeof(__INT64_TYPE__) == 8
+                && sizeof(__UINT32_TYPE__) == 4
+                && (__UINT32_TYPE__)-1 == __UINT32_MAX__;
+        }
+        int widths_agree(void) {
+            return __INT_WIDTH__ == sizeof(int) * __CHAR_BIT__
+                && __LONG_WIDTH__ == sizeof(long) * __CHAR_BIT__
+                && __SIZE_WIDTH__ == sizeof(size_t) * __CHAR_BIT__;
+        }
+        int intmax_agrees(void) {
+            return sizeof(__INTMAX_TYPE__) == sizeof(intmax_t)
+                && __INTMAX_MAX__ == INTMAX_MAX;
+        }
+        double largest_double(void) { return __DBL_MAX__; }
+    }
+
+    unsafe {
+        assert_eq!(int_max_agrees(), 1);
+        assert_eq!(long_max_agrees(), 1);
+        assert_eq!(schar_max_agrees(), 1);
+        assert_eq!(shrt_max_agrees(), 1);
+        assert_eq!(size_type_agrees(), 1);
+        assert_eq!(ptrdiff_type_agrees(), 1);
+        assert_eq!(intptr_type_agrees(), 1);
+        assert_eq!(exact_widths_agree(), 1);
+        assert_eq!(widths_agree(), 1);
+        assert_eq!(intmax_agrees(), 1);
+        assert_eq!(largest_double(), f64::MAX);
+    }
+}
+
+#[test]
+fn a_line_splice_may_sit_inside_a_token() {
+    // Translation phase 2 deletes a backslash-newline *before* the source is
+    // split into tokens, so one may appear in the middle of an identifier:
+    // Clang's own `drs/dr464.c` writes `__LI\<newline>NE__`, and this is that
+    // test. The C goes in as a string literal because a line continuation is
+    // not something Rust's own lexer will hand over.
+    c99! { r#"
+        #line 10000
+        int line_number(void) { return __LI\
+NE__; }
+
+        #define GRE\
+ETING 42
+        int greeting(void) { return GREETING; }
+
+        int spliced_declaration(void) {
+            int val\
+ue = 7;
+            return value;
+        }
+    "# }
+
+    unsafe {
+        // `#line 10000` makes the *next* line 10000, and the line of a
+        // pp-token is the line its first character is on — which for a
+        // spliced identifier is the line the splice starts on.
+        assert_eq!(line_number(), 10000);
+        assert_eq!(greeting(), 42);
+        assert_eq!(spliced_declaration(), 7);
+    }
+}

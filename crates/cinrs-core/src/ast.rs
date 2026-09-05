@@ -1,6 +1,6 @@
 //! The C99 abstract syntax tree.
 //!
-//! Two design points matter for the milestones that follow:
+//! Three design points matter for the milestones that follow:
 //!
 //! * **Every node carries a [`SourceRange`]**, so a diagnostic raised by sema
 //!   (M0b) or a token emitted by codegen can be attributed to the exact piece
@@ -10,6 +10,13 @@
 //!   never hands out a raw declarator chain; `int (*fp[3])(void)` arrives as
 //!   `array of 3 pointer to function(void) returning int`. Sema therefore only
 //!   ever has to walk [`Type`], which is also the shape codegen needs.
+//!
+//! * **The body of a tag specifier is stored once.** Resolving declarators
+//!   eagerly means one specifier is named by several types — `struct S { … } a,
+//!   b;` is the declaration's specifiers plus the type of each declarator — so
+//!   the member list lives in [`TranslationUnit::records`] and the types carry
+//!   a [`RecordSpecId`]. Copying it instead would double the tree at every
+//!   level of a nested `struct`.
 
 use crate::capture::SourceRange;
 use crate::lex::{CharLit, FloatLit, IntLit, StrLit};
@@ -214,17 +221,38 @@ pub enum TypeKind {
     /// Function derivation.
     Function(Box<FunctionType>),
     /// A `struct`/`union` specifier, with or without a body.
-    Record(Box<RecordType>),
+    ///
+    /// The specifier itself lives in [`TranslationUnit::records`]; see
+    /// [`RecordSpecId`] for why it is an id rather than the body.
+    Record(RecordSpecId),
     /// An `enum` specifier, with or without a body.
-    Enum(Box<EnumType>),
+    Enum(EnumSpecId),
     /// A name introduced by `typedef`, not yet resolved.
     Typedef(Ident),
     /// `typeof(…)` / `typeof_unqual(…)` — C23.
-    Typeof(Box<TypeofOperand>),
+    ///
+    /// The operand lives in [`TranslationUnit::typeofs`]; see [`TypeofId`].
+    Typeof(TypeofId),
     /// The type `auto x = e;` infers from the initialiser — C23.
     Auto,
     /// Produced by error recovery; sema must not report further errors on it.
     Error,
+}
+
+/// Identifies one `typeof` operand in [`TranslationUnit::typeofs`].
+///
+/// Stored apart for the reason a [`RecordSpecId`] is: a type name holds both
+/// the specifiers it was written with and the type its declarator produced, so
+/// a `typeof` written inside another one would otherwise be copied twice per
+/// level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TypeofId(pub u32);
+
+impl TypeofId {
+    /// The index into [`TranslationUnit::typeofs`].
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 /// What `typeof` was applied to.
@@ -272,9 +300,45 @@ pub struct ParamDecl {
     pub range: SourceRange,
 }
 
-/// A `struct` or `union` specifier.
+/// Identifies one `struct`/`union` specifier in [`TranslationUnit::records`].
+///
+/// A declarator is resolved into a [`Type`] as it is parsed, so the specifier
+/// of `struct S { … } a, b;` is named by the type of every declarator that
+/// shares it *and* by the declaration's own specifiers. Storing the member
+/// list once and handing out an index keeps that from copying the body — which,
+/// for a record nested inside a record, would double the data at every level.
+///
+/// An index rather than an `Rc` because the tree crosses the thread boundary
+/// [`crate::analyze`] puts the deep passes behind, and has to stay [`Send`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RecordSpecId(pub u32);
+
+impl RecordSpecId {
+    /// The index into [`TranslationUnit::records`].
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Identifies one `enum` specifier in [`TranslationUnit::enums`].
+///
+/// See [`RecordSpecId`], which this is the enumeration's counterpart of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EnumSpecId(pub u32);
+
+impl EnumSpecId {
+    /// The index into [`TranslationUnit::enums`].
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A `struct` or `union` specifier, as written.
+///
+/// One of these lives in [`TranslationUnit::records`] per specifier in the
+/// source, and [`TypeKind::Record`] names it by [`RecordSpecId`].
 #[derive(Clone, Debug, PartialEq)]
-pub struct RecordType {
+pub struct RecordSpec {
     /// `struct` or `union`.
     pub kind: RecordKind,
     /// The tag, if one was written.
@@ -325,9 +389,12 @@ pub struct FieldDecl {
     pub range: SourceRange,
 }
 
-/// An `enum` specifier.
+/// An `enum` specifier, as written.
+///
+/// Stored in [`TranslationUnit::enums`] and named by [`EnumSpecId`], for the
+/// same reason a [`RecordSpec`] is.
 #[derive(Clone, Debug, PartialEq)]
-pub struct EnumType {
+pub struct EnumSpec {
     /// The tag, if one was written.
     pub name: Option<Ident>,
     /// The enumerator list; `None` for a reference such as `enum E e`.
@@ -1054,6 +1121,31 @@ pub enum ExternalDecl {
 pub struct TranslationUnit {
     /// The top-level items.
     pub items: Vec<ExternalDecl>,
+    /// Every `struct`/`union` specifier written in the unit, in source order.
+    ///
+    /// [`TypeKind::Record`] indexes this; see [`RecordSpecId`].
+    pub records: Vec<RecordSpec>,
+    /// Every `enum` specifier written in the unit, in source order.
+    pub enums: Vec<EnumSpec>,
+    /// Every `typeof` operand written in the unit, in source order.
+    pub typeofs: Vec<TypeofOperand>,
     /// The range covering the whole input.
     pub range: SourceRange,
+}
+
+impl TranslationUnit {
+    /// The `struct`/`union` specifier `id` names.
+    pub fn record(&self, id: RecordSpecId) -> &RecordSpec {
+        &self.records[id.index()]
+    }
+
+    /// The `enum` specifier `id` names.
+    pub fn enum_spec(&self, id: EnumSpecId) -> &EnumSpec {
+        &self.enums[id.index()]
+    }
+
+    /// The `typeof` operand `id` names.
+    pub fn typeof_operand(&self, id: TypeofId) -> &TypeofOperand {
+        &self.typeofs[id.index()]
+    }
 }

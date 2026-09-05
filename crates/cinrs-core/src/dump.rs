@@ -9,7 +9,7 @@ use crate::lex::{FloatSuffix, LongKind, StrKind};
 
 /// Renders a whole translation unit.
 pub fn dump_translation_unit(unit: &TranslationUnit) -> String {
-    let mut d = Dumper::default();
+    let mut d = Dumper::new(unit);
     d.line("translation-unit");
     d.indent += 1;
     for item in &unit.items {
@@ -19,14 +19,17 @@ pub fn dump_translation_unit(unit: &TranslationUnit) -> String {
 }
 
 /// Renders a single expression (useful for focused tests).
-pub fn dump_expr(expr: &Expr) -> String {
-    let mut d = Dumper::default();
+///
+/// The unit is needed because a type inside the expression may name a tag
+/// specifier, which lives in [`TranslationUnit::records`].
+pub fn dump_expr(unit: &TranslationUnit, expr: &Expr) -> String {
+    let mut d = Dumper::new(unit);
     d.expr(expr);
     d.out
 }
 
 /// Renders a type the way the dump does.
-pub fn type_to_string(ty: &Type) -> String {
+pub fn type_to_string(unit: &TranslationUnit, ty: &Type) -> String {
     let mut s = String::new();
     if ty.qualifiers.is_const {
         s.push_str("const ");
@@ -65,7 +68,7 @@ pub fn type_to_string(ty: &Type) -> String {
         }
         TypeKind::Pointer(inner) => {
             s.push_str("ptr<");
-            s.push_str(&type_to_string(inner));
+            s.push_str(&type_to_string(unit, inner));
             s.push('>');
         }
         TypeKind::Array {
@@ -75,7 +78,7 @@ pub fn type_to_string(ty: &Type) -> String {
             is_static,
         } => {
             s.push_str("array<");
-            s.push_str(&type_to_string(elem));
+            s.push_str(&type_to_string(unit, elem));
             s.push_str(", ");
             s.push_str(&array_size(size));
             if *is_static {
@@ -113,8 +116,8 @@ pub fn type_to_string(ty: &Type) -> String {
                     .params
                     .iter()
                     .map(|p| match &p.name {
-                        Some(n) => format!("{}: {}", n.name, type_to_string(&p.ty)),
-                        None => type_to_string(&p.ty),
+                        Some(n) => format!("{}: {}", n.name, type_to_string(unit, &p.ty)),
+                        None => type_to_string(unit, &p.ty),
                     })
                     .collect();
                 s.push_str(&params.join(", "));
@@ -126,9 +129,10 @@ pub fn type_to_string(ty: &Type) -> String {
                 }
             }
             s.push_str(") -> ");
-            s.push_str(&type_to_string(&ft.ret));
+            s.push_str(&type_to_string(unit, &ft.ret));
         }
-        TypeKind::Record(r) => {
+        TypeKind::Record(id) => {
+            let r = unit.record(*id);
             s.push_str(r.kind.as_str());
             s.push(' ');
             match &r.name {
@@ -139,7 +143,8 @@ pub fn type_to_string(ty: &Type) -> String {
                 s.push_str(" {…}");
             }
         }
-        TypeKind::Enum(e) => {
+        TypeKind::Enum(id) => {
+            let e = unit.enum_spec(*id);
             s.push_str("enum ");
             match &e.name {
                 Some(n) => s.push_str(&n.name),
@@ -153,11 +158,11 @@ pub fn type_to_string(ty: &Type) -> String {
             s.push_str("typedef-name ");
             s.push_str(&id.name);
         }
-        TypeKind::Typeof(operand) => {
+        TypeKind::Typeof(id) => {
             s.push_str("typeof<");
-            match operand.as_ref() {
+            match unit.typeof_operand(*id) {
                 TypeofOperand::Expr(_) => s.push_str("expr"),
-                TypeofOperand::Type(name) => s.push_str(&type_to_string(&name.ty)),
+                TypeofOperand::Type(name) => s.push_str(&type_to_string(unit, &name.ty)),
             }
             s.push('>');
         }
@@ -186,13 +191,27 @@ fn array_size(size: &ArraySize) -> String {
     }
 }
 
-#[derive(Default)]
-struct Dumper {
+struct Dumper<'a> {
+    /// The unit being dumped, which the tag specifiers are looked up in.
+    unit: &'a TranslationUnit,
     out: String,
     indent: usize,
 }
 
-impl Dumper {
+impl<'a> Dumper<'a> {
+    fn new(unit: &'a TranslationUnit) -> Self {
+        Self {
+            unit,
+            out: String::new(),
+            indent: 0,
+        }
+    }
+
+    /// The rendering of a type, in this unit.
+    fn ty(&self, ty: &Type) -> String {
+        type_to_string(self.unit, ty)
+    }
+
     fn line(&mut self, text: impl AsRef<str>) {
         for _ in 0..self.indent {
             self.out.push_str("  ");
@@ -228,7 +247,7 @@ impl Dumper {
     }
 
     fn function_def(&mut self, f: &FunctionDef) {
-        let mut header = format!("function '{}' : {}", f.name.name, type_to_string(&f.ty));
+        let mut header = format!("function '{}' : {}", f.name.name, self.ty(&f.ty));
         if let Some(storage) = &f.specifiers.storage {
             header.push_str(&format!(" [{}]", storage.node.as_str()));
         }
@@ -257,7 +276,7 @@ impl Dumper {
     }
 
     fn decl_inner(&mut self, decl: &Decl) {
-        let mut header = format!("specifiers: {}", type_to_string(&decl.specifiers.base));
+        let mut header = format!("specifiers: {}", self.ty(&decl.specifiers.base));
         if let Some(storage) = &decl.specifiers.storage {
             header.push_str(&format!(" [{}]", storage.node.as_str()));
         }
@@ -268,7 +287,7 @@ impl Dumper {
         self.type_body(&decl.specifiers.base);
         for d in &decl.declarators {
             let name = d.name.as_ref().map_or("<abstract>", |n| n.name.as_str());
-            self.line(format!("declarator '{}' : {}", name, type_to_string(&d.ty)));
+            self.line(format!("declarator '{}' : {}", name, self.ty(&d.ty)));
             if let Some(init) = &d.init {
                 self.indent += 1;
                 self.under("init", |dd| dd.initializer(init));
@@ -281,7 +300,8 @@ impl Dumper {
     /// body, so that bit-fields and enumerator values are visible.
     fn type_body(&mut self, ty: &Type) {
         match &ty.kind {
-            TypeKind::Record(r) => {
+            TypeKind::Record(id) => {
+                let r = self.unit.record(*id);
                 let Some(fields) = &r.fields else { return };
                 let label = format!(
                     "{} '{}' members",
@@ -291,7 +311,7 @@ impl Dumper {
                 self.under(&label, |d| {
                     for f in fields {
                         let name = f.name.as_ref().map_or("<anonymous>", |n| n.name.as_str());
-                        let mut line = format!("field '{}' : {}", name, type_to_string(&f.ty));
+                        let mut line = format!("field '{}' : {}", name, d.ty(&f.ty));
                         if let Some(w) = &f.bit_width {
                             if let ExprKind::Int(lit) = &w.kind {
                                 line.push_str(&format!(" : {}", lit.value));
@@ -309,7 +329,8 @@ impl Dumper {
                     }
                 });
             }
-            TypeKind::Enum(e) => {
+            TypeKind::Enum(id) => {
+                let e = self.unit.enum_spec(*id);
                 let Some(enumerators) = &e.enumerators else {
                     return;
                 };
@@ -521,17 +542,15 @@ impl Dumper {
                 self.under(&format!("prefix '{}'", op.as_str()), |d| d.expr(operand));
             }
             ExprKind::Cast { ty, expr } => {
-                self.under(&format!("cast to {}", type_to_string(&ty.ty)), |d| {
-                    d.expr(expr)
-                });
+                self.under(&format!("cast to {}", self.ty(&ty.ty)), |d| d.expr(expr));
             }
             ExprKind::SizeofExpr(inner) => self.under("sizeof-expr", |d| d.expr(inner)),
             ExprKind::SizeofType(ty) => {
-                self.line(format!("sizeof-type {}", type_to_string(&ty.ty)));
+                self.line(format!("sizeof-type {}", self.ty(&ty.ty)));
             }
             ExprKind::AlignofExpr(inner) => self.under("alignof-expr", |d| d.expr(inner)),
             ExprKind::AlignofType(ty) => {
-                self.line(format!("alignof-type {}", type_to_string(&ty.ty)));
+                self.line(format!("alignof-type {}", self.ty(&ty.ty)));
             }
             ExprKind::Generic {
                 controlling,
@@ -540,7 +559,7 @@ impl Dumper {
                 d.under("controlling", |dd| dd.expr(controlling));
                 for assoc in assocs {
                     let label = match &assoc.ty {
-                        Some(ty) => format!("assoc {}", type_to_string(&ty.ty)),
+                        Some(ty) => format!("assoc {}", d.ty(&ty.ty)),
                         None => "assoc default".to_owned(),
                     };
                     d.under(&label, |dd| dd.expr(&assoc.value));
@@ -549,26 +568,19 @@ impl Dumper {
             ExprKind::Bool(value) => self.line(if *value { "true" } else { "false" }),
             ExprKind::Nullptr => self.line("nullptr"),
             ExprKind::VaArg { ap, ty } => {
-                self.under(&format!("va_arg {}", type_to_string(&ty.ty)), |d| {
-                    d.expr(ap)
-                });
+                self.under(&format!("va_arg {}", self.ty(&ty.ty)), |d| d.expr(ap));
             }
             ExprKind::OffsetOf { ty, member } => {
-                self.line(format!(
-                    "offsetof {} .{}",
-                    type_to_string(&ty.ty),
-                    member.name
-                ));
+                self.line(format!("offsetof {} .{}", self.ty(&ty.ty), member.name));
             }
-            ExprKind::CompoundLiteral { ty, init } => self.under(
-                &format!("compound-literal {}", type_to_string(&ty.ty)),
-                |d| {
+            ExprKind::CompoundLiteral { ty, init } => {
+                self.under(&format!("compound-literal {}", self.ty(&ty.ty)), |d| {
                     for item in init {
                         let label = element_label(&item.designators);
                         d.under(&label, |dd| dd.initializer(&item.init));
                     }
-                },
-            ),
+                })
+            }
             ExprKind::StmtExpr(block) => self.under("stmt-expr", |d| {
                 for item in &block.items {
                     d.block_item(item);
@@ -576,8 +588,8 @@ impl Dumper {
             }),
             ExprKind::TypesCompatible { lhs, rhs } => self.line(format!(
                 "types-compatible {} {}",
-                type_to_string(&lhs.ty),
-                type_to_string(&rhs.ty)
+                self.ty(&lhs.ty),
+                self.ty(&rhs.ty)
             )),
             ExprKind::ChooseExpr {
                 cond,

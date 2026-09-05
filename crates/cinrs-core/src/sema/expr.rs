@@ -20,10 +20,77 @@ enum Deref {
     Function(Expr),
 }
 
-impl Sema {
+/// The left operand of a node that a *chain* of operators leaves behind.
+///
+/// `a + b + c` and `a, b, c` are left-associative, so what the parser hands
+/// over is one node per operand with the whole of the rest hanging off its
+/// left: walking down it recursively is one stack frame per operand. C23
+/// 5.2.5.2p1 asks every implementation to accept a logical source line of
+/// 4095 characters, which is two thousand comma operands, so that walk has to
+/// be a loop — see [`Sema::expr`].
+fn chain_left_operand(expr: &ast::Expr) -> Option<&ast::Expr> {
+    match &expr.kind {
+        ast::ExprKind::Binary { lhs, .. } | ast::ExprKind::Comma { lhs, .. } => Some(lhs),
+        _ => None,
+    }
+}
+
+impl Sema<'_> {
     // -- expressions --------------------------------------------------------
 
+    /// Checks one expression.
+    ///
+    /// A chain of left-associative operators is walked iteratively — down the
+    /// spine into a vector, then back up it in a loop — so that the depth of
+    /// the recursion is the *nesting* of the expression and not the length of
+    /// the chain; see [`chain_left_operand`]. Everything else is
+    /// [`Sema::expr_node`], one frame per level as recursive descent always
+    /// is.
     pub(super) fn expr(&mut self, expr: &ast::Expr) -> Option<Expr> {
+        let Some(lhs) = chain_left_operand(expr) else {
+            return self.expr_node(expr);
+        };
+        let mut spine = vec![expr];
+        let mut node = lhs;
+        while let Some(lhs) = chain_left_operand(node) {
+            spine.push(node);
+            node = lhs;
+        }
+        // The innermost left operand is checked first, exactly as the
+        // recursive walk checked it first, so the diagnostics come out in
+        // source order and an error in it stops the chain there.
+        let mut value = self.expr_node(node)?;
+        while let Some(node) = spine.pop() {
+            value = self.chain_step(node, value)?;
+        }
+        Some(value)
+    }
+
+    /// One step back up a chain: `node` with its left operand already checked.
+    fn chain_step(&mut self, node: &ast::Expr, lhs: Expr) -> Option<Expr> {
+        match &node.kind {
+            ast::ExprKind::Binary {
+                op,
+                lhs: lhs_expr,
+                rhs,
+            } => self.binary_with(*op, lhs, lhs_expr.range, rhs, node.range),
+            ast::ExprKind::Comma { rhs, .. } => {
+                let rhs = self.expr(rhs)?;
+                let ty = rhs.ty;
+                Some(Expr::new(
+                    ExprKind::Comma {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    ty,
+                    node.range,
+                ))
+            }
+            _ => unreachable!("chain_left_operand matches exactly these two"),
+        }
+    }
+
+    fn expr_node(&mut self, expr: &ast::Expr) -> Option<Expr> {
         let range = expr.range;
         match &expr.kind {
             ast::ExprKind::Ident(name) => match self.lookup(&name.name) {
@@ -971,11 +1038,26 @@ impl Sema {
         rhs: &ast::Expr,
         range: SourceRange,
     ) -> Option<Expr> {
+        let lhs_value = self.expr(lhs)?;
+        self.binary_with(op, lhs_value, lhs.range, rhs, range)
+    }
+
+    /// [`Sema::binary`] with the left operand already checked.
+    ///
+    /// This is the half a chain folds with; `lhs_range` is where the left
+    /// operand was written, which is where a complaint about it points.
+    fn binary_with(
+        &mut self,
+        op: ast::BinaryOp,
+        lhs_value: Expr,
+        lhs_range: SourceRange,
+        rhs: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Expr> {
         use ast::BinaryOp as B;
         if matches!(op, B::LogAnd | B::LogOr) {
-            let lhs_value = self.expr(lhs)?;
             let rhs_value = self.expr(rhs)?;
-            self.require_scalar(&lhs_value, op.as_str(), lhs.range)?;
+            self.require_scalar(&lhs_value, op.as_str(), lhs_range)?;
             self.require_scalar(&rhs_value, op.as_str(), rhs.range)?;
             let logical = if op == B::LogAnd {
                 LogicalOp::And
@@ -993,14 +1075,13 @@ impl Sema {
             ));
         }
 
-        let lhs_value = self.expr(lhs)?;
         let rhs_value = self.expr(rhs)?;
 
         if let Some(cmp) = compare_op(op) {
             if lhs_value.ty.is_pointer() || rhs_value.ty.is_pointer() {
                 return self.pointer_compare(cmp, lhs_value, rhs_value, range);
             }
-            self.require_arithmetic(&lhs_value, op.as_str(), lhs.range)?;
+            self.require_arithmetic(&lhs_value, op.as_str(), lhs_range)?;
             self.require_arithmetic(&rhs_value, op.as_str(), rhs.range)?;
             let (lhs_value, rhs_value, _) = self.balance(lhs_value, rhs_value);
             return Some(Expr::new(

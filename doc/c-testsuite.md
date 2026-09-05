@@ -1,5 +1,8 @@
 # Conformance: c-testsuite
 
+*One of three suites; [`doc/testsuites.md`](testsuites.md) is the overview, and
+has the memory rules a run has to be given.*
+
 [c-testsuite](https://github.com/c-testsuite/c-testsuite) is a collaborative
 database of C compiler test cases. `cinrs` runs its `single-exec` suite through
 any of its entry points — `c99!`, `c11!`, `c23!` and the GNU dialects
@@ -221,20 +224,38 @@ with `NNNNN.run.stdout` next to it, copied from `.expected`.
 * The programs are compiled with `-Cstrip=symbols`: 220 unstripped binaries
   are most of a gigabyte and the same 220 stripped are eighty megabytes.
 
-## Timeouts
+## Timeouts and memory
 
-A miscompiled program may never come back, and `ui_test` has no per-test
-timeout. Two things keep that from wedging a `cargo test`:
+A miscompiled program may never come back — or may allocate until there is
+nothing left — and `ui_test` bounds neither. Four things keep that from wedging
+a `cargo test`, and they are the same four every one of the three suites has;
+[`doc/testsuites.md`](testsuites.md#the-safety-rules) is where they are
+described, and `CINRS_MEMORY_LIMIT_MB` (8192 by default) is the one number they
+all work to.
+
+The two this suite spells with a prefix of its own:
 
 * the generated program starts a **watchdog thread** that prints a line and
   exits 124 after `CINRS_CTESTSUITE_TIMEOUT` seconds (20 by default), which
-  covers a program that loops forever;
-* the compiler is invoked through **`timeout(1)`** where there is one (five
-  minutes, `-k 5`), which covers a macro expansion that never comes back.
+  covers a program that loops forever, and exits 137 — reported as
+  `runtime: out of memory` — when its own resident set passes the ceiling;
+* the compiler is invoked through **`timeout(1)`** (five minutes, `-k 5`) and
+  under a **`ulimit -v`**, which covers a macro expansion that never comes back
+  or that asks for everything.
 
-`CINRS_CTESTSUITE_TIMEOUT=0` disables both. A program killed by a signal — a
-stack overflow, an `abort` — needs neither: its exit status is not zero, so it
-is an ordinary run failure, reported as `runtime: killed by signal N`.
+`CINRS_CTESTSUITE_TIMEOUT=0` disables the clock and `CINRS_MEMORY_LIMIT_MB=0`
+the ceilings. A program killed by a signal — a stack overflow, an `abort` —
+needs neither: its exit status is not zero, so it is an ordinary run failure,
+reported as `runtime: killed by signal N`.
+
+This suite is 220 short programs and takes about six seconds, so it is the one
+run that does not really need the outer cap; run it with one anyway, for the
+same reason the other two must be:
+
+```
+( ulimit -v 8000000; timeout -k 10 1800 \
+      cargo test -q --test c_testsuite -- --test-threads=2 )
+```
 
 ## Baseline
 

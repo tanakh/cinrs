@@ -1395,3 +1395,61 @@ fn nested_switches_and_continue_from_inside_one() {
         assert_eq!(nested(9, 0), -1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// the block a selection or iteration statement is
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_tag_declared_in_a_controlling_expression_is_scoped_to_the_statement() {
+    // C99 6.8.4p3 and 6.8.5p5: a selection statement and an iteration
+    // statement are each a block, and the controlling expression is inside
+    // it. So an enumeration declared there is invisible afterwards, and the
+    // outer `b` is what the code after the statement sees. In C89 it was the
+    // inner one, which is exactly what the change was for; Clang's own
+    // `C99/block-scopes.c` is this test.
+    c99! {
+        enum { a, b };
+
+        int outer_after_if(void) {
+            if (sizeof(enum { b, a }) != sizeof(int)) {
+                return -1;
+            }
+            return b;
+        }
+
+        int inner_inside_if(void) {
+            if (sizeof(enum { b, a }) == sizeof(int)) {
+                return a;
+            }
+            return -1;
+        }
+
+        int outer_after_while(void) {
+            while (sizeof(enum { b, a }) == 0) {
+                return -1;
+            }
+            return b;
+        }
+
+        int outer_after_switch(void) {
+            switch (sizeof(enum { b, a }) != sizeof(int)) {
+                case 1:
+                    return -1;
+                default:
+                    break;
+            }
+            return b;
+        }
+    }
+
+    unsafe {
+        // The file-scope `enum { a, b }` has `b == 1`...
+        assert_eq!(outer_after_if(), 1);
+        assert_eq!(outer_after_while(), 1);
+        assert_eq!(outer_after_switch(), 1);
+        // ...while inside the `if`, the one declared in its controlling
+        // expression is in scope, and there `a == 1`.
+        assert_eq!(inner_inside_if(), 1);
+    }
+}

@@ -17,6 +17,12 @@
 //! it wants. `doc/c-testsuite.md` has the licence note and the recorded
 //! baseline.
 //!
+//! Everything this harness has in common with the [GCC torture](gcc_torture)
+//! and [Clang](clang_c) ones — the modes, the expected-failure list and its
+//! markers, the result collector, the timeouts — lives in
+//! [`support/conformance.rs`](conformance); what is left here is c-testsuite
+//! itself.
+//!
 //! # The two modes
 //!
 //! **Guard mode** is the default, and is what `cargo test` runs. Every
@@ -37,7 +43,8 @@
 //! # The three markers
 //!
 //! A line of an expected-failure list is `[marker]NNNNN  <note>`, and the
-//! marker says what kind of claim the line is making. See [`EntryKind`].
+//! marker says what kind of claim the line is making. See
+//! [`conformance::EntryKind`].
 //!
 //! | marker | means | guard mode | report mode |
 //! | --- | --- | --- | --- |
@@ -71,14 +78,17 @@
 //! next to the harness's own `fn main` is a warning, which would then have to
 //! be blessed into a `.stderr` file for every single case.
 //!
-//! # Timeouts
+//! # Timeouts and memory
 //!
-//! A miscompiled program may loop forever, and `ui_test` has no per-test
-//! timeout. Two things keep that from wedging the run: the generated program
-//! starts a watchdog thread that exits with status 124 after
-//! `CINRS_CTESTSUITE_TIMEOUT` seconds (20 by default; `0` disables both
-//! halves), and the compiler is invoked through `timeout(1)` where there is
-//! one, in case the hang is in the macro rather than in the program. A
+//! A miscompiled program may loop forever or allocate until there is nothing
+//! left, and `ui_test` bounds neither. Four things keep that from wedging the
+//! run — the generated program's watchdog thread, which is a clock *and* a
+//! memory gauge; the `timeout(1)` and `ulimit -v` the compiler is invoked
+//! through; the ceiling on this process itself; and the cap on how many
+//! compilers run at once. `CINRS_CTESTSUITE_TIMEOUT` is the clock (20 seconds
+//! by default; `0` disables both halves of it) and `CINRS_MEMORY_LIMIT_MB` the
+//! ceiling; the memory section of
+//! [`support/conformance.rs`](conformance#memory) is the whole story. A
 //! program killed by a signal — a stack overflow, an `abort` — is an ordinary
 //! run failure, since its exit status is not zero.
 //!
@@ -94,21 +104,31 @@
 //!   now passes or one that names nothing, is a failure and not a warning.
 //! * `CINRS_CTESTSUITE_UPDATE_EXPECTED=1` — rewrite the list from the report.
 //! * `CINRS_CTESTSUITE_TIMEOUT=<seconds>` — per-test timeout; `0` disables.
+//! * `CINRS_MEMORY_LIMIT_MB=<mib>` — the ceiling this harness, every compiler
+//!   it spawns and every program it runs work to; 8192 by default and `0` to
+//!   switch all of it off. See the memory section of
+//!   [`support/conformance.rs`](conformance#memory).
+//! * `CINRS_TEST_THREADS=<n>` — the default parallelism, which is otherwise
+//!   the smaller of this machine's and eight. `-- --test-threads=<n>` wins
+//!   over both.
 //!
 //! [c-testsuite]: https://github.com/c-testsuite/c-testsuite
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
+use ui_test::Args;
 use ui_test::color_eyre::eyre::{Result, eyre};
-use ui_test::custom_flags::edition::Edition;
-use ui_test::dependencies::DependencyBuilder;
-use ui_test::status_emitter::{RevisionStyle, StatusEmitter, Summary, TestStatus};
-use ui_test::test_result::{TestOk, TestResult};
-use ui_test::{Args, Config, Error, error_on_output_conflict, run_tests_generic};
+use ui_test::status_emitter::StatusEmitter;
+
+#[path = "support/conformance.rs"]
+mod conformance;
+
+use conformance::{
+    COMPILE_TIMEOUT, Collector, Entry, EntryKind, MainKind, Outcome, Skipped, flag, listing,
+    percent, plural, raw_string_hashes, read_list, rejections, report_skipped, watchdog,
+    write_list,
+};
 
 // ---------------------------------------------------------------------------
 // where things live
@@ -140,13 +160,6 @@ const WORK_DIR: &str = "target/c-testsuite-work";
 
 /// How long a generated program may run before it is killed, in seconds.
 const DEFAULT_TIMEOUT: u64 = 20;
-
-/// How long the *compiler* may take on one case, in seconds.
-///
-/// Much larger than [`DEFAULT_TIMEOUT`]: a cold run pays for the dependency
-/// build, and a macro that is merely slow should be seen as slow rather than
-/// mistaken for one that has hung.
-const COMPILE_TIMEOUT: u64 = 300;
 
 // ---------------------------------------------------------------------------
 // the standards
@@ -319,123 +332,6 @@ fn is_selected(test: &Test, standard: Standard) -> bool {
 // generating one Rust file
 // ---------------------------------------------------------------------------
 
-/// How the C program spells `main`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum MainKind {
-    /// `int main(void)`, or `int main()` with an empty identifier list.
-    NoArgs,
-    /// `int main(int argc, char **argv)`.
-    ArgcArgv,
-}
-
-/// The C source with comments and literals blanked out.
-///
-/// Blanking rather than deleting keeps the length, so a position in the
-/// result means the same thing in the original.
-fn blank_out_comments_and_literals(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut out = String::with_capacity(source.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let rest = &bytes[i..];
-        let end = if rest.starts_with(b"/*") {
-            source[i + 2..]
-                .find("*/")
-                .map_or(bytes.len(), |at| i + 2 + at + 2)
-        } else if rest.starts_with(b"//") {
-            source[i..].find('\n').map_or(bytes.len(), |at| i + at)
-        } else if rest[0] == b'"' || rest[0] == b'\'' {
-            // A string or character constant: skip to the closing quote,
-            // letting a backslash escape whatever follows it.
-            let quote = rest[0];
-            let mut at = i + 1;
-            while at < bytes.len() && bytes[at] != quote {
-                at += if bytes[at] == b'\\' { 2 } else { 1 };
-            }
-            (at + 1).min(bytes.len())
-        } else {
-            // The source is UTF-8, so copy a whole character rather than a
-            // byte.
-            let ch = source[i..].chars().next().expect("i is a char boundary");
-            out.push(ch);
-            i += ch.len_utf8();
-            continue;
-        };
-        // One space per *byte*, so that the two strings stay the same length.
-        for _ in i..end {
-            out.push(' ');
-        }
-        i = end;
-    }
-    out
-}
-
-/// How the program's `main` is declared, read off the text.
-///
-/// The *first* declaration wins. One case in the corpus (`00182`) carries a
-/// second `main` inside an `#ifndef` that its own `#define` has already made
-/// false; finding that out would mean running the preprocessor, and taking
-/// the first is both simpler and right.
-fn detect_main(source: &str) -> Option<MainKind> {
-    let text = blank_out_comments_and_literals(source);
-    let bytes = text.as_bytes();
-    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut from = 0;
-    while let Some(at) = text[from..].find("main") {
-        let start = from + at;
-        from = start + "main".len();
-        if start > 0 && is_ident(bytes[start - 1]) {
-            continue;
-        }
-        let Some(args) = text[from..].trim_start().strip_prefix('(') else {
-            continue;
-        };
-        let Some(end) = args.find(')') else { continue };
-        let args = args[..end].trim();
-        return Some(if args.is_empty() || args == "void" {
-            MainKind::NoArgs
-        } else {
-            MainKind::ArgcArgv
-        });
-    }
-    None
-}
-
-/// How many `#` a raw string literal holding `source` needs.
-///
-/// A `r#…#"` literal ends at the first `"` followed by that many `#`, so one
-/// more than the longest run of `#` that follows a `"` anywhere inside is
-/// always enough — and never fewer than one, so that a bare `"` is safe.
-fn raw_string_hashes(source: &str) -> usize {
-    let bytes = source.as_bytes();
-    let mut needed = 1;
-    for at in bytes
-        .iter()
-        .enumerate()
-        .filter_map(|(at, &b)| (b == b'"').then_some(at))
-    {
-        let run = bytes[at + 1..].iter().take_while(|&&b| b == b'#').count();
-        needed = needed.max(run + 1);
-    }
-    needed
-}
-
-/// Whether a line of the C source would be read as a `ui_test` command.
-///
-/// `ui_test` scans every line of the generated file, and the C goes into it
-/// verbatim, so `//@` at the start of a line — or `//` immediately followed
-/// by one of the sigils it reserves — is a comment directive rather than C.
-/// Nothing in the corpus does that; a case that did would be skipped with a
-/// note rather than failing with a baffling parse error.
-fn confuses_ui_test(source: &str) -> bool {
-    source.lines().any(|line| {
-        line.starts_with("//@")
-            || line
-                .match_indices("//")
-                .any(|(at, _)| matches!(line.as_bytes().get(at + 2), Some(b'@' | b'~')))
-    })
-}
-
 /// The Rust file for one case.
 fn generate_source(
     test: &Test,
@@ -494,17 +390,11 @@ fn main() {{
 "
     );
 
-    if timeout > 0 {
-        out.push_str(&format!(
-            "    // A miscompiled program need never come back; the harness must.
-    std::thread::spawn(|| {{
-        std::thread::sleep(std::time::Duration::from_secs({timeout}));
-        eprintln!(\"cinrs c-testsuite: timed out after {timeout} seconds\");
-        std::process::exit(124);
-    }});
-"
-        ));
-    }
+    out.push_str(&watchdog(
+        timeout,
+        conformance::memory_limit_mb(),
+        "c-testsuite",
+    ));
 
     out.push_str(match main {
         MainKind::NoArgs => "    let status = unsafe { unit::ctest::main() };\n",
@@ -521,12 +411,6 @@ fn main() {{
     out
 }
 
-/// A case that could not be turned into a Rust file, and why.
-struct Skipped {
-    id: String,
-    reason: String,
-}
-
 /// Writes every case in `tests` into `dir`, which is emptied first.
 fn generate(
     dir: &Path,
@@ -541,14 +425,14 @@ fn generate(
     std::fs::create_dir_all(dir)?;
     let mut skipped = Vec::new();
     for test in tests {
-        if confuses_ui_test(&test.source) {
+        if conformance::confuses_ui_test(&test.source) {
             skipped.push(Skipped {
                 id: test.id.clone(),
                 reason: "its C source holds a line `ui_test` would read as a command".to_owned(),
             });
             continue;
         }
-        let Some(main) = detect_main(&test.source) else {
+        let Some(main) = conformance::detect_main(&test.source) else {
             skipped.push(Skipped {
                 id: test.id.clone(),
                 reason: "no `main` could be found in its C source".to_owned(),
@@ -562,239 +446,6 @@ fn generate(
         std::fs::write(dir.join(format!("{}.run.stdout", test.id)), &test.expected)?;
     }
     Ok(skipped)
-}
-
-// ---------------------------------------------------------------------------
-// collecting results
-// ---------------------------------------------------------------------------
-
-/// How a case ended.
-#[derive(Clone, Debug)]
-enum Outcome {
-    Passed,
-    Ignored,
-    Failed {
-        /// `compile error: …`, `runtime: exit code 1`, and so on.
-        classification: String,
-        /// The first interesting line of what the failing command wrote.
-        detail: String,
-        /// Everything the failing command wrote, for a `!` entry that names a
-        /// substring its diagnostic has to contain.
-        output: String,
-    },
-}
-
-impl Outcome {
-    /// Whether the case was refused by the compiler, rather than built and
-    /// then found wanting.
-    fn is_compile_error(&self) -> bool {
-        matches!(self, Outcome::Failed { classification, .. } if classification.starts_with("compile error"))
-    }
-}
-
-/// One recorded run of one file, in one phase.
-#[derive(Clone, Debug)]
-struct Record {
-    id: String,
-    outcome: Outcome,
-}
-
-/// A [`StatusEmitter`] that keeps the results instead of printing them.
-///
-/// `ui_test` renders failures to the terminal; a report has to *classify*
-/// them, which means holding the errors themselves rather than the text they
-/// were rendered to.
-#[derive(Clone, Default)]
-struct Collector {
-    records: Arc<Mutex<Vec<Record>>>,
-}
-
-impl Collector {
-    /// The outcome of each case, the worse phase winning.
-    fn results(&self) -> BTreeMap<String, Outcome> {
-        let mut out: BTreeMap<String, Outcome> = BTreeMap::new();
-        for record in self.records.lock().expect("collector poisoned").iter() {
-            // Compiling and running are two phases of one case, and the first
-            // reports success even when the second then fails.
-            if matches!(out.get(&record.id), Some(Outcome::Failed { .. })) {
-                continue;
-            }
-            out.insert(record.id.clone(), record.outcome.clone());
-        }
-        out
-    }
-}
-
-impl StatusEmitter for Collector {
-    fn register_test(&self, path: PathBuf) -> Box<dyn TestStatus + 'static> {
-        Box::new(CollectStatus {
-            path,
-            revision: String::new(),
-            records: self.records.clone(),
-        })
-    }
-
-    fn finalize(
-        &self,
-        _failed: usize,
-        _succeeded: usize,
-        _ignored: usize,
-        _filtered: usize,
-        _aborted: bool,
-    ) -> Box<dyn Summary> {
-        Box::new(())
-    }
-}
-
-/// The [`TestStatus`] half of [`Collector`].
-struct CollectStatus {
-    path: PathBuf,
-    revision: String,
-    records: Arc<Mutex<Vec<Record>>>,
-}
-
-impl TestStatus for CollectStatus {
-    fn for_revision(&self, revision: &str, _style: RevisionStyle) -> Box<dyn TestStatus> {
-        Box::new(CollectStatus {
-            path: self.path.clone(),
-            revision: revision.to_owned(),
-            records: self.records.clone(),
-        })
-    }
-
-    fn for_path(&self, path: &Path) -> Box<dyn TestStatus> {
-        Box::new(CollectStatus {
-            path: path.to_path_buf(),
-            revision: self.revision.clone(),
-            records: self.records.clone(),
-        })
-    }
-
-    fn failed_test<'a>(
-        &'a self,
-        _cmd: &'a str,
-        _stderr: &'a [u8],
-        _stdout: &'a [u8],
-    ) -> Box<dyn std::fmt::Debug + 'a> {
-        Box::new(())
-    }
-
-    fn done(&self, result: &TestResult, aborted: bool) {
-        if aborted {
-            return;
-        }
-        let id = self
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        let outcome = match result {
-            Ok(TestOk::Ok) => Outcome::Passed,
-            Ok(TestOk::Ignored) => Outcome::Ignored,
-            Err(errored) => classify(&self.revision, &errored.errors, &errored.stderr),
-        };
-        self.records
-            .lock()
-            .expect("collector poisoned")
-            .push(Record { id, outcome });
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn revision(&self) -> &str {
-        &self.revision
-    }
-}
-
-/// The first line worth showing out of what a command wrote.
-///
-/// `rustc`'s own `error: ` prefix goes, since the classification already says
-/// this was an error; the `[E0282]` of one that has a code stays, because it
-/// is the shortest thing that names the problem.
-fn first_diagnostic_line(output: &[u8]) -> String {
-    let text = String::from_utf8_lossy(output);
-    let line = text
-        .lines()
-        .map(str::trim_end)
-        .find(|line| line.starts_with("error"))
-        .or_else(|| {
-            text.lines()
-                .map(str::trim_end)
-                .find(|line| !line.is_empty())
-        })
-        .unwrap_or_default();
-    if let Some(rest) = line.strip_prefix("error: ") {
-        rest.to_owned()
-    } else if let Some(rest) = line.strip_prefix("error[")
-        && let Some((code, message)) = rest.split_once("]: ")
-    {
-        format!("{code}: {message}")
-    } else {
-        line.to_owned()
-    }
-}
-
-/// Turns a failure into one line saying what kind of failure it is.
-fn classify(revision: &str, errors: &[Error], output: &[u8]) -> Outcome {
-    let detail = first_diagnostic_line(output);
-    // The `run` revision is the phase that executes the compiled program;
-    // everything else is the compilation itself.
-    let classification = if revision == "run" {
-        // The corpus's own runner checks the exit status first and diffs the
-        // output only then, so a program that both fails and prints the wrong
-        // thing is reported as having failed.
-        let status = errors.iter().find_map(|error| match error {
-            Error::ExitStatus { status, .. } => Some(*status),
-            _ => None,
-        });
-        match status {
-            Some(status) => match status.code() {
-                Some(124) => "runtime: timed out".to_owned(),
-                Some(code) => format!("runtime: exit code {code}"),
-                None => format!("runtime: {}", killed_by(status)),
-            },
-            None if wrote_to_stderr(errors) => "runtime: unexpected output on stderr".to_owned(),
-            None => "runtime: stdout mismatch".to_owned(),
-        }
-    } else if detail.is_empty() {
-        "compile error".to_owned()
-    } else {
-        format!("compile error: {detail}")
-    };
-    Outcome::Failed {
-        classification,
-        detail,
-        output: String::from_utf8_lossy(output).into_owned(),
-    }
-}
-
-/// Whether the output that differed was the program's stderr.
-fn wrote_to_stderr(errors: &[Error]) -> bool {
-    errors.iter().any(|error| match error {
-        Error::OutputDiffers { path, .. } => path
-            .to_str()
-            .is_some_and(|path| path.ends_with(".run.stderr")),
-        _ => false,
-    })
-}
-
-/// How a process that produced no exit code came to an end.
-#[cfg(unix)]
-fn killed_by(status: std::process::ExitStatus) -> String {
-    use std::os::unix::process::ExitStatusExt as _;
-    match status.signal() {
-        Some(signal) => format!("killed by signal {signal}"),
-        None => format!("ended with {status}"),
-    }
-}
-
-/// How a process that produced no exit code came to an end.
-#[cfg(not(unix))]
-fn killed_by(status: std::process::ExitStatus) -> String {
-    format!("ended with {status}")
 }
 
 // ---------------------------------------------------------------------------
@@ -815,166 +466,10 @@ fn list_path(standard: Standard) -> PathBuf {
     }
 }
 
-/// What the marker on an expected-failure line claims about its case.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum EntryKind {
-    /// A plain `NNNNN`: something `cinrs` gets wrong. Guard mode skips the
-    /// case and reports it if it starts passing, so that the line can go.
-    #[default]
-    Failure,
-    /// `?NNNNN`: the result depends on the *toolchain*, so neither answer says
-    /// anything about the list, and the case is guarded neither way. `00140`
-    /// needs C-variadic *definitions*, which Rust stabilised in 1.99, and so
-    /// passes on a new enough compiler and not on an older one.
-    ToolchainDependent,
-    /// `!NNNNN`: the entry point makes the case *invalid*, so refusing it is
-    /// conforming behaviour rather than a gap. Guard mode asserts that the
-    /// case fails to compile — a `!` case that builds and runs means the
-    /// compiler has stopped conforming, and is a failure.
-    Rejected {
-        /// A substring the diagnostic has to contain, written
-        /// `error: "<substring>"` in front of the note. Plain text: there is
-        /// no escape, so the substring cannot itself hold a `"`.
-        diagnostic: Option<String>,
-    },
-}
-
-impl EntryKind {
-    /// The character an id of this kind is written with.
-    fn marker(&self) -> &'static str {
-        match self {
-            EntryKind::Failure => "",
-            EntryKind::ToolchainDependent => "?",
-            EntryKind::Rejected { .. } => "!",
-        }
-    }
-
-    /// Whether a line of this kind survives an update untouched, whatever the
-    /// run made of its case.
-    ///
-    /// A `?` entry may well have passed in *this* run and still be right about
-    /// the next compiler along; a `!` entry is a statement about the language,
-    /// which a run cannot refute — only report on.
-    fn is_permanent(&self) -> bool {
-        !matches!(self, EntryKind::Failure)
-    }
-}
-
-/// One line of an expected-failure list.
-#[derive(Clone, Debug, Default)]
-struct Entry {
-    /// What the marker in front of the id says.
-    kind: EntryKind,
-    /// What the line says about why the case does not pass.
-    note: String,
-}
-
-/// Splits an `error: "<substring>"` prefix off a `!` line's note.
-///
-/// Returns the substring the diagnostic must contain, and what is left of the
-/// note. A note that does not open with `error:` names no substring.
-fn split_required_diagnostic(note: &str) -> Result<(Option<String>, String)> {
-    let Some(rest) = note.strip_prefix("error:") else {
-        return Ok((None, note.to_owned()));
-    };
-    let malformed = || {
-        eyre!(
-            "`error:` in {note:?} must be followed by a quoted substring, as \
-             `error: \"too many arguments\"`"
-        )
-    };
-    let rest = rest.trim_start().strip_prefix('"').ok_or_else(malformed)?;
-    let (wanted, note) = rest.split_once('"').ok_or_else(malformed)?;
-    if wanted.is_empty() {
-        return Err(malformed());
-    }
-    Ok((Some(wanted.to_owned()), note.trim().to_owned()))
-}
-
-/// Reads a list of `[?!]id [note]` lines, ignoring `#` comments and blanks.
-fn read_list(path: &Path) -> Result<BTreeMap<String, Entry>> {
-    let mut out = BTreeMap::new();
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(out),
-        Err(err) => return Err(eyre!("reading {}: {err}", path.display())),
-    };
-    for (number, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let at = |err| eyre!("{}:{}: {err}", path.display(), number + 1);
-        let (id, note) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-        let note = note.trim().trim_start_matches('#').trim();
-        let (kind, note) = match id.as_bytes().first() {
-            Some(b'?') => (EntryKind::ToolchainDependent, note.to_owned()),
-            Some(b'!') => {
-                let (diagnostic, note) = split_required_diagnostic(note).map_err(at)?;
-                (EntryKind::Rejected { diagnostic }, note)
-            }
-            _ => (EntryKind::Failure, note.to_owned()),
-        };
-        let id = id.trim_start_matches(['?', '!']);
-        out.insert(id.to_owned(), Entry { kind, note });
-    }
-    Ok(out)
-}
-
-/// The text after the id, `error: "…"` prefix and all.
-fn entry_note(entry: &Entry) -> String {
-    let note = entry.note.replace('\n', " ");
-    match &entry.kind {
-        EntryKind::Rejected {
-            diagnostic: Some(wanted),
-        } => format!("error: \"{wanted}\"  {}", note.trim()),
-        _ => note.trim().to_owned(),
-    }
-}
-
-/// Rewrites the list from a report, keeping the notes already written.
-///
-/// Every case that failed goes in, together with every `?` and `!` entry the
-/// file already had, marker and note and all. Those two say something a single
-/// run cannot check: a `?` entry may well have passed *here* and still be
-/// right about the next compiler along, and a `!` entry is a claim about the
-/// language rather than about `cinrs`, so an update never downgrades one to a
-/// plain failure or drops it because the case happened to build. A `!` case
-/// that passed is warned about instead, and kept.
-fn write_list(
-    path: &Path,
-    standard: Standard,
-    results: &BTreeMap<String, Outcome>,
-    previous: &BTreeMap<String, Entry>,
-) -> Result<usize> {
-    let mut lines: BTreeMap<&str, Entry> = previous
-        .iter()
-        .filter(|(_, entry)| entry.kind.is_permanent())
-        .map(|(id, entry)| (id.as_str(), entry.clone()))
-        .collect();
-    for (id, outcome) in results {
-        let Outcome::Failed { classification, .. } = outcome else {
-            continue;
-        };
-        let entry = lines.entry(id.as_str()).or_default();
-        if entry.note.is_empty() {
-            entry.note = previous
-                .get(id)
-                .map(|entry| entry.note.clone())
-                .filter(|note| !note.is_empty())
-                .unwrap_or_else(|| classification.clone());
-        }
-    }
-
-    let mut body = String::new();
-    for (id, entry) in &lines {
-        let id = format!("{}{id}", entry.kind.marker());
-        let line = format!("{id:<8}{}", entry_note(entry));
-        writeln!(body, "{}", line.trim_end()).expect("writing to a String");
-    }
-
+/// The comment block written above the list.
+fn list_header(standard: Standard) -> String {
     let standard = standard.name();
-    let header = format!(
+    format!(
         "# The c-testsuite cases `cinrs` does not pass under `{standard}!`.\n\
          #\n\
          # Guard mode — the default, and what `cargo test` runs — skips these and\n\
@@ -1001,153 +496,6 @@ fn write_list(
          #\n\
          # which keeps every `?` and `!` line as it stands.\n\
          \n"
-    );
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, format!("{header}{body}"))?;
-    Ok(lines.len())
-}
-
-// ---------------------------------------------------------------------------
-// the `!` assertion
-// ---------------------------------------------------------------------------
-
-/// What a `!` case actually did, measured against what its line requires.
-#[derive(Clone, Debug)]
-enum Rejection {
-    /// Refused at compile time, with the diagnostic the line asked for.
-    AsRequired,
-    /// Refused, but not in the words the line names.
-    WrongDiagnostic { wanted: String, detail: String },
-    /// It got past the compiler; what happened after that is beside the point.
-    NotRejected { what: String },
-}
-
-impl Rejection {
-    /// The sentence that goes after `NNNNN in <list> …`.
-    fn complaint(&self) -> Option<String> {
-        match self {
-            Rejection::AsRequired => None,
-            Rejection::WrongDiagnostic { wanted, detail } => Some(format!(
-                "is marked `!` and must be refused with a diagnostic containing {wanted:?}. \
-                 It was refused, but the diagnostic was: {detail}"
-            )),
-            Rejection::NotRejected { what } => Some(format!(
-                "is marked `!`, which says this entry point must refuse it, but {what}. \
-                 Either the entry point has stopped conforming or the entry is wrong."
-            )),
-        }
-    }
-}
-
-/// Measures one `!` case against its line.
-fn check_rejection(diagnostic: Option<&str>, outcome: &Outcome) -> Rejection {
-    match outcome {
-        Outcome::Failed { detail, output, .. } if outcome.is_compile_error() => match diagnostic {
-            Some(wanted) if !output.contains(wanted) => Rejection::WrongDiagnostic {
-                wanted: wanted.to_owned(),
-                detail: detail.clone(),
-            },
-            _ => Rejection::AsRequired,
-        },
-        Outcome::Failed { classification, .. } => Rejection::NotRejected {
-            what: format!("it compiled and then failed at run time ({classification})"),
-        },
-        Outcome::Passed => Rejection::NotRejected {
-            what: "it compiled and ran successfully".to_owned(),
-        },
-        Outcome::Ignored => Rejection::NotRejected {
-            what: "it was ignored".to_owned(),
-        },
-    }
-}
-
-/// Every `!` entry of `list` that names a case with a result, with what that
-/// case did.
-fn rejections<'a>(
-    list: &'a BTreeMap<String, Entry>,
-    results: &BTreeMap<String, Outcome>,
-) -> Vec<(&'a str, &'a Entry, Rejection)> {
-    list.iter()
-        .filter_map(|(id, entry)| {
-            let EntryKind::Rejected { diagnostic } = &entry.kind else {
-                return None;
-            };
-            let outcome = results.get(id)?;
-            Some((
-                id.as_str(),
-                entry,
-                check_rejection(diagnostic.as_deref(), outcome),
-            ))
-        })
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// running
-// ---------------------------------------------------------------------------
-
-/// The `ui_test` configuration for a directory of generated cases.
-///
-/// The dependency is this crate, built by `cargo` exactly as the `ui` suite
-/// builds it. `-Cstrip=symbols` is there because 220 unstripped binaries are
-/// most of a gigabyte and the same 220 stripped are eighty megabytes.
-fn test_config(root: &Path, out_dir: &Path, compile_timeout: u64) -> Result<Config> {
-    let mut config = Config::rustc(root);
-    config.out_dir = out_dir.to_path_buf();
-    let defaults = config.comment_defaults.base();
-    defaults.set_custom("edition", Edition("2024".to_owned()));
-    defaults.set_custom("dependencies", DependencyBuilder::default());
-    defaults.compile_flags.push("-Cstrip=symbols".to_owned());
-    // Blessing would overwrite the corpus's own expected output with whatever
-    // we produced, which is the opposite of the point.
-    config.output_conflict_handling = error_on_output_conflict;
-    // The host has to be read off the compiler *before* the compiler is
-    // wrapped in anything, since reading it means running it with `-vV`.
-    config.fill_host_and_target()?;
-    wrap_in_timeout(&mut config, compile_timeout);
-    Ok(config)
-}
-
-/// Puts `timeout(1)` in front of the compiler, where there is one.
-///
-/// `ui_test` has no timeout of its own, and a front end that hung would hang
-/// `cargo test` with it. The generated programs carry their own watchdog for
-/// the other half of the problem; this is for a macro expansion that never
-/// comes back.
-fn wrap_in_timeout(config: &mut Config, seconds: u64) {
-    if seconds == 0 || !have_timeout() {
-        return;
-    }
-    let mut args: Vec<OsString> = vec!["-k".into(), "5".into(), seconds.to_string().into()];
-    args.push(config.program.program.clone().into_os_string());
-    args.append(&mut config.program.args);
-    config.program.program = PathBuf::from("timeout");
-    config.program.args = args;
-}
-
-/// Whether `timeout(1)` can be run at all.
-fn have_timeout() -> bool {
-    std::process::Command::new("timeout")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// Runs one directory of generated cases.
-///
-/// The collector is always attached; `emitter` is what the person watching
-/// sees, and is the silent one for the runs whose failures are the subject
-/// rather than a problem.
-fn run(config: Config, emitter: Box<dyn StatusEmitter>, collector: &Collector) -> Result<()> {
-    run_tests_generic(
-        vec![config],
-        ui_test::default_file_filter,
-        ui_test::default_per_file_config,
-        (emitter, collector.clone()),
     )
 }
 
@@ -1172,7 +520,7 @@ fn print_report(run: &Run<'_>, results: &BTreeMap<String, Outcome>) {
     let rejections = rejections(&run.expected_failures, results);
     let rejected: BTreeSet<&str> = rejections
         .iter()
-        .filter(|(_, _, how)| matches!(how, Rejection::AsRequired))
+        .filter(|(_, _, how)| how.is_as_required())
         .map(|(id, _, _)| *id)
         .collect();
     let toolchain: BTreeSet<&str> = run
@@ -1289,10 +637,7 @@ fn print_report(run: &Run<'_>, results: &BTreeMap<String, Outcome>) {
     if !rejected.is_empty() {
         println!();
         println!("  rejected as the standard requires ({})", rejected.len());
-        for (id, entry, _) in rejections
-            .iter()
-            .filter(|(_, _, how)| matches!(how, Rejection::AsRequired))
-        {
+        for (id, entry, _) in rejections.iter().filter(|(_, _, how)| how.is_as_required()) {
             let Some(test) = by_id.get(id) else { continue };
             println!("    {id}  [{}]", test.tag_list());
             println!("        {}", entry.note);
@@ -1334,9 +679,7 @@ fn print_report(run: &Run<'_>, results: &BTreeMap<String, Outcome>) {
             println!(
                 "        here: {}",
                 match results.get(id) {
-                    Some(Outcome::Passed) => "passed".to_owned(),
-                    Some(Outcome::Ignored) => "ignored".to_owned(),
-                    Some(Outcome::Failed { classification, .. }) => classification.clone(),
+                    Some(outcome) => outcome.describe(),
                     None => "not run".to_owned(),
                 }
             );
@@ -1353,24 +696,9 @@ fn print_report(run: &Run<'_>, results: &BTreeMap<String, Outcome>) {
     println!();
 }
 
-/// `90.0%`, or `n/a` when there is nothing to divide by.
-fn percent(part: usize, whole: usize) -> String {
-    if whole == 0 {
-        return "n/a".to_owned();
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let rate = part as f64 * 100.0 / whole as f64;
-    format!("{rate:.1}%")
-}
-
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
-
-/// Whether a `CINRS_CTESTSUITE_…` flag is set to `1`.
-fn flag(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|value| value == "1")
-}
 
 /// Everything the two modes both need.
 struct Run<'a> {
@@ -1386,7 +714,15 @@ struct Run<'a> {
     expected_failures: BTreeMap<String, Entry>,
 }
 
+impl Run<'_> {
+    /// The `ui_test` configuration for one directory of generated cases.
+    fn config(&self, root: &Path) -> Result<ui_test::Config> {
+        conformance::test_config(root, &self.build_root, self.compile_timeout, &[])
+    }
+}
+
 fn main() -> Result<()> {
+    conformance::start_memory_watchdog("c-testsuite");
     let suite = Path::new(SUITE_DIR);
     if !suite.is_dir() {
         let message = format!(
@@ -1408,12 +744,7 @@ fn main() -> Result<()> {
         Ok(value) => Standard::parse(&value)?,
         Err(_) => Standard::C99,
     };
-    let timeout: u64 = match std::env::var("CINRS_CTESTSUITE_TIMEOUT") {
-        Ok(value) => value
-            .parse()
-            .map_err(|err| eyre!("CINRS_CTESTSUITE_TIMEOUT={value}: {err}"))?,
-        Err(_) => DEFAULT_TIMEOUT,
-    };
+    let timeout = conformance::timeout_var("CINRS_CTESTSUITE_TIMEOUT", DEFAULT_TIMEOUT)?;
     let filter = std::env::var("CINRS_CTESTSUITE_FILTER").unwrap_or_default();
 
     let all = load_tests(suite)?;
@@ -1453,7 +784,11 @@ fn main() -> Result<()> {
         work_root,
         timeout,
         compile_timeout: if timeout == 0 { 0 } else { COMPILE_TIMEOUT },
-        args: Args::test()?,
+        args: {
+            let mut args = Args::test()?;
+            conformance::cap_threads(&mut args)?;
+            args
+        },
         expected_failures: read_list(&list)?,
         list,
     };
@@ -1474,15 +809,15 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
         run.timeout,
         &run.work_root,
     )?;
-    report_skipped(&skipped);
+    report_skipped("c-testsuite", &skipped);
 
     let collector = Collector::default();
-    let mut config = test_config(&run.gen_root, &run.build_root, run.compile_timeout)?;
+    let mut config = run.config(&run.gen_root)?;
     config.with_args(&run.args);
-    config.output_conflict_handling = error_on_output_conflict;
+    config.output_conflict_handling = ui_test::error_on_output_conflict;
     println!("c-testsuite: running {} cases…", run.selected.len());
     // Failures are the subject of the report, not a reason to stop.
-    drop(self::run(config, Box::new(()), &collector));
+    drop(conformance::run(config, Box::new(()), &collector));
 
     let results = collector.results();
     print_report(run, &results);
@@ -1502,7 +837,12 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
                 );
             }
         }
-        let written = write_list(&run.list, run.standard, &results, &run.expected_failures)?;
+        let written = write_list(
+            &run.list,
+            &list_header(run.standard),
+            &results,
+            &run.expected_failures,
+        )?;
         println!(
             "c-testsuite: wrote {written} expected failures to {}",
             run.list.display()
@@ -1556,7 +896,7 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
         run.timeout,
         &run.work_root,
     )?;
-    report_skipped(&skipped);
+    report_skipped("c-testsuite", &skipped);
     let known_bad_root = run
         .gen_root
         .with_file_name(format!("{}-known-failures", run.standard.name()));
@@ -1591,11 +931,11 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
     // The cases that must pass. Their failures are real failures, rendered by
     // `ui_test` exactly as the `ui` suite's are, so nothing here needs the
     // collector's classification of them.
-    let mut config = test_config(&run.gen_root, &run.build_root, run.compile_timeout)?;
+    let mut config = run.config(&run.gen_root)?;
     config.with_args(&run.args);
-    config.output_conflict_handling = error_on_output_conflict;
+    config.output_conflict_handling = ui_test::error_on_output_conflict;
     let emitter: Box<dyn StatusEmitter> = run.args.format.into();
-    let guarded = self::run(config, emitter, &Collector::default());
+    let guarded = conformance::run(config, emitter, &Collector::default());
 
     // The known-failing ones, silently, so that one which has started passing
     // can be reported and so that a `!` one can be *required* to fail. They
@@ -1605,8 +945,8 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
     let mut nonconforming: Vec<String> = Vec::new();
     if !known_bad.is_empty() {
         let collector = Collector::default();
-        let config = test_config(&known_bad_root, &run.build_root, run.compile_timeout)?;
-        drop(self::run(config, Box::new(()), &collector));
+        let config = run.config(&known_bad_root)?;
+        drop(conformance::run(config, Box::new(()), &collector));
         let results = collector.results();
         now_passing = known_bad
             .iter()
@@ -1691,25 +1031,4 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
         run.selected.len()
     );
     Ok(())
-}
-
-/// `1 entry` or `3 entries`.
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
-
-/// A headline with an indented list of ids under it.
-fn listing<'a>(headline: &str, ids: impl Iterator<Item = &'a str>) -> String {
-    let mut out = format!("{headline}:");
-    for id in ids {
-        write!(out, "\n    {id}").expect("writing to a String");
-    }
-    out
-}
-
-/// Says which cases could not be turned into a Rust file at all.
-fn report_skipped(skipped: &[Skipped]) {
-    for Skipped { id, reason } in skipped {
-        println!("c-testsuite: warning: {id} was not generated: {reason}");
-    }
 }

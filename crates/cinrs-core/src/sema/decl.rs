@@ -9,7 +9,7 @@ use crate::ir::{
 
 use super::{Entry, Sema, TypedefEntry};
 
-impl Sema {
+impl Sema<'_> {
     // -- static assertions --------------------------------------------------
 
     /// Checks a `_Static_assert` declaration, which generates nothing at all.

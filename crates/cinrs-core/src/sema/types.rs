@@ -120,7 +120,7 @@ struct LaidOut {
     packed_attr: Option<u64>,
 }
 
-impl Sema {
+impl Sema<'_> {
     /// Resolves an AST type into a [`Ty`], or explains why it cannot.
     pub(super) fn resolve_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         let range = ty.range;
@@ -206,12 +206,12 @@ impl Sema {
                 }
                 Ok(self.program.types.func(ret, params, func.variadic))
             }
-            ast::TypeKind::Record(record) => self.record_ty(record),
-            ast::TypeKind::Enum(spec) => self.enum_ty(spec),
+            ast::TypeKind::Record(id) => self.record_ty(*id),
+            ast::TypeKind::Enum(id) => self.enum_ty(*id),
             // C23's `typeof`. The operand of the expression form is not
             // evaluated, and it does *not* decay: `typeof(a)` of an array is
             // the array type, which is the whole point of the operator.
-            ast::TypeKind::Typeof(operand) => match operand.as_ref() {
+            ast::TypeKind::Typeof(id) => match self.typeof_operand(*id) {
                 ast::TypeofOperand::Expr(expr) => {
                     let ty = if self.is_lvalue_form(expr) {
                         self.lvalue(expr).map(|place| place.ty)
@@ -417,13 +417,13 @@ impl Sema {
 
     // -- struct and union ---------------------------------------------------
 
-    fn record_ty(&mut self, spec: &ast::RecordType) -> Result<Ty, TypeError> {
-        let key = (spec.range.start, spec.range.end);
-        // The parser clones a specifier into every declarator that shares it;
-        // the range is what identifies the one type they all mean.
-        if let Some(id) = self.record_by_range.get(&key) {
-            return Ok(Ty::Record(*id));
+    fn record_ty(&mut self, spec_id: ast::RecordSpecId) -> Result<Ty, TypeError> {
+        // The type of every declarator that shares a specifier names that one
+        // specifier, so resolving it twice would be defining the tag twice.
+        if let Some(id) = self.record_by_spec[spec_id.index()] {
+            return Ok(Ty::Record(id));
         }
+        let spec = self.record_spec(spec_id);
         let kind = match spec.kind {
             ast::RecordKind::Struct => RecordKind::Struct,
             ast::RecordKind::Union => RecordKind::Union,
@@ -443,7 +443,7 @@ impl Sema {
                         ),
                     ));
                 }
-                self.record_by_range.insert(key, id);
+                self.record_by_spec[spec_id.index()] = Some(id);
                 return Ok(Ty::Record(id));
             }
             if let Some(TagEntry::Enum { .. }) = self.lookup_tag(&name.name) {
@@ -454,7 +454,7 @@ impl Sema {
             }
             let id = self.declare_record(kind, Some(name.name.clone()), spec.range);
             self.insert_tag(&name.name, TagEntry::Record(id));
-            self.record_by_range.insert(key, id);
+            self.record_by_spec[spec_id.index()] = Some(id);
             return Ok(Ty::Record(id));
         };
 
@@ -508,7 +508,7 @@ impl Sema {
         };
         // Registered before the members are resolved, so that a member of type
         // `struct S *` inside `struct S` finds the tag it is inside.
-        self.record_by_range.insert(key, id);
+        self.record_by_spec[spec_id.index()] = Some(id);
         self.define_record(id, spec, fields);
         for assert in &spec.asserts {
             self.static_assert(assert);
@@ -555,7 +555,7 @@ impl Sema {
     }
 
     /// Resolves a member list and computes the record's layout.
-    fn define_record(&mut self, id: RecordId, spec: &ast::RecordType, fields: &[ast::FieldDecl]) {
+    fn define_record(&mut self, id: RecordId, spec: &ast::RecordSpec, fields: &[ast::FieldDecl]) {
         let kind = self.types().record(id).kind;
         // What the record asks of every member: `packed` is a maximum
         // alignment of one byte, and `#pragma pack(N)` one of N.
@@ -957,10 +957,10 @@ impl Sema {
     /// make it unsigned when no enumerator is negative — which is observable
     /// exactly here and nowhere else.
     fn bit_field_signed(&self, written: &ast::Type, ty: Ty) -> bool {
-        if let ast::TypeKind::Enum(spec) = &written.kind
-            && let Some(unsigned) = self.enum_unsigned.get(&(spec.range.start, spec.range.end))
+        if let ast::TypeKind::Enum(id) = &written.kind
+            && let Some(unsigned) = self.enum_unsigned[id.index()]
         {
-            return !*unsigned;
+            return !unsigned;
         }
         ty.is_signed(&self.target)
     }
@@ -1394,11 +1394,11 @@ impl Sema {
 
     // -- enum ---------------------------------------------------------------
 
-    fn enum_ty(&mut self, spec: &ast::EnumType) -> Result<Ty, TypeError> {
-        let key = (spec.range.start, spec.range.end);
-        if let Some(ty) = self.enum_by_range.get(&key) {
-            return Ok(*ty);
+    fn enum_ty(&mut self, spec_id: ast::EnumSpecId) -> Result<Ty, TypeError> {
+        if let Some(ty) = self.enum_by_spec[spec_id.index()] {
+            return Ok(ty);
         }
+        let spec = self.enum_spec(spec_id);
 
         // C23's fixed underlying type. An enumeration with one *is* that
         // integer type: its enumerators have it, `sizeof` gives its size, and
@@ -1424,8 +1424,8 @@ impl Sema {
             let name = spec.name.as_ref().expect("the parser requires a tag here");
             return match self.lookup_tag(&name.name) {
                 Some(TagEntry::Enum { ty, unsigned, .. }) => {
-                    self.enum_by_range.insert(key, ty);
-                    self.enum_unsigned.insert(key, unsigned);
+                    self.enum_by_spec[spec_id.index()] = Some(ty);
+                    self.enum_unsigned[spec_id.index()] = Some(unsigned);
                     Ok(ty)
                 }
                 Some(TagEntry::Record(_)) => Err(TypeError::at(
@@ -1454,8 +1454,8 @@ impl Sema {
                             complete: false,
                         },
                     );
-                    self.enum_by_range.insert(key, ty);
-                    self.enum_unsigned.insert(key, unsigned);
+                    self.enum_by_spec[spec_id.index()] = Some(ty);
+                    self.enum_unsigned[spec_id.index()] = Some(unsigned);
                     Ok(ty)
                 }
             };
@@ -1530,7 +1530,7 @@ impl Sema {
                 },
             );
         }
-        self.enum_by_range.insert(key, ty);
+        self.enum_by_spec[spec_id.index()] = Some(ty);
         // With a fixed underlying type the enumerators have the enumeration's
         // own type; without one they are `int`, as C99 says.
         let constant_ty = underlying.unwrap_or(Ty::Int);
@@ -1609,7 +1609,7 @@ impl Sema {
         if let Ty::Enum(id) = ty {
             self.program.types.enum_mut(id).unsigned = unsigned;
         }
-        self.enum_unsigned.insert(key, unsigned);
+        self.enum_unsigned[spec_id.index()] = Some(unsigned);
         Ok(ty)
     }
 }

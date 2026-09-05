@@ -598,11 +598,26 @@ fn hash_at_line_start_is_marked() {
 }
 
 #[test]
-fn line_splices_are_whitespace() {
+fn a_line_splice_is_deleted_before_the_source_is_tokenised() {
+    // Translation phase 2 deletes a backslash-newline; phase 3 then splits
+    // what is left into tokens. So a splice inside a name is not a token
+    // boundary at all: `a\<newline>b` is the one identifier `ab`, which is
+    // how `__LI\<newline>NE__` comes out as `__LINE__` — Clang's own
+    // `drs/dr464.c` relies on exactly that.
+    assert_eq!(kinds("a\\\nb"), vec![TokenKind::Ident("ab".to_owned())]);
+    // A splice that nothing continues over is whitespace, as before.
     assert_eq!(
-        kinds("a\\\nb"),
+        kinds("a\\\n b"),
         vec![
             TokenKind::Ident("a".to_owned()),
+            TokenKind::Ident("b".to_owned()),
+        ]
+    );
+    assert_eq!(
+        kinds("a\\\n+b"),
+        vec![
+            TokenKind::Ident("a".to_owned()),
+            TokenKind::Punct(cinrs_core::lex::Punct::Plus),
             TokenKind::Ident("b".to_owned()),
         ]
     );

@@ -247,3 +247,34 @@ fn a_loop_keeps_its_edges() {
             .any(|b| matches!(b.term, Terminator::Branch { .. }))
     );
 }
+
+#[test]
+fn a_switch_with_more_groups_than_rustc_can_nest_takes_the_graph() {
+    // The structured lowering puts one labelled block inside the last, one per
+    // group, and `rustc`'s own parser dies on the stack somewhere past four
+    // hundred of them. C23 5.2.5.2p1 asks for 1023 `case` labels in one
+    // `switch`, so a big one is lowered into the graph instead, whose `match`
+    // over states is flat however many there are.
+    let groups = |n: u32| {
+        let body: String = (0..n)
+            .map(|i| format!("case {i}: t += {i}; break;"))
+            .collect();
+        format!("int f(int x) {{ int t = 0; switch (x) {{ {body} }} return t; }}")
+    };
+    assert!(is_structured(&groups(200), "f"));
+    assert!(!is_structured(&groups(1023), "f"));
+    let cfg = cfg_of(&groups(1023), "f");
+    check_invariants(&cfg);
+    assert!(
+        cfg.blocks
+            .iter()
+            .any(|b| matches!(b.term, Terminator::Switch { .. }))
+    );
+
+    // A thousand labels on *one* statement is a single group, which the
+    // structured lowering handles as one block and one pattern.
+    let labels: String = (0..1023).map(|i| format!("case {i}:")).collect();
+    let one_group =
+        format!("int g(int x) {{ int t = 0; switch (x) {{ {labels} t = 1; break; }} return t; }}");
+    assert!(is_structured(&one_group, "g"));
+}

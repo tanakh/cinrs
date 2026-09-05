@@ -147,17 +147,62 @@ pub fn parse(
         packing,
         last_range,
         depth: 0,
+        records: Vec::new(),
+        enums: Vec::new(),
+        typeofs: Vec::new(),
     };
     parser.parse_translation_unit(unit_range)
 }
 
-/// How deeply the parser may recurse before giving up.
+/// How deeply one construct may nest before the parser gives up.
 ///
 /// Recursive descent turns nesting in the input into stack frames, and a
 /// procedural macro that overflows the stack takes the whole compiler down
 /// with no useful message. Pathologically nested input becomes a diagnostic
 /// instead.
+///
+/// What it bounds is the *nesting* of the tree and never the length of
+/// anything. `a + b + c + …`, `a, b, c, …` and `a && b && …` are
+/// left-associative, so each operand is a sibling rather than a level, and
+/// the parser, [`crate::sema`] and [`crate::codegen`] all walk such a chain
+/// iteratively: its length is bounded by memory alone, which is what lets a
+/// logical source line hold the 4095 characters C23 5.2.5.2p1 asks for. Three
+/// constructs are the other way round and *are* charged here, because each
+/// operator is one more level of a tree every pass has to walk:
+///
+/// * the right-associative `a ? b : c ? d : e` and `a = b = c`
+///   ([`Parser::parse_conditional_expr`],
+///   [`Parser::parse_assignment_expr`]);
+/// * a run of postfix operators, `p->a->b->c` and `a[i][j][k]`
+///   ([`Parser::parse_postfix_suffixes`]), where each one is a place inside
+///   the last.
+///
+/// 200 is three times the 63 levels of nesting C23 5.2.5.2p1 asks for and
+/// close to Clang's own `-fbracket-depth` default of 256. Measured on an
+/// unoptimised build against the 8 MiB `rustc` gives macro expansion, code
+/// generation survives about 5000 levels of a conditional chain and about 450
+/// of a `->` chain, which is the tightest of them; the margin is therefore
+/// twofold at worst and twentyfold at best.
 const MAX_RECURSION_DEPTH: u32 = 200;
+
+/// How many labels one statement may carry.
+///
+/// A label chain is parsed iteratively, so it costs the parser nothing — but
+/// each label is still a level of the tree that sema, the CFG lowering and
+/// code generation walk recursively, and something has to bound that. C23
+/// 5.2.5.2p1 asks for 1023 `case` labels in one `switch`; this is four times
+/// that, and a chain longer than it is a diagnostic rather than a crash.
+const MAX_LABEL_CHAIN: usize = 4096;
+
+/// One label of a chain, held while the statement it labels is parsed.
+enum PendingLabel {
+    /// `name:`, with the range of its `:`.
+    Ident { label: Ident, colon: SourceRange },
+    /// `case value:`, and GNU's `case low ... high:`.
+    Case { value: Expr, upper: Option<Expr> },
+    /// `default:`
+    Default,
+}
 
 struct Parser<'a> {
     tokens: &'a [Token],
@@ -174,6 +219,12 @@ struct Parser<'a> {
     last_range: SourceRange,
     /// Current recursion depth; reset at every external declaration.
     depth: u32,
+    /// The `struct`/`union` specifiers seen so far; see [`RecordSpecId`].
+    records: Vec<RecordSpec>,
+    /// The `enum` specifiers seen so far.
+    enums: Vec<EnumSpec>,
+    /// The `typeof` operands seen so far.
+    typeofs: Vec<TypeofOperand>,
 }
 
 // ---------------------------------------------------------------------------
@@ -640,7 +691,13 @@ impl Parser<'_> {
                 self.advance();
             }
         }
-        TranslationUnit { items, range }
+        TranslationUnit {
+            items,
+            records: std::mem::take(&mut self.records),
+            enums: std::mem::take(&mut self.enums),
+            typeofs: std::mem::take(&mut self.typeofs),
+            range,
+        }
     }
 
     /// How deeply nested in brackets the current position is, relative to the
@@ -1332,7 +1389,8 @@ impl Parser<'_> {
         };
         self.expect_punct(Punct::RParen, &format!(" after the operand of '{name}'"))?;
         let range = self.span_to_here(start);
-        Ok(Type::plain(TypeKind::Typeof(Box::new(operand)), range))
+        let id = self.add_typeof(operand);
+        Ok(Type::plain(TypeKind::Typeof(id), range))
     }
 
     fn build_base_type(
@@ -1487,7 +1545,40 @@ impl SpecCounts {
 // ---------------------------------------------------------------------------
 
 impl Parser<'_> {
+    /// Stores a `struct`/`union` specifier and hands back its id.
+    fn add_record(&mut self, spec: RecordSpec) -> RecordSpecId {
+        let id = RecordSpecId(self.records.len() as u32);
+        self.records.push(spec);
+        id
+    }
+
+    /// Stores an `enum` specifier and hands back its id.
+    fn add_enum(&mut self, spec: EnumSpec) -> EnumSpecId {
+        let id = EnumSpecId(self.enums.len() as u32);
+        self.enums.push(spec);
+        id
+    }
+
+    /// Stores a `typeof` operand and hands back its id.
+    fn add_typeof(&mut self, operand: TypeofOperand) -> TypeofId {
+        let id = TypeofId(self.typeofs.len() as u32);
+        self.typeofs.push(operand);
+        id
+    }
+
+    /// A `struct`/`union` specifier, whose body may hold more of them.
+    ///
+    /// The nesting is counted: a member list is parsed by a recursive call, so
+    /// a specifier nested past [`MAX_RECURSION_DEPTH`] is a diagnostic rather
+    /// than a stack overflow. C23 5.2.5.2p1 asks for 63 levels.
     fn parse_record_specifier(&mut self) -> PResult<Type> {
+        self.enter()?;
+        let result = self.parse_record_specifier_inner();
+        self.leave();
+        result
+    }
+
+    fn parse_record_specifier_inner(&mut self) -> PResult<Type> {
         let start = self.cur_range();
         // What `#pragma pack` was asking for *here* is what applies to this
         // record; a pragma written after it changes nothing about it.
@@ -1526,18 +1617,16 @@ impl Parser<'_> {
             attrs.merge(after);
         }
         let range = self.span_to_here(start);
-        Ok(Type::plain(
-            TypeKind::Record(Box::new(RecordType {
-                kind,
-                name,
-                fields,
-                asserts,
-                attrs,
-                pack,
-                range,
-            })),
+        let id = self.add_record(RecordSpec {
+            kind,
+            name,
+            fields,
+            asserts,
+            attrs,
+            pack,
             range,
-        ))
+        });
+        Ok(Type::plain(TypeKind::Record(id), range))
     }
 
     /// The member list of a `struct` or `union`, and the `_Static_assert`
@@ -1681,15 +1770,13 @@ impl Parser<'_> {
             None
         };
         let range = self.span_to_here(start);
-        Ok(Type::plain(
-            TypeKind::Enum(Box::new(EnumType {
-                name,
-                enumerators,
-                underlying,
-                range,
-            })),
+        let id = self.add_enum(EnumSpec {
+            name,
+            enumerators,
+            underlying,
             range,
-        ))
+        });
+        Ok(Type::plain(TypeKind::Enum(id), range))
     }
 }
 
@@ -2203,16 +2290,70 @@ impl Parser<'_> {
         result
     }
 
+    /// Parses a statement, taking the labels in front of it iteratively.
+    ///
+    /// `case 0: case 1: … case 1022: break;` is one statement under 1023
+    /// labels, and C23 5.2.5.2p1 asks for exactly that many. Recursing per
+    /// label would spend a stack frame — and a level of the recursion guard —
+    /// on each of them, so the run is collected into a list and folded into
+    /// the tree afterwards. What the tree looks like does not change.
     fn parse_stmt_inner(&mut self) -> PResult<Stmt> {
-        let start = self.cur_range();
-        // A statement may carry attributes of its own: `[[fallthrough]];`,
-        // `__attribute__((fallthrough));`, `[[likely]] if (…)`. They are
-        // consumed and dropped — a `switch` group falls through either way.
-        let _ = self.parse_attributes()?;
-        // `__extension__ stmt` asks for the pedantic warnings to be held
-        // back; there are none.
-        while self.eat_keyword(Keyword::Extension).is_some() {}
+        let mut labels: Vec<(PendingLabel, SourceRange)> = Vec::new();
+        let start = loop {
+            let start = self.cur_range();
+            // A statement may carry attributes of its own: `[[fallthrough]];`,
+            // `__attribute__((fallthrough));`, `[[likely]] if (…)`. They are
+            // consumed and dropped — a `switch` group falls through either way.
+            let _ = self.parse_attributes()?;
+            // `__extension__ stmt` asks for the pedantic warnings to be held
+            // back; there are none.
+            while self.eat_keyword(Keyword::Extension).is_some() {}
 
+            // `label:`
+            let label = if self.peek().ident().is_some() && self.nth(1).is_punct(Punct::Colon) {
+                let label = self.eat_ident().expect("checked above");
+                let colon = self.bump_range();
+                PendingLabel::Ident { label, colon }
+            } else if self.at_keyword(Keyword::Case) {
+                self.advance();
+                let value = self.parse_conditional_expr()?;
+                // GNU's `case low ... high:`, which is one label for every
+                // value in the range.
+                let upper = if self.eat_punct(Punct::Ellipsis).is_some() {
+                    Some(self.parse_conditional_expr()?)
+                } else {
+                    None
+                };
+                self.expect_punct(Punct::Colon, " after 'case' label")?;
+                PendingLabel::Case { value, upper }
+            } else if self.at_keyword(Keyword::Default) {
+                self.advance();
+                self.expect_punct(Punct::Colon, " after 'default' label")?;
+                PendingLabel::Default
+            } else {
+                break start;
+            };
+            labels.push((label, start));
+            if labels.len() > MAX_LABEL_CHAIN {
+                let range = self.cur_range();
+                return Err(self.error_bail(
+                    range,
+                    format!("more than {MAX_LABEL_CHAIN} labels on one statement"),
+                ));
+            }
+        };
+
+        if !labels.is_empty() {
+            return self.finish_labeled_stmt(labels);
+        }
+        self.parse_unlabeled_stmt(start)
+    }
+
+    /// A statement with the labels — and the attributes — already taken.
+    ///
+    /// `start` is where the statement began, attributes included, which is
+    /// where its range starts.
+    fn parse_unlabeled_stmt(&mut self, start: SourceRange) -> PResult<Stmt> {
         // Inline assembly, which has no honest translation. Recognising the
         // whole statement is what turns it into one clear diagnostic.
         if self.at_keyword(Keyword::Asm) {
@@ -2227,75 +2368,8 @@ impl Parser<'_> {
             });
         }
 
-        // `label:`
-        if self.peek().ident().is_some() && self.nth(1).is_punct(Punct::Colon) {
-            let label = self.eat_ident().expect("checked above");
-            let colon = self.bump_range();
-            // C23 lets a label stand before a declaration and at the very end
-            // of a compound statement; before that it had to label a
-            // statement. Either way the label itself labels nothing, so it
-            // takes a null statement and whatever follows is parsed on its
-            // own.
-            let empty = if self.at_punct(Punct::RBrace) {
-                Some("a label at the end of a compound statement")
-            } else if self.starts_declaration() || self.at_static_assert() {
-                Some("a label before a declaration")
-            } else {
-                None
-            };
-            let body = match empty {
-                Some(what) => {
-                    self.require_standard(Standard::C23, what, label.range.join(colon));
-                    Stmt {
-                        kind: StmtKind::Expr(None),
-                        range: colon,
-                    }
-                }
-                None => self.parse_stmt()?,
-            };
-            return Ok(Stmt {
-                kind: StmtKind::Labeled {
-                    label,
-                    body: Box::new(body),
-                },
-                range: self.span_to_here(start),
-            });
-        }
-
         if let Some(k) = self.peek().keyword() {
             match k {
-                Keyword::Case => {
-                    self.advance();
-                    let value = self.parse_conditional_expr()?;
-                    // GNU's `case low ... high:`, which is one label for every
-                    // value in the range.
-                    let upper = if self.eat_punct(Punct::Ellipsis).is_some() {
-                        Some(self.parse_conditional_expr()?)
-                    } else {
-                        None
-                    };
-                    self.expect_punct(Punct::Colon, " after 'case' label")?;
-                    let body = self.parse_stmt()?;
-                    return Ok(Stmt {
-                        kind: StmtKind::Case {
-                            value,
-                            upper,
-                            body: Box::new(body),
-                        },
-                        range: self.span_to_here(start),
-                    });
-                }
-                Keyword::Default => {
-                    self.advance();
-                    self.expect_punct(Punct::Colon, " after 'default' label")?;
-                    let body = self.parse_stmt()?;
-                    return Ok(Stmt {
-                        kind: StmtKind::Default {
-                            body: Box::new(body),
-                        },
-                        range: self.span_to_here(start),
-                    });
-                }
                 Keyword::If => return self.parse_if_stmt(),
                 Keyword::Switch => {
                     self.advance();
@@ -2397,6 +2471,56 @@ impl Parser<'_> {
             kind: StmtKind::Expr(Some(expr)),
             range: self.span_to_here(start),
         })
+    }
+
+    /// Parses what a run of labels labels, and folds the run into the tree.
+    ///
+    /// The list is never empty; see [`Parser::parse_stmt_inner`].
+    fn finish_labeled_stmt(&mut self, labels: Vec<(PendingLabel, SourceRange)>) -> PResult<Stmt> {
+        // C23 lets a label stand before a declaration and at the very end of a
+        // compound statement; before that it had to label a statement. Either
+        // way the label itself labels nothing, so it takes a null statement and
+        // whatever follows is parsed on its own.
+        let trailing = match labels.last().expect("a label chain is never empty") {
+            (PendingLabel::Ident { label, colon }, _) => {
+                let what = if self.at_punct(Punct::RBrace) {
+                    Some("a label at the end of a compound statement")
+                } else if self.starts_declaration() || self.at_static_assert() {
+                    Some("a label before a declaration")
+                } else {
+                    None
+                };
+                what.map(|what| (what, label.range.join(*colon), *colon))
+            }
+            _ => None,
+        };
+        let mut stmt = match trailing {
+            Some((what, at, colon)) => {
+                self.require_standard(Standard::C23, what, at);
+                Stmt {
+                    kind: StmtKind::Expr(None),
+                    range: colon,
+                }
+            }
+            None => {
+                let start = self.cur_range();
+                self.parse_unlabeled_stmt(start)?
+            }
+        };
+        let end = self.last_range;
+        for (label, start) in labels.into_iter().rev() {
+            let body = Box::new(stmt);
+            let kind = match label {
+                PendingLabel::Ident { label, .. } => StmtKind::Labeled { label, body },
+                PendingLabel::Case { value, upper } => StmtKind::Case { value, upper, body },
+                PendingLabel::Default => StmtKind::Default { body },
+            };
+            stmt = Stmt {
+                kind,
+                range: start.join(end),
+            };
+        }
+        Ok(stmt)
     }
 
     /// `asm [qualifiers] ( … ) ;` — an inline assembly statement.
@@ -2569,6 +2693,12 @@ impl Parser<'_> {
         result
     }
 
+    /// `a, b, c, …` — the comma operator, which is left-associative.
+    ///
+    /// Taken in a loop, so the length of the chain costs the parser no stack;
+    /// sema and code generation walk it iteratively too, so it costs them
+    /// none either and nothing but memory bounds it. See
+    /// [`MAX_RECURSION_DEPTH`].
     fn parse_expr_inner(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_assignment_expr()?;
         while self.eat_punct(Punct::Comma).is_some() {
@@ -2585,49 +2715,107 @@ impl Parser<'_> {
         Ok(lhs)
     }
 
+    /// `assignment-expression`, which is right associative.
+    ///
+    /// `a = b = c` is taken in a loop and folded from the right afterwards, so
+    /// the parser itself never recurses down the chain — but what it folds is
+    /// `Assign(a, Assign(b, c))`, one level of *nesting* per operator, and
+    /// nesting is what [`MAX_RECURSION_DEPTH`] is for. Each operator is
+    /// therefore charged to the same counter `((((…))))` is charged to, and
+    /// released again however the chain ends.
     fn parse_assignment_expr(&mut self) -> PResult<Expr> {
-        let lhs = self.parse_conditional_expr()?;
-        if let Some(op) = assign_op(&self.peek().kind) {
+        let mut charged = 0u32;
+        let result = self.assignment_chain(&mut charged);
+        for _ in 0..charged {
+            self.leave();
+        }
+        result
+    }
+
+    /// [`Parser::parse_assignment_expr`], reporting the nesting it charged.
+    fn assignment_chain(&mut self, charged: &mut u32) -> PResult<Expr> {
+        let mut pending: Vec<(Expr, Option<BinaryOp>)> = Vec::new();
+        let mut value = loop {
+            let lhs = self.parse_conditional_expr()?;
+            let Some(op) = assign_op(&self.peek().kind) else {
+                break lhs;
+            };
             self.advance();
-            let rhs = self.parse_assignment_expr()?;
-            let range = lhs.range.join(rhs.range);
-            return Ok(Expr {
+            self.enter()?;
+            *charged += 1;
+            pending.push((lhs, op));
+        };
+        for (lhs, op) in pending.into_iter().rev() {
+            let range = lhs.range.join(value.range);
+            value = Expr {
                 kind: ExprKind::Assign {
                     op,
                     lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
+                    rhs: Box::new(value),
                 },
                 range,
-            });
+            };
         }
-        Ok(lhs)
+        Ok(value)
     }
 
+    /// `conditional-expression`, whose `else` operand is another one.
+    ///
+    /// `a ? b : c ? d : e` is taken in a loop and folded from the right, for
+    /// the reason [`Parser::parse_assignment_expr`] is — and, for the same
+    /// reason, each operator is charged to [`MAX_RECURSION_DEPTH`]: the tree
+    /// it builds nests one level per operator, and every pass after this one
+    /// has to walk it.
     fn parse_conditional_expr(&mut self) -> PResult<Expr> {
-        let cond = self.parse_binary_expr(1)?;
-        if self.eat_punct(Punct::Question).is_none() {
-            return Ok(cond);
+        let mut charged = 0u32;
+        let result = self.conditional_chain(&mut charged);
+        for _ in 0..charged {
+            self.leave();
         }
-        // GNU's `a ?: b`: the middle operand is the condition itself, and the
-        // condition is evaluated exactly once.
-        let then_expr = if self.at_punct(Punct::Colon) {
-            None
-        } else {
-            Some(Box::new(self.parse_expr()?))
-        };
-        self.expect_punct(Punct::Colon, " in conditional expression")?;
-        let else_expr = self.parse_conditional_expr()?;
-        let range = cond.range.join(else_expr.range);
-        Ok(Expr {
-            kind: ExprKind::Conditional {
-                cond: Box::new(cond),
-                then_expr,
-                else_expr: Box::new(else_expr),
-            },
-            range,
-        })
+        result
     }
 
+    /// [`Parser::parse_conditional_expr`], reporting the nesting it charged.
+    fn conditional_chain(&mut self, charged: &mut u32) -> PResult<Expr> {
+        #[allow(clippy::type_complexity)]
+        let mut pending: Vec<(Expr, Option<Box<Expr>>)> = Vec::new();
+        let mut value = loop {
+            let cond = self.parse_binary_expr(1)?;
+            if self.eat_punct(Punct::Question).is_none() {
+                break cond;
+            }
+            // GNU's `a ?: b`: the middle operand is the condition itself, and
+            // the condition is evaluated exactly once.
+            let then_expr = if self.at_punct(Punct::Colon) {
+                None
+            } else {
+                Some(Box::new(self.parse_expr()?))
+            };
+            self.expect_punct(Punct::Colon, " in conditional expression")?;
+            self.enter()?;
+            *charged += 1;
+            pending.push((cond, then_expr));
+        };
+        for (cond, then_expr) in pending.into_iter().rev() {
+            let range = cond.range.join(value.range);
+            value = Expr {
+                kind: ExprKind::Conditional {
+                    cond: Box::new(cond),
+                    then_expr,
+                    else_expr: Box::new(value),
+                },
+                range,
+            };
+        }
+        Ok(value)
+    }
+
+    /// The binary operators, by precedence climbing.
+    ///
+    /// Every level is left-associative, so a run of one operator is a loop
+    /// rather than recursion and its length costs no stack — here or in the
+    /// passes after it; the recursion is over the ten *precedence levels*.
+    /// See [`MAX_RECURSION_DEPTH`].
     fn parse_binary_expr(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.parse_cast_expr()?;
         while let Some((op, prec)) = binary_op(&self.peek().kind) {
@@ -2963,8 +3151,34 @@ impl Parser<'_> {
         self.parse_postfix_suffixes(primary)
     }
 
-    fn parse_postfix_suffixes(&mut self, mut expr: Expr) -> PResult<Expr> {
+    /// The `[…]`, `(…)`, `.x`, `->x`, `++` and `--` that follow an operand.
+    ///
+    /// A run of them is left-associative in the source and *nested* in the
+    /// tree — `p->a->b` is a member of a member — and code generation walks
+    /// that nesting recursively, so each suffix taken is charged to
+    /// [`MAX_RECURSION_DEPTH`]. It is the tightest of the three constructs
+    /// charged there: a `->` chain is what overflows first, at about 450.
+    fn parse_postfix_suffixes(&mut self, expr: Expr) -> PResult<Expr> {
+        let mut charged = 0u32;
+        let result = self.postfix_suffixes(expr, &mut charged);
+        for _ in 0..charged {
+            self.leave();
+        }
+        result
+    }
+
+    /// [`Parser::parse_postfix_suffixes`], reporting the nesting it charged.
+    fn postfix_suffixes(&mut self, mut expr: Expr, charged: &mut u32) -> PResult<Expr> {
+        let mut suffixes = 0usize;
         loop {
+            // Nothing is charged for an operand with no suffix at all, so
+            // that the 63 levels of parenthesised expression C23 5.2.5.2p1
+            // asks for keep the whole budget to themselves.
+            if suffixes > 0 {
+                self.enter()?;
+                *charged += 1;
+            }
+            suffixes += 1;
             if self.eat_punct(Punct::LBracket).is_some() {
                 let index = self.parse_expr()?;
                 let rb = self.expect_punct(Punct::RBracket, " after subscript")?;

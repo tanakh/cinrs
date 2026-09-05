@@ -23,6 +23,9 @@ use ui_test::custom_flags::edition::Edition;
 use ui_test::dependencies::DependencyBuilder;
 use ui_test::{CommandBuilder, Config, run_tests};
 
+#[path = "support/conformance.rs"]
+mod conformance;
+
 /// The suite that only a toolchain with `c_variadic` can compile.
 #[rustversion::since(1.99)]
 const C_VARIADIC_SUITE: Option<&str> = Some("tests/ui-since-1.99");
@@ -83,13 +86,37 @@ fn build(root: &str, dependencies: DependencyBuilder) -> Config {
     config
 }
 
+/// Runs one suite under the same ceilings the conformance harnesses use.
+///
+/// The `ui` suite is sixty tests rather than a thousand, so it was never what
+/// exhausted this machine's memory — but it spawns `rustc` the same way, and
+/// the protections cost nothing: see the memory section of
+/// [`conformance`](conformance#memory). Wrapping the compiler has to come
+/// after the host has been read off it, which is what
+/// `fill_host_and_target` does; none of the three changes a byte of the
+/// blessed `.stderr` files, which hold the compiler's diagnostics and not the
+/// command line that produced them.
+fn run(mut config: Config) -> ui_test::color_eyre::Result<()> {
+    config.fill_host_and_target()?;
+    conformance::wrap_in_limits(
+        &mut config,
+        conformance::COMPILE_TIMEOUT,
+        conformance::memory_limit_mb(),
+    );
+    let mut args = ui_test::Args::test()?;
+    conformance::cap_threads(&mut args)?;
+    config.with_args(&args);
+    run_tests(config)
+}
+
 fn main() -> ui_test::color_eyre::Result<()> {
-    run_tests(config("tests/ui"))?;
+    conformance::start_memory_watchdog("ui");
+    run(config("tests/ui"))?;
     if let Some(root) = C_VARIADIC_SUITE {
-        run_tests(config(root))?;
+        run(config(root))?;
     }
     if let Some(root) = SUBSPAN_SUITE {
-        run_tests(nightly_config(root))?;
+        run(nightly_config(root))?;
     }
     Ok(())
 }

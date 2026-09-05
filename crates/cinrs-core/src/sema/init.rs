@@ -51,7 +51,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-impl Sema {
+impl Sema<'_> {
     /// Checks an initialiser against the type of what it initialises.
     pub(super) fn initializer(
         &mut self,

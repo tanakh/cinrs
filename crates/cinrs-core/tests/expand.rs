@@ -546,11 +546,49 @@ fn malformed_input_always_terminates() {
 }
 
 #[test]
-fn a_long_flat_expression_does_not_recurse() {
-    // Left-associative chains are parsed iteratively, so length alone must not
-    // trip the recursion guard.
-    let source = format!("int x = 1{};", " + 1".repeat(2_000));
-    assert_eq!(expand_c(&source), Vec::new());
+fn a_long_left_associative_chain_costs_no_stack() {
+    // `a + b + c`, `a, b, c` and `a && b && c` are left-associative, so every
+    // operand is a *sibling* rather than a level: the parser takes them in a
+    // loop, and sema and code generation walk the spine iteratively. Nothing
+    // but memory bounds how many there may be, which is what lets a logical
+    // source line hold the 4095 characters C23 5.2.5.2p1 asks for — about two
+    // thousand comma operands.
+    for source in [
+        format!("int x = 1{};", " + 1".repeat(3_000)),
+        format!("int f(int x) {{ return (x{}); }}", ", x".repeat(3_000)),
+        format!("int g(int x) {{ return x{}; }}", " && x".repeat(3_000)),
+        format!("int h(int x) {{ return x{}; }}", " | x".repeat(3_000)),
+    ] {
+        assert_eq!(expand_c(&source), Vec::new(), "for {:.40}…", source);
+    }
+}
+
+#[test]
+fn a_deeply_nested_chain_of_operators_is_one_diagnostic() {
+    // The right-associative `?:` and `=`, and a run of postfix operators, are
+    // the other way round: each operator is one more *level* of the tree, and
+    // code generation walks that on the caller's stack — the 8 MiB `rustc`
+    // gives macro expansion. So they are charged to
+    // `parse::MAX_RECURSION_DEPTH`, exactly as `((((…))))` is, and going past
+    // it is a diagnostic rather than a stack overflow with no message at all.
+    for source in [
+        format!("int g(int x) {{ return {}x; }}", "x ? x : ".repeat(600)),
+        format!("int h(int *p) {{ return {}*p; }}", "*p = ".repeat(600)),
+        format!(
+            "struct n {{ struct n *next; }};\n\
+             struct n *f(struct n *p) {{ return p{}; }}",
+            "->next".repeat(600)
+        ),
+    ] {
+        let errors = expand_c(&source);
+        assert_eq!(errors.len(), 1, "{errors:?} for {:.40}…", source);
+        assert!(
+            errors[0].message.contains("nests too deeply"),
+            "{:?} for {:.40}…",
+            errors[0],
+            source
+        );
+    }
 }
 
 /// The stack the deep-nesting test below gives the whole expansion.

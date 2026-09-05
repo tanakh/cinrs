@@ -1108,6 +1108,19 @@ fn a_missing_header_says_where_it_looked() {
 }
 
 #[test]
+fn a_header_may_include_itself_by_file_macro() {
+    // `#include __FILE__`, guarded by `__COUNTER__`: the name is the path the
+    // header was found at, relative to the working directory, and the
+    // directive is written inside that directory — so it resolves only
+    // because `include::resolve` also looks for a path-shaped quoted name
+    // from the working directory. Clang's `C99/n590.c` reaches its fifteen
+    // levels of nested `#include` exactly this way.
+    let (tokens, errors, _) = run_including("#include \"file_macro.h\"", &[]);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(tokens, ["level"; 4]);
+}
+
+#[test]
 fn a_header_that_includes_itself_hits_the_depth_limit() {
     // Written to a temporary file so that the fixtures stay readable.
     let dir = std::env::temp_dir().join(format!("cinrs-pp-{}", std::process::id()));

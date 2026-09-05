@@ -81,7 +81,7 @@ impl VaBuiltin {
     }
 }
 
-impl Sema {
+impl Sema<'_> {
     /// Checks `va_start`, `va_end` or `va_copy`.
     ///
     /// They are `void` expressions; `va_start` and `va_copy` become ordinary

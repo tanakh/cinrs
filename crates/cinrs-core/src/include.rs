@@ -9,10 +9,20 @@
 //!    header it is the directory that header was found in;
 //! 2. the configured include directories, in the order [`SearchPaths`]
 //!    describes;
-//! 3. the [bundled headers](bundled).
+//! 3. the working directory, but only when the name *is* a path — when it
+//!    holds a directory separator. That is what makes `#include __FILE__`
+//!    work: [`Resolved::name`] is written relative to the working directory
+//!    wherever it can be (a diagnostic naming an absolute path is a
+//!    diagnostic that differs between two machines), so a header that
+//!    includes itself by `__FILE__` is asking for
+//!    `some/dir/thing.h` from a directive written *in* `some/dir`, which
+//!    neither of the first two steps will find. A bare name is deliberately
+//!    left out of this step, so that a `stdio.h` sitting in the working
+//!    directory never shadows the bundled one;
+//! 4. the [bundled headers](bundled).
 //!
-//! `#include <name>` skips step 1. A name that is absolute is used as it
-//! stands.
+//! `#include <name>` skips steps 1 and 3. A name that is absolute is used as
+//! it stands.
 //!
 //! # What is deliberately *not* searched
 //!
@@ -255,6 +265,22 @@ pub fn resolve(
         }
     }
 
+    // A name that is itself a path, taken from the working directory. This is
+    // what `#include __FILE__` needs: the name a header is known by is
+    // relative to the working directory, so a header that includes itself
+    // asks for `some/dir/thing.h` from inside `some/dir`, which neither the
+    // origin nor a `-I` will resolve. A bare header name is not looked for
+    // here, so nothing in the working directory can shadow a bundled header.
+    if form == Form::Quoted && is_path(name) {
+        if let Some(found) = read_file(Path::new(name))? {
+            return Ok(found);
+        }
+        let shown = display_dir(Path::new(""));
+        if !searched.contains(&shown) {
+            searched.push(shown);
+        }
+    }
+
     if let Some(found) = read_bundled(name) {
         return Ok(found);
     }
@@ -262,6 +288,15 @@ pub fn resolve(
         searched.push(BUNDLED_DIR.to_owned());
     }
     Err(Error::NotFound { searched })
+}
+
+/// Whether a header name names a directory as well as a file.
+///
+/// Both separators count on every platform: a `#include "sub/thing.h"` is
+/// written with a forward slash in portable C whatever the host does with
+/// them.
+fn is_path(name: &str) -> bool {
+    name.contains('/') || name.contains('\\')
 }
 
 fn read_bundled(name: &str) -> Option<Resolved> {
@@ -357,6 +392,40 @@ mod tests {
         assert_eq!(found.name, "<cinrs>/stddef.h");
         assert!(found.path.is_none());
         assert!(found.text.contains("size_t"));
+    }
+
+    #[test]
+    fn a_quoted_name_that_is_a_path_is_taken_from_the_working_directory() {
+        // What `#include __FILE__` in a header comes to: the name is a path
+        // relative to the working directory, and the directive is written in
+        // the directory that path leads to, so neither the origin nor a `-I`
+        // resolves it.
+        // `cargo test` runs with the package directory as the working
+        // directory, and `include/` is where the bundled headers live as
+        // files.
+        let found = resolve(
+            "include/stddef.h",
+            Form::Quoted,
+            &Origin::Dir(PathBuf::from("include")),
+            &SearchPaths::default(),
+        )
+        .expect("the file is there, relative to the package directory");
+        assert!(found.text.contains("size_t"));
+        assert!(
+            found.path.is_some(),
+            "it is a real file, not the bundled one"
+        );
+    }
+
+    #[test]
+    fn a_bare_name_in_the_working_directory_does_not_shadow_a_bundled_header() {
+        // `Cargo.toml` is in the working directory and is not a header, but
+        // the point is the rule: a name with no separator is never looked for
+        // there, so the step cannot take a `stdio.h` somebody left lying
+        // about in preference to ours.
+        assert!(!is_path("stdio.h"));
+        assert!(is_path("sub/stdio.h"));
+        assert!(is_path("sub\\stdio.h"));
     }
 
     #[test]

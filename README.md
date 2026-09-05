@@ -181,22 +181,37 @@ declaration that needed it.
 
 ## Conformance
 
-`cinrs` is measured against
-[c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
-C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **213 of the 218 that `c99!` is eligible for
-pass (97.7 %)**, and 216 of 220 under `c11!`, `gnu99!` and `gnu11!` —
-compiled, run, and diffed against the expected output. What is left is one
-construct listed as unsupported above — `va_arg` with a struct — plus two
-corners GCC has and this does not: a `goto` out of a
-statement expression, and initialising a flexible array member. One needs a
-newer Rust than 1.97, and the two C23 entry points give up one more case that
-C23 itself made invalid. The corpus is a git submodule, so a fresh checkout
-skips the suite until
-`git submodule update --init third_party/c-testsuite` fetches it.
-[`doc/c-testsuite.md`](doc/c-testsuite.md) has the harness, how to run it in
-either mode, the selection rules and the baseline with every failure and its
-cause.
+`cinrs` is measured against three public corpora — about 2,265 cases in about
+four and a half minutes. [`doc/testsuites.md`](doc/testsuites.md) is the
+overview: how to fetch them, the three modes each harness has, the
+expected-failure lists and their markers, and **the memory ceilings a run has
+to be given**, which are not optional.
+
+* **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
+  programs with the output each must produce. Of the 220 in its `single-exec`
+  suite, **213 of the 218 that `c99!` is eligible for pass (97.7 %)**, and 216
+  of 220 under `c11!`, `gnu99!` and `gnu11!`. What is left is one construct
+  listed as unsupported above — `va_arg` with a struct — plus two corners GCC
+  has and this does not: a `goto` out of a statement expression, and
+  initialising a flexible array member. One needs a newer Rust than 1.97, and
+  the two C23 entry points give up one more case that C23 itself made invalid.
+  The corpus is a git submodule, so a fresh checkout skips the suite until
+  `git submodule update --init third_party/c-testsuite` fetches it.
+  [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
+* **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
+  programs, each a bug report distilled into twenty lines, where success is
+  exit status zero. **1,230 pass (69.5 %)** under `gnu11!`. Half of what is
+  left is old-style (K&R) definitions and implicit declarations — C89 rules
+  these C89-era programs lean on — and fifteen are programs that built and
+  then did the wrong thing, which the document names one by one.
+* **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
+  paper or defect report, with `// expected-error` comments saying exactly
+  which lines must be diagnosed. **79 of the 175 revisions run come out as
+  required (45.1 %)**, and this is the only suite that measures what `cinrs`
+  *refuses*, which is half of what a front end is for.
+
+The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
+each harness skips itself with a note when its corpus is missing.
 
 ## How it works
 

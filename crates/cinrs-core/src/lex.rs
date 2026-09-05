@@ -1042,16 +1042,54 @@ impl<'a> Lexer<'a> {
         TokenKind::Error(ch.to_string())
     }
 
+    /// Scans an identifier or a keyword.
+    ///
+    /// Translation phase 2 deletes a backslash-newline *before* the source is
+    /// split into tokens, so one may sit in the middle of an identifier:
+    /// `__LI\<newline>NE__` is `__LINE__`, and Clang's own `drs/dr464.c`
+    /// writes exactly that. Almost no identifier has one, so the spelling
+    /// stays a slice of the source until the first splice is found and only
+    /// then becomes a `String`.
     fn scan_ident(&mut self) -> TokenKind {
         let start = self.pos;
-        while let Some(c) = self.peek() {
-            if is_ident_continue(c, self.options.dollar_in_identifiers) {
-                self.pos += 1;
-            } else {
-                break;
+        // The text before the current splice, when there has been one.
+        let mut spliced: Option<String> = None;
+        // Where the run of characters that is still a slice begins.
+        let mut segment = start;
+        loop {
+            match self.peek() {
+                Some(c) if is_ident_continue(c, self.options.dollar_in_identifiers) => {
+                    self.pos += 1;
+                }
+                // Only a splice that the identifier *continues* over: one at
+                // the end of it is whitespace, and belongs to whatever comes
+                // next.
+                Some(b'\\')
+                    if self.line_splice_len(self.pos) > 0
+                        && self
+                            .bytes
+                            .get(self.pos + self.line_splice_len(self.pos))
+                            .is_some_and(|c| {
+                                is_ident_continue(*c, self.options.dollar_in_identifiers)
+                            }) =>
+                {
+                    let text = spliced.get_or_insert_with(String::new);
+                    text.push_str(&self.text[segment..self.pos]);
+                    self.pos += self.line_splice_len(self.pos);
+                    segment = self.pos;
+                }
+                _ => break,
             }
         }
-        let text = &self.text[start..self.pos];
+        let joined;
+        let text = match spliced {
+            Some(mut text) => {
+                text.push_str(&self.text[segment..self.pos]);
+                joined = text;
+                joined.as_str()
+            }
+            None => &self.text[start..self.pos],
+        };
         match Keyword::from_str(text, self.options.standard) {
             Some(k) => TokenKind::Keyword(k),
             None => TokenKind::Ident(text.to_owned()),

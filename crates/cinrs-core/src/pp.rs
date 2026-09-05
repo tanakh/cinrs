@@ -4001,5 +4001,236 @@ fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
             "1234".to_owned()
         },
     ));
+    if cfg!(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )) {
+        out.push(("__ELF__", "1".to_owned()));
+    }
+    limit_macros(target, &mut out);
     out
+}
+
+/// The largest value a signed type of `bits` bits holds, as a decimal string.
+fn signed_max(bits: u32) -> String {
+    ((1u128 << (bits - 1)) - 1).to_string()
+}
+
+/// The largest value an unsigned type of `bits` bits holds.
+fn unsigned_max(bits: u32) -> String {
+    (u128::MAX >> (128 - bits)).to_string()
+}
+
+/// GCC's `__INT_MAX__`, `__SIZE_TYPE__` and the rest of that family.
+///
+/// A great deal of portable C is written against these rather than against
+/// `<limits.h>` and `<stdint.h>`, because they are available before any header
+/// is included and are what those headers are written in terms of. GCC's own
+/// torture suite uses `__INT_MAX__` in ninety-five files and `__SIZE_TYPE__`
+/// in seventy, and a program that tests one of them and finds it undefined
+/// does not fail to compile — it silently takes the wrong branch, which is
+/// worse. So the whole family is defined here, from the same
+/// [`TargetModel`] everything else is derived from.
+///
+/// The spellings of the *types* are GCC's own (`long unsigned int` rather than
+/// `unsigned long`), because a program may paste one into a `typedef` and
+/// diff the result, and the suffixes on the *values* are the ones that give
+/// each constant the type its name says it has.
+///
+/// What is deliberately absent: `__SIZEOF_INT128__` (there is no `__int128`),
+/// `__OPTIMIZE__` (nothing here optimises), and the `__INT8_C`-style
+/// function-like macros, which take an argument.
+fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
+    let int_bits = target.int_bits;
+    let long_bits = target.long_bits;
+    let llong_bits = target.long_long_bits;
+    let ptr_bits = target.ptr_bits;
+
+    // `long` is the widest type that is not `long long`, so on LP64 it is what
+    // `size_t`, `intmax_t` and `intptr_t` are, exactly as GCC has them.
+    let wide_signed = if long_bits >= ptr_bits {
+        "long int"
+    } else {
+        "long long int"
+    };
+    let wide_unsigned = if long_bits >= ptr_bits {
+        "long unsigned int"
+    } else {
+        "long long unsigned int"
+    };
+    let wide_suffix = if long_bits >= ptr_bits { "L" } else { "LL" };
+    let wide_bits = long_bits.max(ptr_bits);
+
+    let mut push = |name: &'static str, value: String| out.push((name, value));
+
+    // The limits of the standard integer types.
+    push("__SCHAR_MAX__", signed_max(8));
+    push("__SHRT_MAX__", signed_max(target.short_bits));
+    push("__INT_MAX__", signed_max(int_bits));
+    push("__LONG_MAX__", format!("{}L", signed_max(long_bits)));
+    push("__LONG_LONG_MAX__", format!("{}LL", signed_max(llong_bits)));
+
+    // Their widths, which C23 added to <limits.h> and GCC has always had.
+    push("__SCHAR_WIDTH__", "8".to_owned());
+    push("__SHRT_WIDTH__", target.short_bits.to_string());
+    push("__INT_WIDTH__", int_bits.to_string());
+    push("__LONG_WIDTH__", long_bits.to_string());
+    push("__LONG_LONG_WIDTH__", llong_bits.to_string());
+
+    // The library types, and how wide each is.
+    push("__SIZE_TYPE__", wide_unsigned.to_owned());
+    push(
+        "__SIZE_MAX__",
+        format!("{}U{wide_suffix}", unsigned_max(ptr_bits)),
+    );
+    push("__SIZE_WIDTH__", ptr_bits.to_string());
+    push("__SIZEOF_SIZE_T__", (ptr_bits / 8).to_string());
+    push("__PTRDIFF_TYPE__", wide_signed.to_owned());
+    push(
+        "__PTRDIFF_MAX__",
+        format!("{}{wide_suffix}", signed_max(ptr_bits)),
+    );
+    push("__PTRDIFF_WIDTH__", ptr_bits.to_string());
+    push("__SIZEOF_PTRDIFF_T__", (ptr_bits / 8).to_string());
+    push("__INTMAX_TYPE__", wide_signed.to_owned());
+    push(
+        "__INTMAX_MAX__",
+        format!("{}{wide_suffix}", signed_max(wide_bits)),
+    );
+    push("__INTMAX_WIDTH__", wide_bits.to_string());
+    push("__SIZEOF_INTMAX__", (wide_bits / 8).to_string());
+    push("__UINTMAX_TYPE__", wide_unsigned.to_owned());
+    push(
+        "__UINTMAX_MAX__",
+        format!("{}U{wide_suffix}", unsigned_max(wide_bits)),
+    );
+    push("__INTPTR_TYPE__", wide_signed.to_owned());
+    push(
+        "__INTPTR_MAX__",
+        format!("{}{wide_suffix}", signed_max(ptr_bits)),
+    );
+    push("__INTPTR_WIDTH__", ptr_bits.to_string());
+    push("__UINTPTR_TYPE__", wide_unsigned.to_owned());
+    push(
+        "__UINTPTR_MAX__",
+        format!("{}U{wide_suffix}", unsigned_max(ptr_bits)),
+    );
+
+    // `wchar_t` is `int` on every target this crate has; see
+    // `include/stddef.h`.
+    push("__WCHAR_TYPE__", "int".to_owned());
+    push("__WCHAR_MAX__", signed_max(int_bits));
+    push("__WCHAR_MIN__", format!("(-{}-1)", signed_max(int_bits)));
+    push("__WCHAR_WIDTH__", int_bits.to_string());
+    push("__SIZEOF_WCHAR_T__", (int_bits / 8).to_string());
+    push("__WINT_TYPE__", "unsigned int".to_owned());
+    push("__WINT_WIDTH__", int_bits.to_string());
+    push("__SIZEOF_WINT_T__", (int_bits / 8).to_string());
+    push("__SIG_ATOMIC_TYPE__", "int".to_owned());
+    push("__SIG_ATOMIC_MAX__", signed_max(int_bits));
+    push(
+        "__SIG_ATOMIC_MIN__",
+        format!("(-{}-1)", signed_max(int_bits)),
+    );
+    push("__SIG_ATOMIC_WIDTH__", int_bits.to_string());
+    push("__CHAR16_TYPE__", "short unsigned int".to_owned());
+    push("__CHAR32_TYPE__", "unsigned int".to_owned());
+
+    // The floating types. `long double` is `double` here, and the values are
+    // the ones `include/float.h` gives.
+    push("__SIZEOF_FLOAT__", "4".to_owned());
+    push("__SIZEOF_DOUBLE__", "8".to_owned());
+    push("__SIZEOF_LONG_DOUBLE__", "8".to_owned());
+    push("__FLT_MANT_DIG__", "24".to_owned());
+    push("__FLT_DIG__", "6".to_owned());
+    push("__FLT_MAX__", "3.40282346638528859812e+38F".to_owned());
+    push("__FLT_MIN__", "1.17549435082228750797e-38F".to_owned());
+    push("__FLT_EPSILON__", "1.19209289550781250000e-7F".to_owned());
+    push("__DBL_MANT_DIG__", "53".to_owned());
+    push("__DBL_DIG__", "15".to_owned());
+    push("__DBL_MAX__", "1.79769313486231570815e+308".to_owned());
+    push("__DBL_MIN__", "2.22507385850720138309e-308".to_owned());
+    push("__DBL_EPSILON__", "2.22044604925031308085e-16".to_owned());
+    push("__LDBL_MANT_DIG__", "53".to_owned());
+    push("__LDBL_DIG__", "15".to_owned());
+    push("__LDBL_MAX__", "1.79769313486231570815e+308L".to_owned());
+    push("__LDBL_MIN__", "2.22507385850720138309e-308L".to_owned());
+    push("__LDBL_EPSILON__", "2.22044604925031308085e-16L".to_owned());
+
+    // The exact-width types of <stdint.h>, which GCC's own <stdint.h> is
+    // written in terms of. `int64_t` follows `long` wherever `long` is 64
+    // bits, exactly as GCC has it.
+    let (i64_type, u64_type, s64, u64) = if long_bits == 64 {
+        ("long int", "long unsigned int", "L", "UL")
+    } else {
+        ("long long int", "long long unsigned int", "LL", "ULL")
+    };
+    let widths: [(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        u32,
+    ); 4] = [
+        ("8", "signed char", "unsigned char", "", "", 8),
+        ("16", "short int", "short unsigned int", "", "", 16),
+        ("32", "int", "unsigned int", "", "U", 32),
+        ("64", i64_type, u64_type, s64, u64, 64),
+    ];
+    // The names have to be `'static`, so the four sets are written out rather
+    // than built; the values still come from the loop above.
+    const EXACT: [[&str; 8]; 4] = [
+        [
+            "__INT8_TYPE__",
+            "__UINT8_TYPE__",
+            "__INT8_MAX__",
+            "__UINT8_MAX__",
+            "__INT_LEAST8_TYPE__",
+            "__UINT_LEAST8_TYPE__",
+            "__INT_LEAST8_MAX__",
+            "__UINT_LEAST8_MAX__",
+        ],
+        [
+            "__INT16_TYPE__",
+            "__UINT16_TYPE__",
+            "__INT16_MAX__",
+            "__UINT16_MAX__",
+            "__INT_LEAST16_TYPE__",
+            "__UINT_LEAST16_TYPE__",
+            "__INT_LEAST16_MAX__",
+            "__UINT_LEAST16_MAX__",
+        ],
+        [
+            "__INT32_TYPE__",
+            "__UINT32_TYPE__",
+            "__INT32_MAX__",
+            "__UINT32_MAX__",
+            "__INT_LEAST32_TYPE__",
+            "__UINT_LEAST32_TYPE__",
+            "__INT_LEAST32_MAX__",
+            "__UINT_LEAST32_MAX__",
+        ],
+        [
+            "__INT64_TYPE__",
+            "__UINT64_TYPE__",
+            "__INT64_MAX__",
+            "__UINT64_MAX__",
+            "__INT_LEAST64_TYPE__",
+            "__UINT_LEAST64_TYPE__",
+            "__INT_LEAST64_MAX__",
+            "__UINT_LEAST64_MAX__",
+        ],
+    ];
+    for (names, (_, signed, unsigned, s_suffix, u_suffix, bits)) in EXACT.iter().zip(widths) {
+        let smax = format!("{}{s_suffix}", signed_max(bits));
+        let umax = format!("{}{u_suffix}", unsigned_max(bits));
+        for at in [0, 4] {
+            out.push((names[at], signed.to_owned()));
+            out.push((names[at + 1], unsigned.to_owned()));
+            out.push((names[at + 2], smax.clone()));
+            out.push((names[at + 3], umax.clone()));
+        }
+    }
 }
