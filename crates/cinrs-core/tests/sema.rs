@@ -529,6 +529,76 @@ fn calls_are_checked() {
     accepted("int f(double d) { return (int) d; } int g(void) { return f(1); }");
 }
 
+/// C99 6.7.5.3p14 and 6.5.2.2p6: before C23 an empty parameter list says
+/// nothing about the parameters, so no argument count is wrong.
+#[test]
+fn a_call_without_a_prototype_takes_any_arguments() {
+    accepted("int f(); int g(void) { return f() + f(1) + f(1, 2, 3); }");
+    accepted("int g(int (*fp)()) { return fp(1, 2); }");
+    // A definition written that way takes no parameters, and a call with one
+    // is still legal C — the callee never looks at it.
+    accepted("int f() { return 1; } int g(void) { return f(2); }");
+    // C23 removed the form; there the empty list is `(void)`.
+    let mut c23 = Options::new(Standard::C23);
+    c23.c_variadic = true;
+    assert_eq!(
+        errors_with("int f(); int g(void) { return f(1); }", &c23),
+        ["too many arguments to function call, expected 0, have 1"]
+    );
+}
+
+/// C99 6.7.5.3p15: an empty parameter list is compatible with a prototype that
+/// is not variadic and whose parameter types are all their own promoted forms.
+/// GCC enforces the same rule, in the same places.
+#[test]
+fn compatibility_with_an_empty_parameter_list_follows_the_promotions() {
+    accepted("int f(); int f(int);");
+    accepted("int f(int); int f();");
+    accepted("int f(); int f(void);");
+    accepted("int f(); int f(double, char *);");
+    rejected("int f(); int f(char);", &["conflicting types for 'f'"]);
+    rejected("int f(float); int f();", &["conflicting types for 'f'"]);
+    // A variadic prototype can never match one: the empty list promises a
+    // fixed argument list.
+    rejected("int f(); int f(int, ...);", &["conflicting types for 'f'"]);
+    // The same rule decides an assignment between function pointers…
+    accepted("int p(int, int); int g(void) { int (*fp)() = p; return fp(1, 2); }");
+    accepted("int p(); int g(void) { int (*fp)(int) = p; return fp(1); }");
+    rejected(
+        "int p(char); int g(void) { int (*fp)() = p; return fp(1); }",
+        &[
+            "cannot initialize 'fp', of type 'int (*)()', with an expression of type 'int (*)(char)'",
+        ],
+    );
+    // … and what `__builtin_types_compatible_p` answers, which is what `gcc`
+    // answers for the same three.
+    accepted(
+        "int k(void) { \
+             return __builtin_types_compatible_p(int (), int (int)) \
+                  + __builtin_types_compatible_p(int (), int (void)) \
+                  - __builtin_types_compatible_p(int (), int (char)); }",
+    );
+    // C11 6.5.1.1p2 puts `_Generic` on compatibility as well, so two
+    // associations that differ only in the prototype are a duplicate pair.
+    let mut c11 = Options::new(Standard::C11);
+    c11.c_variadic = true;
+    assert!(
+        errors_with(
+            "int p(int); int k(void) { int (*a)() = p; \
+             return _Generic(a, int (*)(int): 1, default: 0); }",
+            &c11,
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        errors_with(
+            "int k(int (*a)()) { return _Generic(a, int (*)(): 1, int (*)(int): 2); }",
+            &c11,
+        ),
+        ["'_Generic' has two associations for the compatible type 'int (*)(int)'"]
+    );
+}
+
 #[test]
 fn void_values_cannot_be_used() {
     rejected(

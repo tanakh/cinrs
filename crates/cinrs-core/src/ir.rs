@@ -215,6 +215,16 @@ pub struct FuncType {
     pub params: Vec<Ty>,
     /// Whether the prototype ended with `, ...`.
     pub variadic: bool,
+    /// Whether a parameter type list was given at all.
+    ///
+    /// `int f(void)` and `int f(int)` have a prototype; `int f()` — before C23,
+    /// which removed the form — does not, and says nothing about the number or
+    /// the types of the parameters. An unprototyped type has no parameters and
+    /// is never variadic, so `ret` is all that distinguishes two of them; the
+    /// difference from `int (void)` is what a call site has to know, since an
+    /// argument passed to one gets the default argument promotions and is then
+    /// passed as if the prototype had been written that way (C99 6.5.2.2p6).
+    pub prototyped: bool,
 }
 
 /// `struct` or `union`.
@@ -487,13 +497,31 @@ impl Types {
         Ty::Array(id)
     }
 
-    /// The type of a function.
+    /// The type of a function with a prototype.
     pub fn func(&mut self, ret: Ty, params: Vec<Ty>, variadic: bool) -> Ty {
-        let key = FuncType {
+        self.func_type_of(FuncType {
             ret,
             params,
             variadic,
-        };
+            prototyped: true,
+        })
+    }
+
+    /// The type `ret ()`: a function whose parameters are unspecified.
+    ///
+    /// See [`FuncType::prototyped`]. Only the return type varies, so this needs
+    /// nothing else.
+    pub fn unprototyped_func(&mut self, ret: Ty) -> Ty {
+        self.func_type_of(FuncType {
+            ret,
+            params: Vec::new(),
+            variadic: false,
+            prototyped: false,
+        })
+    }
+
+    /// The interned type for a function type description.
+    pub fn func_type_of(&mut self, key: FuncType) -> Ty {
         if let Some(id) = self.func_index.get(&key) {
             return Ty::Func(*id);
         }
@@ -733,7 +761,9 @@ impl Types {
         if f.variadic {
             params.push("...".to_owned());
         }
-        if params.is_empty() {
+        // `int ()` and `int (void)` are two types, and a diagnostic that says
+        // which one it means is the whole point of the distinction.
+        if params.is_empty() && f.prototyped {
             params.push("void".to_owned());
         }
         format!("{} {middle}({})", self.name(f.ret), params.join(", "))
@@ -1179,6 +1209,16 @@ pub struct Signature {
     pub params: Vec<Ty>,
     /// Whether the prototype ended with `, ...`.
     pub variadic: bool,
+    /// Whether a parameter type list was given at all; see
+    /// [`FuncType::prototyped`].
+    ///
+    /// `int f();` before C23 declares a function whose parameters are
+    /// unspecified: `params` is empty because nothing was said, not because
+    /// there are none. A *definition* written that way does take no parameters
+    /// — that is what the generated item has — but its type still has no
+    /// prototype, so a call with arguments is legal C and reaches the callee
+    /// with the default argument promotions applied.
+    pub prototyped: bool,
 }
 
 /// How a function's body is lowered.

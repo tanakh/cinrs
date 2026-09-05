@@ -63,8 +63,7 @@ input, two spell `main(int argc, char **argv)` (only one of the two is live —
 the other is inside an `#ifndef` its own `#define` has already made false), and
 one (`00187`) writes a file relative to the working directory. The headers they
 include are `<stdio.h>` (61 cases), `<stdlib.h>`, `<string.h>`, `<stdint.h>`,
-`<stdarg.h>`, `<math.h>` and `<wchar.h>` — all bundled with `cinrs` except the
-last.
+`<stdarg.h>`, `<math.h>` and `<wchar.h>` — all bundled with `cinrs`.
 
 ## Running it
 
@@ -134,9 +133,9 @@ Two rules, both out of the corpus's own tags:
 Nothing is excluded by the other two tags. `needs-cpp` is fine — `cinrs` has
 the whole C99 preprocessor — and so is `needs-libc`, since the bundled headers
 declare the platform's real library and the calls link against it. A case that
-needs something `cinrs` does not have, such as `00220`'s `<wchar.h>`, is left
-in and *fails*, so that it shows up in the count instead of being quietly
-filtered out of it.
+needs something `cinrs` does not have, such as `00207`'s variable length array,
+is left in and *fails*, so that it shows up in the count instead of being
+quietly filtered out of it.
 
 ## How a case becomes a Rust file
 
@@ -211,62 +210,65 @@ corpus revision.
 
 | entry point | selected | passed | rate |
 | --- | ---: | ---: | ---: |
-| `c99!` | 218 | 209 | **95.9 %** |
-| `c11!` | 220 | 212 | **96.4 %** |
-| `c23!` | 220 | 212 | **96.4 %** |
-| `gnu99!` | 220 | 212 | **96.4 %** |
-| `gnu11!` | 220 | 212 | **96.4 %** |
-| `gnu23!` | 220 | 212 | **96.4 %** |
+| `c99!` | 218 | 212 | **97.2 %** |
+| `c11!` | 220 | 215 | **97.7 %** |
+| `c23!` | 220 | 214 | **97.3 %** |
+| `gnu99!` | 220 | 215 | **97.7 %** |
+| `gnu11!` | 220 | 215 | **97.7 %** |
+| `gnu23!` | 220 | 214 | **97.3 %** |
 
 Per tag, under `c11!` (the run that selects everything):
 
 | tag | passed | rate |
 | --- | ---: | ---: |
-| `portable` | 212/220 | 96.4 % |
-| `c89` | 169/174 | 97.1 % |
-| `c99` | 41/43 | 95.3 % |
+| `portable` | 215/220 | 97.7 % |
+| `c89` | 171/174 | 98.3 % |
+| `c99` | 42/43 | 97.7 % |
 | `c11` | 2/2 | 100 % |
-| `needs-cpp` | 93/98 | 94.9 % |
-| `needs-libc` | 59/63 | 93.7 % |
+| `needs-cpp` | 95/98 | 96.9 % |
+| `needs-libc` | 60/63 | 95.2 % |
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
 fails on 1.97.1. The tables above count it as a failure; on 1.99 the rows are
-210/218 (96.3 %) for `c99!` and 213/220 (96.8 %) for every entry point that
-selects all 220.
+213/218 (97.7 %) for `c99!`, 216/220 (98.2 %) for `c11!`, `gnu99!` and
+`gnu11!`, and 215/220 (97.7 %) for the two C23 entry points.
 
-The GNU dialects select all 220 cases and pass the same 212 as `c11!`: nothing
-in the corpus needs a *plain*-spelled GNU keyword, so switching the dialect on
-buys eligibility rather than passes.
+The GNU dialects select all 220 cases and pass the same ones as their ISO
+counterparts: nothing in the corpus needs a *plain*-spelled GNU keyword, so
+switching the dialect on buys eligibility rather than passes.
 
 ### The failures, by cause
 
-Eight cases fail under `c11!`, all of them to compile, and `c99!` adds `00219`,
-which wants a later entry point. None of them is a `cinrs` bug: the seven
-earlier measurements found — `00110`, `00149`, `00150`, `00159`, `00200`,
-`00218` and `00219` — are fixed and have regression tests of their own, and so
-are the six the GNU extensions closed (`00095`, `00170`, `00206`, `00210` and
-`00214`, plus `00209`'s incomplete `enum`).
+Five cases fail under `c11!`, all of them to compile. `c99!` adds `00219`,
+which wants a later entry point, and the two C23 entry points add `00209`,
+which C23 itself makes invalid. None of them is a `cinrs` bug: the earlier
+measurements' failures — `00110`, `00149`, `00150`, `00152`, `00159`, `00200`,
+`00209`, `00218`, `00219` and `00220` — are fixed and have regression tests of
+their own, and so are the six the GNU extensions closed (`00095`, `00170`,
+`00206`, `00210` and `00214`, plus `00209`'s incomplete `enum`).
 
-**Something `cinrs` has not implemented (6).**
+**Something `cinrs` has not implemented (4).**
 
 | case | what it needs |
 | --- | --- |
 | `00204` | `va_arg` with a struct type |
 | `00207` | a variable length array |
-| `00209` | a function declarator with *no prototype* — `int (*fp)();` called with an argument. C23 removed the form and `cinrs` applies that rule in every mode, so `int f()` is `int f(void)` and the call has one argument too many. |
 | `00213` | a `goto` out of a statement expression, and a `?:` one of whose operands is `void`. The `goto` is the hard half: whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. |
 | `00216` | initialising a flexible array member, which GCC allows with a warning by over-allocating the object — the Rust item would have to have a different type from the one `sizeof` reports. Under `c99!` the case also needs the C23 empty initialiser `{}`, which `gnu99!` and `c23!` accept. |
-| `00220` | `<wchar.h>`, which is not among the bundled headers |
+
+**Wanted a newer toolchain (1).** `00140` defines a variadic function, which
+needs Rust 1.99.
 
 **Wanted a later entry point (1, `c99!` only).** `00219` uses `_Generic` and is
 tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under every other
 entry point — including `gnu99!`, which accepts what C11 added — it passes.
 
-**A documented deviation (1).** `00152` writes `#line line` with `line` a macro
-expanding to `1000` and then checks `__LINE__`. `cinrs` makes `__LINE__` the
-line of the *`.rs` file*, so that it points where the user is looking, and
-`#line` does not redirect it; the case's `#error` fires.
+**Made invalid by the entry point (1, `c23!` and `gnu23!` only).** `00209`
+calls an `int (*fp)();` with an argument. That is C89 through C17, and
+`cinrs` supports it there; C23 removed function declarators without a
+prototype (N2841), so `fp` takes no parameters and the call has one argument
+too many. `gcc -std=c23` refuses the case in the same words.
 
 ## Reproducing the numbers
 

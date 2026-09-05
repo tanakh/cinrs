@@ -171,6 +171,12 @@ impl Sema {
                         "a function cannot return an array type",
                     ));
                 }
+                // `int ()` — before C23, which removed the form — is a
+                // function type whose parameters are unspecified rather than
+                // one that takes none; see [`ir::FuncType::prototyped`].
+                if !self.is_prototyped(func) {
+                    return Ok(self.program.types.unprototyped_func(ret));
+                }
                 let mut params = Vec::with_capacity(func.params.len());
                 for param in &func.params {
                     let ty = self.resolve_param_ty(&param.ty)?;
@@ -243,6 +249,14 @@ impl Sema {
         let resolved = self.resolve_ty(ty)?;
         if resolved.is_func() {
             return Ok(self.ptr_to(resolved, false));
+        }
+        // The adjustment is made on the *type*, not on the spelling, so a
+        // parameter that reaches an array through a `typedef` is a pointer
+        // too: `typedef int A[4]; void f(A a);` takes an `int *`, and the
+        // declaration has to agree with `void f(int *a);`.
+        if let Ty::Array(id) = resolved {
+            let array = self.types().array_type(id);
+            return Ok(self.ptr_to(array.elem, array.elem_const));
         }
         Ok(resolved)
     }

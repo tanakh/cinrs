@@ -257,6 +257,57 @@
 //! apart from anything else of that name, and pointed back at its symbol with
 //! `#[link_name]`.
 //!
+//! ## Functions declared without a prototype
+//!
+//! Before C23, `int f();` and `int (*fp)();` say nothing about the parameters
+//! (C99 6.7.5.3p14). A call through such a type may pass any number of
+//! arguments; each one gets the *default argument promotions* — `float` widens
+//! to `double`, the small integer types to `int`, arrays and functions decay —
+//! and the callee is then invoked as though its prototype had been made of
+//! those promoted types (6.5.2.2p6).
+//!
+//! The generated Rust type of such a function is `unsafe extern "C" fn() -> R`,
+//! with no parameters, because that is all the declaration said. Each call site
+//! with at least one argument writes the reinterpretation out:
+//!
+//! ```text
+//! ::core::mem::transmute::<unsafe extern "C" fn() -> R,
+//!                          unsafe extern "C" fn(T1, …, Tn) -> R>(f)(a1, …, an)
+//! ```
+//!
+//! (through a function pointer, the `Option` comes off first). That is exactly
+//! the contract C's own ABI relies on: the program is defined only if the
+//! function really does take parameters of those types, and undefined
+//! otherwise — which is the risk the author took by leaving the prototype out.
+//! A call with no arguments needs no cast at all.
+//!
+//! A *definition* written `int f() { … }` takes no parameters, as C99 6.9.1p7
+//! says, and the generated item has none; its type still has no prototype, so a
+//! call to it with an argument is legal C that the callee simply never looks
+//! at. Two declarations of one function are compatible when the prototyped one
+//! is not variadic and no parameter type is changed by the promotions
+//! (6.7.5.3p15) — so `int f(); int f(int);` is one function and
+//! `int f(); int f(char);` is a diagnostic, exactly as GCC has it. That same
+//! rule answers `_Generic` and `__builtin_types_compatible_p`, and is what lets
+//! `int (*fp)() = g;` take a `g` of any promoted prototype.
+//!
+//! [`c23!`] and [`gnu23!`] follow C23's N2841 instead: there `int f()` is
+//! `int f(void)`, and an argument is one too many.
+//!
+//! ```
+//! cinrs::c99! {
+//!     int cinrs_doc_scale();                      /* no prototype */
+//!     int cinrs_doc_scale(int n) { return n * 3; }
+//!
+//!     int nine(void) {
+//!         short three = 3;                        /* promoted to `int` */
+//!         return cinrs_doc_scale(three);
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { nine() }, 9);
+//! ```
+//!
 //! ## Bit-fields
 //!
 //! A bit-field has no address of its own — it may share a byte with its
@@ -429,7 +480,8 @@
 //! A full C99 preprocessor runs before the parser: object-like and
 //! function-like macros with `#`, `##`, `...`/`__VA_ARGS__` and the standard's
 //! rescanning rules; `#define`, `#undef`, `#if`, `#ifdef`, `#ifndef`, `#elif`,
-//! `#else`, `#endif`, `#include`, `#error`, `#warning`, `#pragma` and `#line`.
+//! `#else`, `#endif`, `#include`, `#error`, `#warning`, `#pragma` and
+//! [`#line`](#line).
 //!
 //! ```
 //! cinrs::c99! {
@@ -492,6 +544,39 @@
 //! are answered from this crate's own tables, so a program that guards a
 //! construct with one is told the truth about *this* implementation.
 //!
+//! ## `#line`
+//!
+//! `#line 100` and `#line 100 "generated.c"` do what C99 6.10.4 says: the line
+//! after the directive is line 100 and counts up from there, and `__FILE__` is
+//! the given name until the next directive or the end of that file. The
+//! macro-expanded form works too, and so does the `# 100 "generated.c" 1 3 4`
+//! line marker GCC writes in place of one — its flags describe an `#include`
+//! that happened in whatever produced the text, so they are read and dropped.
+//! The numbering is per file, so a `#line` inside a header ends with the
+//! header, and in the macro's own text it replaces the `.rs`-line convention
+//! above from the next line to the end of the block.
+//!
+//! **Only `__LINE__` and `__FILE__` move.** A diagnostic — this crate's or
+//! `rustc`'s — still points at the token that was really written, in the file
+//! it was really written in, because that is the position the user can look
+//! at. `__FILE_NAME__` is `__FILE__` without the directory and follows it;
+//! `__BASE_FILE__` names the file the translation unit started in and does
+//! not.
+//!
+//! ```
+//! cinrs::c99! {
+//!     #line 100 "generated.c"
+//!     int cinrs_doc_where(void) { return __LINE__; }
+//!     const char *cinrs_doc_what(void) { return __FILE__; }
+//! }
+//!
+//! assert_eq!(unsafe { cinrs_doc_where() }, 100);
+//! assert_eq!(
+//!     unsafe { core::ffi::CStr::from_ptr(cinrs_doc_what()) }.to_str(),
+//!     Ok("generated.c"),
+//! );
+//! ```
+//!
 //! # Headers
 //!
 //! ```
@@ -514,7 +599,8 @@
 //! `cinrs` ships its own `<assert.h>`, `<ctype.h>`, `<errno.h>`, `<float.h>`,
 //! `<inttypes.h>`, `<limits.h>`, `<math.h>`, `<stdalign.h>`, `<stdarg.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
-//! `<stdnoreturn.h>`, `<string.h>` and `<time.h>`, and never reads the
+//! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<wchar.h>` and `<wctype.h>`,
+//! and never reads the
 //! platform's. A real `<stdio.h>` is not C — glibc's is built out of GNU
 //! extensions, compiler builtins and `__asm__` renaming — so a front end that
 //! read it would have to be GCC. The bundled ones declare what the platform's
@@ -531,6 +617,25 @@
 //! back — `exit`, `_Exit`, `abort` and `quick_exit` — are marked as such
 //! whichever entry point reads the header, so a function may end with
 //! `exit(1);` and write no `return`.
+//!
+//! `<wchar.h>` and `<wctype.h>` make `wchar_t` an `int`, which is what the
+//! front end gives `L'x'` and `L"…"` on every target and what the Unix
+//! platforms do; a header that said otherwise would hand the library a pointer
+//! of the wrong type. Wide characters are the one place `cinrs` is knowingly a
+//! Unix compiler — the Microsoft library's `wchar_t` is 16 bits wide.
+//! `mbstate_t` *is* spelled the way each platform's library lays it out, since
+//! a program declares one and passes its address to `mbrtowc`. Writing `L"…"`
+//! needs [string-literal input](#input-forms), which is where every prefixed
+//! literal lives.
+//!
+//! ```
+//! cinrs::c99! { r#"
+//! #include <wchar.h>
+//! int cinrs_doc_wide(void) { return (int)wcslen(L"hello") + (wcscmp(L"a", L"a") == 0); }
+//! "# }
+//!
+//! assert_eq!(unsafe { cinrs_doc_wide() }, 6);
+//! ```
 //!
 //! Anything else — POSIX, a third-party library, your own project's headers —
 //! is written out as C declarations by hand, or pointed at with an include

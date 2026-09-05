@@ -69,8 +69,8 @@ use crate::ast;
 use crate::capture::{Pos, SourceRange};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
-    self, ConstValue, Expr, ExprKind, FuncId, LoopId, ObjectId, Place, Program, RecordId, Storage,
-    SwitchId, Ty, Types, VA_LIST_NAMES,
+    self, ConstValue, Expr, ExprKind, FuncId, LoopId, ObjectId, Place, Program, RecordId,
+    Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
 };
 use crate::target::TargetModel;
 
@@ -516,6 +516,123 @@ impl Sema {
 
     fn size_ty(&self) -> Ty {
         Ty::size_ty(&self.target)
+    }
+
+    /// Whether a function type may be written without a prototype here.
+    ///
+    /// C23 removed the form (N2841): `int f()` means `int f(void)` there, and
+    /// in a `c23!` or `gnu23!` block it does. Every earlier revision — ISO and
+    /// GNU alike — reads it as "the parameters are unspecified", which is what
+    /// C99 6.7.5.3p14 says and what a program written before 2023 means by it.
+    fn empty_list_is_unprototyped(&self) -> bool {
+        self.gating.standard < crate::Standard::C23
+    }
+
+    /// Whether an `ast::FunctionType` carries a prototype *here*.
+    fn is_prototyped(&self, func: &ast::FunctionType) -> bool {
+        func.has_prototype || !self.empty_list_is_unprototyped()
+    }
+
+    // -- type compatibility -------------------------------------------------
+
+    /// C's type compatibility (C99 6.2.7), as far as it differs from type
+    /// *identity*.
+    ///
+    /// The arena hash-conses every derived type and [`Ty`] carries no top-level
+    /// qualifiers, so `a == b` already answers the question for everything but
+    /// the one case C23 removed: a function type with no prototype
+    /// (6.7.5.3p15). Keeping the difference this narrow is deliberate — an
+    /// enumerated type is compatible with an implementation-defined integer
+    /// type too, and opening that here would change what `_Generic` selects.
+    fn compatible(&self, a: Ty, b: Ty) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (Ty::Func(x), Ty::Func(y)) => self.func_compatible(x, y),
+            (Ty::Pointer(x), Ty::Pointer(y)) => {
+                let (x, y) = (self.types().pointer_type(x), self.types().pointer_type(y));
+                x.konst == y.konst && self.compatible(x.pointee, y.pointee)
+            }
+            _ => false,
+        }
+    }
+
+    /// C99 6.7.5.3p15 for two function types.
+    ///
+    /// One with a prototype and one without are compatible when the prototyped
+    /// one is not variadic and no parameter type is changed by the default
+    /// argument promotions — which is exactly the condition under which a call
+    /// through the unprototyped type reaches the other one's parameters
+    /// unharmed. GCC enforces the same rule, and says so
+    /// ("an argument type that has a default promotion cannot match an empty
+    /// parameter name list declaration").
+    fn func_compatible(&self, x: ir::FuncTyId, y: ir::FuncTyId) -> bool {
+        let (x, y) = (self.types().func_type(x), self.types().func_type(y));
+        if !self.compatible(x.ret, y.ret) {
+            return false;
+        }
+        match (x.prototyped, y.prototyped) {
+            (false, false) => true,
+            (true, true) => {
+                x.variadic == y.variadic
+                    && x.params.len() == y.params.len()
+                    && x.params
+                        .iter()
+                        .zip(&y.params)
+                        .all(|(a, b)| self.compatible(*a, *b))
+            }
+            _ => {
+                let prototyped = if x.prototyped { x } else { y };
+                !prototyped.variadic
+                    && prototyped
+                        .params
+                        .iter()
+                        .all(|p| *p == p.promote_argument(&self.target))
+            }
+        }
+    }
+
+    /// The composite of two declarations of one function (C99 6.2.7p3), or
+    /// `None` when the two are not compatible at all.
+    ///
+    /// A prototype wins over an empty parameter list, so
+    /// `int f(); int f(int);` leaves `f` with the prototype and a later call is
+    /// checked against it.
+    fn composite_signature(&self, a: &Signature, b: &Signature) -> Option<Signature> {
+        if a == b {
+            return Some(a.clone());
+        }
+        if !self.compatible(a.ret, b.ret) {
+            return None;
+        }
+        match (a.prototyped, b.prototyped) {
+            // Two empty lists say the same nothing, and the return types
+            // already agree.
+            (false, false) => Some(a.clone()),
+            // Two prototypes agree when they agree parameter by parameter,
+            // which is not quite `==`: a parameter may itself be a pointer to
+            // a function with no prototype.
+            (true, true) => {
+                let same = a.variadic == b.variadic
+                    && a.params.len() == b.params.len()
+                    && a.params
+                        .iter()
+                        .zip(&b.params)
+                        .all(|(x, y)| self.compatible(*x, *y));
+                same.then(|| a.clone())
+            }
+            // 6.7.5.3p15, and the composite type is the prototype's.
+            _ => {
+                let prototyped = if a.prototyped { a } else { b };
+                let ok = !prototyped.variadic
+                    && prototyped
+                        .params
+                        .iter()
+                        .all(|p| *p == p.promote_argument(&self.target));
+                ok.then(|| prototyped.clone())
+            }
+        }
     }
 
     // -- bit-fields ---------------------------------------------------------

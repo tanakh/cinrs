@@ -1,0 +1,30 @@
+error: conflicting types for 'narrow'
+       note: previous declaration of 'narrow' is at line 9
+  --> tests/ui/sema_no_prototype.rs:10:9
+   |
+10 |     int narrow(char c);
+   |         ^^^^^^
+
+error: conflicting types for 'widened'
+       note: previous declaration of 'widened' is at line 12
+  --> tests/ui/sema_no_prototype.rs:13:9
+   |
+13 |     int widened();
+   |         ^^^^^^^
+
+error: cannot initialize 'fp', of type 'int (*)()', with an expression of type 'int (*)(char)'
+       note: the pointee types differ; add a cast if the conversion is intended
+  --> tests/ui/sema_no_prototype.rs:17:23
+   |
+17 |         int (*fp)() = takes_a_char;
+   |                       ^^^^^^^^^^^^
+
+error: too many arguments to function call, expected 0, have 1
+       note: 'nothing' is declared at line 25
+  --> tests/ui/sema_no_prototype.rs:26:29
+   |
+26 |     int call(void) { return nothing(1); }
+   |                             ^^^^^^^
+
+error: aborting due to 4 previous errors
+

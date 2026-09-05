@@ -460,6 +460,7 @@ impl Sema {
             ret,
             params,
             variadic: false,
+            prototyped: true,
         };
         Some(match name {
             "memcpy" | "memmove" => sig(void_ptr, vec![void_ptr, const_void_ptr, size_t]),

@@ -350,6 +350,26 @@ fn function_pointers() {
     ));
 }
 
+/// A call through a function type with no prototype is a call through a
+/// signature the *arguments* make, so the callee is transmuted to it at each
+/// call site. The zero-argument calls are left alone, since there is nothing to
+/// reinterpret.
+#[test]
+fn a_call_without_a_prototype_casts_at_the_call_site() {
+    insta::assert_snapshot!(generate(
+        r"
+        int taker();
+        int made_here() { return 1; }
+
+        int call_them(void) {
+            char c = 3;
+            int (*fp)() = made_here;
+            return taker() + taker(c) + made_here() + fp(1.5f, c);
+        }
+        "
+    ));
+}
+
 #[test]
 fn goto_becomes_a_state_machine() {
     insta::assert_snapshot!(generate(

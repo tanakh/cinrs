@@ -179,7 +179,7 @@ spellings work, and so does C23's `[[gnu::name]]`.
 | `#warning` | common | supported (accepted, no output) | Standard in C23. |
 | `#ident`, `#sccs` | rare | accepted | Ignored: there is no object-file section to put the string in. |
 | `#assert` / `#unassert` | rare | not planned | Removed from GCC itself. |
-| `#line` | occasional (generated code: lex/yacc) | planned | Must redirect `__LINE__`/`__FILE__` for the rest of the file. c-testsuite `00152`. |
+| `#line`, and the `# N "file" flags…` line marker GCC writes in its place | occasional (generated code: lex/yacc) | supported | Both forms redirect `__LINE__` and `__FILE__` from the next line to the end of that file, the marker's flags being read and dropped. Nothing else moves: a diagnostic still points at the token that was really written, which is what makes an error inside a `c99!` block land on the C. In the macro's own text a `#line` replaces the `.rs`-line convention from there on. c-testsuite `00152`. |
 | `__BASE_FILE__`, `__FILE_NAME__`, `__INCLUDE_LEVEL__`, `__TIMESTAMP__` | rare | supported | |
 | Directives inside macro arguments | `f(\n#ifdef X …)` | rare | — | GCC processes them; the standard says undefined. |
 | `__VA_OPT__` in older modes | | supported in `c23!` and every GNU dialect | |
@@ -223,6 +223,6 @@ Everything in the tables above marked *supported* is implemented and tested;
 `tests/gnu_language.rs`, `tests/gnu_attributes.rs`, `tests/gnu_builtins.rs`,
 `tests/gnu_preprocessor.rs` and `tests/dialects.rs` are where. What is left is
 the *planned* rows — computed `goto`, `cleanup`, `__int128`, the `__sync_*` and
-`__atomic_*` builtins, `#line`, casts to a union type — plus the rows that say
+`__atomic_*` builtins, casts to a union type — plus the rows that say
 `not planned` or `impossible`, and the c-testsuite report
 ([`doc/c-testsuite.md`](c-testsuite.md)) lists which cases each one would fix.

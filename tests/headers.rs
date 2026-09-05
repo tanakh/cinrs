@@ -548,3 +548,127 @@ fn time_moves_forward() {
         assert_eq!(year_is_after_2020(), 1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// <wchar.h> and <wctype.h>
+// ---------------------------------------------------------------------------
+
+/// Wide characters need [string-literal input](cinrs#input-forms): Rust's own
+/// lexer refuses `L"…"` as a token.
+#[test]
+fn wide_strings_and_characters() {
+    c99! { r#"
+#include <string.h>
+#include <wchar.h>
+#include <wctype.h>
+
+/* The literal is a `wchar_t[4]`, and the library counts the same three. */
+int wide_length(void) { return (int)wcslen(L"abc"); }
+
+int wide_compare(void) {
+    return wcscmp(L"abc", L"abc") == 0
+        && wcscmp(L"abc", L"abd") < 0
+        && wcsncmp(L"abcdef", L"abcxxx", 3) == 0;
+}
+
+int wide_copy(void) {
+    wchar_t buf[8];
+    wmemcpy(buf, L"hello", 6);
+    return wcscmp(buf, L"hello") == 0 && buf[5] == 0 && wmemcmp(buf, L"hello", 6) == 0;
+}
+
+int wide_format(void) {
+    wchar_t buf[32];
+    int n = swprintf(buf, 32, L"%ls-%d", L"hi", 42);
+    return n == 5 && wcscmp(buf, L"hi-42") == 0;
+}
+
+int wide_search(void) {
+    const wchar_t *s = L"a,b,c";
+    const wchar_t *first = wcschr(s, L',');
+    const wchar_t *last = wcsrchr(s, L',');
+    return first != NULL && last != NULL && first - s == 1 && last - s == 3
+        && wcsstr(s, L"b,c") == s + 2 && wcsspn(s, L"ab,") == 4;
+}
+
+int wide_tokens(void) {
+    wchar_t text[] = L"a b";
+    wchar_t *save = NULL;
+    wchar_t *first = wcstok(text, L" ", &save);
+    wchar_t *second = wcstok(NULL, L" ", &save);
+    return wcscmp(first, L"a") == 0 && wcscmp(second, L"b") == 0;
+}
+
+long wide_to_long(void) { return wcstol(L"  -42abc", NULL, 10); }
+double wide_to_double(void) { return wcstod(L"2.5", NULL); }
+
+/* A wide character constant has the type `wchar_t`, so it round-trips through
+   the single-byte conversions. */
+int byte_round_trip(void) {
+    wint_t w = btowc('Q');
+    return w == (wint_t)L'Q' && wctob(w) == 'Q' && btowc(EOF) == WEOF;
+}
+
+/* The test process is in the "C" locale, so only the ASCII range is a single
+   byte; that is all this decodes. */
+int decode_one_byte(void) {
+    mbstate_t state;
+    wchar_t wc = 0;
+    memset(&state, 0, sizeof state);
+    return mbsinit(&state)
+        && mbrtowc(&wc, "A", 1, &state) == 1
+        && wc == L'A'
+        && mbrlen("B", 1, &state) == 1;
+}
+
+int classification(void) {
+    return iswalpha(L'x') && iswdigit(L'7') && iswspace(L' ') && !iswalpha(L'7')
+        && towupper(L'x') == (wint_t)L'X' && towlower(L'X') == (wint_t)L'x'
+        && iswctype(L'x', wctype("alpha"));
+}
+
+/* Both headers say what `wchar_t`'s range is, and either may come first. */
+int limits_agree(void) {
+    return sizeof(wchar_t) == 4 && WCHAR_MAX == 2147483647 && WCHAR_MIN < 0;
+}
+"# }
+
+    unsafe {
+        assert_eq!(wide_length(), 3);
+        assert_eq!(wide_compare(), 1);
+        assert_eq!(wide_copy(), 1);
+        assert_eq!(wide_format(), 1);
+        assert_eq!(wide_search(), 1);
+        assert_eq!(wide_tokens(), 1);
+        assert_eq!(wide_to_long(), -42);
+        assert_eq!(wide_to_double(), 2.5);
+        assert_eq!(byte_round_trip(), 1);
+        assert_eq!(decode_one_byte(), 1);
+        assert_eq!(classification(), 1);
+        assert_eq!(limits_agree(), 1);
+    }
+}
+
+/// `<stdint.h>` and `<wchar.h>` both define `WCHAR_MIN` and `WCHAR_MAX`, so
+/// including them in either order has to be quiet.
+#[test]
+fn the_wide_character_limits_survive_both_headers() {
+    c99! {
+        #include <stdint.h>
+        #include <wchar.h>
+
+        int stdint_first(void) { return WCHAR_MAX == INT32_MAX; }
+    }
+
+    c99! {
+        #include <wchar.h>
+        #include <stdint.h>
+
+        int wchar_first(void) { return WCHAR_MIN == INT32_MIN; }
+    }
+
+    unsafe {
+        assert_eq!(stdint_first(), 1);
+        assert_eq!(wchar_first(), 1);
+    }
+}

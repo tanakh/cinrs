@@ -81,7 +81,10 @@ Also standard C99 but absent from Clang's list:
 | Feature | cinrs | Notes |
 | --- | --- | --- |
 | Bit-fields (also C89) | Yes | `_Bool`, `int` and `unsigned int` as the standard requires; `char`, `short`, `long`, `long long`, their signed and unsigned forms and `enum` as the GCC extension. The layout follows GCC and Clang, and is checked against the host compiler by `tests/bitfield_layout.rs`. A member has no address, so it becomes a pair of accessors on a shared `[u8; K]`; see the crate docs. |
-| Old-style (K&R) function definitions (obsolescent) | No | Rejected in every mode; removed in C23. |
+| Function declarators without a prototype (6.7.5.3p14, 6.5.2.2p6) | Yes | In `c99!`, `c11!`, `c17!` and the matching `gnu*!` dialects, `int f();` and `int (*fp)();` declare a function whose parameters are *unspecified*: a call may pass any number of arguments, each gets the default argument promotions, and the callee is invoked through the signature they make. A *definition* written `int f() { … }` takes no parameters, as 6.9.1p7 says, and calls to it through the unprototyped type are still legal. Two declarations of one function are compatible when the prototyped one is not variadic and no parameter type is changed by the promotions (6.7.5.3p15), which is also what `_Generic`, `__builtin_types_compatible_p` and assignment between function pointers use. `c23!` and `gnu23!` follow N2841 instead. |
+| Old-style (K&R) function definitions (obsolescent) | No | Rejected in every mode; removed in C23. `int f();` is *not* one of these — see the row above. |
+| `#line` and GCC's `# N "file" flags…` line marker (6.10.4) | Yes | Both forms, the macro-expanded one included, per file. Only `__LINE__`, `__FILE__` and `__FILE_NAME__` move: a diagnostic still points at the token that was really written, which is the whole point of the crate. `__BASE_FILE__` names the file the unit started in and is unaffected. A number outside 1…2147483647 is an error, which is what `-pedantic-errors` makes it. |
+| `<wchar.h>` and `<wctype.h>` | Yes | Bundled. `wchar_t` is `int` (from `<stddef.h>`) on every target, which is what the front end gives `L'x'` and `L"…"`; `mbstate_t` is spelled the way each platform's library lays it out. `wcstold` is left out with `long double`. |
 | `setjmp`/`longjmp` | No | `<setjmp.h>` is bundled only to `#error`. |
 | `long double` | Partial | Mapped to `double`; the ABI of `long double` arguments is therefore wrong. |
 | `va_list` as a struct member or file-scope object | No | `core::ffi::VaList` carries a lifetime. |
@@ -191,7 +194,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | `unreachable()` | N2826 | Yes | `core::hint::unreachable_unchecked()`. |
 | Unicode sequences more than 21 bits are a constraint violation | N2828 | Unverified | |
 | Identifier syntax using Unicode Standard Annex 31 | N2836, N2939 | No | ASCII identifiers only. |
-| No function declarators without prototypes (`f()` means `f(void)`) | N2841 | Yes | Applied in every mode. |
+| No function declarators without prototypes (`f()` means `f(void)`) | N2841 | Yes | In `c23!` and `gnu23!` only, which is where the change belongs: an empty parameter list is `(void)`, and a call with an argument is "too many arguments", exactly as `gcc -std=c23` says. Every earlier entry point keeps C99 6.7.5.3p14 — see the [C99 table](#c99). |
 | `char8_t` | N2653 | No | |
 | Consistent, warningless and intuitive initialization with `{}` | N2900, N3011 | Yes | |
 | Not-so-magic: `typeof`, `typeof_unqual` | N2927, N2930 | Yes | `typeof_unqual` equals `typeof` (no top-level qualifiers in the type model). |

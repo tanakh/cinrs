@@ -774,6 +774,7 @@ impl Sema {
             ret,
             params: param_tys,
             variadic: func.variadic,
+            prototyped: self.is_prototyped(func),
         };
 
         let existing = match self.lookup(&name.name) {
@@ -800,7 +801,7 @@ impl Sema {
         let id = match existing {
             Some(id) => {
                 let previous = self.program.function(id).clone();
-                if previous.sig != sig {
+                let Some(composite) = self.composite_signature(&previous.sig, &sig) else {
                     self.error_note(
                         name.range,
                         format!("conflicting types for '{}'", name.name),
@@ -808,7 +809,22 @@ impl Sema {
                         format!("previous declaration of '{}' is", name.name),
                     );
                     return None;
-                }
+                };
+                // The composite type is what later calls are checked against;
+                // a *definition* keeps its own signature instead, because that
+                // is what the generated Rust item really takes. The two differ
+                // only for `int f(int); int f() { … }`, which C allows and
+                // which defines a function that ignores its argument.
+                let merged = if definition.is_some() {
+                    sig.clone()
+                } else if previous.body.is_some() {
+                    previous.sig.clone()
+                } else {
+                    composite
+                };
+                // The parameter names the `extern` block declares come from
+                // whichever declaration supplied the signature.
+                let names_from_here = definition.is_some() || merged == sig;
                 if definition.is_some() && previous.body.is_some() {
                     self.error_note(
                         name.range,
@@ -819,6 +835,7 @@ impl Sema {
                     return None;
                 }
                 let entry = &mut self.program.functions[id.0 as usize];
+                entry.sig = merged;
                 entry.is_static |= is_static;
                 entry.is_inline |= is_inline;
                 entry.noreturn |= is_noreturn;
@@ -839,6 +856,8 @@ impl Sema {
                     .or_else(|| asm_label.map(|label| label.node.clone()));
                 if definition.is_some() {
                     entry.range = name.range;
+                }
+                if names_from_here {
                     entry.param_names = param_names;
                 }
                 id

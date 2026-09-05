@@ -38,7 +38,11 @@ Run it with `cargo run --example fact`.
   `__VA_OPT__`, `#elifdef`/`#elifndef`, binary constants, digit separators,
   empty initialisers, `auto` type inference, enumerations with a fixed
   underlying type and `unreachable()`. A feature from a later revision used in
-  an earlier block is a diagnostic that says which macro to write instead.
+  an earlier block is a diagnostic that says which macro to write instead. The
+  revision also decides what `int f();` means: the parameters are *unspecified*
+  before C23, so a call may pass any number of arguments and each gets the
+  default argument promotions, while `c23!` and `gnu23!` read the empty list as
+  `(void)` — which is exactly where the standard moved it.
 * **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
   `union`, `enum`, bit-fields, `typedef`, string literals, function pointers,
   `sizeof` with
@@ -51,12 +55,14 @@ Run it with `cargo run --example fact`.
   basic blocks.
 * **The C99 preprocessor.** Object-like and function-like macros with `#`,
   `##`, `__VA_ARGS__` and the standard's rescanning rules, every conditional
-  directive, `#error`, `#warning`, `#pragma` and `#line`.
-* **`#include`.** Standard headers (`<stdio.h>`, `<string.h>`, `<math.h>` and
-  the rest) are bundled with the crate, written in plain C99 rather than read
-  from the platform, and the calls link against the real C library. Your own
-  headers are found next to the `.rs` file that includes them, and editing one
-  rebuilds the crate.
+  directive, `#error`, `#warning`, `#pragma`, and `#line` — which redirects
+  `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
+  the C token that was really written.
+* **`#include`.** Standard headers (`<stdio.h>`, `<string.h>`, `<math.h>`,
+  `<wchar.h>` and the rest) are bundled with the crate, written in plain C99
+  rather than read from the platform, and the calls link against the real C
+  library. Your own headers are found next to the `.rs` file that includes
+  them, and editing one rebuilds the crate.
 * **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
   `__attribute__((packed))` and `aligned` with the layout GCC gives them,
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
@@ -136,14 +142,15 @@ Run it with `cargo run --example fact`.
 `cinrs` is measured against
 [c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
 C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **209 of the 218 that `c99!` is eligible for
-pass (95.9 %)**, and 212 of 220 under `c11!`, `c23!` and every GNU dialect —
+220 in its `single-exec` suite, **212 of the 218 that `c99!` is eligible for
+pass (97.2 %)**, and 215 of 220 under `c11!`, `gnu99!` and `gnu11!` —
 compiled, run, and diffed against the expected output. What is left is the
 constructs listed as unsupported above — variable length arrays, `va_arg` with
-a struct, `<wchar.h>` — plus three corners GCC has and this does not: a
-function declarator with no prototype, a `goto` out of a statement expression,
-and initialising a flexible array member. One needs a newer Rust than 1.97. The
-corpus is a git submodule, so a fresh checkout skips the suite until
+a struct — plus two corners GCC has and this does not: a `goto` out of a
+statement expression, and initialising a flexible array member. One needs a
+newer Rust than 1.97, and the two C23 entry points give up one more case that
+C23 itself made invalid. The corpus is a git submodule, so a fresh checkout
+skips the suite until
 `git submodule update --init third_party/c-testsuite` fetches it.
 [`doc/c-testsuite.md`](doc/c-testsuite.md) has the harness, how to run it in
 either mode, the selection rules and the baseline with every failure and its

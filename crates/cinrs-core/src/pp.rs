@@ -130,6 +130,26 @@
 //! C text itself otherwise (a `TokenStream` built from a string in a unit
 //! test, for instance).
 //!
+//! ## `#line`
+//!
+//! `#line N` and `#line N "name"` (6.10.4), and GCC's `# N "name" flags…` line
+//! marker, do what they say: the line after the directive is line N, counting
+//! up per physical line from there, and `__FILE__` is the given name until the
+//! next directive or the end of that file. The macro-expanded form is
+//! supported too — `#line line`, with `line` a macro — and the numbering is
+//! per file, so a `#line` inside a header ends with the header. In the
+//! macro's own text a `#line` replaces the `.rs`-line convention above from
+//! the next line to the end of the block, which is exactly what a program that
+//! writes one is asking for.
+//!
+//! **Nothing else moves.** A diagnostic — this crate's or `rustc`'s — still
+//! points at the token that was really written, in the file it was really
+//! written in, because that is the position the user can look at; making the
+//! caret land on the C is the reason the whole pipeline carries spans.
+//! `__BASE_FILE__` names the file the translation unit started in and is not
+//! affected either; `__FILE_NAME__` is `__FILE__` without the directory, so it
+//! is.
+//!
 //! On top of those comes a small, deliberately short set of target
 //! description macros derived from the machine this crate was compiled for and
 //! from [`TargetModel`]: the architecture
@@ -738,6 +758,21 @@ struct Cond {
     seen_else: bool,
 }
 
+/// What one `#line` — or one GCC line marker — did to a file's numbering.
+///
+/// See [`Pp::line_directive`]. Only `__LINE__` and `__FILE__` are affected:
+/// a diagnostic still points at the token that was really written, which is the
+/// whole point of this crate.
+struct LineDirective {
+    /// The zero-based index of the *physical* line the directive is written on.
+    at: usize,
+    /// The number the next physical line is given.
+    line: usize,
+    /// What `__FILE__` says from that line on: the name the directive gave, or
+    /// the one in force when it was written.
+    name: String,
+}
+
 /// One file the preprocessor has read, kept for as long as positions inside it
 /// can still be reported.
 struct FileEntry {
@@ -752,6 +787,10 @@ struct FileEntry {
     first_line: usize,
     /// What `__FILE__` says inside it.
     name: String,
+    /// The `#line` directives it has executed so far, in the order they were
+    /// reached — which is the order of their positions, since a file is only
+    /// ever read forwards.
+    lines: Vec<LineDirective>,
 }
 
 impl FileEntry {
@@ -768,16 +807,43 @@ impl FileEntry {
             line_starts,
             first_line: first_line.max(1),
             name,
+            lines: Vec::new(),
         }
+    }
+
+    /// The zero-based index of the physical line `local` sits on.
+    fn physical_line(&self, local: Pos) -> usize {
+        self.line_starts
+            .partition_point(|start| *start <= local)
+            .saturating_sub(1)
+    }
+
+    /// The `#line` in force on physical line `index`, if there is one.
+    ///
+    /// A directive takes effect on the line *after* itself, so its own line
+    /// still counts the way the one before it did.
+    fn directive_for(&self, index: usize) -> Option<&LineDirective> {
+        let after = self.lines.partition_point(|d| d.at < index);
+        self.lines[..after].last()
     }
 
     /// The line `local` sits on, counted the way `__LINE__` counts.
     fn line_of(&self, local: Pos) -> usize {
-        let index = self
-            .line_starts
-            .partition_point(|start| *start <= local)
-            .saturating_sub(1);
-        self.first_line + index
+        let index = self.physical_line(local);
+        match self.directive_for(index) {
+            // The directive named the line after itself; every line after that
+            // one counts up from there.
+            Some(d) => d.line + (index - d.at - 1),
+            None => self.first_line + index,
+        }
+    }
+
+    /// The name `__FILE__` reports for `local`.
+    fn name_of(&self, local: Pos) -> &str {
+        match self.directive_for(self.physical_line(local)) {
+            Some(d) => &d.name,
+            None => &self.name,
+        }
     }
 }
 
@@ -1141,23 +1207,31 @@ impl<'a> Pp<'a> {
     /// left — which is what a diagnostic about a macro defined in a header
     /// that was closed long ago needs.
     fn file_at(&self, pos: Pos) -> &FileEntry {
-        let index = self
-            .files
+        &self.files[self.file_index(pos)]
+    }
+
+    /// The index in `files` of the file a position is in.
+    fn file_index(&self, pos: Pos) -> usize {
+        self.files
             .partition_point(|f| f.base <= pos)
-            .saturating_sub(1);
-        &self.files[index]
+            .saturating_sub(1)
+    }
+
+    /// A position's offset within its own file.
+    fn local_pos(file: &FileEntry, pos: Pos) -> Pos {
+        pos.saturating_sub(file.base).min(file.text.len() as Pos)
     }
 
     /// The line number `__LINE__` reports for a position.
     fn line_of(&self, pos: Pos) -> usize {
         let file = self.file_at(pos);
-        let local = pos.saturating_sub(file.base).min(file.text.len() as Pos);
-        file.line_of(local)
+        file.line_of(Self::local_pos(file, pos))
     }
 
     /// The name `__FILE__` reports for a position.
     fn file_name_of(&self, pos: Pos) -> &str {
-        &self.file_at(pos).name
+        let file = self.file_at(pos);
+        file.name_of(Self::local_pos(file, pos))
     }
 
     /// The verbatim source text between two positions.
@@ -1799,6 +1873,42 @@ fn paste_operand(def: &MacroDef, args: &Args, tok: &PTok) -> Vec<Piece> {
     arg.iter().cloned().map(Piece::Tok).collect()
 }
 
+/// The largest line number `#line` may name (C99 6.10.4p3).
+const MAX_LINE_NUMBER: u64 = 2_147_483_647;
+
+/// The value of a `digit-sequence` token, which is what `#line` takes.
+///
+/// A *digit sequence* is not an integer constant: `#line 010` is line ten, not
+/// line eight, and `#line 0x10`, `#line 1u` and `#line 1.0` are none of the
+/// three. Reading the spelling rather than the lexer's value is what says so.
+/// A sequence too long for the range check below comes back saturated, so it is
+/// reported as out of range rather than as not a number at all.
+fn digit_sequence(kind: &TokenKind) -> Option<u64> {
+    let TokenKind::Int(lit) = kind else {
+        return None;
+    };
+    if lit.text.is_empty() || !lit.text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(lit.text.parse::<u64>().unwrap_or(u64::MAX))
+}
+
+/// Whether a `#line`'s operands are already one of the two forms 6.10.4 gives,
+/// in which case they are used as they stand rather than macro-replaced first.
+fn is_line_form(rest: &[PTok]) -> bool {
+    let Some(first) = rest.first() else {
+        return false;
+    };
+    if digit_sequence(&first.kind).is_none() {
+        return false;
+    }
+    match rest.len() {
+        1 => true,
+        2 => matches!(&rest[1].kind, TokenKind::Str(lit) if lit.kind == StrKind::Narrow),
+        _ => false,
+    }
+}
+
 /// The decimal integer token a built-in macro expands to.
 fn int_token_kind(value: u128) -> TokenKind {
     TokenKind::Int(IntLit {
@@ -1856,7 +1966,12 @@ impl Pp<'_> {
         let range = hash.range.join(first.range);
         let Some(name) = first.name() else {
             if matches!(first.kind, TokenKind::Int(_)) {
-                // A line marker (`# 42 "file.h"`), which we have no use for.
+                // A GCC line marker, `# 42 "file.h" 1 3 4`: `#line` without the
+                // keyword, with flags saying whether the compiler is entering
+                // or leaving a file. The numbering is all this needs from it.
+                if !self.skipping() {
+                    self.line_directive(&line, range, true);
+                }
                 return;
             }
             if !self.skipping() {
@@ -1935,11 +2050,7 @@ impl Pp<'_> {
                     "#embed is not supported; use `include_bytes!` on the Rust side",
                 );
             }
-            "line" => {
-                // Accepted and ignored: the positions this crate reports are
-                // positions in the user's `.rs` file, which no `#line` in the
-                // C text can usefully move.
-            }
+            "line" => self.line_directive(rest, range, false),
             // `#ident "string"` and `#sccs` put a string into a section of the
             // object file that nothing here has; GCC ignores them too when the
             // target has no such section.
@@ -1949,6 +2060,122 @@ impl Pp<'_> {
                     .error(range, format!("invalid preprocessing directive #{other}"));
             }
         }
+    }
+
+    /// `#line` (C99 6.10.4), and GCC's `# 42 "file.h" 1 3 4` line marker.
+    ///
+    /// Both say the same thing: the line after the directive is line N, and
+    /// `__FILE__` is the name that follows until the next directive or the end
+    /// of the file. The marker's trailing flags — which of "entering",
+    /// "returning", "system header" and "extern C" applies — describe an
+    /// `#include` that has already happened elsewhere, so they are read and
+    /// dropped.
+    ///
+    /// **Only `__LINE__` and `__FILE__` move.** A diagnostic still points at
+    /// the token that was really written, in the file it was really written
+    /// in, because that is the position the user can look at — the whole
+    /// reason this crate maps every token back to a `proc_macro2::Span`. A
+    /// `#line` in generated C therefore renumbers what the *program* observes
+    /// without hiding where the compiler found it.
+    fn line_directive(&mut self, rest: &[PTok], range: SourceRange, marker: bool) {
+        let what = if marker { "line marker" } else { "#line" };
+        // 6.10.4p5: a `#line` matching neither of the two forms the grammar
+        // gives has its tokens macro-replaced first, and the result must then
+        // match one of them. c-testsuite's `00152` is `#line line`, with
+        // `line` a macro for 1000.
+        let expanded: Vec<PTok>;
+        let toks: &[PTok] = if marker || is_line_form(rest) {
+            rest
+        } else {
+            expanded = self.expand_sequence(rest.to_vec());
+            &expanded
+        };
+
+        let Some(first) = toks.first() else {
+            self.diags
+                .error(range, format!("'{what}' requires a line number"));
+            return;
+        };
+        let Some(digits) = digit_sequence(&first.kind) else {
+            self.diags.error(
+                first.range,
+                format!(
+                    "'{what}' requires a decimal line number, found {}",
+                    first.kind.describe()
+                ),
+            );
+            return;
+        };
+        // 6.10.4p3: the digit sequence shall not specify zero, nor a number
+        // greater than 2147483647.
+        if digits == 0 || digits > MAX_LINE_NUMBER {
+            self.diags.error(
+                first.range,
+                format!(
+                    "the line number of '{what}' must be between 1 and {MAX_LINE_NUMBER}, \
+                     not {digits}"
+                ),
+            );
+            return;
+        }
+
+        let mut used = 1;
+        let mut name = None;
+        if let Some(tok) = toks.get(1) {
+            match &tok.kind {
+                TokenKind::Str(lit) if lit.kind == StrKind::Narrow => {
+                    name = Some(
+                        lit.values
+                            .iter()
+                            .map(|v| char::from_u32(*v).unwrap_or('\u{fffd}'))
+                            .collect::<String>(),
+                    );
+                    used = 2;
+                }
+                _ if marker => {}
+                _ => {
+                    self.diags.error(
+                        tok.range,
+                        format!(
+                            "the file name of '{what}' must be an ordinary string literal, \
+                             found {}",
+                            tok.kind.describe()
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+        // A marker's flags are digits the compiler that wrote it understood;
+        // anything else on a `#line` is what GCC calls "extra tokens at end of
+        // directive" and, like GCC, warns about rather than refuses.
+        if !marker && toks.len() > used {
+            self.diags.warning(
+                toks[used].range,
+                format!("extra tokens at the end of '{what}'"),
+            );
+        }
+        self.set_line(range.start, digits as usize, name);
+    }
+
+    /// Records what a `#line` did to the file it was written in.
+    fn set_line(&mut self, pos: Pos, line: usize, name: Option<String>) {
+        let index = self.file_index(pos);
+        let local = Self::local_pos(&self.files[index], pos);
+        let file = &mut self.files[index];
+        let at = file.physical_line(local);
+        // Without a name of its own the directive keeps whichever one is in
+        // force, which may itself have come from an earlier `#line`.
+        let name = match name {
+            Some(name) => name,
+            None => file.name_of(local).to_owned(),
+        };
+        // The list is searched by binary search, so it has to stay sorted. A
+        // file is only ever read forwards, so this drops nothing in practice.
+        while file.lines.last().is_some_and(|d| d.at >= at) {
+            file.lines.pop();
+        }
+        file.lines.push(LineDirective { at, line, name });
     }
 
     /// The raw source text of a directive line from its `skip`-th token on.

@@ -140,9 +140,13 @@ typedef uint64_t uintmax_t;
 #define INTMAX_MAX INT64_MAX
 #define UINTMAX_MAX UINT64_MAX
 
-/* cinrs makes a wide character constant an `int`; see <stddef.h>. */
-#define WCHAR_MIN INT32_MIN
-#define WCHAR_MAX INT32_MAX
+/* cinrs makes a wide character constant an `int`; see <stddef.h>. <wchar.h>
+ * defines the same two macros, and either header may be included first, so
+ * both guard them. */
+#ifndef WCHAR_MIN
+#define WCHAR_MIN (-2147483647 - 1)
+#define WCHAR_MAX 2147483647
+#endif
 #define WINT_MIN INT32_MIN
 #define WINT_MAX INT32_MAX
 #define SIG_ATOMIC_MIN INT32_MIN

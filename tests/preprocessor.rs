@@ -157,6 +157,53 @@ fn line_and_file_describe_the_rust_source() {
     }
 }
 
+#[test]
+fn line_redirects_line_and_file_and_nothing_else() {
+    c99! {
+        int before(void) { return __LINE__; }
+        #line 500 "generated.c"
+        int after(void) { return __LINE__; }
+        int later(void) { return __LINE__; }
+        const char *renumbered_source(void) { return __FILE__; }
+    }
+
+    unsafe {
+        // Before the directive `__LINE__` is still a line of *this* file, which
+        // is what makes it a number the user can find in their editor; after
+        // it, it is what the directive asked for.
+        assert!(before() > 100, "the .rs line, not the C one: {}", before());
+        assert_eq!(after(), 500);
+        assert_eq!(later(), 501);
+        let file = core::ffi::CStr::from_ptr(renumbered_source())
+            .to_str()
+            .unwrap();
+        assert_eq!(file, "generated.c");
+    }
+}
+
+#[test]
+fn a_line_directive_in_a_header_ends_with_the_header() {
+    c99! {
+        #include "include/renumbered.h"
+
+        const char *outer_file(void) { return __FILE__; }
+    }
+
+    unsafe {
+        assert_eq!(renumbered_line(), 90);
+        let inner = core::ffi::CStr::from_ptr(renumbered_file())
+            .to_str()
+            .unwrap();
+        assert_eq!(inner, "elsewhere.c");
+        // Back in the includer, `__FILE__` is this `.rs` file again.
+        let outer = core::ffi::CStr::from_ptr(outer_file()).to_str().unwrap();
+        assert!(
+            outer.ends_with("preprocessor.rs"),
+            "__FILE__ should name this file again, got {outer:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // token pasting, in both input modes
 // ---------------------------------------------------------------------------

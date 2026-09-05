@@ -53,6 +53,8 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("stdnoreturn.h", include_str!("../include/stdnoreturn.h")),
     ("string.h", include_str!("../include/string.h")),
     ("time.h", include_str!("../include/time.h")),
+    ("wchar.h", include_str!("../include/wchar.h")),
+    ("wctype.h", include_str!("../include/wctype.h")),
 ];
 
 /// The directory the bundled headers appear to live in.

@@ -158,9 +158,15 @@ impl Sema {
                 let lhs = self.ty_of(&lhs.ty)?;
                 let rhs = self.ty_of(&rhs.ty)?;
                 // The types are compared after the adjustments C makes to a
-                // type name, which is exactly `Ty` equality here — `Ty` is
-                // interned, and it carries no top-level qualifiers.
-                Some(Expr::int(i128::from(lhs == rhs), Ty::Int, range))
+                // type name, which is `Ty` equality here — `Ty` is interned,
+                // and it carries no top-level qualifiers — plus the one case
+                // where C's compatibility is wider than identity; see
+                // `Sema::compatible`.
+                Some(Expr::int(
+                    i128::from(self.compatible(lhs, rhs)),
+                    Ty::Int,
+                    range,
+                ))
             }
             ast::ExprKind::ChooseExpr {
                 cond,
@@ -327,10 +333,9 @@ impl Sema {
                 continue;
             };
             let quals = name.ty.qualifiers;
-            if let Some((_, _, previous)) = seen
-                .iter()
-                .find(|(seen, seen_quals, _)| *seen == assoc_ty && *seen_quals == quals)
-            {
+            if let Some((_, _, previous)) = seen.iter().find(|(seen, seen_quals, _)| {
+                self.compatible(*seen, assoc_ty) && *seen_quals == quals
+            }) {
                 let previous = *previous;
                 let spelled = self.qualified_name(assoc_ty, quals);
                 self.error_note(
@@ -342,7 +347,7 @@ impl Sema {
                 continue;
             }
             seen.push((assoc_ty, quals, name.range));
-            if assoc_ty == ty && !quals.any() && chosen.is_none() {
+            if self.compatible(assoc_ty, ty) && !quals.any() && chosen.is_none() {
                 chosen = Some(assoc);
             }
         }
@@ -396,10 +401,13 @@ impl Sema {
     /// The value of a function name used as an expression: a pointer to it.
     fn function_designator(&mut self, id: crate::ir::FuncId, range: SourceRange) -> Expr {
         let sig = self.program.function(id).sig.clone();
-        let func = self
-            .program
-            .types
-            .func(sig.ret, sig.params.clone(), sig.variadic);
+        let func = if sig.prototyped {
+            self.program
+                .types
+                .func(sig.ret, sig.params.clone(), sig.variadic)
+        } else {
+            self.program.types.unprototyped_func(sig.ret)
+        };
         let ty = self.ptr_to(func, false);
         Expr::new(ExprKind::FuncAddr(id), ty, range)
     }
@@ -1442,8 +1450,10 @@ impl Sema {
                 }
                 None => {
                     // The variable part of a variadic call gets the default
-                    // argument promotions: `float` widens to `double` and the
-                    // small integer types to `int`.
+                    // argument promotions, and so does *every* argument of a
+                    // call through a type with no prototype (C99 6.5.2.2p6):
+                    // `float` widens to `double` and the small integer types
+                    // to `int`.
                     let promoted = self.promoted_argument(&value);
                     let value = self.convert(value, promoted);
                     values.push(value);
@@ -1452,7 +1462,9 @@ impl Sema {
         }
 
         let too_few = args.len() < sig.params.len();
-        let too_many = args.len() > sig.params.len() && !sig.variadic;
+        // A function type with no prototype says nothing about how many
+        // arguments it takes, so no count can be wrong.
+        let too_many = args.len() > sig.params.len() && !sig.variadic && sig.prototyped;
         if too_few || too_many {
             let word = if too_few { "few" } else { "many" };
             let expected = if sig.variadic {
@@ -1553,6 +1565,7 @@ impl Sema {
             ret: ft.ret,
             params: ft.params,
             variadic: ft.variadic,
+            prototyped: ft.prototyped,
         };
         Some((
             Callee::Indirect(Box::new(value)),
@@ -1944,7 +1957,12 @@ impl Sema {
             // it. `cinrs` follows GCC — the two have the same size on every
             // target it supports, and codegen makes the reinterpretation
             // explicit.
-            return to == from
+            //
+            // `compatible` is what lets `int (*fp)() = g;` through, where `g`
+            // is an `int(int)`: a function type with no prototype is
+            // compatible with a prototyped one whose parameters are their own
+            // promoted forms (6.7.5.3p15), and GCC accepts exactly that pair.
+            return self.compatible(to, from)
                 || self.types().is_void_pointer(to)
                 || self.types().is_void_pointer(from);
         }

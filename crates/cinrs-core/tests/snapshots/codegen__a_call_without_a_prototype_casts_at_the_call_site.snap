@@ -1,0 +1,52 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int taker();\n        int made_here() { return 1; }\n\n        int call_them(void) {\n            char c = 3;\n            int (*fp)() = made_here;\n            return taker() + taker(c) + made_here() + fp(1.5f, c);\n        }\n        \")"
+---
+mod __cinrs_unit_949d5fe9 {
+    #[allow(…)]
+    unsafe extern "C" {
+        #[link_name = "taker"]
+        pub fn __cinrs_949d5fe9_taker() -> ::core::ffi::c_int;
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn made_here() -> ::core::ffi::c_int {
+        unsafe {
+            return 1;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn call_them() -> ::core::ffi::c_int {
+        unsafe {
+            let mut c: ::core::ffi::c_char = 3;
+            let mut fp: ::core::option::Option<
+                unsafe extern "C" fn() -> ::core::ffi::c_int,
+            > = ::core::option::Option::Some(
+                made_here as unsafe extern "C" fn() -> ::core::ffi::c_int,
+            );
+            return __cinrs_949d5fe9_taker()
+                .wrapping_add(
+                    (::core::mem::transmute::<
+                        unsafe extern "C" fn() -> ::core::ffi::c_int,
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >(
+                        (__cinrs_949d5fe9_taker
+                            as unsafe extern "C" fn() -> ::core::ffi::c_int),
+                    ))(c as ::core::ffi::c_int),
+                )
+                .wrapping_add(made_here())
+                .wrapping_add(
+                    (::core::mem::transmute::<
+                        unsafe extern "C" fn() -> ::core::ffi::c_int,
+                        unsafe extern "C" fn(
+                            ::core::ffi::c_double,
+                            ::core::ffi::c_int,
+                        ) -> ::core::ffi::c_int,
+                    >(
+                        (fp.expect("null function pointer")),
+                    ))(1.5, c as ::core::ffi::c_int),
+                );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_949d5fe9::*;

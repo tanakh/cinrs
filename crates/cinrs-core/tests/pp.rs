@@ -573,6 +573,95 @@ fn line_counts_lines_of_the_rs_file_when_the_map_knows_it() {
     assert_eq!(run_in(src, ctx).0, ["40", "41"]);
 }
 
+/// C99 6.10.4. Every expectation here is what `gcc -E -P` prints for the same
+/// text.
+#[test]
+fn line_renumbers_the_lines_that_follow_it() {
+    assert_eq!(pp("__LINE__\n#line 100\n__LINE__\n__LINE__"), "1 100 101");
+    // The name comes with it, and stays until the next directive.
+    assert_eq!(
+        pp("#line 100 \"foo.c\"\n__LINE__ __FILE__\n__LINE__ __FILE__"),
+        "100 \"foo.c\" 101 \"foo.c\""
+    );
+    // `#line N` on its own keeps whichever name is in force, including one an
+    // earlier `#line` gave.
+    assert_eq!(
+        pp("#line 10 \"a.c\"\n#line 20\n__LINE__ __FILE__"),
+        "20 \"a.c\""
+    );
+    // A digit sequence is not an integer constant: `010` is ten.
+    assert_eq!(pp("#line 010\n__LINE__"), "10");
+    // `__FILE_NAME__` is `__FILE__` without the directory, so it follows too;
+    // `__BASE_FILE__` names the file the translation unit started in and does
+    // not.
+    assert_eq!(
+        pp("#line 1 \"dir/gen.c\"\n__FILE_NAME__ __BASE_FILE__"),
+        "\"gen.c\" \"<c99!>\""
+    );
+    // The line the directive is written on still counts the old way, which is
+    // what makes `#line` renumber *the lines that follow*.
+    assert_eq!(pp("#define AT __LINE__\n#line 50\nAT"), "50");
+}
+
+/// GCC writes `# 42 "file.h" 1 3 4` where it would have written `#line`; the
+/// flags describe an `#include` that happened in the compiler that produced the
+/// text, so they are read and dropped.
+#[test]
+fn a_gcc_line_marker_renumbers_like_line_does() {
+    assert_eq!(
+        pp("# 42 \"gen.c\" 1 3 4\n__LINE__ __FILE__"),
+        "42 \"gen.c\""
+    );
+    assert_eq!(pp("# 7\n__LINE__"), "7");
+}
+
+#[test]
+fn line_takes_the_macro_expanded_form_too() {
+    // 6.10.4p5, and c-testsuite's `00152`.
+    assert_eq!(pp("#define line 1000\n#line line\n__LINE__"), "1000");
+    assert_eq!(
+        pp("#define BOTH 5 \"gen.c\"\n#line BOTH\n__LINE__ __FILE__"),
+        "5 \"gen.c\""
+    );
+}
+
+#[test]
+fn a_line_directive_that_says_nothing_usable_is_an_error() {
+    // 6.10.4p3: the digit sequence names a line between 1 and 2147483647.
+    one_error("#line 0", "must be between 1 and 2147483647");
+    one_error("#line 2147483648", "must be between 1 and 2147483647");
+    one_error("#line 99999999999999999999999", "must be between 1 and");
+    one_error("#line", "requires a line number");
+    one_error("#line x", "requires a decimal line number");
+    one_error("#line 0x10", "requires a decimal line number");
+    one_error("#line 1u", "requires a decimal line number");
+    one_error("#line 1 x", "must be an ordinary string literal");
+}
+
+#[test]
+fn line_in_a_header_ends_with_the_header() {
+    let (tokens, errors, _) = run_including("#include \"renumbered.h\"\n__FILE__ __LINE__", &[]);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(
+        tokens,
+        ["renumbered", "\"generated.c\"", "70", "\"<c99!>\"", "2"]
+    );
+}
+
+/// The main unit's `__LINE__` is a line of the *`.rs` file*, so that it points
+/// where the user is looking. A `#line` replaces that numbering from the next
+/// line to the end of the text — which is the whole point of writing one.
+#[test]
+fn line_replaces_the_rs_line_convention() {
+    let src = "__LINE__\n#line 7\n__LINE__\n__LINE__";
+    let ctx = Context {
+        file_name: "src/lib.rs".to_owned(),
+        first_line: 40,
+        ..Context::new(src, 0)
+    };
+    assert_eq!(run_in(src, ctx).0, ["40", "7", "8"]);
+}
+
 #[test]
 fn file_is_the_rs_path_when_it_is_known() {
     assert_eq!(pp("__FILE__"), "\"<c99!>\"");
@@ -651,7 +740,7 @@ fn error_carries_the_rest_of_the_line() {
 }
 
 #[test]
-fn warning_pragma_and_line_are_accepted_quietly() {
+fn warning_pragma_and_line_produce_no_tokens() {
     assert_eq!(
         pp(
             "#warning careful\n#pragma once\n#pragma GCC diagnostic ignored \"-Wall\"\n#line 42 \"x.c\"\nok"
