@@ -12,7 +12,7 @@ mod __cinrs_unit_3db7f700 {
     ) -> ::core::ffi::c_int {
         unsafe {
             let mut i: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: u32 = 0;
+            let mut __cinrs_state: ::core::primitive::u32 = 0;
             'cfg: loop {
                 match __cinrs_state {
                     0 => {
@@ -33,7 +33,8 @@ mod __cinrs_unit_3db7f700 {
                     }
                     3 => {
                         if ({
-                            let __cinrs_tmp0 = values.offset(i as isize);
+                            let __cinrs_tmp0 = values
+                                .offset(i as ::core::primitive::isize);
                             (*__cinrs_tmp0)
                         }) == needle
                         {

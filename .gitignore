@@ -1,5 +1,10 @@
 /target
 
+# `tests/cross` is a crate of its own, outside the workspace, that
+# `tests/cross_targets.rs` compiles for other machines; Cargo writes its lock
+# file the first time the test runs. Its artifacts go to `target/cross-check`.
+/tests/cross/Cargo.lock
+
 # insta writes these next to the blessed snapshots when one fails
 *.snap.new
 *.pending-snap

@@ -1144,8 +1144,18 @@ fn a_different_data_model_is_asserted_differently() {
 /// so it is asserted exactly where the unit has one.
 #[test]
 fn the_int128_alignment_is_asserted_only_where_it_is_used() {
-    let without = data_model_check(cinrs_core::TargetModel::LP64, "int f(void) { return 0; }");
-    assert!(!without.contains("align_of"), "{without}");
+    // Every unit asserts the alignment of `long long` and `double`, which is
+    // where two ILP32 targets part company; only one that really has an
+    // `__int128` asserts *its* alignment.
+    let without = squeeze(&data_model_check(
+        cinrs_core::TargetModel::LP64,
+        "int f(void) { return 0; }",
+    ));
+    assert!(
+        without.contains("align_of::<::core::ffi::c_longlong>()==8"),
+        "{without}"
+    );
+    assert!(!without.contains("primitive::i128"), "{without}");
 
     let with = squeeze(&data_model_check(
         cinrs_core::TargetModel::LP64,

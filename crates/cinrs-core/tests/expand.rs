@@ -669,8 +669,11 @@ fn a_user_header_is_named_by_an_include_str_in_the_expansion() {
         .map(|(_, s)| s)
         .collect();
     assert_eq!(tracked.len(), 2, "{output}");
+    // `str` takes the `core::primitive` path like every other primitive the
+    // expansion writes: the item goes into the unit's own module, which a
+    // `typedef` named `str` could otherwise have taken over.
     assert!(
-        output.contains("const _ : & str = :: core :: include_str !"),
+        output.contains("const _ : & :: core :: primitive :: str = :: core :: include_str !"),
         "{output}"
     );
     let root = std::env::current_dir().expect("a working directory");

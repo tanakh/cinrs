@@ -8,24 +8,20 @@
 #ifndef _CINRS_STDDEF_H
 #define _CINRS_STDDEF_H
 
-#if __SIZEOF_POINTER__ == __SIZEOF_LONG__
-typedef unsigned long size_t;
-typedef long ptrdiff_t;
-#elif __SIZEOF_POINTER__ == __SIZEOF_LONG_LONG__
-/* `long long` is C99's; `__extension__` is how a header says "an extension,
- * and I know it", so that a `c89!` block including this one is not told off
- * for what the implementation wrote. */
-__extension__ typedef unsigned long long size_t;
-__extension__ typedef long long ptrdiff_t;
-#else
-typedef unsigned int size_t;
-typedef int ptrdiff_t;
-#endif
+/* `__SIZE_TYPE__` and its relatives are what the front end itself uses for
+ * these types, predefined from the target model, so writing the typedefs in
+ * terms of them is what keeps `sizeof` and `size_t` the same type on every
+ * target: `unsigned int` on i686, `unsigned long` on LP64, `unsigned long
+ * long` on 64-bit Windows. `__extension__` says "an extension, and I know it",
+ * so that a `c89!` block including this one is not told off for the `long
+ * long` the last of those expands to. */
+__extension__ typedef __SIZE_TYPE__ size_t;
+__extension__ typedef __PTRDIFF_TYPE__ ptrdiff_t;
 
-/* cinrs gives a wide character constant the type `int` on every target, which
- * is what the Unix platforms do and what MSVC does not — there `wchar_t` is 16
- * bits wide. The two agree everywhere cinrs is tested. */
-typedef int wchar_t;
+/* `wchar_t` is `int` on the Unix platforms, `unsigned int` on Arm and
+ * `unsigned short` on Windows; `__WCHAR_TYPE__` is whichever this target has,
+ * and is the same type the front end gives `L'x'` and `L"…"`. */
+typedef __WCHAR_TYPE__ wchar_t;
 
 #define NULL ((void *)0)
 

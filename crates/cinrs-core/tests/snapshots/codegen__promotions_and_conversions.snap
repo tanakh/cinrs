@@ -16,7 +16,7 @@ mod __cinrs_unit_b1173e1a {
                 as ::core::ffi::c_int;
             let mut d: ::core::ffi::c_double = wide as ::core::ffi::c_double;
             let mut f: ::core::ffi::c_float = d as ::core::ffi::c_float / 2.0;
-            let mut flag: bool = f != 0.0;
+            let mut flag: ::core::primitive::bool = f != 0.0;
             return wide
                 .wrapping_add(signed_vs_unsigned)
                 .wrapping_add(f as ::core::ffi::c_int)

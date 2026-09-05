@@ -677,12 +677,25 @@ impl StrKind {
     }
 
     /// The largest value one element of this kind can hold.
-    fn max_element(self) -> u32 {
+    ///
+    /// `wide_bits` is how wide the target's `wchar_t` is, which is the one
+    /// answer here that is not fixed by the language: 32 bits on the Unix
+    /// platforms and 16 on Windows, where `L"…"` is UTF-16 and a character
+    /// outside the basic multilingual plane takes a surrogate pair, exactly as
+    /// `u"…"` does.
+    fn max_element(self, wide_bits: u32) -> u32 {
         match self {
             StrKind::Narrow | StrKind::Utf8 => 0xff,
             StrKind::Utf16 => 0xffff,
+            StrKind::Wide if wide_bits <= 16 => 0xffff,
             StrKind::Utf32 | StrKind::Wide => u32::MAX,
         }
+    }
+
+    /// Whether one element holds a UTF-16 code unit, so that a character
+    /// beyond the basic multilingual plane becomes a surrogate pair.
+    fn is_utf16(self, wide_bits: u32) -> bool {
+        self == StrKind::Utf16 || (self == StrKind::Wide && wide_bits <= 16)
     }
 }
 
@@ -849,6 +862,12 @@ pub struct LexOptions {
     ///
     /// See [`trigraphs_enabled`] for who has them and why.
     pub trigraphs: bool,
+    /// How wide the target's `wchar_t` is.
+    ///
+    /// The one target property the *lexer* has an opinion about: it decides
+    /// what an `L'\xffff'` escape may hold and whether `L"😀"` is one element
+    /// or a surrogate pair, since Windows makes `wchar_t` 16 bits.
+    pub wchar_bits: u32,
 }
 
 impl LexOptions {
@@ -862,6 +881,7 @@ impl LexOptions {
             },
             dollar_in_identifiers: false,
             trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),
+            wchar_bits: crate::TargetModel::host().wchar_bits,
         }
     }
 }
@@ -873,6 +893,7 @@ impl From<&Options> for LexOptions {
             gating: o.gating(),
             dollar_in_identifiers: o.dollar_in_identifiers,
             trigraphs: trigraphs_enabled(o.standard, o.dialect),
+            wchar_bits: o.target.wchar_bits,
         }
     }
 }
@@ -1813,7 +1834,7 @@ impl<'a> Lexer<'a> {
                 None => {
                     let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
                     self.pos += ch.len_utf8();
-                    push_character(ch as u32, kind, out);
+                    push_character(ch as u32, kind, self.options.wchar_bits, out);
                 }
             }
             return;
@@ -1930,7 +1951,7 @@ impl<'a> Lexer<'a> {
                             out.push(*b as u32);
                         }
                     }
-                    Some(ch) => push_character(ch as u32, kind, out),
+                    Some(ch) => push_character(ch as u32, kind, self.options.wchar_bits, out),
                     None => {
                         self.error(
                             range,
@@ -1953,7 +1974,7 @@ impl<'a> Lexer<'a> {
     /// Pushes the value of a numeric escape sequence, which unlike a character
     /// is *not* re-encoded: `u"\xd83d"` is that one code unit.
     fn push_escape_value(&mut self, v: u32, kind: StrKind, start: usize, out: &mut Vec<u32>) {
-        let max = kind.max_element();
+        let max = kind.max_element(self.options.wchar_bits);
         if v > max {
             let range = self.range(start, self.pos);
             let ty = match kind {
@@ -1978,9 +1999,10 @@ impl<'a> Lexer<'a> {
 ///
 /// A `u"…"` literal holds UTF-16 code units, so a character outside the basic
 /// multilingual plane becomes the two halves of a surrogate pair — which is
-/// what makes `sizeof(u"\U0001F600")` six rather than four.
-fn push_character(value: u32, kind: StrKind, out: &mut Vec<u32>) {
-    if kind != StrKind::Utf16 || value <= 0xffff {
+/// what makes `sizeof(u"\U0001F600")` six rather than four. On a target whose
+/// `wchar_t` is 16 bits wide, `L"…"` is UTF-16 too and does the same.
+fn push_character(value: u32, kind: StrKind, wchar_bits: u32, out: &mut Vec<u32>) {
+    if !kind.is_utf16(wchar_bits) || value <= 0xffff {
         out.push(value);
         return;
     }

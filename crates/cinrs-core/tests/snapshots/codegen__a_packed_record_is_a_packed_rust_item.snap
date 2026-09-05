@@ -10,25 +10,27 @@ mod __cinrs_unit_a87d9fcd {
     pub struct Header {
         pub kind: ::core::ffi::c_uchar,
         pub length: ::core::ffi::c_uint,
-        pub __cinrs_bits0: [u8; 2],
+        pub __cinrs_bits0: [::core::primitive::u8; 2],
     }
     #[allow(…)]
     impl Header {
         #[inline]
         pub fn flags(&self) -> ::core::ffi::c_ushort {
-            let raw: u64 = (self.__cinrs_bits0[0] as u64)
-                | ((self.__cinrs_bits0[1] as u64) << 8);
-            let value: u64 = raw & 0xfff;
+            let raw: ::core::primitive::u64 = (self.__cinrs_bits0[0]
+                as ::core::primitive::u64)
+                | ((self.__cinrs_bits0[1] as ::core::primitive::u64) << 8);
+            let value: ::core::primitive::u64 = raw & 0xfff;
             value as ::core::ffi::c_ushort
         }
         #[inline]
         pub fn set_flags(&mut self, value: ::core::ffi::c_ushort) {
-            let bits: u64 = (value as u64) & 0xfff;
-            let raw: u64 = (self.__cinrs_bits0[0] as u64)
-                | ((self.__cinrs_bits0[1] as u64) << 8);
-            let raw: u64 = (raw & 0xfffffffffffff000) | bits;
-            self.__cinrs_bits0[0] = raw as u8;
-            self.__cinrs_bits0[1] = (raw >> 8) as u8;
+            let bits: ::core::primitive::u64 = (value as ::core::primitive::u64) & 0xfff;
+            let raw: ::core::primitive::u64 = (self.__cinrs_bits0[0]
+                as ::core::primitive::u64)
+                | ((self.__cinrs_bits0[1] as ::core::primitive::u64) << 8);
+            let raw: ::core::primitive::u64 = (raw & 0xfffffffffffff000) | bits;
+            self.__cinrs_bits0[0] = raw as ::core::primitive::u8;
+            self.__cinrs_bits0[1] = (raw >> 8) as ::core::primitive::u8;
         }
     }
     #[allow(…)]
@@ -44,7 +46,7 @@ mod __cinrs_unit_a87d9fcd {
     #[derive(Copy, Clone)]
     pub struct Moved {
         pub c: ::core::ffi::c_char,
-        pub __cinrs_pad0: [u8; 15],
+        pub __cinrs_pad0: [::core::primitive::u8; 15],
         pub x: ::core::ffi::c_int,
     }
     #[allow(…)]

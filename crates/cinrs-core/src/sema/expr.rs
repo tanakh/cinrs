@@ -896,7 +896,7 @@ impl Sema<'_> {
             StrKind::Utf8 => Ty::Char,
             StrKind::Utf16 => Ty::char16_ty(),
             StrKind::Utf32 => Ty::char32_ty(),
-            StrKind::Wide => Ty::wchar_ty(),
+            StrKind::Wide => Ty::wchar_ty(&self.target),
         }
     }
 
@@ -2373,7 +2373,7 @@ impl Sema<'_> {
             StrKind::Utf8 => Ty::UChar,
             StrKind::Utf16 => Ty::char16_ty(),
             StrKind::Utf32 => Ty::char32_ty(),
-            StrKind::Wide => Ty::wchar_ty(),
+            StrKind::Wide => Ty::wchar_ty(&self.target),
         };
         // The lexer hands over the raw execution-character value; whether the
         // top bit means "negative" is up to the target's plain `char`.

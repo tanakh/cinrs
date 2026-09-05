@@ -1,11 +1,9 @@
 /* <wchar.h> — extended multibyte and wide character utilities (C99 7.24).
  *
- * `wchar_t` comes from <stddef.h>, which makes it `int` on every target cinrs
- * supports: that is what the front end gives `L'x'` and `L"…"`, so a header
- * that said anything else here would hand the library a pointer of the wrong
- * type. It matches the Unix platforms exactly; the Microsoft library's
- * `wchar_t` is 16 bits wide, and wide characters are the one place cinrs is
- * knowingly a Unix compiler.
+ * `wchar_t` comes from <stddef.h>, which takes it from `__WCHAR_TYPE__` and so
+ * from the target model: `int` on the Unix platforms, `unsigned int` on Arm,
+ * `unsigned short` on Windows. That is exactly what the front end gives `L'x'`
+ * and `L"…"`, so the two cannot drift apart.
  *
  * `mbstate_t` is the one type whose *layout* a program can observe — it
  * declares one and passes its address to `mbrtowc` — so it is spelled the way
@@ -23,27 +21,26 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#if defined(_WIN32)
-typedef unsigned short wint_t;
-#elif defined(__APPLE__)
-typedef int wint_t;
-#else
-typedef unsigned int wint_t;
-#endif
+/* `unsigned short` on Windows, `int` on Apple's platforms, `unsigned int`
+ * elsewhere — which is what `__WINT_TYPE__` already says. */
+typedef __WINT_TYPE__ wint_t;
 
-/* `wchar_t` is `int` here, so its range is `int`'s; <stdint.h> says the same
- * thing, and either header may be included first. */
+/* The range of whatever `wchar_t` turned out to be; <stdint.h> defines the
+ * same two macros, and either header may be included first. */
 #ifndef WCHAR_MIN
-#define WCHAR_MIN (-2147483647 - 1)
-#define WCHAR_MAX 2147483647
+#define WCHAR_MIN __WCHAR_MIN__
+#define WCHAR_MAX __WCHAR_MAX__
 #endif
 
-#if defined(_WIN32)
-#define WEOF ((wint_t)(0xFFFF))
-#elif defined(__APPLE__)
+/* `WEOF` is a `wint_t` that is not a character. Where `wint_t` is signed it is
+ * `-1`; where it is unsigned it is the all-ones value of its width, which is
+ * 0xffff on Windows and 0xffffffff elsewhere. */
+#if defined(__APPLE__)
 #define WEOF (-1)
+#elif __SIZEOF_WINT_T__ == 2
+#define WEOF ((wint_t)(0xFFFF))
 #else
-#define WEOF (0xffffffffu)
+#define WEOF ((wint_t)(0xffffffffu))
 #endif
 
 #if defined(_WIN32)

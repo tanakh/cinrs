@@ -60,16 +60,11 @@ typedef uint32_t uint_fast32_t;
 typedef int64_t int_fast64_t;
 typedef uint64_t uint_fast64_t;
 
-#if __SIZEOF_POINTER__ == __SIZEOF_LONG__
-typedef long intptr_t;
-typedef unsigned long uintptr_t;
-#elif __SIZEOF_POINTER__ == __SIZEOF_LONG_LONG__
-__extension__ typedef long long intptr_t;
-__extension__ typedef unsigned long long uintptr_t;
-#else
-typedef int intptr_t;
-typedef unsigned int uintptr_t;
-#endif
+/* The same two types `size_t` and `ptrdiff_t` are built from; taking them from
+ * the predefined macros is what keeps every pointer-sized typedef naming one
+ * underlying type rather than two that merely happen to be the same width. */
+__extension__ typedef __INTPTR_TYPE__ intptr_t;
+__extension__ typedef __UINTPTR_TYPE__ uintptr_t;
 
 typedef int64_t intmax_t;
 typedef uint64_t uintmax_t;
@@ -142,15 +137,23 @@ typedef uint64_t uintmax_t;
 #define INTMAX_MAX INT64_MAX
 #define UINTMAX_MAX UINT64_MAX
 
-/* cinrs makes a wide character constant an `int`; see <stddef.h>. <wchar.h>
- * defines the same two macros, and either header may be included first, so
- * both guard them. */
+/* The range of `wchar_t`, whatever the target made it; see <stddef.h>.
+ * <wchar.h> defines the same two macros, and either header may be included
+ * first, so both guard them. */
 #ifndef WCHAR_MIN
-#define WCHAR_MIN (-2147483647 - 1)
-#define WCHAR_MAX 2147483647
+#define WCHAR_MIN __WCHAR_MIN__
+#define WCHAR_MAX __WCHAR_MAX__
 #endif
+#if __SIZEOF_WINT_T__ == 2
+#define WINT_MIN 0
+#define WINT_MAX 65535
+#elif defined(__APPLE__)
 #define WINT_MIN INT32_MIN
 #define WINT_MAX INT32_MAX
+#else
+#define WINT_MIN 0
+#define WINT_MAX 4294967295U
+#endif
 #define SIG_ATOMIC_MIN INT32_MIN
 #define SIG_ATOMIC_MAX INT32_MAX
 

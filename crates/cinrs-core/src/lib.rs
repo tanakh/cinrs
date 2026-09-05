@@ -107,7 +107,21 @@ pub use capture::{FileId, InputMode, Pos, Source, SourceMap, SourceRange, Subspa
 pub use diag::{Diagnostic, Diagnostics, Level};
 pub use ir::{Program, Ty};
 pub use pp::Token;
-pub use target::TargetModel;
+pub use target::{Arch, Os, TargetModel, TargetSource, UnknownTarget};
+
+/// The environment variable that names the target the expansion is for.
+///
+/// A procedural macro cannot ask `rustc` what it is compiling for, so the
+/// crate being built says it, from its own build script:
+///
+/// ```text
+/// println!("cargo:rustc-env=CINRS_TARGET={}", std::env::var("TARGET").unwrap());
+/// ```
+///
+/// `cargo:rustc-env` reaches the very `rustc` process that runs the macro, and
+/// Cargo makes the value part of the crate's fingerprint, so changing the
+/// `--target` rebuilds. See [`target`] for the whole order of precedence.
+pub const TARGET_ENV_VAR: &str = "CINRS_TARGET";
 
 /// Which revision of the C standard to accept.
 ///
@@ -246,12 +260,20 @@ pub struct Options {
     pub include_paths: Vec<PathBuf>,
     /// The data model the generated code is compiled for.
     ///
-    /// Defaults to the host's; see [`TargetModel`] for what that means when
-    /// cross-compiling. Whatever it is set to, the expansion states it — the
+    /// Defaults to the host's, which [`analyze`] replaces with the one
+    /// [`TARGET_ENV_VAR`] names and the unit's own
+    /// `#pragma cinrs target` replaces again; see [`target`] for the order.
+    /// Whatever it ends up being, the expansion states it — the
     /// `const _: () = { assert!(…); };` block every unit opens with is built
     /// from *this* model, so a unit expanded for one data model and compiled
     /// for another fails to compile.
+    ///
+    /// Setting it directly — [`Options::for_target`] is the tidy way — marks
+    /// [`Options::target_source`] `Explicit`, and the environment variable is
+    /// then left alone.
     pub target: TargetModel,
+    /// Where [`Options::target`] came from, which the diagnostics name.
+    pub target_source: TargetSource,
     /// Whether `va_list` and variadic *definitions* may be generated.
     ///
     /// Defaults to [`C_VARIADIC_SUPPORTED`], which is exactly what the
@@ -287,8 +309,20 @@ impl Options {
             dollar_in_identifiers: false,
             include_paths: Vec::new(),
             target: TargetModel::host(),
+            target_source: TargetSource::Host,
             c_variadic: C_VARIADIC_SUPPORTED,
         }
+    }
+
+    /// These options with `target` set, and marked as the caller's choice so
+    /// that [`TARGET_ENV_VAR`] does not override it.
+    ///
+    /// What a test that wants the ILP32 or LLP64 rules uses; a unit still
+    /// overrides it with `#pragma cinrs target`.
+    pub fn for_target(mut self, target: TargetModel) -> Self {
+        self.target = target;
+        self.target_source = TargetSource::Explicit;
+        self
     }
 
     /// The macro that selects this entry point, as a diagnostic names it.
@@ -426,6 +460,13 @@ pub struct Analysis {
     pub no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module, if any.
     pub module: Option<String>,
+    /// The options the rest of the pipeline is to run with.
+    ///
+    /// These are the caller's, with the target model resolved: whatever
+    /// [`TARGET_ENV_VAR`] and the unit's own `#pragma cinrs target` had to say
+    /// is already in [`Options::target`], so sema and code generation must use
+    /// *these* rather than the ones they were handed.
+    pub options: Options,
 }
 
 /// Stack size for the thread the recursive passes run on.
@@ -505,17 +546,30 @@ struct FrontEndOutput {
     export: bool,
     no_std: bool,
     module: Option<String>,
+    /// The options with the target model resolved; see [`Analysis::options`].
+    options: Options,
 }
 
 /// Lexes, preprocesses and parses one translation unit.
 fn front_end(input: FrontEndInput) -> FrontEndOutput {
     let FrontEndInput {
-        ctx,
+        mut ctx,
         unit_range,
-        options,
+        mut options,
     } = input;
     let mut diagnostics = Diagnostics::new();
-    let raw = lex::lex_text(&ctx.text, ctx.base, &(&options).into());
+    let mut raw = lex::lex_text(&ctx.text, ctx.base, &(&options).into());
+    // `#pragma cinrs target` has to be answered before anything else looks at
+    // the model: the predefined macros are built from it, so it cannot be a
+    // pragma like the others, handled where it stands. The scan is lexical and
+    // over the unit's own text only; see [`pp::scan_target_pragma`]. A pragma
+    // that really did change the model means the text has to be lexed again,
+    // because how wide `wchar_t` is decides what `L'…'` may hold.
+    let (target_pragmas, relex) = pp::scan_target_pragma(&raw, &mut options, &mut diagnostics);
+    ctx.target_pragmas = target_pragmas;
+    if relex {
+        raw = lex::lex_text(&ctx.text, ctx.base, &(&options).into());
+    }
     let pp::Preprocessed {
         tokens,
         expansions,
@@ -545,6 +599,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         export,
         no_std,
         module,
+        options,
     }
 }
 
@@ -566,6 +621,11 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
     // Capture must stay on this thread: it handles `proc_macro2::Span`s, which
     // are not `Send`. Everything after it works on plain byte offsets.
     let mut source = capture::capture_with(input, &mut diagnostics, subspan);
+    // The environment is read here rather than in `Options::new`, so that the
+    // diagnostic a bad `CINRS_TARGET` deserves has a range to sit on — the
+    // whole invocation, there being nothing in the C to point at.
+    let mut options = options.clone();
+    apply_env_target(&mut options, source.root_range(), &mut diagnostics);
     let file = source.map.file(source.root);
     let arg = FrontEndInput {
         ctx: pp::Context {
@@ -575,9 +635,11 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
             first_line: file.first_line(),
             dir: including_directory(file.rust_path()),
             next_base: source.map.next_base(),
+            // Filled in by `front_end`, which is where the scan runs.
+            target_pragmas: pp::TargetPragmas::default(),
         },
         unit_range: source.root_range(),
-        options: options.clone(),
+        options,
     };
     let out = on_large_stack(arg, front_end);
     // The preprocessor allocated the offsets; the map hands out the spans for
@@ -610,6 +672,34 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
         export: out.export,
         no_std: out.no_std,
         module: out.module,
+        options: out.options,
+    }
+}
+
+/// Resolves [`TARGET_ENV_VAR`] into `options`, reporting a triple that names
+/// no machine this crate models.
+///
+/// Only when the caller left the model at the host's: an
+/// [`Options::for_target`] is a deliberate choice, and a test that sets one
+/// must not have the developer's own environment change the answer.
+fn apply_env_target(options: &mut Options, range: SourceRange, diagnostics: &mut Diagnostics) {
+    if options.target_source != TargetSource::Host {
+        return;
+    }
+    let Ok(triple) = std::env::var(TARGET_ENV_VAR) else {
+        return;
+    };
+    let triple = triple.trim().to_owned();
+    if triple.is_empty() {
+        return;
+    }
+    let source = TargetSource::Env(triple);
+    match TargetModel::from_triple(source.triple().expect("Env carries its triple")) {
+        Ok(model) => {
+            options.target = model;
+            options.target_source = source;
+        }
+        Err(unknown) => diagnostics.error(range, unknown.message(&source)),
     }
 }
 
@@ -676,8 +766,13 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         export,
         no_std,
         module,
+        // The target model the environment and the unit's own pragma settled
+        // on; everything after the front end has to use these rather than the
+        // options the caller handed in.
+        options,
         ..
     } = analyze_with(input, options, subspan);
+    let options = &options;
 
     let unit_id = source.unit_id();
     let (mut program, mut sema_diagnostics) = on_large_stack(
@@ -767,6 +862,11 @@ fn in_module(items: TokenStream, name: Option<&str>, unit_id: u64) -> TokenStrea
 ///
 /// Bundled headers are left out: they cannot change without the crate that
 /// carries them changing, which Cargo already knows about.
+///
+/// `str` and `u8` take the [`core::primitive`] path for the same reason every
+/// primitive the code generator writes does: these items go into the unit's
+/// own module, where `typedef unsigned char u8;` may have put an alias of that
+/// name.
 fn rebuild_tracking(headers: &[PathBuf], embedded: &[PathBuf]) -> TokenStream {
     let span = Span::call_site();
     let mut out = TokenStream::new();
@@ -774,13 +874,17 @@ fn rebuild_tracking(headers: &[PathBuf], embedded: &[PathBuf]) -> TokenStream {
         let mut literal = Literal::string(&header.to_string_lossy());
         literal.set_span(span);
         let literal = TokenTree::Literal(literal);
-        out.extend(quote! { const _: &str = ::core::include_str!(#literal); });
+        out.extend(quote! {
+            const _: &::core::primitive::str = ::core::include_str!(#literal);
+        });
     }
     for resource in embedded {
         let mut literal = Literal::string(&resource.to_string_lossy());
         literal.set_span(span);
         let literal = TokenTree::Literal(literal);
-        out.extend(quote! { const _: &[u8] = ::core::include_bytes!(#literal); });
+        out.extend(quote! {
+            const _: &[::core::primitive::u8] = ::core::include_bytes!(#literal);
+        });
     }
     out
 }

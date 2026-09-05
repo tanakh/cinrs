@@ -1,0 +1,20 @@
+# The crate `tests/cross_targets.rs` runs `cargo check --target …` over.
+#
+# Deliberately outside the workspace — the empty `[workspace]` table below is
+# what detaches it — because it is not built by an ordinary `cargo build` of
+# this repository: it exists to be compiled for another machine, once with
+# `CINRS_TARGET` exported by its build script and once without, and the second
+# of those is *expected to fail*.
+[package]
+name = "cinrs-cross-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cinrs = { path = "../.." }
+
+[lib]
+path = "src/lib.rs"

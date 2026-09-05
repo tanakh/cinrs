@@ -20,7 +20,8 @@ mod __cinrs_unit_270870a9 {
                     'l0_body: {
                         total = total
                             .wrapping_add({
-                                let __cinrs_tmp0 = values.offset(i as isize);
+                                let __cinrs_tmp0 = values
+                                    .offset(i as ::core::primitive::isize);
                                 (*__cinrs_tmp0)
                             });
                     }
@@ -37,7 +38,9 @@ mod __cinrs_unit_270870a9 {
     ) {
         unsafe {
             let mut front: *mut ::core::ffi::c_int = values;
-            let mut back: *mut ::core::ffi::c_int = values.offset(n as isize).offset(-1);
+            let mut back: *mut ::core::ffi::c_int = values
+                .offset(n as ::core::primitive::isize)
+                .offset(-1);
             'l0: while front < back {
                 let mut t: ::core::ffi::c_int = (*front);
                 let __cinrs_tmp1 = ({

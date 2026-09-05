@@ -627,7 +627,10 @@ impl<'a> Codegen<'a> {
             // Only reachable on the error path, where a `compile_error!` is
             // already going out; the unit type keeps the stub items parseable.
             Ty::Void | Ty::Error => return quote_spanned! {span=> () },
-            Ty::Bool => return quote_spanned! {span=> bool },
+            // `typedef _Bool bool;` is what every C23 compatibility header
+            // writes, so the name has to be the qualified one or the alias
+            // this unit generates for it is `pub type bool = bool;`.
+            Ty::Bool => return primitive_ty("bool", span),
             Ty::Char => "c_char",
             Ty::SChar => "c_schar",
             Ty::UChar => "c_uchar",
@@ -837,11 +840,12 @@ impl<'a> Codegen<'a> {
             }
             (None, None) => quote_spanned! {span=> #[repr(C)] #[derive(Copy, Clone)] },
         };
+        let byte = primitive_ty("u8", span);
         if !record.complete {
             // A tag that is never completed can still be pointed at. An empty
             // body is the closest Rust has to C's incomplete type.
             return quote_spanned! {span=>
-                #attrs #derives pub struct #name { _incomplete: [u8; 0] }
+                #attrs #derives pub struct #name { _incomplete: [#byte; 0] }
             };
         }
         let mut fields = TokenStream::new();
@@ -859,7 +863,7 @@ impl<'a> Codegen<'a> {
                 ir::RustField::Bits { name, bytes, .. } | ir::RustField::Pad { name, bytes } => {
                     let fname = Ident::new(name, span);
                     let len = usize_literal(*bytes, span);
-                    fields.extend(quote_spanned! {span=> pub #fname: [u8; #len], });
+                    fields.extend(quote_spanned! {span=> pub #fname: [#byte; #len], });
                 }
                 ir::RustField::Align { name, align } => {
                     let fname = Ident::new(name, span);
@@ -872,7 +876,7 @@ impl<'a> Codegen<'a> {
             // GCC gives an empty `union` a size of zero, and so does an empty
             // Rust `struct`; a Rust `union` has to have at least one field, so
             // this is the one place the two kinds are generated differently.
-            fields.extend(quote_spanned! {span=> pub __cinrs_empty: [u8; 0], });
+            fields.extend(quote_spanned! {span=> pub __cinrs_empty: [#byte; 0], });
         }
         let body = braced(fields, span);
         let item = match record.kind {
@@ -1030,13 +1034,16 @@ impl<'a> Codegen<'a> {
         let first = start / 8;
         let count = (shift + bits.width).div_ceil(8);
         let mut writes = TokenStream::new();
+        let byte = primitive_ty("u8", span);
         for step in 0..count {
             let index = usize_literal(first + u64::from(step), span);
             if step == 0 {
-                writes.extend(quote_spanned! {span=> self.#storage[#index] = raw as u8; });
+                writes.extend(quote_spanned! {span=> self.#storage[#index] = raw as #byte; });
             } else {
                 let by = usize_literal(u64::from(step) * 8, span);
-                writes.extend(quote_spanned! {span=> self.#storage[#index] = (raw >> #by) as u8; });
+                writes.extend(
+                    quote_spanned! {span=> self.#storage[#index] = (raw >> #by) as #byte; },
+                );
             }
         }
         let body = self.accessor_body(
@@ -1070,31 +1077,37 @@ impl<'a> Codegen<'a> {
     ///
     /// Everything this crate computes at expansion time — `sizeof`, member
     /// offsets, bit-field storage, the type of an integer constant, the value
-    /// of an `#if` — comes out of a [`TargetModel`](crate::TargetModel) that is
-    /// the *host's* unless something told it otherwise. Cross-compiling to a
-    /// machine with a different data model would leave every one of those
-    /// answers quietly wrong, so the expansion states them: `long` is this
-    /// many bytes, a pointer is that many, plain `char` is signed. The
-    /// generated code uses the `core::ffi` aliases, which follow the *target*,
-    /// so a mismatch is a failed assertion at the caret of the C rather than a
-    /// program that computes the wrong thing.
+    /// of an `#if` — comes out of a [`TargetModel`](crate::TargetModel) that
+    /// was chosen from `CINRS_TARGET`, from `#pragma cinrs target`, or (with
+    /// neither) from the *host*. Any of the three may be the wrong one, and a
+    /// wrong one would leave every one of those answers quietly wrong. So the
+    /// expansion states them: `long` is this many bytes, a pointer is that
+    /// many, plain `char` is signed, `double` is aligned so. The generated
+    /// code uses the `core::ffi` aliases, which follow the *target*, so a
+    /// mismatch is a failed assertion at the caret of the C rather than a
+    /// program that computes the wrong thing — and the message names both the
+    /// model that was used and the knob that chose it.
     ///
-    /// The numbers come from the model itself, so a unit expanded with a
-    /// different [`Options::target`](crate::Options::target) asserts that
-    /// model. `__int128`'s alignment is included only where the unit has one —
-    /// it is the one scalar whose alignment is not fixed by its width, and a
-    /// unit that never mentions it must not be refused over it.
+    /// `__int128`'s alignment is included only where the unit has one: it is
+    /// the one scalar whose alignment is not fixed by its width, and a unit
+    /// that never mentions it must not be refused over it.
     fn data_model_check(&self) -> TokenStream {
         let span = self.map.span(SourceRange::at(0));
         let target = &self.options.target;
+        // Every message ends with this, so that a failure says what to change
+        // rather than only what went wrong.
+        let chosen = format!(
+            "Translated for {}; set CINRS_TARGET from a build script \
+             (cargo:rustc-env=CINRS_TARGET=$TARGET) or write #pragma cinrs target.",
+            target.describe(&self.options.target_source)
+        );
         let mut body = TokenStream::new();
         let mut width = |ty: TokenStream, bits: u32, what: &str| {
             let bytes = usize_literal(u64::from(bits).div_ceil(8), span);
             let message = message_literal(
                 &format!(
-                    "cinrs: this unit was translated for a data model where {what} is {} \
-                     bytes, and this target's is not. Cross-compilation to a different data \
-                     model is not supported.",
+                    "cinrs: {what} is {} bytes in the data model this unit was translated for, \
+                     and is not on this target. {chosen}",
                     bits.div_ceil(8)
                 ),
                 span,
@@ -1144,20 +1157,40 @@ impl<'a> Codegen<'a> {
         };
         let message = message_literal(
             &format!(
-                "cinrs: this unit was translated for a data model where plain 'char' is \
-                 {said}, and this target's is not. Cross-compilation to a different data \
-                 model is not supported."
+                "cinrs: plain 'char' is {said} in the data model this unit was translated \
+                 for, and is not on this target. {chosen}"
             ),
             span,
         );
         body.extend(quote_spanned! {span=> assert!(#test, #message); });
+        // The one property two targets of the same *data model* differ on: the
+        // i386 System V ABI aligns `long long` and `double` to four bytes and
+        // the Microsoft one to eight, and every member offset the front end
+        // computed followed whichever this model says. `c_longlong` and
+        // `c_double` are the aliases, so the assertion follows the target.
+        let align = usize_literal(target.max_scalar_align.min(8), span);
+        let message = message_literal(
+            &format!(
+                "cinrs: 'long long' and 'double' are {}-byte aligned in the data model this \
+                 unit was translated for, and are not on this target — so every 'sizeof' and \
+                 member offset in it would be wrong. {chosen}",
+                target.max_scalar_align.min(8)
+            ),
+            span,
+        );
+        body.extend(quote_spanned! {span=>
+            assert!(
+                ::core::mem::align_of::<::core::ffi::c_longlong>() == #align
+                    && ::core::mem::align_of::<::core::ffi::c_double>() == #align,
+                #message
+            );
+        });
         if self.uses_int128.get() {
             let align = usize_literal(target.int128_align, span);
             let message = message_literal(
                 &format!(
-                    "cinrs: this unit was translated for a data model where '__int128' is \
-                     {}-byte aligned, and this target's is not. Cross-compilation to a \
-                     different data model is not supported.",
+                    "cinrs: '__int128' is {}-byte aligned in the data model this unit was \
+                     translated for, and is not on this target. {chosen}",
                     target.int128_align
                 ),
                 span,
@@ -1603,7 +1636,7 @@ impl<'a> Codegen<'a> {
     /// when the arena is dropped, which is when the function returns.
     fn alloca_arena(&self, span: Span) -> TokenStream {
         let name = self.alloca_ident();
-        let block = self.vec_ty(quote_spanned! {span=> u128 }, span);
+        let block = self.vec_ty(primitive_ty("u128", span), span);
         let arena = self.vec_ty(block, span);
         let empty = self.vec_new(span);
         quote_spanned! {span=> let mut #name: #arena = #empty; }
@@ -1779,9 +1812,10 @@ impl<'a> Codegen<'a> {
             arms.extend(quote_spanned! {bspan=> #pattern => { #body } });
         }
         arms.extend(quote_spanned! {span=> _ => ::core::unreachable!(), });
+        let u32_ty = primitive_ty("u32", span);
         quote_spanned! {span=>
             #out
-            let mut #state: u32 = 0;
+            let mut #state: #u32_ty = 0;
             #label: loop {
                 match #state { #arms }
             }
@@ -2091,7 +2125,8 @@ impl<'a> Codegen<'a> {
         let count = self.expr_at(&def.count, count_ty);
         let zero = self.zero_tokens(elem, span);
         let elem_ty = self.ty(elem, span);
-        let elements = self.vec_of(zero, quote_spanned! {span=> #len as usize }, span);
+        let usize_ty = primitive_ty("usize", span);
+        let elements = self.vec_of(zero, quote_spanned! {span=> #len as #usize_ty }, span);
         if self.in_cfg {
             return quote_spanned! {span=>
                 #len = #count;
@@ -2818,9 +2853,10 @@ impl<'a> Codegen<'a> {
                 let block = self.temporary();
                 let pointer = self.temporary();
                 let void = self.pointee_ty(Ty::Void, span);
+                let usize_ty = primitive_ty("usize", span);
                 let elements = self.vec_of(
                     quote_spanned! {span=> 0u128 },
-                    quote_spanned! {span=> (#size as usize).div_ceil(16) },
+                    quote_spanned! {span=> (#size as #usize_ty).div_ceil(16) },
                     span,
                 );
                 Value::new(
@@ -3041,10 +3077,11 @@ impl<'a> Codegen<'a> {
             return int_literal_token(value, span);
         }
         let tokens = self.expr(index).at(prec::CAST, span);
+        let isize_ty = primitive_ty("isize", span);
         if sub {
-            quote_spanned! {span=> -(#tokens as isize) }
+            quote_spanned! {span=> -(#tokens as #isize_ty) }
         } else {
-            quote_spanned! {span=> #tokens as isize }
+            quote_spanned! {span=> #tokens as #isize_ty }
         }
     }
 
@@ -3613,7 +3650,8 @@ impl<'a> Codegen<'a> {
                 // `wrapping_shl` takes the shift amount as a `u32` whatever the
                 // shifted type is; a bare literal simply is one already.
                 let amount = rhs.at(prec::CAST, span);
-                quote_spanned! {span=> #amount as u32 }
+                let u32_ty = primitive_ty("u32", span);
+                quote_spanned! {span=> #amount as #u32_ty }
             } else {
                 rhs.at(prec::LOWEST, span)
             };
@@ -3707,10 +3745,11 @@ impl<'a> Codegen<'a> {
     /// The `offset` argument for an index that has already been emitted.
     fn offset_of_value(&mut self, index: Value, sub: bool, span: Span) -> TokenStream {
         let tokens = index.at(prec::CAST, span);
+        let isize_ty = primitive_ty("isize", span);
         if sub {
-            quote_spanned! {span=> -(#tokens as isize) }
+            quote_spanned! {span=> -(#tokens as #isize_ty) }
         } else {
-            quote_spanned! {span=> #tokens as isize }
+            quote_spanned! {span=> #tokens as #isize_ty }
         }
     }
 
@@ -3783,11 +3822,12 @@ impl<'a> Codegen<'a> {
             // integer amounts to.
             let target = self.ty(to, span);
             let source = self.ty(from, span);
+            let usize_ty = primitive_ty("usize", span);
             if to_fn && !from.is_pointer() {
                 let tokens = value.at(prec::CAST, span);
                 return Value::new(
                     quote_spanned! {span=>
-                        ::core::mem::transmute::<usize, #target>(#tokens as usize)
+                        ::core::mem::transmute::<#usize_ty, #target>(#tokens as #usize_ty)
                     },
                     prec::CALL,
                 );
@@ -3796,7 +3836,7 @@ impl<'a> Codegen<'a> {
                 let tokens = value.at(prec::LOWEST, span);
                 return Value::new(
                     quote_spanned! {span=>
-                        ::core::mem::transmute::<#source, usize>(#tokens) as #target
+                        ::core::mem::transmute::<#source, #usize_ty>(#tokens) as #target
                     },
                     prec::CAST,
                 )
@@ -3815,8 +3855,9 @@ impl<'a> Codegen<'a> {
             // Rust only casts a pointer to `usize`; the rest is an ordinary
             // integer conversion.
             let tokens = value.at(prec::CAST, span);
+            let usize_ty = primitive_ty("usize", span);
             return Value::new(
-                quote_spanned! {span=> #tokens as usize as #target },
+                quote_spanned! {span=> #tokens as #usize_ty as #target },
                 prec::CAST,
             )
             .type_end(true);
@@ -4293,13 +4334,14 @@ impl<'a> Codegen<'a> {
     /// An infinity or a NaN, which no Rust literal can spell.
     fn non_finite_literal(&self, value: f64, ty: Ty, span: Span) -> TokenStream {
         let target = self.ty(ty, span);
+        let f64_ty = primitive_ty("f64", span);
         if value.is_nan() {
-            return quote_spanned! {span=> f64::NAN as #target };
+            return quote_spanned! {span=> <#f64_ty>::NAN as #target };
         }
         if value.is_sign_negative() {
-            quote_spanned! {span=> -f64::INFINITY as #target }
+            quote_spanned! {span=> -<#f64_ty>::INFINITY as #target }
         } else {
-            quote_spanned! {span=> f64::INFINITY as #target }
+            quote_spanned! {span=> <#f64_ty>::INFINITY as #target }
         }
     }
 
@@ -4411,26 +4453,28 @@ fn rooted_in_static(place: &Place, program: &Program) -> bool {
 /// The Rust unsigned integer of a given width, which is what the bit-counting
 /// builtins are defined on.
 fn unsigned_rust_ty(width: u32, span: Span) -> TokenStream {
-    let name = match width {
-        0..=8 => "u8",
-        9..=16 => "u16",
-        17..=32 => "u32",
-        _ => "u64",
-    };
-    let ident = Ident::new(name, span);
-    quote_spanned! {span=> #ident }
+    primitive_ty(
+        match width {
+            0..=8 => "u8",
+            9..=16 => "u16",
+            17..=32 => "u32",
+            _ => "u64",
+        },
+        span,
+    )
 }
 
 /// The signed counterpart, for `__builtin_clrsb`.
 fn signed_rust_ty(width: u32, span: Span) -> TokenStream {
-    let name = match width {
-        0..=8 => "i8",
-        9..=16 => "i16",
-        17..=32 => "i32",
-        _ => "i64",
-    };
-    let ident = Ident::new(name, span);
-    quote_spanned! {span=> #ident }
+    primitive_ty(
+        match width {
+            0..=8 => "i8",
+            9..=16 => "i16",
+            17..=32 => "i32",
+            _ => "i64",
+        },
+        span,
+    )
 }
 
 /// A mask of `width` low bits, inside a word of `word_bits`.
@@ -4635,26 +4679,33 @@ fn bare_int_literal(value: i128, ty: Ty, span: Span) -> TokenStream {
 /// The integer a bit-field's bytes are gathered into: `u64`/`i64` for a
 /// window of 64 bits and the 128-bit primitives for a wider one.
 ///
-/// The 128-bit ones take the [`core::primitive`] path and the 64-bit ones do
-/// not, because `u128` and `i128` are the names a C unit really takes for
-/// GNU's 128-bit types — `typedef unsigned __int128 u128;` — while nothing
-/// spells `unsigned long long` `u64` and then puts a bit-field of it next to
-/// one.
+/// All four take the [`core::primitive`] path, `typedef unsigned long long
+/// u64;` being every bit as ordinary in C as `typedef unsigned __int128 u128;`.
 fn window_ty(word_bits: u32, signed: bool, span: Span) -> TokenStream {
     match (word_bits, signed) {
         (128, false) => primitive_ty("u128", span),
         (128, true) => primitive_ty("i128", span),
-        (_, false) => quote_spanned! {span=> u64 },
-        (_, true) => quote_spanned! {span=> i64 },
+        (_, false) => primitive_ty("u64", span),
+        (_, true) => primitive_ty("i64", span),
     }
 }
 
-/// `::core::primitive::u128` and its relatives.
+/// `::core::primitive::u64` and every other primitive this code generator
+/// writes.
 ///
-/// A bare `u128` is a name a C `typedef` can take — `typedef unsigned __int128
-/// u128;` is how real C spells the type — and the generated alias would then
-/// either be a cycle or shadow the primitive for the rest of the module. The
-/// path is what [`core::primitive`] exists for.
+/// **Every** bare primitive name goes through here, and none is ever written
+/// as a bare identifier, because each of them is a name a C `typedef` can
+/// take. `typedef _Bool bool;` is in the C23 compatibility header of half the
+/// world's C — and in gcc.c-torture's `execute/20030714-1` — while `typedef
+/// unsigned int u32;`, `typedef unsigned long usize;` and `typedef long long
+/// i64;` are how a great deal of embedded C spells its types. The generated
+/// item is then `pub type bool = bool;`, which is a cycle (`E0391`), and even
+/// where it is not a cycle the alias shadows the primitive for the rest of the
+/// module — so the padding of a `struct`, a bit-field accessor's window and a
+/// pointer difference would all silently take the C type instead.
+///
+/// The [`core::primitive`] module exists for exactly this, and the leading
+/// `::core` keeps it working in a crate that has renamed its own `core`.
 fn primitive_ty(name: &str, span: Span) -> TokenStream {
     let ident = Ident::new(name, span);
     quote_spanned! {span=> ::core::primitive::#ident }

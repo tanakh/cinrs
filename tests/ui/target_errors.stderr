@@ -1,0 +1,74 @@
+error: #pragma cinrs target: unknown architecture 'pdp11' in the target triple 'pdp11-unknown-unix'; the architectures cinrs models are x86, x86_64, aarch64, arm/thumb, riscv32, riscv64, wasm32, powerpc, powerpc64, s390x, mips, mips64, sparc, sparc64 and loongarch64, on linux (android included), darwin, windows, freebsd, netbsd, openbsd, wasi or none
+  --> tests/ui/target_errors.rs:16:5
+   |
+16 |     #pragma cinrs target "pdp11-unknown-unix"
+   |     ^
+
+error: #pragma cinrs target: unsupported operating system 'plan9' in the target triple 'x86_64-unknown-plan9'; the architectures cinrs models are x86, x86_64, aarch64, arm/thumb, riscv32, riscv64, wasm32, powerpc, powerpc64, s390x, mips, mips64, sparc, sparc64 and loongarch64, on linux (android included), darwin, windows, freebsd, netbsd, openbsd, wasi or none
+  --> tests/ui/target_errors.rs:23:5
+   |
+23 |     #pragma cinrs target "x86_64-unknown-plan9"
+   |     ^
+
+error: #pragma cinrs target: the target triple 'avr-none-unknown' is not supported: on 'avr' 'int' is 16 bits and 'double' is 32; the architectures cinrs models are x86, x86_64, aarch64, arm/thumb, riscv32, riscv64, wasm32, powerpc, powerpc64, s390x, mips, mips64, sparc, sparc64 and loongarch64, on linux (android included), darwin, windows, freebsd, netbsd, openbsd, wasi or none
+  --> tests/ui/target_errors.rs:30:5
+   |
+30 |     #pragma cinrs target "avr-none-unknown"
+   |     ^
+
+error: #pragma cinrs target needs a string literal
+  --> tests/ui/target_errors.rs:37:5
+   |
+37 |     #pragma cinrs target
+   |     ^
+
+error: #pragma cinrs target needs a string literal, found integer constant
+  --> tests/ui/target_errors.rs:43:26
+   |
+43 |     #pragma cinrs target 42
+   |                          ^^
+
+error: #pragma cinrs target was given an empty string
+  --> tests/ui/target_errors.rs:49:26
+   |
+49 |     #pragma cinrs target ""
+   |                          ^^
+
+error: this unit is already translated for 'i686-unknown-linux-gnu' by an earlier #pragma cinrs target
+  --> tests/ui/target_errors.rs:57:5
+   |
+57 |     #pragma cinrs target "wasm32-unknown-unknown"
+   |     ^
+
+error: '#pragma cinrs target' must come before every '#include' and '#if', which were already answered with the previous data model
+  --> tests/ui/target_errors.rs:65:5
+   |
+65 |     #pragma cinrs target "i686-unknown-linux-gnu"
+   |     ^
+
+error: '__int128' is not available on this target (x86, 32-bit pointers); guard on '__SIZEOF_INT128__'
+  --> tests/ui/target_errors.rs:74:5
+   |
+74 |     __int128 wide(void) { return 0; }
+   |     ^^^^^^^^
+
+error: 'unsigned __int128' is not available on this target (x86, 32-bit pointers); guard on '__SIZEOF_INT128__'
+  --> tests/ui/target_errors.rs:77:5
+   |
+77 |     unsigned __int128 uwide(void) { return 0; }
+   |     ^^^^^^^^
+
+error: bit-field 'a' is not supported on a big-endian target (s390x): cinrs allocates bit-fields from the least significant end, which is not how a big-endian ABI lays them out
+  --> tests/ui/target_errors.rs:87:18
+   |
+87 |         unsigned a : 3;
+   |                  ^
+
+error: bit-field 'b' is not supported on a big-endian target (s390x): cinrs allocates bit-fields from the least significant end, which is not how a big-endian ABI lays them out
+  --> tests/ui/target_errors.rs:89:18
+   |
+89 |         unsigned b : 5;
+   |                  ^
+
+error: aborting due to 12 previous errors
+

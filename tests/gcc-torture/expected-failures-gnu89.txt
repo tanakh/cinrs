@@ -58,7 +58,6 @@ execute/20030125-1                    compile error: 'weak' is not supported: Ru
 execute/20030222-1                    compile error: inline assembly is not supported
 execute/20030323-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030501-1                    compile error: expected ';' after declaration, found '{'
-execute/20030714-1                    compile error: E0391: cycle detected when expanding type alias `unit::torture::bool`
 execute/20030811-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030910-1                    compile error: complex types are not supported
 ?execute/20030914-2                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)

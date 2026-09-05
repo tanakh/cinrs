@@ -6,6 +6,11 @@
  *
  * Only the numbers are platform-specific; EDOM and ERANGE happen to agree
  * everywhere.
+ *
+ * `_WIN32` and `__APPLE__` here are the *target's*, predefined from the model
+ * cinrs was told to translate for — `CINRS_TARGET`, `#pragma cinrs target`, or
+ * the host with neither — so a cross build takes the branch of the machine the
+ * program will run on rather than the one it is built on.
  */
 #ifndef _CINRS_ERRNO_H
 #define _CINRS_ERRNO_H

@@ -56,28 +56,117 @@ about.
 
 Almost every row below is answered against a *model* of the machine rather than
 against the machine: `sizeof`, `_Alignof`, member offsets, bit-field storage,
-the type an integer constant gets, whether `-1 < 1u`, and the value of an `#if`
-are all computed while the macro is expanding, from
-`cinrs_core::TargetModel` — the widths of `short`, `int`, `long`, `long long`
-and a pointer, the signedness of plain `char`, and the alignment of
-`__int128`. It defaults to the machine the procedural macro itself was compiled
-for, which is the *host*, because nothing in Cargo tells a procedural macro
-what the target is.
+the type an integer constant gets, whether `-1 < 1u`, the value of an `#if`,
+the predefined macros and therefore which branch each bundled header takes are
+all computed while the macro is expanding, from `cinrs_core::TargetModel`.
 
-Cross-compiling to a machine with a different data model would therefore leave
-those answers quietly wrong — 64-bit Windows is LLP64, where `long` is four
-bytes; wasm32 and the 32-bit targets are ILP32; AArch64 and s390x make plain
-`char` unsigned. So **every expansion states the model it was translated for**,
+### Choosing it
+
+A procedural macro cannot ask `rustc` what it is compiling for, so the model is
+chosen, in this order:
+
+1. **`#pragma cinrs target "<triple>"`** written in the unit itself;
+2. the **`CINRS_TARGET`** environment variable, which the crate being built
+   sets from its own build script —
+   `println!("cargo:rustc-env=CINRS_TARGET={}", std::env::var("TARGET").unwrap());`
+   — because `cargo:rustc-env` reaches the very `rustc` process that runs the
+   macro;
+3. otherwise the machine the macro itself was compiled for, the *host*.
+
+The pragma is read *before* preprocessing — the predefined macros are built
+from the model, so a pragma handled where it stood would come too late — which
+gives it three rules, each of them a diagnostic rather than a silent
+half-measure: it has to be a directive in the unit's own text (not in a header,
+and not through `_Pragma`), it has to come before every `#include` and `#if`,
+and two of them have to name the same triple. The one case the two halves
+cannot agree on is a pragma inside a group `#if 0` goes on to skip: the scan
+has already read it, so it applies, and nothing is left to complain. A `target`
+pragma does not belong in a conditional.
+
+Whichever it was, **every expansion states the model it was translated for**,
 as a `const _: () = { assert!(…); };` block at the top of the unit's module:
-one assertion per width, over the `core::ffi` aliases, which follow the
-*target*. A mismatch is a failed assertion with the caret on the C, not a
-program that computes the wrong thing. `__int128`'s alignment is asserted in a
-unit that has one, being the only scalar whose alignment does not follow from
-its width.
+one assertion per width, one for plain `char`'s signedness, one for the
+alignment of `long long` and `double`, and — in a unit that has one — one for
+`__int128`'s, all over the `core::ffi` aliases, which follow the real target. A
+wrong choice, or a forgotten build script on a cross build, is therefore a
+failed compile-time assertion whose message names both the model cinrs used and
+the knob that chose it, rather than a program that computes the wrong thing.
+`tests/cross_targets.rs` compiles a small crate for each installed target with
+and without the variable and checks exactly that.
 
-The check is a guard, not support: cross-compilation to a different data model
-is refused, not performed. Selecting the model through a macro option is what
-would turn the refusal into a translation.
+### The table
+
+The triple is read the way `rustc` writes one — `arch-vendor-os-env`, or
+`arch-os-env` — and the first component picks the architecture row. An
+architecture or an operating system that is not here is an error naming the
+families that are, never a guess.
+
+| Architecture | Pointer | `long` | Endian | `__int128` | `align(long long, double)` | Macros |
+| --- | --- | --- | --- | --- | --- | --- |
+| `x86_64*` (incl. `gnux32`, where the pointer is 32) | 64 (32) | LP64 rule | little | yes | 8 | `__x86_64__`, `__amd64__` |
+| `i386`/`i486`/`i586`/`i686` | 32 | 32 | little | no | **4 off Windows**, 8 on it | `__i386__` |
+| `aarch64*` (`aarch64_be` big; `gnu_ilp32` 32-bit pointer) | 64 (32) | LP64 rule | little | yes | 8 | `__aarch64__` |
+| `arm*`, `thumb*` (`armeb*` big) | 32 | 32 | little | no | 8 | `__arm__` |
+| `riscv32*` / `riscv64*` | 32 / 64 | LP64 rule | little | 64-bit only | 8 | `__riscv`, `__riscv_xlen` |
+| `wasm32` | 32 | 32 (64 on a Linux ABI) | little | no | 8 | `__wasm__`, `__wasm32__` |
+| `powerpc` / `powerpc64` / `powerpc64le` | 32 / 64 | LP64 rule | big except `le` | 64-bit only | 8 | `__powerpc__`, `__PPC64__` |
+| `s390x` | 64 | 64 | **big** | yes | 8 | `__s390x__` |
+| `mips*` / `mips64*` (`*el` little) | 32 / 64 | LP64 rule | big except `el` | 64-bit only | 8 | `__mips__` |
+| `sparc` / `sparc64`, `sparcv9` | 32 / 64 | LP64 rule | **big** | 64-bit only | 8 | `__sparc__` |
+| `loongarch64` | 64 | 64 | little | yes | 8 | `__loongarch__` |
+
+"LP64 rule" is `long` = 64 on a 64-bit pointer **unless the system is
+Windows**, which is LLP64 and keeps a 32-bit `long`.
+
+| Operating system | Macros | `wchar_t` | `wint_t` | `time_t` | Object format |
+| --- | --- | --- | --- | --- | --- |
+| `linux` (incl. `android`; any libc) | `__linux__`, `__gnu_linux__`, `__unix__` | 32-bit `int`, unsigned on Arm | `unsigned int` | `long` | `__ELF__` |
+| `darwin`/`macos`/`ios`/`tvos`/`watchos`/`visionos` | `__APPLE__`, `__MACH__`, `__unix__` | 32-bit `int` | `int` | `long` | Mach-O |
+| `windows` (`msvc` and `gnu`) | `_WIN32`, `_WIN64` at 64 bits | **16-bit `unsigned short`** | `unsigned short` | `long long` | PE |
+| `freebsd`, `netbsd`, `openbsd` | `__FreeBSD__`/`__NetBSD__`/`__OpenBSD__`, `__unix__` | 32-bit `int` | `unsigned int` | `long` | `__ELF__` |
+| `wasi` | `__wasi__` | 32-bit `int` | `unsigned int` | `long` | wasm |
+| `none` (and `arch-unknown-unknown`) | — | 32-bit `int` | `unsigned int` | `long` | `__ELF__` off wasm |
+
+**The signedness of plain `char` follows `core::ffi::c_char`, not the
+architecture alone.** That is the rule, because the generated code uses that
+alias and a model that disagreed would fail its own assertion: unsigned on
+AArch64, Arm, PowerPC, RISC-V and s390x — *except* on Windows and on Apple's
+platforms, which make it signed whatever the machine is — and signed everywhere
+else, LoongArch and **wasm32** included.
+
+`short` is 16 bits, `int` 32, `long long` 64 and `double` 64 on every target
+here; `long double` is `double`; `intmax_t` is 64 bits everywhere, so an ILP32
+target has `__INTMAX_TYPE__` of `long long int` while LP64 has `long int`.
+`size_t`, `ptrdiff_t` and `intptr_t` are the narrowest standard type as wide as
+a pointer, exactly as GCC picks them.
+
+### What a target refuses
+
+* **`__int128` on a 32-bit architecture.** GCC has the type on the 64-bit ones
+  only and refuses it rather than emulating it; so does this, and
+  `__SIZEOF_INT128__` is left undefined there so that a program can guard on it.
+  The x32 ABI keeps the type, the machine still being x86-64.
+* **A bit-field on a big-endian target.** Where a bit-field's bits sit inside
+  its storage unit is implementation defined, and cinrs allocates from the
+  least significant end — which is what GCC and Clang do on a little-endian
+  machine and the opposite of what they do on a big-endian one. Refusing beats
+  laying one out the wrong way round, since nothing in the generated Rust would
+  notice.
+* **An architecture whose data model is not one of the three.** `avr` (16-bit
+  `int`, 32-bit `double`) and `msp430` are named in the diagnostic rather than
+  silently approximated.
+
+### Where it does *not* reach
+
+The C library is still the platform's. A bundled header declares the functions
+and spells the types the target's library really uses — the branches above are
+what `errno`, the standard streams, `mbstate_t`, `struct tm` and `FILE` are
+picked with — but nothing here can check that the library on the other end
+agrees. The Windows branch keeps to the portable UCRT subset
+(`__acrt_iob_func` for the three streams, `_errno()` for `errno`), which both
+the Microsoft library and mingw-w64 export; it is compiled for in
+`tests/cross_targets.rs` and has not been *run*. The same is true of every
+target but the host.
 
 ## C99
 
@@ -115,7 +204,7 @@ would turn the refusal into a translation.
 | Boolean type in `<stdbool.h>` | N815 | Yes | |
 | Idempotent type qualifiers | N505 | Unverified | |
 | Empty macro arguments | N570 | Yes | |
-| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, the four `__STDC_NO_*` subsetting macros, `__STDC_UTF_16__` and `__STDC_UTF_32__` (C11 7.28p2: `char16_t` and `char32_t` really are UTF-16 and UTF-32), and the three `__STDC_EMBED_*` answers `__has_embed` gives; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). `__SIZEOF_INT128__` is `16`, because `__int128` is a type this crate has. Absent on purpose: `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
+| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, the four `__STDC_NO_*` subsetting macros, `__STDC_UTF_16__` and `__STDC_UTF_32__` (C11 7.28p2: `char16_t` and `char32_t` really are UTF-16 and UTF-32), and the three `__STDC_EMBED_*` answers `__has_embed` gives; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). Every one of them, and the architecture and system macros beside them, comes from the [target model](#the-target-model) rather than from the host, so `CINRS_TARGET` changes them together. `__SIZEOF_INT128__` is `16` on a 64-bit architecture and undefined on a 32-bit one, matching where `__int128` exists. Absent on purpose: `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
 | `_Pragma` preprocessing operator | N634 | Yes | Destringized and executed as the directive it spells, so a macro can produce one. |
 | Standard pragmas (`STDC FP_CONTRACT`, …) | N631, N696 | Accepted | Ignored. |
 | `__func__` predefined identifier | N611 | Yes | A `const char[]` in every function body, so `sizeof(__func__)` is the name's length; GCC's `__FUNCTION__` and `__PRETTY_FUNCTION__` are the same thing. |
@@ -130,7 +219,7 @@ Also standard C99 but absent from Clang's list:
 
 | Feature | cinrs | Notes |
 | --- | --- | --- |
-| Bit-fields (also C89) | Yes | `_Bool`, `int` and `unsigned int` as the standard requires; `char`, `short`, `long`, `long long`, their signed and unsigned forms and `enum` as the GCC extension. The layout follows GCC and Clang, and is checked against the host compiler by `tests/bitfield_layout.rs`. A member has no address, so it becomes a pair of accessors on a shared `[u8; K]`; see the crate docs. |
+| Bit-fields (also C89) | Yes | `_Bool`, `int` and `unsigned int` as the standard requires; `char`, `short`, `long`, `long long`, their signed and unsigned forms and `enum` as the GCC extension. The layout follows GCC and Clang, and is checked against the host compiler by `tests/bitfield_layout.rs`. A member has no address, so it becomes a pair of accessors on a shared `[u8; K]`; see the crate docs. Bits are allocated from the *least significant* end, which is what GCC and Clang do on a little-endian machine and the opposite of what they do on a big-endian one — so a bit-field is a located error on a big-endian [target](#the-target-model) rather than one laid out the wrong way round. The signedness of a bit-field of enumeration type is the enumeration's own: unsigned where no enumerator is negative, which is what GCC and Clang pick and the only place the choice is observable. |
 | Function declarators without a prototype (6.7.5.3p14, 6.5.2.2p6) | Yes | In `c89!`, `c99!`, `c11!`, `c17!` and the matching `gnu*!` dialects, `int f();` and `int (*fp)();` declare a function whose parameters are *unspecified*: a call may pass any number of arguments, each gets the default argument promotions, and the callee is invoked through the signature they make. A *definition* written `int f() { … }` takes no parameters, as 6.9.1p7 says, and calls to it through the unprototyped type are still legal. Two declarations of one function are compatible when the prototyped one is not variadic and no parameter type is changed by the promotions (6.7.5.3p15), which is also what `_Generic`, `__builtin_types_compatible_p` and assignment between function pointers use. `c23!` and `gnu23!` follow N2841 instead. |
 | Old-style (K&R) function definitions (obsolescent) | Yes | `int f(a, b) int a; char *b; { … }` in every entry point below `c23!`, which is where C removed it. The identifier list and the declaration list become the parameter list (6.9.1p6); a name the declaration list leaves out is an `int`, which is implicit `int` and therefore `c89!` and `gnu89!` only. The definition's type has **no prototype** (6.9.1p7), so it is compatible with `int f();` and a caller applies the default argument promotions — which is why the generated item takes the *promoted* types and converts to the declared ones on entry: `int f(c) char c;` is `fn f(c: c_int)` with `let c: c_char = c as c_char;` in front of the body. `register` is allowed on a parameter; a declaration-list entry that names something other than a parameter, names one twice, or carries an initialiser is diagnosed. `int f();` is *not* one of these — see the row above. |
 | `#line` and GCC's `# N "file" flags…` line marker (6.10.4) | Yes | Both forms, the macro-expanded one included, per file. Only `__LINE__`, `__FILE__` and `__FILE_NAME__` move: a diagnostic still points at the token that was really written, which is the whole point of the crate. `__BASE_FILE__` names the file the unit started in and is unaffected. A number outside 1…2147483647 is an error, which is what `-pedantic-errors` makes it. |

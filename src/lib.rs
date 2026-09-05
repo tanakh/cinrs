@@ -987,7 +987,7 @@
 //! platform splits `PATH` and searched last. `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
-//! three `cinrs` pragmas are
+//! four `cinrs` pragmas are [`target`](#the-data-model),
 //! [`export`](#linking-two-blocks-together), [`no_std`](#no_std) and
 //! [`module`](#one-block-one-module).
 //!
@@ -1147,34 +1147,96 @@
 //! # The data model
 //!
 //! `sizeof`, `_Alignof`, member offsets, bit-field storage, the type an
-//! integer constant gets, whether `-1 < 1u` and the value of an `#if` are all
-//! worked out while the macro is expanding, from a model of the machine: the
-//! widths of `short`, `int`, `long`, `long long` and a pointer, the signedness
-//! of plain `char`, and the alignment of `__int128`. That model is the machine
-//! the procedural macro itself was compiled for — the *host* — because nothing
-//! in Cargo tells a procedural macro what the target is.
+//! integer constant gets, whether `-1 < 1u`, the value of an `#if`, the
+//! predefined macros and therefore which branch each bundled header takes are
+//! all worked out while the macro is expanding, from a model of the machine
+//! the code will *run* on: the widths of `short`, `int`, `long`, `long long`
+//! and a pointer, the signedness of plain `char`, how strictly `long long` and
+//! `double` are aligned, how wide `wchar_t` is, the byte order, and whether
+//! `__int128` exists at all.
 //!
-//! Cross-compiling to a machine with a different data model would leave every
-//! one of those answers quietly wrong: 64-bit Windows is LLP64, where `long`
-//! is four bytes; `wasm32` and the 32-bit targets are ILP32; AArch64, s390x
-//! and PowerPC make plain `char` unsigned. So **every expansion states the
-//! model it was translated for**, as a `const _: () = { assert!(…); };` block
-//! at the top of the unit's module — one assertion per width, over the
-//! [`core::ffi`] aliases, which follow the *target*:
+//! A procedural macro cannot ask `rustc` what it is compiling for — `--target`
+//! is not part of a macro's world — so the model is chosen, in this order:
+//!
+//! 1. **`#pragma cinrs target "<triple>"`** written in the unit itself;
+//! 2. the **`CINRS_TARGET`** environment variable, which the crate being built
+//!    sets from its own build script;
+//! 3. otherwise the machine the macro itself was compiled for, the *host*.
+//!
+//! ## Cross-compiling
+//!
+//! One line in a build script is the whole recipe:
+//!
+//! ```rust,ignore
+//! // build.rs
+//! fn main() {
+//!     println!(
+//!         "cargo:rustc-env=CINRS_TARGET={}",
+//!         std::env::var("TARGET").expect("Cargo sets TARGET for a build script")
+//!     );
+//! }
+//! ```
+//!
+//! `cargo:rustc-env` reaches the very `rustc` process that runs the macro, and
+//! Cargo makes the value part of the crate's fingerprint, so changing
+//! `--target` rebuilds. With it, `cargo build --target i686-unknown-linux-gnu`
+//! translates the C for a 32-bit machine — a four-byte `long`, `2147483648`
+//! typed as `long long`, `long long` and `double` aligned to four bytes and
+//! laid out accordingly — and `--target x86_64-pc-windows-msvc` for one where
+//! `long` is four bytes, `wchar_t` is two and `<stdio.h>` declares the
+//! Microsoft streams.
+//!
+//! A unit may override it for itself:
+//!
+//! ```c
+//! #pragma cinrs target "aarch64-unknown-linux-gnu"
+//! ```
+//!
+//! which has to be a directive in that unit's own text and has to come before
+//! any `#include` or `#if`: the model is settled before the first directive is
+//! read, so a pragma after one would be a lie, and it is reported rather than
+//! half-applied.
+//!
+//! The families, and what each one refuses — `__int128` on a 32-bit
+//! architecture, a bit-field on a big-endian one — are tabulated in the
+//! repository's `doc/c-status.md`.
+//!
+//! ## The assertion that guards it
+//!
+//! Any of the three choices may still be the wrong one, so **every expansion
+//! states the model it was translated for**, as a
+//! `const _: () = { assert!(…); };` block at the top of the unit's module,
+//! written over the [`core::ffi`] aliases, which follow the *real* target:
 //!
 //! ```text
 //! const _: () = {
 //!     assert!(::core::mem::size_of::<::core::ffi::c_long>() == 8, "cinrs: …");
 //!     assert!(::core::ffi::c_char::MIN != 0, "cinrs: …");
+//!     assert!(::core::mem::align_of::<::core::ffi::c_longlong>() == 8
+//!             && ::core::mem::align_of::<::core::ffi::c_double>() == 8, "cinrs: …");
 //!     // … and one for `short`, `int`, `long long` and a pointer.
 //! };
 //! ```
 //!
 //! A mismatch is therefore a failed compile-time assertion with the caret on
-//! the C, rather than a program that computes the wrong thing. It is a guard,
-//! not support: **cross-compilation to a different data model is detected and
-//! refused.** `__int128`'s alignment is asserted in a unit that has one, it
-//! being the only scalar whose alignment does not follow from its width.
+//! the C, rather than a program that computes the wrong thing — and its
+//! message names both the model cinrs used and the knob that would change it:
+//!
+//! ```text
+//! error[E0080]: evaluation panicked: cinrs: 'long' is 8 bytes in the data model
+//! this unit was translated for, and is not on this target. Translated for LP64
+//! (x86_64-linux, signed 'char', 32-bit 'wchar_t'), chosen from the host,
+//! CINRS_TARGET being unset; set CINRS_TARGET from a build script
+//! (cargo:rustc-env=CINRS_TARGET=$TARGET) or write #pragma cinrs target.
+//! ```
+//!
+//! `__int128`'s alignment is asserted only in a unit that has one, it being
+//! the only scalar whose alignment does not follow from its width.
+//!
+//! What the model cannot check is the C *library* on the other end: a bundled
+//! header declares what the target's library is expected to export, and
+//! nothing here can confirm it. Every target but the host is compiled for and
+//! not run.
 
 #![warn(missing_docs)]
 #![no_std]

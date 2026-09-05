@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | total | rate |
 | --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1333/1691 (78.8 %) | 36/78 (46.2 %) | **1369/1769** | **77.4 %** |
-| `gnu11!` | 1243/1691 (73.5 %) | 36/78 (46.2 %) | 1279/1769 | 72.3 % |
+| **`gnu89!`** | 1334/1691 (78.9 %) | 36/78 (46.2 %) | **1370/1769** | **77.4 %** |
+| `gnu11!` | 1244/1691 (73.6 %) | 36/78 (46.2 %) | 1280/1769 | 72.4 % |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -174,7 +174,7 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 398 of the 400 failures are refused at compile time, in 60
+Under `gnu89!`, 397 of the 399 failures are refused at compile time, in 60
 distinct causes. The ones worth a line each, with what the same cause costs
 under `gnu11!` beside it:
 
@@ -247,7 +247,7 @@ the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 490 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 400.
+`gnu11!`'s, 489 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 399.
 One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has

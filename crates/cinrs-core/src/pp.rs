@@ -79,6 +79,7 @@
 //! ## The `cinrs` pragmas
 //!
 //! ```c
+//! #pragma cinrs target "i686-unknown-linux-gnu"
 //! #pragma cinrs include_path "vendor/include"
 //! #pragma cinrs link "mylib"
 //! #pragma cinrs export
@@ -86,14 +87,23 @@
 //! #pragma cinrs module "geometry"
 //! ```
 //!
-//! The first adds a directory to the search path (relative paths resolve
-//! against `CARGO_MANIFEST_DIR`); the second puts `#[link(name = "mylib")]` on
-//! the generated `extern` block; the third gives everything with external
-//! linkage a real C symbol, so that another unit can link to it; the last
-//! names the module the expansion goes into. Being directives rather than
-//! attributes or macro arguments is what makes them mean the same thing in
-//! raw-token and in string-literal input. An unknown `#pragma cinrs` option is
-//! an error; every other pragma is ignored, as 6.10.6 asks.
+//! The first picks the data model the unit is translated for, overriding
+//! `CINRS_TARGET`; the second adds a directory to the search path (relative
+//! paths resolve against `CARGO_MANIFEST_DIR`); the third puts
+//! `#[link(name = "mylib")]` on the generated `extern` block; the fourth gives
+//! everything with external linkage a real C symbol, so that another unit can
+//! link to it; the last names the module the expansion goes into. Being
+//! directives rather than attributes or macro arguments is what makes them
+//! mean the same thing in raw-token and in string-literal input. An unknown
+//! `#pragma cinrs` option is an error; every other pragma is ignored, as
+//! 6.10.6 asks.
+//!
+//! `target` is the one that cannot be handled where it stands: the predefined
+//! macros are built from the model before the first directive is read, so
+//! [`scan_target_pragma`] finds it *lexically*, before preprocessing, and the
+//! handler here only checks that what it finds agrees. Which is why the pragma
+//! has to be written in the unit's own text, ahead of any `#include` or `#if`;
+//! anywhere else is a diagnostic rather than a silent half-measure.
 //!
 //! # What the later revisions add
 //!
@@ -173,7 +183,7 @@ use crate::include;
 use crate::lex::{
     self, IntLit, Keyword, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind,
 };
-use crate::target::TargetModel;
+use crate::target::{TargetModel, TargetSource};
 use crate::{Dialect, Gating, Options, Standard};
 
 // ---------------------------------------------------------------------------
@@ -628,6 +638,10 @@ pub struct Context {
     /// it runs where a [`SourceMap`](crate::SourceMap) cannot follow it; see
     /// [`crate::SourceMap::next_base`].
     pub next_base: Pos,
+    /// The `#pragma cinrs target` directives [`scan_target_pragma`] already
+    /// read out of `text`, so that the preprocessor does not report one twice
+    /// and can tell a header's from the unit's own.
+    pub target_pragmas: TargetPragmas,
 }
 
 impl Context {
@@ -646,6 +660,7 @@ impl Context {
             first_line: 1,
             dir: None,
             next_base,
+            target_pragmas: TargetPragmas::default(),
         }
     }
 }
@@ -773,6 +788,166 @@ pub fn preprocess(
         module: pp.module,
         pack_events: pp.pack_events,
     }
+}
+
+/// What [`scan_target_pragma`] found, which the preprocessor needs in order
+/// not to report the same directive twice.
+#[derive(Clone, Debug, Default)]
+pub struct TargetPragmas {
+    /// Where each `#pragma cinrs target` in the unit's own text begins — the
+    /// offset of its `#`, which is where the preprocessor's own range for a
+    /// directive starts too.
+    pub at: Vec<Pos>,
+    /// Whether one of them really chose the model. False when there was none,
+    /// and false when there was one that has already been reported.
+    pub applied: bool,
+}
+
+impl TargetPragmas {
+    /// Whether the directive at `range` is one the scan read.
+    fn scanned(&self, range: SourceRange) -> bool {
+        self.at.contains(&range.start)
+    }
+}
+
+/// Finds `#pragma cinrs target "<triple>"` in a freshly lexed unit and puts the
+/// model it names into `options`.
+///
+/// This runs *before* the preprocessor, and has to. Everything the
+/// preprocessor does with the model — the hundred-odd predefined macros, and
+/// therefore which branch every `#if` and every bundled header takes — is
+/// settled when it starts, so a pragma handled where it stands would arrive
+/// too late to mean what it says. Reading it lexically is the price: the
+/// directive is recognised by its shape, in the unit's own text, whether or
+/// not a conditional group would later have skipped it, and a second one
+/// naming a different triple is an error rather than a last-one-wins.
+///
+/// The preprocessor sees the same directives again during the real run —
+/// `Pp::target_pragma` is where — which is what catches the two cases this
+/// scan cannot serve: a `target` pragma the scan never read, because it is in
+/// a header or came out of `_Pragma`, and one written after an `#include` or
+/// an `#if` that the old model had already answered.
+///
+/// The caller must lex the text again when the model changed: how wide
+/// `wchar_t` is decides what `L'…'` may hold.
+pub fn scan_target_pragma(
+    tokens: &[lex::Token],
+    options: &mut Options,
+    diags: &mut Diagnostics,
+) -> (TargetPragmas, bool) {
+    let mut found = TargetPragmas::default();
+    let mut chosen: Option<(String, SourceRange)> = None;
+    let mut failed = false;
+    for (i, hash) in tokens.iter().enumerate() {
+        // `# pragma cinrs target "…"`, the directive spelled out; the lexer
+        // marks the token that begins a logical line.
+        if !hash.bol || !hash.is_punct(Punct::Hash) {
+            continue;
+        }
+        // Five tokens are enough for `pragma cinrs target "…"` and the one
+        // trailing token the diagnostic complains about; a `#define` whose
+        // replacement list runs to a hundred is not walked to the end just to
+        // discover it is not this.
+        let words: Vec<&lex::Token> = tokens[i + 1..]
+            .iter()
+            .take_while(|t| !t.bol && !matches!(t.kind, TokenKind::Eof))
+            .take(5)
+            .collect();
+        let [pragma, cinrs, option, rest @ ..] = words.as_slice() else {
+            continue;
+        };
+        if pragma.ident() != Some("pragma")
+            || cinrs.ident() != Some("cinrs")
+            || option.ident() != Some("target")
+        {
+            continue;
+        }
+        found.at.push(hash.range.start);
+        let range = SourceRange::new(hash.range.start, option.range.end);
+        let Some(triple) = target_pragma_triple(rest, range, diags) else {
+            failed = true;
+            continue;
+        };
+        match &chosen {
+            // The same triple twice says the same thing twice, which is no
+            // mistake at all.
+            Some((first, _)) if *first == triple => {}
+            Some((first, _)) => {
+                diags.error(
+                    range,
+                    format!(
+                        "this unit is already translated for '{first}' by an earlier \
+                         #pragma cinrs target"
+                    ),
+                );
+                failed = true;
+            }
+            None => chosen = Some((triple, range)),
+        }
+    }
+    let Some((triple, range)) = chosen.filter(|_| !failed) else {
+        return (found, false);
+    };
+    let source = TargetSource::Pragma(triple);
+    match TargetModel::from_triple(source.triple().expect("Pragma carries its triple")) {
+        Ok(model) => {
+            let relex = options.target != model;
+            options.target = model;
+            options.target_source = source;
+            found.applied = true;
+            (found, relex)
+        }
+        Err(unknown) => {
+            diags.error(range, unknown.message(&source));
+            (found, false)
+        }
+    }
+}
+
+/// The one string literal `#pragma cinrs target` takes, as the pre-scan reads
+/// it. The messages match [`Pp::pragma_string`]'s, since the same mistake must
+/// read the same whichever pass notices it.
+fn target_pragma_triple(
+    rest: &[&lex::Token],
+    range: SourceRange,
+    diags: &mut Diagnostics,
+) -> Option<String> {
+    let Some(tok) = rest.first() else {
+        diags.error(range, "#pragma cinrs target needs a string literal");
+        return None;
+    };
+    let TokenKind::Str(lit) = &tok.kind else {
+        diags.error(
+            tok.range,
+            format!(
+                "#pragma cinrs target needs a string literal, found {}",
+                tok.kind.describe()
+            ),
+        );
+        return None;
+    };
+    let Some(bytes) = lit.as_bytes() else {
+        diags.error(
+            tok.range,
+            "#pragma cinrs target does not take a wide string literal",
+        );
+        return None;
+    };
+    let value = String::from_utf8_lossy(&bytes).into_owned();
+    if value.is_empty() {
+        diags.error(tok.range, "#pragma cinrs target was given an empty string");
+        return None;
+    }
+    if let Some(extra) = rest.get(1) {
+        diags.error(
+            extra.range,
+            format!(
+                "unexpected {} after #pragma cinrs target",
+                extra.kind.describe()
+            ),
+        );
+    }
+    Some(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -965,6 +1140,15 @@ struct Pp<'a> {
     no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module.
     module: Option<String>,
+    /// Where the data model in force came from, which is what a
+    /// `#pragma cinrs target` the scan never read is reported against.
+    target_source: TargetSource,
+    /// The `target` pragmas [`scan_target_pragma`] already dealt with.
+    target_pragmas: TargetPragmas,
+    /// Whether anything has yet been decided *by* the data model: a header
+    /// opened, or an `#if` evaluated. A `#pragma cinrs target` after that
+    /// point cannot mean what it says, so it is reported.
+    model_observed: bool,
 }
 
 impl<'a> Pp<'a> {
@@ -1027,6 +1211,9 @@ impl<'a> Pp<'a> {
             export: false,
             no_std: false,
             module: None,
+            target_source: options.target_source.clone(),
+            target_pragmas: ctx.target_pragmas.clone(),
+            model_observed: false,
         };
         pp.define_predefined(options);
         pp
@@ -2430,7 +2617,8 @@ impl Pp<'_> {
     }
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
-    const OPTIONS: &'static str = "'include_path', 'link', 'export', 'no_std' and 'module'";
+    const OPTIONS: &'static str =
+        "'target', 'include_path', 'link', 'export', 'no_std' and 'module'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2443,6 +2631,9 @@ impl Pp<'_> {
         };
         let name = option.name().unwrap_or_default();
         match name {
+            // The scan before preprocessing already read this one and applied
+            // it; all that is left is to say so when it cannot have worked.
+            "target" => self.target_pragma(range),
             "include_path" | "link" | "module" => {
                 let Some(value) = self.pragma_string(&rest[1..], option.range, name) else {
                     return;
@@ -2490,6 +2681,52 @@ impl Pp<'_> {
                     ),
                 );
             }
+        }
+    }
+
+    /// `#pragma cinrs target "<triple>"`, seen a second time.
+    ///
+    /// [`scan_target_pragma`] read every one in the unit's own text before
+    /// this pass began and either applied it or reported it, so there is
+    /// nothing left to do — except in the two cases the scan cannot serve, and
+    /// where silence would mean translating for the wrong machine:
+    ///
+    /// * the directive is one the scan never saw, because it is in a *header*
+    ///   or came out of `_Pragma`, so the model it names was never applied;
+    /// * it stands after an `#include` or an `#if`, both of which had already
+    ///   been answered with the old model.
+    ///
+    /// A `target` inside a group `#if 0` skips is the mirror image — the scan
+    /// applied it and this pass never sees it — which the module
+    /// documentation says, and which is why this is the only pragma read
+    /// twice.
+    fn target_pragma(&mut self, range: SourceRange) {
+        if !self.target_pragmas.scanned(range) {
+            let now = match self.target_source.triple() {
+                Some(triple) => format!("for '{triple}'"),
+                None => format!("for the model {} named", self.target_source.as_str()),
+            };
+            self.diags.error(
+                range,
+                format!(
+                    "'#pragma cinrs target' is read before preprocessing, so it has to be a \
+                     directive in the unit's own text: a header's comes too late, and one \
+                     out of '_Pragma' is never seen. This unit is being translated {now}"
+                ),
+            );
+            return;
+        }
+        // The scan read this one. If it did not like it, it has said so
+        // already and a second message would only get in the way.
+        if !self.target_pragmas.applied {
+            return;
+        }
+        if self.model_observed {
+            self.diags.error(
+                range,
+                "'#pragma cinrs target' must come before every '#include' and '#if', which \
+                 were already answered with the previous data model",
+            );
         }
     }
 
@@ -2570,6 +2807,10 @@ impl Pp<'_> {
 
     /// `#include <name>`, `#include "name"` and `#include MACRO`.
     fn include(&mut self, line: &[PTok], range: SourceRange) {
+        // A header reads the model — every bundled one branches on `_WIN32`
+        // or on `__SIZEOF_POINTER__` — so once one is opened the model is
+        // settled; see `Pp::target_pragma`.
+        self.model_observed = true;
         let Some((name, form)) = self.header_name(line, range) else {
             return;
         };
@@ -3550,6 +3791,9 @@ impl Val {
 impl Pp<'_> {
     /// Evaluates the controlling expression of an `#if` or `#elif`.
     fn eval_condition(&mut self, line: &[PTok], range: SourceRange) -> bool {
+        // An `#if` may read `__SIZEOF_LONG__` or `_WIN32`, so from here on the
+        // data model has been committed to; see `Pp::target_pragma`.
+        self.model_observed = true;
         if line.is_empty() {
             self.diags.error(range, "#if with no expression");
             return false;
@@ -4250,73 +4494,36 @@ impl Pp<'_> {
     }
 }
 
-/// The target description macros, derived from the machine this crate was
-/// compiled for and from `target`.
+/// The target description macros, every one of them derived from `target`.
+///
+/// Nothing here reads a `cfg!`: the model may be the host's or may be a
+/// `CINRS_TARGET` away, and a macro that answered for the host while `sizeof`
+/// answered for the target would send a header down the wrong branch — which
+/// is exactly how the bundled `<errno.h>`, `<stdio.h>`, `<time.h>` and
+/// `<wchar.h>` choose their platform, through `_WIN32` and `__APPLE__`.
 ///
 /// Deliberately short. Anything a real header would test for that is not here
 /// simply comes out as 0 in an `#if`, which is the behaviour a C program
 /// written for an unknown compiler expects; claiming to *be* GCC or Clang
 /// would invite code paths built on extensions this crate does not have.
 fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
-    let mut out: Vec<(&'static str, String)> = Vec::new();
-    let mut flag = |name: &'static str| out.push((name, "1".to_owned()));
-
-    // Architecture.
-    if cfg!(target_arch = "x86_64") {
-        flag("__x86_64__");
-        flag("__amd64__");
-    }
-    if cfg!(target_arch = "x86") {
-        flag("__i386__");
-    }
-    if cfg!(target_arch = "aarch64") {
-        flag("__aarch64__");
-    }
-    if cfg!(target_arch = "arm") {
-        flag("__arm__");
-    }
-    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64")) {
-        flag("__riscv");
-    }
-    if cfg!(target_arch = "powerpc64") {
-        flag("__powerpc64__");
-    }
-    if cfg!(target_arch = "s390x") {
-        flag("__s390x__");
-    }
-
-    // Operating system.
-    if cfg!(target_os = "linux") {
-        flag("__linux__");
-        flag("__gnu_linux__");
-    }
-    if cfg!(target_vendor = "apple") {
-        flag("__APPLE__");
-        flag("__MACH__");
-    }
-    if cfg!(target_os = "windows") {
-        flag("_WIN32");
-    }
-    if cfg!(unix) {
-        flag("__unix__");
-        flag("__unix");
-    }
+    // The architecture, the operating system and the object format; see
+    // `TargetModel::macros`.
+    let mut out: Vec<(&'static str, String)> = target.macros();
+    let flag = |out: &mut Vec<(&'static str, String)>, name: &'static str| {
+        out.push((name, "1".to_owned()))
+    };
 
     // The data model, which is exactly what `TargetModel` describes.
-    if target.ptr_bits == 64 {
-        if cfg!(target_os = "windows") {
-            flag("_WIN64");
-        }
-        if target.long_bits == 64 {
-            flag("__LP64__");
-            flag("_LP64");
-        }
+    if target.ptr_bits == 64 && target.long_bits == 64 {
+        flag(&mut out, "__LP64__");
+        flag(&mut out, "_LP64");
     } else if target.ptr_bits == 32 && target.int_bits == 32 && target.long_bits == 32 {
-        flag("__ILP32__");
-        flag("_ILP32");
+        flag(&mut out, "__ILP32__");
+        flag(&mut out, "_ILP32");
     }
     if !target.char_signed {
-        flag("__CHAR_UNSIGNED__");
+        flag(&mut out, "__CHAR_UNSIGNED__");
     }
     out.push(("__CHAR_BIT__", "8".to_owned()));
     out.push(("__SIZEOF_SHORT__", (target.short_bits / 8).to_string()));
@@ -4327,28 +4534,25 @@ fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
         (target.long_long_bits / 8).to_string(),
     ));
     out.push(("__SIZEOF_POINTER__", (target.ptr_bits / 8).to_string()));
-    // The macro a program tests before writing `__int128`; GCC defines it
-    // exactly where the type exists, and here it always does.
-    out.push(("__SIZEOF_INT128__", "16".to_owned()));
+    // The macro a program tests before writing `__int128`. GCC defines it
+    // exactly where the type exists, which is on the 64-bit architectures, so
+    // a program guarding on it takes the other branch on an ILP32 target
+    // rather than meeting the diagnostic.
+    if target.has_int128 {
+        out.push(("__SIZEOF_INT128__", "16".to_owned()));
+    }
 
     // Byte order, spelled the way GCC spells it.
     out.push(("__ORDER_LITTLE_ENDIAN__", "1234".to_owned()));
     out.push(("__ORDER_BIG_ENDIAN__", "4321".to_owned()));
     out.push((
         "__BYTE_ORDER__",
-        if cfg!(target_endian = "big") {
+        if target.big_endian {
             "4321".to_owned()
         } else {
             "1234".to_owned()
         },
     ));
-    if cfg!(any(
-        target_os = "linux",
-        target_os = "freebsd",
-        target_os = "netbsd"
-    )) {
-        out.push(("__ELF__", "1".to_owned()));
-    }
     limit_macros(target, &mut out);
     out
 }
@@ -4381,28 +4585,36 @@ fn unsigned_max(bits: u32) -> String {
 ///
 /// What is deliberately absent: `__OPTIMIZE__` (nothing here optimises) and
 /// the `__INT8_C`-style function-like macros, which take an argument.
-/// `__SIZEOF_INT128__` is not here but is defined among the data-model macros,
-/// because `__int128` is a type this crate has.
+/// `__SIZEOF_INT128__` is not here but among the data-model macros, and only
+/// on a target that has `__int128` at all.
 fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     let int_bits = target.int_bits;
     let long_bits = target.long_bits;
     let llong_bits = target.long_long_bits;
     let ptr_bits = target.ptr_bits;
 
-    // `long` is the widest type that is not `long long`, so on LP64 it is what
-    // `size_t`, `intmax_t` and `intptr_t` are, exactly as GCC has them.
-    let wide_signed = if long_bits >= ptr_bits {
-        "long int"
+    // `size_t`, `ptrdiff_t` and `intptr_t` are the *narrowest* standard type
+    // as wide as a pointer, which is how GCC picks them: `unsigned int` on
+    // i686, `long unsigned int` on LP64, `long long unsigned int` on 64-bit
+    // Windows, where `long` is only 32 bits.
+    let (ptr_signed, ptr_unsigned, ptr_suffix) = if int_bits >= ptr_bits {
+        ("int", "unsigned int", "")
+    } else if long_bits >= ptr_bits {
+        ("long int", "long unsigned int", "L")
     } else {
-        "long long int"
+        ("long long int", "long long unsigned int", "LL")
     };
-    let wide_unsigned = if long_bits >= ptr_bits {
-        "long unsigned int"
+    // `intmax_t` is the widest standard integer type there is, which is
+    // `long long` unless `long` is just as wide — GCC says `long int` on LP64
+    // and `long long int` on i686 and on Windows. It does *not* follow the
+    // pointer: an ILP32 target still has a 64-bit `intmax_t`, and C99 6.10.1
+    // makes it the type all `#if` arithmetic is done in.
+    let (max_signed, max_unsigned, max_suffix) = if long_bits >= llong_bits {
+        ("long int", "long unsigned int", "L")
     } else {
-        "long long unsigned int"
+        ("long long int", "long long unsigned int", "LL")
     };
-    let wide_suffix = if long_bits >= ptr_bits { "L" } else { "LL" };
-    let wide_bits = long_bits.max(ptr_bits);
+    let max_bits = long_bits.max(llong_bits);
 
     let mut push = |name: &'static str, value: String| out.push((name, value));
 
@@ -4421,54 +4633,86 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     push("__LONG_LONG_WIDTH__", llong_bits.to_string());
 
     // The library types, and how wide each is.
-    push("__SIZE_TYPE__", wide_unsigned.to_owned());
+    push("__SIZE_TYPE__", ptr_unsigned.to_owned());
     push(
         "__SIZE_MAX__",
-        format!("{}U{wide_suffix}", unsigned_max(ptr_bits)),
+        format!("{}U{ptr_suffix}", unsigned_max(ptr_bits)),
     );
     push("__SIZE_WIDTH__", ptr_bits.to_string());
     push("__SIZEOF_SIZE_T__", (ptr_bits / 8).to_string());
-    push("__PTRDIFF_TYPE__", wide_signed.to_owned());
+    push("__PTRDIFF_TYPE__", ptr_signed.to_owned());
     push(
         "__PTRDIFF_MAX__",
-        format!("{}{wide_suffix}", signed_max(ptr_bits)),
+        format!("{}{ptr_suffix}", signed_max(ptr_bits)),
     );
     push("__PTRDIFF_WIDTH__", ptr_bits.to_string());
     push("__SIZEOF_PTRDIFF_T__", (ptr_bits / 8).to_string());
-    push("__INTMAX_TYPE__", wide_signed.to_owned());
+    push("__INTMAX_TYPE__", max_signed.to_owned());
     push(
         "__INTMAX_MAX__",
-        format!("{}{wide_suffix}", signed_max(wide_bits)),
+        format!("{}{max_suffix}", signed_max(max_bits)),
     );
-    push("__INTMAX_WIDTH__", wide_bits.to_string());
-    push("__SIZEOF_INTMAX__", (wide_bits / 8).to_string());
-    push("__UINTMAX_TYPE__", wide_unsigned.to_owned());
+    push("__INTMAX_WIDTH__", max_bits.to_string());
+    push("__SIZEOF_INTMAX__", (max_bits / 8).to_string());
+    push("__UINTMAX_TYPE__", max_unsigned.to_owned());
     push(
         "__UINTMAX_MAX__",
-        format!("{}U{wide_suffix}", unsigned_max(wide_bits)),
+        format!("{}U{max_suffix}", unsigned_max(max_bits)),
     );
-    push("__INTPTR_TYPE__", wide_signed.to_owned());
+    push("__INTPTR_TYPE__", ptr_signed.to_owned());
     push(
         "__INTPTR_MAX__",
-        format!("{}{wide_suffix}", signed_max(ptr_bits)),
+        format!("{}{ptr_suffix}", signed_max(ptr_bits)),
     );
     push("__INTPTR_WIDTH__", ptr_bits.to_string());
-    push("__UINTPTR_TYPE__", wide_unsigned.to_owned());
+    push("__UINTPTR_TYPE__", ptr_unsigned.to_owned());
     push(
         "__UINTPTR_MAX__",
-        format!("{}U{wide_suffix}", unsigned_max(ptr_bits)),
+        format!("{}U{ptr_suffix}", unsigned_max(ptr_bits)),
     );
 
-    // `wchar_t` is `int` on every target this crate has; see
-    // `include/stddef.h`.
-    push("__WCHAR_TYPE__", "int".to_owned());
-    push("__WCHAR_MAX__", signed_max(int_bits));
-    push("__WCHAR_MIN__", format!("(-{}-1)", signed_max(int_bits)));
-    push("__WCHAR_WIDTH__", int_bits.to_string());
-    push("__SIZEOF_WCHAR_T__", (int_bits / 8).to_string());
-    push("__WINT_TYPE__", "unsigned int".to_owned());
-    push("__WINT_WIDTH__", int_bits.to_string());
-    push("__SIZEOF_WINT_T__", (int_bits / 8).to_string());
+    // `wchar_t` and `wint_t`, which the bundled <stddef.h> and <wchar.h>
+    // typedef from these very macros. Windows makes both 16 bits, Arm makes
+    // `wchar_t` unsigned, and Apple makes `wint_t` an `int`.
+    let wchar_bits = target.wchar_bits;
+    let (wchar_type, wchar_max, wchar_min) = if target.wchar_signed {
+        (
+            if wchar_bits == 16 { "short int" } else { "int" },
+            signed_max(wchar_bits),
+            format!("(-{}-1)", signed_max(wchar_bits)),
+        )
+    } else {
+        (
+            if wchar_bits == 16 {
+                "short unsigned int"
+            } else {
+                "unsigned int"
+            },
+            unsigned_max(wchar_bits),
+            "0".to_owned(),
+        )
+    };
+    push("__WCHAR_TYPE__", wchar_type.to_owned());
+    push("__WCHAR_MAX__", wchar_max);
+    push("__WCHAR_MIN__", wchar_min);
+    push("__WCHAR_WIDTH__", wchar_bits.to_string());
+    push("__SIZEOF_WCHAR_T__", (wchar_bits / 8).to_string());
+    if !target.wchar_signed {
+        push("__WCHAR_UNSIGNED__", "1".to_owned());
+    }
+    let wint_bits = target.wint_bits;
+    push(
+        "__WINT_TYPE__",
+        match (target.wint_signed, wint_bits) {
+            (true, 16) => "short int",
+            (true, _) => "int",
+            (false, 16) => "short unsigned int",
+            (false, _) => "unsigned int",
+        }
+        .to_owned(),
+    );
+    push("__WINT_WIDTH__", wint_bits.to_string());
+    push("__SIZEOF_WINT_T__", (wint_bits / 8).to_string());
     push("__SIG_ATOMIC_TYPE__", "int".to_owned());
     push("__SIG_ATOMIC_MAX__", signed_max(int_bits));
     push(

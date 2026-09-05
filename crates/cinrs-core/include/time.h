@@ -5,6 +5,11 @@
  * have and which a program that passes a `struct tm` by address would corrupt
  * if they were missing. The Microsoft library has only the nine, and the `#if`
  * below follows it.
+ *
+ * `_WIN32` is the *target's*, from the model cinrs was told to translate for.
+ * `time_t` is `long` on the Unix platforms, which makes it 32 bits wide on a
+ * 32-bit target — glibc's own default without `_TIME_BITS=64` — and `long
+ * long` on Windows.
  */
 #ifndef _CINRS_TIME_H
 #define _CINRS_TIME_H

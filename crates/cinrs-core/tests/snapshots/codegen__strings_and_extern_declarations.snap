@@ -33,7 +33,9 @@ mod __cinrs_unit_5cdf88e1 {
             let mut message: *const ::core::ffi::c_char = {
                 let __cinrs_tmp0 = (&raw mut messages)
                     .cast::<*const ::core::ffi::c_char>()
-                    .offset((failed != 0) as ::core::ffi::c_int as isize);
+                    .offset(
+                        (failed != 0) as ::core::ffi::c_int as ::core::primitive::isize,
+                    );
                 (*__cinrs_tmp0)
             };
             __cinrs_5cdf88e1_printf(

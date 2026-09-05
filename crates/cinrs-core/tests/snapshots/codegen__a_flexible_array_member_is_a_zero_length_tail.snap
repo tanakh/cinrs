@@ -26,7 +26,7 @@ mod __cinrs_unit_517f0d70 {
                             .wrapping_add({
                                 let __cinrs_tmp0 = (&raw mut (*b).data)
                                     .cast::<::core::ffi::c_int>()
-                                    .offset(i as isize);
+                                    .offset(i as ::core::primitive::isize);
                                 (*__cinrs_tmp0)
                             });
                     }

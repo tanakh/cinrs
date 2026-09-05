@@ -139,6 +139,26 @@ impl Sema<'_> {
                 (ast::Sign::Unsigned, ast::IntSize::Int) => Ty::UInt,
                 (ast::Sign::Unsigned, ast::IntSize::Long) => Ty::ULong,
                 (ast::Sign::Unsigned, ast::IntSize::LongLong) => Ty::ULongLong,
+                // GCC has `__int128` on the 64-bit architectures only and
+                // refuses it outright on a 32-bit one rather than emulating
+                // it; a program that has to work on both guards with
+                // `#ifdef __SIZEOF_INT128__`, which is undefined there.
+                (sign, ast::IntSize::Int128) if !self.target.has_int128 => {
+                    return Err(TypeError::at(
+                        range,
+                        format!(
+                            "'{}__int128' is not available on this target ({}, \
+                             {}-bit pointers); guard on '__SIZEOF_INT128__'",
+                            if *sign == ast::Sign::Unsigned {
+                                "unsigned "
+                            } else {
+                                ""
+                            },
+                            self.target.arch.as_str(),
+                            self.target.ptr_bits
+                        ),
+                    ));
+                }
                 (ast::Sign::Signed, ast::IntSize::Int128) => Ty::Int128,
                 (ast::Sign::Unsigned, ast::IntSize::Int128) => Ty::UInt128,
             }),
@@ -942,6 +962,25 @@ impl Sema<'_> {
             Some(name) => format!("bit-field '{name}'"),
             None => "anonymous bit-field".to_owned(),
         };
+        // Where a bit-field's bits sit inside its storage unit is entirely
+        // implementation defined, and this one allocates from the least
+        // significant end, which is what GCC and Clang do on a little-endian
+        // machine and the opposite of what they do on a big-endian one. Rather
+        // than lay one out the wrong way round — nothing in the generated Rust
+        // would notice, and a `union` or a `memcpy` would read rubbish — a
+        // big-endian target refuses the construct.
+        if self.target.big_endian {
+            self.error(
+                field.range,
+                format!(
+                    "{what} is not supported on a big-endian target ({}): cinrs allocates \
+                     bit-fields from the least significant end, which is not how a \
+                     big-endian ABI lays them out",
+                    self.target.arch.as_str()
+                ),
+            );
+            return None;
+        }
         if !ty.is_integer() {
             self.error(
                 field.range,
@@ -1002,12 +1041,23 @@ impl Sema<'_> {
     /// It is the signedness of the declared type, except for an enumeration:
     /// there the implementation picks the underlying type, and GCC and Clang
     /// make it unsigned when no enumerator is negative — which is observable
-    /// exactly here and nowhere else.
+    /// exactly here and nowhere else. `enum E { A, B, C, D } f : 2;` therefore
+    /// holds `D`, where a *signed* two-bit field would read it back as `-1`.
+    ///
+    /// The answer is taken from the resolved type rather than from what was
+    /// written, so that a `typedef` of the enumeration gets it too — which is
+    /// how the C in gcc.c-torture's `execute/20030714-1` spells it.
+    /// `self.enum_unsigned` is consulted first all the same: a member declared
+    /// with an `enum` specifier that is being defined right here is answered
+    /// there before the [`ir::EnumDef`] is complete.
     fn bit_field_signed(&self, written: &ast::Type, ty: Ty) -> bool {
         if let ast::TypeKind::Enum(id) = &written.kind
             && let Some(unsigned) = self.enum_unsigned[id.index()]
         {
             return !unsigned;
+        }
+        if let Ty::Enum(id) = ty {
+            return !self.types().enum_def(id).unsigned;
         }
         ty.is_signed(&self.target)
     }

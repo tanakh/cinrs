@@ -8,7 +8,7 @@ mod __cinrs_unit_faaff27e {
     #[repr(C, align(16))]
     #[derive(Copy, Clone)]
     pub struct Packed {
-        pub __cinrs_bits0: [u8; 10],
+        pub __cinrs_bits0: [::core::primitive::u8; 10],
     }
     #[allow(…)]
     impl Packed {
@@ -43,31 +43,34 @@ mod __cinrs_unit_faaff27e {
                 | ((self.__cinrs_bits0[8] as ::core::primitive::u128) << 64);
             let raw: ::core::primitive::u128 = (raw
                 & 0xffffffffffffffc00000000000000000u128) | bits;
-            self.__cinrs_bits0[0] = raw as u8;
-            self.__cinrs_bits0[1] = (raw >> 8) as u8;
-            self.__cinrs_bits0[2] = (raw >> 16) as u8;
-            self.__cinrs_bits0[3] = (raw >> 24) as u8;
-            self.__cinrs_bits0[4] = (raw >> 32) as u8;
-            self.__cinrs_bits0[5] = (raw >> 40) as u8;
-            self.__cinrs_bits0[6] = (raw >> 48) as u8;
-            self.__cinrs_bits0[7] = (raw >> 56) as u8;
-            self.__cinrs_bits0[8] = (raw >> 64) as u8;
+            self.__cinrs_bits0[0] = raw as ::core::primitive::u8;
+            self.__cinrs_bits0[1] = (raw >> 8) as ::core::primitive::u8;
+            self.__cinrs_bits0[2] = (raw >> 16) as ::core::primitive::u8;
+            self.__cinrs_bits0[3] = (raw >> 24) as ::core::primitive::u8;
+            self.__cinrs_bits0[4] = (raw >> 32) as ::core::primitive::u8;
+            self.__cinrs_bits0[5] = (raw >> 40) as ::core::primitive::u8;
+            self.__cinrs_bits0[6] = (raw >> 48) as ::core::primitive::u8;
+            self.__cinrs_bits0[7] = (raw >> 56) as ::core::primitive::u8;
+            self.__cinrs_bits0[8] = (raw >> 64) as ::core::primitive::u8;
         }
         #[inline]
         pub fn tail(&self) -> ::core::ffi::c_int {
-            let raw: u64 = (self.__cinrs_bits0[8] as u64)
-                | ((self.__cinrs_bits0[9] as u64) << 8);
-            let value: u64 = (raw >> 6) & 0x7;
-            (((value << 61) as i64) >> 61) as ::core::ffi::c_int
+            let raw: ::core::primitive::u64 = (self.__cinrs_bits0[8]
+                as ::core::primitive::u64)
+                | ((self.__cinrs_bits0[9] as ::core::primitive::u64) << 8);
+            let value: ::core::primitive::u64 = (raw >> 6) & 0x7;
+            (((value << 61) as ::core::primitive::i64) >> 61) as ::core::ffi::c_int
         }
         #[inline]
         pub fn set_tail(&mut self, value: ::core::ffi::c_int) {
-            let bits: u64 = ((value as u64) << 6) & 0x1c0;
-            let raw: u64 = (self.__cinrs_bits0[8] as u64)
-                | ((self.__cinrs_bits0[9] as u64) << 8);
-            let raw: u64 = (raw & 0xfffffffffffffe3f) | bits;
-            self.__cinrs_bits0[8] = raw as u8;
-            self.__cinrs_bits0[9] = (raw >> 8) as u8;
+            let bits: ::core::primitive::u64 = ((value as ::core::primitive::u64) << 6)
+                & 0x1c0;
+            let raw: ::core::primitive::u64 = (self.__cinrs_bits0[8]
+                as ::core::primitive::u64)
+                | ((self.__cinrs_bits0[9] as ::core::primitive::u64) << 8);
+            let raw: ::core::primitive::u64 = (raw & 0xfffffffffffffe3f) | bits;
+            self.__cinrs_bits0[8] = raw as ::core::primitive::u8;
+            self.__cinrs_bits0[9] = (raw >> 8) as ::core::primitive::u8;
         }
     }
     #[allow(…)]

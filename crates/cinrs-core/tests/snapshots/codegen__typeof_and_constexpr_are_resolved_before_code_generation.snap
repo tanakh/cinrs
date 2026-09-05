@@ -26,7 +26,7 @@ mod __cinrs_unit_8f5fa472 {
                             .wrapping_add({
                                 let __cinrs_tmp0 = (&raw mut values)
                                     .cast::<::core::ffi::c_int>()
-                                    .offset(i as isize);
+                                    .offset(i as ::core::primitive::isize);
                                 (*__cinrs_tmp0)
                             });
                     }
@@ -37,7 +37,9 @@ mod __cinrs_unit_8f5fa472 {
         }
     }
     #[allow(…)]
-    pub unsafe extern "C" fn is_red(mut s: ::core::ffi::c_uchar) -> bool {
+    pub unsafe extern "C" fn is_red(
+        mut s: ::core::ffi::c_uchar,
+    ) -> ::core::primitive::bool {
         unsafe {
             return (s as ::core::ffi::c_int == 0) as ::core::ffi::c_int != 0;
         }

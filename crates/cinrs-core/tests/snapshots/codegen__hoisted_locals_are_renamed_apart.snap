@@ -11,7 +11,7 @@ mod __cinrs_unit_50c08a5c {
             let mut x: ::core::ffi::c_int = 0;
             let mut x_1: ::core::ffi::c_int = 0;
             let mut x_2: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: u32 = 0;
+            let mut __cinrs_state: ::core::primitive::u32 = 0;
             'cfg: loop {
                 match __cinrs_state {
                     0 => {

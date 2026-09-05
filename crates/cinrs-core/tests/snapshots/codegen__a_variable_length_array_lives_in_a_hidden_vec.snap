@@ -19,18 +19,19 @@ mod __cinrs_unit_dbedfd3e {
                             as ::core::ffi::c_ulong;
                         let mut __cinrs_vla_buf: ::std::vec::Vec<::core::ffi::c_char> = ::std::vec::from_elem(
                             0,
-                            __cinrs_vla_len_buf as usize,
+                            __cinrs_vla_len_buf as ::core::primitive::usize,
                         );
                         let mut buf: *mut ::core::ffi::c_char = __cinrs_vla_buf
                             .as_mut_ptr();
-                        let __cinrs_tmp0 = buf.offset(i as isize);
+                        let __cinrs_tmp0 = buf.offset(i as ::core::primitive::isize);
                         (*__cinrs_tmp0) = i as ::core::ffi::c_char;
                         total = total
                             .wrapping_add(
                                 __cinrs_vla_len_buf
                                     .wrapping_add(
                                         ({
-                                            let __cinrs_tmp1 = buf.offset(i as isize);
+                                            let __cinrs_tmp1 = buf
+                                                .offset(i as ::core::primitive::isize);
                                             (*__cinrs_tmp1)
                                         }) as ::core::ffi::c_ulong,
                                     ),

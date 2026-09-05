@@ -246,7 +246,9 @@ impl Sema<'_> {
                 let mut cursor = Cursor::new(items);
                 // `char s[] = { "hi" }`: C99 6.7.8p14 lets the string literal
                 // that initialises a character array be wrapped in braces.
-                if let Some(lit) = braced_string(&cursor).filter(|lit| fills_array(elem, lit)) {
+                if let Some(lit) =
+                    braced_string(&cursor).filter(|lit| fills_array(elem, lit, &self.target))
+                {
                     let len = lit.values.len() as u64 + 1;
                     let ty = self.program.types.array(elem, len, elem_const);
                     let value = self.string_initializer(lit, ty, init.range)?;
@@ -299,7 +301,8 @@ impl Sema<'_> {
                 let array = self.types().array_type(id);
                 // `char s[4] = { "abc" }` — the braces around the string are
                 // C's, not a one-element list of characters.
-                if let Some(lit) = braced_string(cursor).filter(|lit| fills_array(array.elem, lit))
+                if let Some(lit) =
+                    braced_string(cursor).filter(|lit| fills_array(array.elem, lit, &self.target))
                 {
                     let value = self.string_initializer(lit, ty, range);
                     cursor.advance();
@@ -764,7 +767,7 @@ impl Sema<'_> {
         if let ast::ExprKind::Str(lit) = &expr.kind {
             while let Ty::Array(id) = self.type_at(top, steps) {
                 let array = self.types().array_type(id);
-                if fills_array(array.elem, lit) {
+                if fills_array(array.elem, lit, &self.target) {
                     let target = self.type_at(top, steps);
                     return self.string_initializer(lit, target, expr.range);
                 }
@@ -1098,7 +1101,7 @@ impl Sema<'_> {
             return None;
         };
         let array = self.types().array_type(id);
-        if !fills_array(array.elem, lit) {
+        if !fills_array(array.elem, lit, &self.target) {
             self.error(
                 range,
                 format!(
@@ -1157,12 +1160,12 @@ fn braced_string<'a>(cursor: &Cursor<'a>) -> Option<&'a StrLit> {
 /// C11 6.7.9p14–15: a narrow or `u8"…"` literal fills an array of any
 /// character type, and each of the other three fills an array of exactly the
 /// type its own prefix names.
-fn fills_array(elem: Ty, lit: &StrLit) -> bool {
+fn fills_array(elem: Ty, lit: &StrLit, target: &crate::TargetModel) -> bool {
     match lit.kind {
         StrKind::Narrow | StrKind::Utf8 => matches!(elem, Ty::Char | Ty::SChar | Ty::UChar),
         StrKind::Utf16 => elem == Ty::char16_ty(),
         StrKind::Utf32 => elem == Ty::char32_ty(),
-        StrKind::Wide => elem == Ty::wchar_ty(),
+        StrKind::Wide => elem == Ty::wchar_ty(target),
     }
 }
 

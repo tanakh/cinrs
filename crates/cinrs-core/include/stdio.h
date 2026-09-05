@@ -9,6 +9,13 @@
  * is a structure whose layout this header would have to guess at, and getting
  * it wrong would corrupt memory rather than fail to compile. Use `ftell` and
  * `fseek`.
+ *
+ * `_WIN32` and `__APPLE__` are the *target's*, from the model cinrs was told
+ * to translate for, so a cross build declares the streams of the machine the
+ * program will run on. The Windows branch is the portable UCRT subset —
+ * `__acrt_iob_func` for the three streams, which both the Microsoft library
+ * and mingw-w64 export — and is the least tested of the three; see the
+ * "Cross-compilation" section of the README.
  */
 #ifndef _CINRS_STDIO_H
 #define _CINRS_STDIO_H

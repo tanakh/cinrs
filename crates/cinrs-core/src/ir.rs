@@ -770,7 +770,15 @@ impl Types {
             },
             scalar => {
                 let size = scalar.size_bytes(target);
-                Layout { size, align: size }
+                // A scalar is aligned to its own width, up to whatever the ABI
+                // stops at: the i386 System V ABI aligns `long long` and
+                // `double` to four bytes rather than eight, and `rustc` gives
+                // `u64` and `f64` the same alignment there. See
+                // [`TargetModel::max_scalar_align`].
+                Layout {
+                    size,
+                    align: size.min(target.max_scalar_align).max(1),
+                }
             }
         })
     }
@@ -1202,26 +1210,45 @@ impl Ty {
     }
 
     /// `size_t` for `target`.
+    ///
+    /// The *narrowest* unsigned type as wide as a pointer, which is how GCC
+    /// picks it and therefore what `__SIZE_TYPE__` says: `unsigned int` on
+    /// i686, `unsigned long` on LP64, `unsigned long long` on 64-bit Windows,
+    /// where `long` is only 32 bits.
     pub fn size_ty(target: &TargetModel) -> Ty {
-        if Ty::ULong.bits(target) == target.ptr_bits {
+        if target.int_bits >= target.ptr_bits {
+            Ty::UInt
+        } else if target.long_bits >= target.ptr_bits {
             Ty::ULong
         } else {
-            Ty::UInt
+            Ty::ULongLong
         }
     }
 
-    /// `ptrdiff_t` for `target`.
+    /// `ptrdiff_t` for `target`, chosen the same way as [`Ty::size_ty`].
     pub fn ptrdiff_ty(target: &TargetModel) -> Ty {
-        if Ty::Long.bits(target) == target.ptr_bits {
+        if target.int_bits >= target.ptr_bits {
+            Ty::Int
+        } else if target.long_bits >= target.ptr_bits {
             Ty::Long
         } else {
-            Ty::Int
+            Ty::LongLong
         }
     }
 
-    /// `wchar_t` for `target`, which is `int` on every platform this supports.
-    pub fn wchar_ty() -> Ty {
-        Ty::Int
+    /// `wchar_t` for `target`: `unsigned short` on Windows, `unsigned int` on
+    /// Arm outside Apple's platforms, and `int` everywhere else.
+    ///
+    /// This is the type `L'x'` and `L"…"` get, and what the bundled
+    /// `<stddef.h>` typedefs from `__WCHAR_TYPE__`; the two have to agree, or
+    /// a call passing `L"…"` to a `const wchar_t *` would be a type error.
+    pub fn wchar_ty(target: &TargetModel) -> Ty {
+        match (target.wchar_bits, target.wchar_signed) {
+            (16, true) => Ty::Short,
+            (16, false) => Ty::UShort,
+            (_, true) => Ty::Int,
+            (_, false) => Ty::UInt,
+        }
     }
 
     /// `char16_t` (C11 7.28), which is `uint_least16_t` — `unsigned short` on
