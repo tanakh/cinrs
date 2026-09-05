@@ -43,15 +43,13 @@ What `gnu89!` keeps of C89 is only what a later revision **deleted**: implicit
 `c23!`) old-style function definitions.
 
 One of the rows below is answered by the *entry point* rather than by the
-front end: `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
-`__STDC_NO_COMPLEX__` are predefined, so the three features they name are
-conforming omissions rather than gaps. Two of the three are now the
-conservative half of a feature that partly works: `__STDC_NO_VLA__` stays
-defined although one-dimensional variable length arrays do, until the rest of
-the variably modified types follow, and `__STDC_NO_THREADS__` stays defined
-although `_Thread_local` does, because `<threads.h>` is what the macro is
-about. The fourth macro, `__STDC_NO_ATOMICS__`, is *not* defined: atomics are
-implemented.
+front end: `__STDC_NO_THREADS__` and `__STDC_NO_COMPLEX__` are predefined, so
+the two features they name are conforming omissions rather than gaps. One of
+the two is the conservative half of a feature that partly works:
+`__STDC_NO_THREADS__` stays defined although `_Thread_local` does, because
+`<threads.h>` is what the macro is about. The other two macros,
+`__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, are *not* defined: atomics and
+variably modified types are implemented.
 
 ## The target model
 
@@ -176,7 +174,7 @@ target but the host.
 | Restricted character set support via digraphs and `<iso646.h>` | | Yes | Digraphs are lexed, `<iso646.h>` is bundled, and the nine **trigraphs** are replaced in translation phase 1 — before line splicing, so `??/` at the end of a line splices it, and inside string literals, so `"??!"` is `"|"`. A punctuator may be spelled with them, one or both halves: `??!??!` is `||` and `??'=` is `^=`. They are on in `c89!`, `c99!`, `c11!` and `c17!` and off in `c23!` (N2940 removed them) and in every GNU dialect, which is the line `gcc -std=c99` and `clang` both draw. |
 | More precise aliasing rules via effective type | | N/A | |
 | Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits — Rust's own aliasing rules are stricter than the promise, so there is nothing to pass on. The one *constraint* it carries is checked: 6.7.3p2 lets it qualify only a pointer to an object type, so `int restrict i` and `void (*restrict fp)(void)` are diagnosed, while `int *restrict p`, `int_ptr restrict q` through a `typedef` of a pointer, and `void f(int a[restrict])` are not. Clang's `C99/n448.c` is that test. |
-| Variable length arrays | N683 | Partial | A *one-dimensional* array at block scope whose element type is complete and not itself variably modified: `T a[n];`, with `T` a scalar, a pointer, a record or a fixed-size array (`int a[n][3]` is one, `int a[3][n]` is not). The bound is evaluated once at the declaration, `sizeof` is a run-time value, the object's lifetime is the block, and a declaration inside a loop allocates afresh on every pass. Emulated on the heap — the elements live in a `Vec` — so the storage is not the stack; that and the `alloc` dependency are the only differences a program can observe. A jump into the scope of one is diagnosed (6.8.6.1p1, 6.8.4.2p2). Not there: every other variably modified type — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA — and `[*]` outside a prototype, each a located error. `__STDC_NO_VLA__` stays predefined for exactly that reason: see the [N1460 row](#c11). |
+| Variable length arrays | N683 | Yes | Every variably modified type at block scope: `T a[n];`, `double a[n][m]`, `int a[3][n]` and `int a[n][3]`, `int (*p)[n]`, `typedef int T[n];`, and the parameter forms `void f(int n, int m, double a[n][m])`, `double (*a)[m]` and `int a[*][*]` in a prototype. Each variable dimension gets a hidden `size_t` object, created where the *type* is declared and named by the type itself: a `typedef` evaluates its bound once, at the `typedef` (6.7.7p4), and the objects declared with it share it; a definition's parameter evaluates its bounds on entry, in declaration order (6.9.1p10). `sizeof a`, `sizeof a[0]`, `sizeof *p` and `sizeof(int[n][m])` are products of those; `a[i][j]`, `p + 1` and `p - q` scale by them. The object's lifetime is the block, a declaration inside a loop allocates afresh on every pass, and a jump into the scope of one is diagnosed (6.8.6.1p1, 6.8.4.2p2). Emulated on the heap — the whole object, however many dimensions, is one `Vec` — so the storage is not the stack; that and the `alloc` dependency are the only differences a program can observe. The one gap: a bound written in a *type name* other than `sizeof`'s — `(double (*)[m])q` — has no object to live in, so an expression that needs the length is refused ("the length of this variably modified type is not available here"). `__STDC_NO_VLA__` is **not** predefined; see the [N1460 row](#c11). |
 | Flexible array members | | Yes | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is pointer arithmetic. Initialising one — which GCC allows with a warning — is refused. |
 | Incomplete array types (6.2.5p22, 6.9.2p5) | | Yes | `int j[];` is a *type*, not a mistake, in the two places C allows an object to have one: an `extern` declaration, whose object is defined in another unit, and a file-scope tentative definition, which the end of the translation unit completes to **one element**. A later declaration with a bound completes it sooner (`extern int j[]; int j[3];` is one object of three), the composite type is what the object keeps (6.2.7p4), an incomplete array is *compatible* with every completed one of the same element type — so `__builtin_types_compatible_p(int[5], int[])` is 1 — and `sizeof` of one is a constraint violation until it is completed, exactly as GCC has it. `typedef int A[]; A a = { 1, 2 };` takes its length from the initialiser as the `int a[]` spelling does. |
 | `static` and type qualifiers in parameter array declarators | | Accepted | Parsed; no effect on codegen. The *bound* of an array parameter is not part of its type either (6.7.5.3p7), so `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all declare an `int *` — which is what makes `sizeof a` there the size of a pointer. In a *definition* the bound is still evaluated on entry, in declaration order, because C99 6.9.1p10 says so and `void f(int n, int a[n++])` can tell: the value is thrown away, and a bound that plainly has no effect is left out of the generated code. |
@@ -260,7 +258,7 @@ Also standard C99 but absent from Clang's list:
 | Completeness of types | N1439 | N/A | |
 | Generic macro facility (`_Generic`) | N1441 | Yes | |
 | Dependency ordering for C memory model | N1444 | N/A | `memory_order_consume` is accepted and performed as an acquire, which is what every compiler does with it and what 7.17.3 allows; Rust has no `Ordering::Consume` to map it to. |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | Three of the four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_ATOMICS__` is **not** predefined any more: `_Atomic` and `<stdatomic.h>` are implemented ([N1485/N1526](#c11)), so saying they are absent would be false. Two of the remaining three are the conservative half of a feature that partly works. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. `__STDC_NO_THREADS__` likewise stays defined although `_Thread_local` works ([N1364](#c11)): the macro is about `<threads.h>` and 7.26, which are not there at all. Each comes off when the rest of its feature lands. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | Two of the four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_ATOMICS__` is **not** predefined: `_Atomic` and `<stdatomic.h>` are implemented ([N1485/N1526](#c11)), so saying they are absent would be false. Neither is `__STDC_NO_VLA__` any more: variable length arrays and the variably modified types built on them are translated ([N683](#c99)) — `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the parameter forms — and what is left of the feature is one corner of a *type name*, which no program guards `__STDC_NO_VLA__` for. `__STDC_NO_THREADS__` is the conservative half of a feature that partly works: it stays defined although `_Thread_local` does ([N1364](#c11)), because the macro is about `<threads.h>` and 7.26, which are not there at all. It comes off when the rest of that feature lands. |
 | Assumed types in F.9.2 | N1468 | N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | Yes | |
 | Updates to the memory model | N1480 | N/A | |
@@ -308,7 +306,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | What we think we reserve | N2572 | N/A | |
 | Remove mixed wide string literal concatenation | N2594 | Unverified | |
 | Update to IEC 60559:2020 | N2600 | N/A | |
-| Compatibility of pointers to arrays with qualifiers | N2607 | Unverified | |
+| Compatibility of pointers to arrays with qualifiers | N2607 | Partial | `float (*)[n]` converts to `const float (*)[n]`, so passing `float x[n][n]` to a `const float x[n][n]` parameter is accepted — in *every* entry point, as GCC and Clang do (GCC warns only under `-pedantic` before C23). What is not modelled is the other half of 6.7.3p9: `const A a`, where `A` is a `typedef` of an array, puts the qualifier on the object rather than on the elements, so `&a` is not the `const int (*)[1]` the paper says it is. |
 | Format specifier and argument type relationship | N2562 | N/A | |
 | Digit separators | N2626 | Yes | String-literal input only (Rust's lexer rejects `1'000`). |
 | Missing `+(x)` in table | N2641 | N/A | |
@@ -323,7 +321,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | IEC 60559 binding | N2749 | N/A | |
 | Annex F overflow and underflow | N2747 | N/A | |
 | Remove UB from incomplete types in function parameters | N2770 | N/A | |
-| Variably-modified types | N2778, N2992 | Partial | The one-dimensional variable length array is there; the pointer and `typedef` forms that carry a size around in the *type* are not. See the [C99 row](#c99). |
+| Variably-modified types | N2778, N2992 | Yes | The array, pointer, `typedef` and parameter forms all carry their bounds in the *type*, in hidden `size_t` objects the declaration binds. See the [C99 row](#c99). |
 | Types do not have types | N2781 | N/A | |
 | Allow 16-bit `ptrdiff_t` | N2808 | N/A | |
 | CFP freestanding requirements | N2823 | N/A | |

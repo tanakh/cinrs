@@ -47,7 +47,7 @@ C23/n2322.c            the line number of a macro invocation spanning spliced li
 !C23/n2350.c:3         a `//` comment in a `c89!` block; see `C11/n1310.c:0`. The other seven revisions of this file — which are about `offsetof` with a nested member designator — now come out as required
 !C23/n2508.c:1         a label at the end of a compound statement in a `c11!` block; C23 made it legal and `c23!` accepts it
 !C23/n2549.c:1         a binary integer constant in a `c17!` block; C23 added them and `c23!` accepts them (Clang takes them as an extension everywhere)
-C23/n2607.c:0          wrong line: `_Atomic` applied to an array is not the error reported; a `[N][N]` parameter (a variably modified type) is refused first
+C23/n2607.c:0          wrong line: the conditional-operator case the file ends on is not the error reported; `const array a` puts the qualifier on the *object* rather than on the array's elements (6.7.3p9), so `&a` is not the `const int (*)[1]` the `_Generic` before it asks for
 C23/n2607.c:1          see `C23/n2607.c:0`
 C23/n2836_n2939.c:0    wrong line: `\N{...}` named universal character escapes are not implemented, so the wrong one of them is diagnosed
 C23/n2838.c            wrong line: a `_BitInt` array bound is refused before the "array is too large" the test asks for

@@ -83,19 +83,22 @@ Run it with `cargo run --example fact`.
   not in Normalization Form C. And the **Unicode literals** — `u8"…"`, `u"…"`
   and `U"…"` with their `char8_t`, `char16_t` and `char32_t`, `u'x'`, `U'x'`
   and C23's `u8'x'`, surrogate pairs and all — with `<uchar.h>` bundled.
-* **Variable length arrays and `alloca`.** `int a[n];` with a bound that is not
-  a constant does what C99 says: the bound is evaluated once, at the
+* **Variably modified types and `alloca`.** `int a[n];` with a bound that is
+  not a constant does what C99 says: the bound is evaluated once, at the
   declaration; the object lives to the end of the block and is made afresh on
-  every pass through a loop; `sizeof a` is a run-time value. `alloca` — the
+  every pass through a loop; `sizeof a` is a run-time value. So does every
+  type built on one — `double a[n][m]` and `int a[3][n]`, `int (*p)[n]`,
+  `typedef int T[n];`, and the parameter form `void f(int n, int m, double
+  a[n][m])` that adjusts to `double (*a)[m]` and reads its bounds on entry
+  (6.9.1p10). `a[i][j]`, `p + 1`, `sizeof a / sizeof a[0]` and `sizeof *p` are
+  all computed from the bounds the declaration evaluated. `alloca` — the
   bundled `<alloca.h>`, or `__builtin_alloca` — gives memory that lives until
   the *function* returns. Both are emulated on the heap, since Rust cannot move
   the stack pointer by an amount chosen at run time, so the storage is not the
   stack and the two of them are the only constructs whose expansion needs more
   than `core`. What a C program can observe — the elements, the lifetimes, the
-  run-time `sizeof` — is unchanged. One dimension is what is supported:
-  `int a[n][3]` is fine, and `int a[3][n]`, `int (*p)[n]` and a `typedef` of a
-  VLA are located errors, as is a `goto` or a `case` that would jump into the
-  scope of one.
+  run-time `sizeof` — is unchanged. A `goto` or a `case` that would jump into
+  the scope of one is a located error, as C requires.
 * **The C99 preprocessor.** Object-like and function-like macros with `#`,
   `##`, `__VA_ARGS__` and the standard's rescanning rules, every conditional
   directive, `#error`, `#warning`, `#pragma`, and `#line` — which redirects
@@ -111,6 +114,8 @@ Run it with `cargo run --example fact`.
   and `__has_embed` — and editing *that* rebuilds the crate too.
 * **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
   `__attribute__((packed))` and `aligned` with the layout GCC gives them,
+  `__attribute__((cleanup(f)))` — `f(&x)` on every way out of the scope, which
+  is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
   `asm` labels, `constructor`/`destructor`, `__func__`, the `__builtin_*`
   family — bit counting, checked overflow, `__builtin_expect`,
@@ -193,19 +198,18 @@ Run it with `cargo run --example fact`.
 ## Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
-  the variably modified types other than a one-dimensional array
-  (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`,
-  `setjmp`/`longjmp`, `_BitInt`, an `_Atomic` *aggregate* (legal C, and there
-  is nothing in the generated Rust to be the lock it needs), and C23's *named*
-  universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the GNU side:
-  inline assembly, computed `goto`, `cleanup` and the vector extensions.
-  Three of C11's four `__STDC_NO_*` macros are predefined, which is the
-  standard's own way of saying that threads, VLAs and complex arithmetic are
-  left out; `__STDC_NO_VLA__` stays defined although one-dimensional VLAs work,
-  so that a program which tests it keeps taking its `malloc` path, and
-  `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
-  `<threads.h>` does not. `__STDC_NO_ATOMICS__` is *not* defined: atomics are
-  here.
+  `_Complex`, `setjmp`/`longjmp`, `_BitInt`, an `_Atomic` *aggregate* (legal C,
+  and there is nothing in the generated Rust to be the lock it needs), and
+  C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
+  the GNU side: inline assembly, computed `goto` and the vector extensions.
+  Two of C11's four `__STDC_NO_*` macros are predefined, which is the
+  standard's own way of saying that threads and complex arithmetic are left
+  out; `__STDC_NO_THREADS__` stays defined although `_Thread_local` works,
+  because `<threads.h>` does not. `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`
+  are *not* defined: atomics and variably modified types are here. The one
+  corner of the latter that is left is a bound written in a *type name* —
+  `(double (*)[m])p` — where there is no declaration to keep the length in, so
+  an expression that needs it is refused.
 * A bit-field has no address, so it is not a field of the generated Rust
   `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
   named member becomes a pair of inherent methods — `s.level()` reads it and
@@ -380,8 +384,8 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,398 pass (79.0 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,304 (73.7 %) under
+  exit status zero. **1,402 pass (79.3 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,307 (73.9 %) under
   `gnu11!`. What is left is inline assembly, the vector extensions, the
   `__builtin_*` forms this crate does not implement, `_Complex`, nested
   functions, and the variadic definitions that need Rust 1.99 — plus three

@@ -4,9 +4,7 @@
 cinrs::c99! {
     int weak_function(void) __attribute__((weak)); //~ ERROR: weak linkage cannot be asked for
 
-    void with_cleanup(void) {
-        int fd __attribute__((cleanup(close_it))); //~ ERROR: it needs a drop guard
-    }
+    typedef int hi __attribute__((mode(HI))); //~ ERROR: write the type the mode names instead
 
     typedef int v4si __attribute__((vector_size(16))); //~ ERROR: the vector extensions need `core::simd`
 

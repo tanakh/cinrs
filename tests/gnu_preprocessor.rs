@@ -93,11 +93,18 @@ c99! {
     int has_attributes(void) { return 0; }
     #endif
 
-    /* `cleanup` is known and refused, so the answer has to be no. */
+    /* `cleanup` is honoured, so the answer has to be yes; `vector_size` is
+       known and refused, so that one is still no. */
     #if __has_attribute(cleanup)
     int has_cleanup(void) { return 1; }
     #else
     int has_cleanup(void) { return 0; }
+    #endif
+
+    #if __has_attribute(vector_size)
+    int has_vector_size(void) { return 1; }
+    #else
+    int has_vector_size(void) { return 0; }
     #endif
 
     #if __has_builtin(__builtin_add_overflow)
@@ -125,7 +132,8 @@ fn the_has_family_answers_about_this_implementation() {
     assert_eq!(unsafe { has_stdio() }, 1);
     assert_eq!(unsafe { has_nonsense() }, 0);
     assert_eq!(unsafe { has_attributes() }, 1);
-    assert_eq!(unsafe { has_cleanup() }, 0);
+    assert_eq!(unsafe { has_cleanup() }, 1);
+    assert_eq!(unsafe { has_vector_size() }, 0);
     assert_eq!(unsafe { has_overflow() }, 1);
     assert_eq!(unsafe { has_features() }, 1);
     assert_eq!(unsafe { has_atomic_builtins() }, 1);
@@ -213,15 +221,21 @@ c99! {
     const char *timestamp(void) { return __TIMESTAMP__; }
     int include_level(void) { return __INCLUDE_LEVEL__; }
 
-    #if defined(__STDC_NO_THREADS__) && defined(__STDC_NO_VLA__) && defined(__STDC_NO_COMPLEX__)
+    #if defined(__STDC_NO_THREADS__) && defined(__STDC_NO_COMPLEX__)
     int subsetting(void) { return 1; }
     #else
     int subsetting(void) { return 0; }
     #endif
 
-    /* Atomics are *not* left out, so the macro that would say so is not
-       defined — and the `__ATOMIC_*` orders and the `__sync_*` advertisement
-       are, in every entry point. */
+    /* Neither atomics nor variable length arrays are left out, so the macros
+       that would say so are not defined — and the `__ATOMIC_*` orders and the
+       `__sync_*` advertisement are, in every entry point. */
+    #if !defined(__STDC_NO_VLA__)
+    int has_vla(void) { return 1; }
+    #else
+    int has_vla(void) { return 0; }
+    #endif
+
     #if !defined(__STDC_NO_ATOMICS__) && __ATOMIC_SEQ_CST == 5 && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4)
     int has_atomics(void) { return 1; }
     #else
@@ -246,6 +260,7 @@ fn the_predefined_macros_say_what_this_implementation_is() {
     assert_eq!(unsafe { strict() }, 1);
     assert_eq!(unsafe { gnu_strict() }, 0);
     assert_eq!(unsafe { subsetting() }, 1);
+    assert_eq!(unsafe { has_vla() }, 1);
     assert_eq!(unsafe { has_atomics() }, 1);
 
     let text = |p| unsafe { core::ffi::CStr::from_ptr(p) }.to_bytes().to_vec();

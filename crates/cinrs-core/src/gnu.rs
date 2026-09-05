@@ -43,6 +43,8 @@ pub enum Attribute {
     Constructor,
     /// `destructor`, likewise: run after it.
     Destructor,
+    /// `cleanup(f)`: call `f(&x)` when `x` goes out of scope.
+    Cleanup,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weak` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -81,10 +83,6 @@ pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
         "is not supported: write the type the mode names instead",
     ),
     (
-        "cleanup",
-        "is not supported yet: it needs a drop guard around the object's scope",
-    ),
-    (
         "scalar_storage_order",
         "is not supported: it reverses the byte order of every scalar in the record, and \
          nothing in the generated Rust could carry that",
@@ -114,6 +112,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "section" => Attribute::Section,
         "constructor" => Attribute::Constructor,
         "destructor" => Attribute::Destructor,
+        "cleanup" => Attribute::Cleanup,
         _ if IGNORED_ATTRIBUTES.contains(&bare) => Attribute::Ignored,
         _ => return None,
     })

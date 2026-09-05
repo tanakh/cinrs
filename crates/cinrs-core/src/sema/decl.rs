@@ -90,8 +90,8 @@ impl Sema<'_> {
         if decl.specifiers.is_typedef() {
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
-            self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
-            return Vec::new();
+            self.reject_cleanup(&attrs, "a 'typedef'");
+            return self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
         }
 
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
@@ -133,6 +133,19 @@ impl Sema<'_> {
         if let Some(range) = attrs.packed {
             self.error(range, "'packed' is only meaningful on a record or a member");
         }
+        // GCC drops `cleanup` on anything but an automatic object, with
+        // "'cleanup' attribute ignored"; dropping it silently would change
+        // what the program does, so it is refused with the reason.
+        if let Some(what) = match storage {
+            _ if decl.specifiers.thread_local.is_some() => Some("a thread-local object"),
+            Some(ast::StorageClass::Static) => Some("an object with static storage duration"),
+            Some(ast::StorageClass::Extern) => Some("an 'extern' declaration"),
+            Some(ast::StorageClass::Constexpr) => Some("a 'constexpr' object"),
+            _ if file_scope => Some("an object at file scope"),
+            _ => None,
+        } {
+            self.reject_cleanup(&attrs, what);
+        }
 
         let thread_local = self.check_thread_local(decl, storage, file_scope);
         if thread_local == ThreadLocal::Rejected {
@@ -164,9 +177,10 @@ impl Sema<'_> {
         // declare the object with yet. Neither of them can name itself either
         // (an incomplete array has no `sizeof`), so nothing is lost.
         //
-        // A bound that is not a constant expression is left in `vla_bound` by
-        // the resolution below, and is this declaration's to take.
-        self.vla_bound = None;
+        // Every bound that is not a constant expression gets a hidden object
+        // of its own during the resolution below, and the statements that bind
+        // them are this declaration's to take.
+        self.vm_bounds.clear();
         let mut inferred = type_from_initializer(declarator);
         let (mut ty, mut init) = if inferred {
             self.typed_initializer(declarator, &name.name)
@@ -199,7 +213,7 @@ impl Sema<'_> {
                 inferred = true;
             }
         }
-        let vla_bound = self.vla_bound.take();
+        let bounds = self.take_vm_bounds();
 
         if storage == Some(ast::StorageClass::Constexpr) {
             // A `constexpr` object is a *constant* rather than storage, so
@@ -217,11 +231,26 @@ impl Sema<'_> {
         // A variably modified type is the one type whose object cannot be a
         // plain `let`, and the one C hedges around with rules about where it
         // may be declared at all. It may not have an initialiser at all.
-        if self.types().is_vla(ty) {
-            return self.declare_vla(name, decl, declarator, ty, vla_bound, file_scope);
+        if self.types().is_vm(ty) {
+            let mut out = self.declare_vla(name, decl, declarator, ty, bounds, file_scope);
+            if let Some(Stmt::Vla(def)) = out.last() {
+                let object = def.object;
+                out.extend(self.declare_cleanup(object, attrs.cleanup.as_ref()));
+            }
+            return out;
         }
 
         if file_scope || is_static {
+            // C99 6.7.5.2p2: an object with static storage duration may not
+            // have a variably modified type — `static int (*p)[n];` has no
+            // moment at which its bound could be evaluated. Having evaluated
+            // one is exactly what says the type is.
+            if !bounds.is_empty() {
+                self.error(
+                    declarator.range,
+                    "a variably modified type cannot have static storage duration",
+                );
+            }
             // An object with static storage duration outlives every argument
             // list there could be, and Rust's `VaList` says so with a lifetime
             // no item could name.
@@ -304,6 +333,10 @@ impl Sema<'_> {
         // stands where the declaration was written, which is where C evaluates
         // the initialiser; a hoisted definition keeps the zero, which is what
         // `explicit: false` asks for.
+        // A bound written in the declarator — `int (*p)[n]` — is evaluated
+        // where the declaration stands, into the hidden object the type points
+        // at, and that has to happen before anything can use the type.
+        let mut out = bounds;
         if explicit && ir::mentions_object(&init, id) {
             let zero = self.zero(ty, declarator.range);
             let place = super::place_of(PlaceKind::Object(id), ty, false, name.range);
@@ -315,20 +348,124 @@ impl Sema<'_> {
                 ty,
                 declarator.range,
             );
-            return vec![
-                Stmt::Let {
-                    object: id,
-                    init: zero,
-                    explicit: false,
-                },
-                Stmt::Expr(assign),
-            ];
+            out.push(Stmt::Let {
+                object: id,
+                init: zero,
+                explicit: false,
+            });
+            out.push(Stmt::Expr(assign));
+        } else {
+            out.push(Stmt::Let {
+                object: id,
+                init,
+                explicit,
+            });
         }
-        vec![Stmt::Let {
-            object: id,
-            init,
-            explicit,
-        }]
+        out.extend(self.declare_cleanup(id, attrs.cleanup.as_ref()));
+        out
+    }
+
+    /// Registers `T x __attribute__((cleanup(f)));` on an object that has just
+    /// been declared (GCC's extension).
+    ///
+    /// The registration is a statement rather than a property of the object
+    /// because *where* it stands is what it means: the guard the structured
+    /// lowering binds goes right after the object's own binding, so that
+    /// Rust's drop order is C's reverse declaration order, and the
+    /// [CFG](crate::cfg) lowering reads the same statement as "from here to
+    /// the end of the block, this call is owed on every way out".
+    pub(super) fn declare_cleanup(
+        &mut self,
+        object: ObjectId,
+        cleanup: Option<&ast::Cleanup>,
+    ) -> Option<Stmt> {
+        let cleanup = cleanup?;
+        // GCC's own two words for the argument it cannot use.
+        let Some(name) = &cleanup.func else {
+            self.error(cleanup.range, "cleanup argument not an identifier");
+            return None;
+        };
+        let Some(Entry::Function(func)) = self.lookup(&name.name).cloned() else {
+            self.error(name.range, "cleanup argument not a function");
+            return None;
+        };
+        let entry = self.program.function(func);
+        let (sig, declared, fname) = (entry.sig.clone(), entry.range, entry.name.clone());
+        if sig.params.len() != 1 || sig.variadic {
+            let expected = if sig.variadic {
+                format!("at least {}", sig.params.len())
+            } else {
+                sig.params.len().to_string()
+            };
+            let word = if sig.params.len() > 1 { "few" } else { "many" };
+            self.error_note(
+                cleanup.range,
+                format!(
+                    "the cleanup function is called with one argument, the object's address: \
+                     too {word} arguments to function call, expected {expected}, have 1"
+                ),
+                declared,
+                format!("'{fname}' is declared"),
+            );
+            return None;
+        }
+        let param = sig.params[0];
+        let info = self.program.object(object);
+        let (ty, is_const, range) = (info.ty, info.is_const, info.range);
+        if ty.is_error() {
+            return None;
+        }
+        let address = Expr::new(
+            ExprKind::AddrOf(super::place_of(
+                PlaceKind::Object(object),
+                ty,
+                is_const,
+                range,
+            )),
+            self.ptr_to(ty, is_const),
+            range,
+        );
+        let arg = self.convert_for(
+            address,
+            param,
+            super::ConvContext::Argument {
+                index: 1,
+                func: fname,
+            },
+        );
+        let call = Expr::new(
+            ExprKind::Call {
+                callee: ir::Callee::Direct(func),
+                args: vec![arg],
+            },
+            sig.ret,
+            range,
+        );
+        self.cleanup_depth += 1;
+        Some(Stmt::Cleanup(Box::new(ir::CleanupDef {
+            object,
+            func,
+            param,
+            call,
+            range: cleanup.range,
+        })))
+    }
+
+    /// Reports a `cleanup` attribute somewhere it cannot mean anything.
+    ///
+    /// GCC drops it with "'cleanup' attribute ignored"; ignoring it here would
+    /// change what the program does, so it is refused with the reason instead.
+    pub(super) fn reject_cleanup(&mut self, attrs: &ast::Attributes, what: &str) {
+        if let Some(cleanup) = &attrs.cleanup {
+            self.error(
+                cleanup.range,
+                format!(
+                    "'cleanup' attribute ignored on {what}: it calls the function when the \
+                     object goes out of scope, and only an object with automatic storage \
+                     duration ever does"
+                ),
+            );
+        }
     }
 
     /// Checks a `_Thread_local` object declaration (C11 6.7.1).
@@ -400,21 +537,23 @@ impl Sema<'_> {
         ThreadLocal::Yes
     }
 
-    /// Declares a variable length array: `T a[n];` (C99 6.7.5.2).
+    /// Declares an object of variably modified type: `T a[n];`, `T a[n][m];`
+    /// (C99 6.7.5.2).
     ///
-    /// The elements live in a hidden `Vec` and the object itself is a pointer
-    /// into it — see [`ir::VlaDef`] — so the declaration contributes three
-    /// bindings rather than one. Everything C forbids about such a declaration
-    /// is reported here, because a block-scope object with automatic storage
-    /// duration is the only place a variably modified type is allowed to reach
-    /// at all.
+    /// The elements live in one hidden `Vec` — however many dimensions there
+    /// are — and the object itself is a pointer into it; see [`ir::VlaDef`].
+    /// `bounds` are the statements that bind the hidden length objects the
+    /// type carries, which have to run before the allocation does. Everything
+    /// C forbids about such a declaration is reported here, because a
+    /// block-scope object with automatic storage duration is the only place a
+    /// variably modified *object* is allowed to reach at all.
     fn declare_vla(
         &mut self,
         name: &ast::Ident,
         decl: &ast::Decl,
         declarator: &ast::InitDeclarator,
         ty: Ty,
-        bound: Option<Expr>,
+        bounds: Vec<Stmt>,
         file_scope: bool,
     ) -> Vec<Stmt> {
         // C99 6.7.5.2 introduced them (N683), so a `c89!` block is told to
@@ -426,6 +565,7 @@ impl Sema<'_> {
             declarator.range,
         );
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
+        let unknown = self.types().vm_dims(ty).contains(&ir::VmDim::Unknown);
         let problem = if file_scope || storage == Some(ast::StorageClass::Static) {
             // An object with static storage duration is an item whose size the
             // linker has to know, and there is no moment at which the bound
@@ -435,10 +575,14 @@ impl Sema<'_> {
             // C99 6.7.8p3: there would be nothing to check the number of
             // initialisers against.
             Some("a variable length array cannot have an initializer".to_owned())
-        } else if bound.is_none() {
-            // The type arrived from somewhere that carries no bound with it,
-            // such as `typeof` of another variable length array.
-            Some(super::VM_UNSUPPORTED.to_owned())
+        } else if unknown {
+            // The type arrived from somewhere that carries no bound with it:
+            // `int a[*]`, or `typeof` of a parameter declared in a prototype.
+            Some(
+                "the length of this variably modified type is not available here: \
+                 its bound was never evaluated"
+                    .to_owned(),
+            )
         } else {
             None
         };
@@ -452,17 +596,14 @@ impl Sema<'_> {
             return Vec::new();
         }
 
-        let count = bound.expect("checked above");
-        let elem = self
-            .types()
-            .elem(ty)
-            .expect("a variable length array is an array type");
         let is_const = declarator.ty.qualifiers.is_const;
         self.check_redefinition(name);
         let object = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
         self.insert(&name.name, Entry::Object(object));
-        // The `Vec` is not an object of the C program; its type is the element
-        // type, and code generation knows to spell the binding `Vec<T>`.
+        // The `Vec` is not an object of the C program; its type is what is
+        // left under the variable dimensions, and code generation knows to
+        // spell the binding `Vec<T>`.
+        let elem = self.types().vm_step_ty(ty);
         let storage = self.new_object(
             &format!("__cinrs_vla_{}", name.name),
             elem,
@@ -471,26 +612,17 @@ impl Sema<'_> {
             name.range,
         );
         self.program.objects[storage.0 as usize].vla_storage = true;
-        let size_ty = self.size_ty();
-        let len = self.new_object(
-            &format!("__cinrs_vla_len_{}", name.name),
-            size_ty,
-            Storage::Automatic,
-            false,
-            name.range,
-        );
-        self.vla_lengths.insert(object, len);
-        // Everything from here to the end of the block is inside the scope of
-        // an identifier with a variably modified type, which nothing may jump
-        // into.
-        self.vla_scopes.push(object);
-        vec![Stmt::Vla(Box::new(ir::VlaDef {
+        let count = self
+            .vm_count(ty, Vec::new(), declarator.range, declarator.range)
+            .expect("every dimension has a length object");
+        let mut out = bounds;
+        out.push(Stmt::Vla(Box::new(ir::VlaDef {
             object,
             storage,
-            len,
             count,
             range: declarator.range,
-        }))]
+        })));
+        out
     }
 
     /// Puts what `__asm__("symbol")` and `__attribute__((section("…")))`
@@ -598,7 +730,7 @@ impl Sema<'_> {
         // `Sema::declare_vla` says so, and checking a list against a length
         // nobody knows would only add noise on top. A type that did not check
         // out has already been reported.
-        if ty.is_error() || self.types().is_vla(ty) {
+        if ty.is_error() || self.types().is_vm(ty) {
             return None;
         }
         self.initializer(init, ty, name)
@@ -654,9 +786,14 @@ impl Sema<'_> {
         } = &declarator.ty.kind
         {
             let element = self.ty_of(elem)?;
-            if self.types().is_vla(element) {
-                // `int x[][n] = { … }`: an array of a variable length array.
-                self.error(declarator.ty.range, super::VM_UNSUPPORTED);
+            if self.types().is_vm(element) {
+                // `int x[][n] = { … }`: the number of elements would have to
+                // come from the initialiser, and a variably modified object
+                // may not have one at all (C99 6.7.8p3).
+                self.error(
+                    declarator.ty.range,
+                    "a variable length array cannot have an initializer",
+                );
                 return None;
             }
             let elem_const = elem.qualifiers.is_const;
@@ -905,7 +1042,7 @@ impl Sema<'_> {
         let Some(ty) = self.declared_object_ty_of(&declarator.ty, &name.name, true) else {
             return;
         };
-        if self.types().is_vla(ty) {
+        if self.types().is_vm(ty) {
             self.error(
                 declarator.range,
                 "a variable length array cannot have static storage duration",
@@ -966,26 +1103,31 @@ impl Sema<'_> {
         ty: &ast::Type,
         init: Option<&ast::Initializer>,
         attrs: &ast::Attributes,
-    ) {
+    ) -> Vec<Stmt> {
         if let Some(init) = init {
             self.error(init.range, "a 'typedef' cannot have an initializer");
         }
         let file_scope = self.at_file_scope();
-        let resolved = match self.resolve_ty(ty) {
-            // `typedef int A[n];` is a variably modified type: every later use
-            // of `A` would have to carry the bound this declaration evaluated,
-            // which is the part of C99's VM machinery that is left out.
-            Ok(resolved) if self.types().is_vla(resolved) => Err(super::VM_UNSUPPORTED.to_owned()),
+        // `typedef int A[n];` is a variably modified type, and C99 6.7.7p4
+        // says the bound is evaluated *here*, once, however many objects `A`
+        // later declares. That needs an object to keep the length in, which is
+        // what `BoundMode::Object` asks for; at file scope there is no moment
+        // at which the bound could be evaluated at all.
+        let resolved = match self.resolve_declared_ty(ty, &name.name) {
             Ok(ty) => Ok(ty),
-            Err(err) if err.message.is_empty() => return,
+            Err(err) if err.message.is_empty() => return Vec::new(),
             Err(err) => Err(err.message),
         };
-        if let Err(message) = &resolved {
-            // A `typedef` of something unrepresentable is only a problem where
-            // it is used — except this one, which the program plainly meant.
-            if message == super::VM_UNSUPPORTED {
-                self.error(ty.range, super::VM_UNSUPPORTED);
-            }
+        let mut out = self.take_vm_bounds();
+        if let Ok(resolved) = resolved
+            && self.types().is_vm(resolved)
+            && file_scope
+        {
+            self.error(
+                ty.range,
+                format!("variably modified '{}' at file scope", name.name),
+            );
+            out.clear();
         }
         // `typedef struct { … } T __attribute__((aligned(N)));` asks for a
         // stricter alignment than the members give; see
@@ -1019,11 +1161,11 @@ impl Sema<'_> {
         // Only a file-scope `typedef` becomes an item Rust code can use; one
         // inside a block is resolved and forgotten, exactly as C does.
         if !file_scope || already {
-            return;
+            return out;
         }
-        let Ok(resolved) = resolved else { return };
+        let Ok(resolved) = resolved else { return out };
         if self.claim_anonymous_tag(resolved, &name.name) {
-            return;
+            return out;
         }
         // `typedef struct Point { … } Point;` is the commonest idiom in C, and
         // the tag already generated a Rust type of exactly that name; an alias
@@ -1034,7 +1176,7 @@ impl Sema<'_> {
             _ => false,
         };
         if same_name {
-            return;
+            return out;
         }
         let rust_name = self.reserve_item_name(&name.name);
         self.program.typedefs.push(TypedefItem {
@@ -1042,6 +1184,7 @@ impl Sema<'_> {
             ty: resolved,
             range: name.range,
         });
+        out
     }
 
     /// Gives an anonymous `struct { … }` or `enum { … }` the name of the
@@ -1077,14 +1220,18 @@ impl Sema<'_> {
 
     // -- functions ----------------------------------------------------------
 
-    /// Evaluates the bounds of the array parameters of a definition, for their
-    /// side effects.
+    /// Evaluates the bounds of the array parameters of a definition, on entry
+    /// and in declaration order (C99 6.9.1p10).
     ///
-    /// The value is thrown away: the parameter is a pointer, and nothing about
-    /// the object it points at depends on the bound. A bound that plainly
-    /// cannot do anything — a constant, or a variable read — is left out, so
-    /// that the overwhelmingly common `void f(int n, int a[n])` still generates
-    /// nothing at all.
+    /// Two things happen here. The *inner* dimensions of a variably modified
+    /// parameter — the `m` of `void f(int n, int m, double a[n][m])` — are
+    /// part of its adjusted type, `double (*)[m]`, and get a hidden object
+    /// apiece, bound here, which is what makes `a[i][j]`, `sizeof a[0]` and
+    /// `a + 1` mean anything in the body. The *outermost* one is not part of
+    /// the type at all — the parameter is a pointer — so its value is thrown
+    /// away and only its side effects are kept; a bound that plainly cannot do
+    /// anything is left out, so that the overwhelmingly common
+    /// `void f(int n, int a[n])` still generates nothing at all.
     fn parameter_size_effects(&mut self, func: &ast::FunctionType) -> Vec<Stmt> {
         // A compound literal written in a bound — `int g(char *p[f((int[27]){0})])`,
         // which is WG14 N2819's example — is an object of the function body's
@@ -1092,7 +1239,12 @@ impl Sema<'_> {
         // way `Sema::block_items` puts a block's own literals at its head.
         let enclosing = std::mem::take(&mut self.compound_literals);
         let mut out = Vec::new();
-        for param in &func.params {
+        for (index, param) in func.params.iter().enumerate() {
+            // The bounds inside the declarator come first, innermost first,
+            // which is the order GCC evaluates them in.
+            if let Some(name) = &param.name {
+                out.extend(self.variably_modified_param(param, index, &name.name));
+            }
             let ast::TypeKind::Array {
                 size: ast::ArraySize::Expr(size),
                 ..
@@ -1126,6 +1278,133 @@ impl Sema<'_> {
         }
         prologue.append(&mut out);
         prologue
+    }
+
+    /// Re-resolves a definition's parameter type inside the *body's* scope,
+    /// where its bounds can be evaluated and kept.
+    ///
+    /// The signature keeps the type the prototype gave it — a parameter's
+    /// bound is not part of its type (C99 6.7.5.3p7), and any two variably
+    /// modified types are compatible whatever their bounds — while the
+    /// *object* the body sees is retyped with the lengths bound here. That is
+    /// the whole of `void f(int n, int m, double a[n][m])`: `a` is a
+    /// `double (*)[m]` whose `m` was read on entry and cannot change
+    /// afterwards, however the body assigns to the parameter `m`.
+    fn variably_modified_param(
+        &mut self,
+        param: &ast::ParamDecl,
+        index: usize,
+        name: &str,
+    ) -> Vec<Stmt> {
+        // Only an array or a pointer declarator can carry an inner bound, and
+        // resolving anything else again would define a tag twice.
+        if !matches!(
+            param.ty.kind,
+            ast::TypeKind::Array { .. } | ast::TypeKind::Pointer(_)
+        ) {
+            return Vec::new();
+        }
+        let Ok(ty) = self.resolve_param_ty_declared(&param.ty, name) else {
+            // Whatever is wrong with it was reported when the signature was
+            // built; this pass says nothing new.
+            self.vm_bounds.clear();
+            return Vec::new();
+        };
+        let bounds = self.take_vm_bounds();
+        if bounds.is_empty() {
+            return Vec::new();
+        }
+        // The parameter object was created from the signature's type; it is
+        // the same type but for the bounds, which is exactly what has to
+        // change.
+        if let Some(object) = self.func_params.get(index).copied() {
+            self.program.objects[object.0 as usize].ty = ty;
+        }
+        bounds
+    }
+
+    /// Resolves a parameter list, inside the prototype scope its names live
+    /// in; `None` means the list was reported and there is no signature.
+    fn declare_params(
+        &mut self,
+        func: &ast::FunctionType,
+        definition: Option<&ast::FunctionDef>,
+        param_tys: &mut Vec<Ty>,
+        param_names: &mut Vec<Option<String>>,
+    ) -> Option<()> {
+        for param in &func.params {
+            // A parameter is an object of automatic storage duration; neither
+            // of these can apply to one.
+            if let Some(storage) = &param.specifiers.storage
+                && storage.node == ast::StorageClass::Constexpr
+            {
+                self.error(
+                    storage.range,
+                    format!("'{}' is not allowed on a parameter", storage.node.as_str()),
+                );
+            }
+            if let Some(range) = param.specifiers.thread_local {
+                self.error(range, "'_Thread_local' is not allowed on a parameter");
+            }
+            let ty = match self.resolve_param_ty(&param.ty) {
+                Ok(ty) => ty,
+                Err(err) => {
+                    self.report_type_error(err);
+                    return None;
+                }
+            };
+            if ty.is_void() {
+                // C99 6.7.5.3p10: a parameter list of one unnamed parameter of
+                // type `void` is a prototype with *no* parameters. The parser
+                // recognises the keyword spelling on its own; reaching `void`
+                // through a `typedef` is DR157 part 1, and only sema can see
+                // it — `typedef void V; int f(V);` is `int f(void)`.
+                if func.params.len() == 1 && !func.variadic && param.name.is_none() {
+                    param_tys.clear();
+                    param_names.clear();
+                    break;
+                }
+                self.error(param.range, "parameter has incomplete type 'void'");
+                return None;
+            }
+            // C99 6.9.1p7: it is a *definition* whose parameters must have a
+            // complete type. A declaration that is not one may mention a tag
+            // this unit has not defined — `void f(struct S s);` before
+            // `struct S` — because nothing here has to know its size; `drs`
+            // DR103 is exactly that question, and GCC and Clang both accept
+            // it with only a warning about the tag's scope.
+            if definition.is_some() && !self.types().is_complete(ty) {
+                self.error(
+                    param.range,
+                    format!("parameter has incomplete type '{}'", self.tyname(ty)),
+                );
+                return None;
+            }
+            // C23 N2480 lets a parameter of a *definition* go unnamed, exactly
+            // as C++ always has; GCC and Clang accepted it before that and
+            // warn about it only under `-pedantic`
+            // ("ISO C does not support omitting parameter names in function
+            // definitions before C23"). There is nothing to bind — the body
+            // cannot name the parameter — but the generated item still needs
+            // one in that position; see `Sema::function_def`.
+            if definition.is_some() && param.name.is_none() {
+                self.require_standard(
+                    crate::Standard::C23,
+                    "omitting a parameter name in a function definition",
+                    param.range,
+                );
+            }
+            // The name is visible to the declarators that follow it, and to
+            // nothing else; the object exists only so that a bound written
+            // there resolves to something.
+            if let Some(name) = &param.name {
+                let object = self.new_object(&name.name, ty, Storage::Automatic, false, name.range);
+                self.insert(&name.name, Entry::Object(object));
+            }
+            param_tys.push(ty);
+            param_names.push(param.name.as_ref().map(|n| n.name.clone()));
+        }
+        Some(())
     }
 
     /// Declares (but does not define) a function.
@@ -1170,6 +1449,7 @@ impl Sema<'_> {
                 "'packed' is only meaningful on a record or a member",
             );
         }
+        self.reject_cleanup(attrs, "a function");
         // C23 has no `constexpr` functions, and neither has this: a constant
         // here is a value, folded wherever its name is used.
         if let Some(storage) = &specifiers.storage
@@ -1218,73 +1498,16 @@ impl Sema<'_> {
 
         let mut param_tys = Vec::with_capacity(func.params.len());
         let mut param_names = Vec::with_capacity(func.params.len());
-        for param in &func.params {
-            // A parameter is an object of automatic storage duration; neither
-            // of these can apply to one.
-            if let Some(storage) = &param.specifiers.storage
-                && storage.node == ast::StorageClass::Constexpr
-            {
-                self.error(
-                    storage.range,
-                    format!("'{}' is not allowed on a parameter", storage.node.as_str()),
-                );
-            }
-            if let Some(range) = param.specifiers.thread_local {
-                self.error(range, "'_Thread_local' is not allowed on a parameter");
-            }
-            let ty = match self.resolve_param_ty(&param.ty) {
-                Ok(ty) => ty,
-                Err(err) => {
-                    if !err.message.is_empty() {
-                        self.error(err.range, err.message);
-                    }
-                    return None;
-                }
-            };
-            if ty.is_void() {
-                // C99 6.7.5.3p10: a parameter list of one unnamed parameter of
-                // type `void` is a prototype with *no* parameters. The parser
-                // recognises the keyword spelling on its own; reaching `void`
-                // through a `typedef` is DR157 part 1, and only sema can see
-                // it — `typedef void V; int f(V);` is `int f(void)`.
-                if func.params.len() == 1 && !func.variadic && param.name.is_none() {
-                    param_tys.clear();
-                    param_names.clear();
-                    break;
-                }
-                self.error(param.range, "parameter has incomplete type 'void'");
-                return None;
-            }
-            // C99 6.9.1p7: it is a *definition* whose parameters must have a
-            // complete type. A declaration that is not one may mention a tag
-            // this unit has not defined — `void f(struct S s);` before
-            // `struct S` — because nothing here has to know its size; `drs`
-            // DR103 is exactly that question, and GCC and Clang both accept
-            // it with only a warning about the tag's scope.
-            if definition.is_some() && !self.types().is_complete(ty) {
-                self.error(
-                    param.range,
-                    format!("parameter has incomplete type '{}'", self.tyname(ty)),
-                );
-                return None;
-            }
-            // C23 N2480 lets a parameter of a *definition* go unnamed, exactly
-            // as C++ always has; GCC and Clang accepted it before that and
-            // warn about it only under `-pedantic`
-            // ("ISO C does not support omitting parameter names in function
-            // definitions before C23"). There is nothing to bind — the body
-            // cannot name the parameter — but the generated item still needs
-            // one in that position; see `Sema::function_def`.
-            if definition.is_some() && param.name.is_none() {
-                self.require_standard(
-                    crate::Standard::C23,
-                    "omitting a parameter name in a function definition",
-                    param.range,
-                );
-            }
-            param_tys.push(ty);
-            param_names.push(param.name.as_ref().map(|n| n.name.clone()));
-        }
+        // C99 6.2.1p4's *function prototype scope*: a parameter's name is
+        // visible to the declarators that follow it, which is what makes the
+        // bound of `void f(int n, double a[3][n])` resolve to the parameter
+        // rather than to nothing. The names are gone again at the closing
+        // parenthesis, and the bounds themselves are never evaluated here —
+        // see [`BoundMode::Unevaluated`].
+        self.push_prototype_scope();
+        let result = self.declare_params(func, definition, &mut param_tys, &mut param_names);
+        self.pop_prototype_scope();
+        result?;
 
         if func.old_style {
             // C99 6.9.1p7: the definition's type has no prototype, so every

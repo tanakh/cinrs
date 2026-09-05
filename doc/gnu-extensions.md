@@ -91,14 +91,13 @@ exactly the same place.
    `#if defined(__GNUC__) && __GNUC__ >= 4`, and those work here. `__VERSION__`
    names cinrs and its version, and nothing claims to be Clang.
 
-C11 6.10.8.3's subsetting macros — `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`,
-`__STDC_NO_VLA__` and `__STDC_NO_COMPLEX__` — are all defined as `1` in every
-entry point, which turns those four gaps into the conforming omissions the
-standard provides for. `__STDC_NO_VLA__` stays defined even though
-one-dimensional variable length arrays now work, because the *rest* of C99's
-variably modified types do not; a program that tests the macro takes its
-`malloc` path, which is always correct. See
-[`doc/c-status.md`](c-status.md#c99).
+Two of C11 6.10.8.3's subsetting macros — `__STDC_NO_THREADS__` and
+`__STDC_NO_COMPLEX__` — are defined as `1` in every entry point, which turns
+those two gaps into the conforming omissions the standard provides for. The
+other two, `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, are *not* defined:
+atomics and the variably modified types — `int a[n]`, `double a[n][m]`,
+`int (*p)[n]`, `typedef int T[n];` and the parameter forms — are implemented.
+See [`doc/c-status.md`](c-status.md#c99).
 
 ## Language extensions
 
@@ -188,7 +187,7 @@ spellings work, and so does C23's `[[gnu::name]]`.
 | `section("…")` | common in libraries | supported | `#[unsafe(link_section = "…")]` on a function or on an object with static storage duration. |
 | `visibility("…")` | common in libraries | accepted | Only matters with `#pragma cinrs export`. |
 | `weak`, `alias("…")`, `weakref`, `ifunc` | occasional | refused | `#[linkage]` is unstable, so weak linkage cannot be asked for at all. |
-| `cleanup(f)` | occasional (glib, systemd) | refused | A Drop guard calling `f(&var)` at scope exit; CFG mode needs care. Phase 2. |
+| `cleanup(f)` | occasional (glib, systemd) | supported | `f(&x)` on every way out of the scope `x` was declared in, in reverse declaration order — the `_cleanup_free_` idiom. The structured lowering binds a drop guard right after the object, so Rust's own drop order *is* C's; the [CFG](../crates/cinrs-core/src/cfg.rs) one has no scopes to drop in and emits the call on each edge that leaves one, which is what runs it once per pass through a loop body. `return expr;` computes its value first, as GCC does. The function must take one argument, a pointer to the variable's type (`void *` included); on a parameter, a `static`, a thread-local or a file-scope object GCC drops the attribute with a warning and cinrs refuses it with the reason. A `goto` *into* the scope is allowed and the cleanup still runs, which is GCC's behaviour. `tests/cleanup.rs` |
 | `mode(…)` | rare | refused | Write the type the mode names instead. |
 | `scalar_storage_order("…")` | rare (file formats, network structs) | refused | It reverses the byte order of *every scalar* in the record, and nothing in the generated Rust could carry that. Ignoring it would silently change what the program reads, which is why it is named here rather than dropped as an unknown attribute; `execute/20230630-2` and its four relatives are the cases that noticed. |
 | `vector_size(N)` | occasional | refused | See vector extensions. |
@@ -213,7 +212,7 @@ spellings work, and so does C23's `[[gnu::name]]`.
 | `_Pragma("…")` (standard C99) | occasional | supported | Destringized and executed as the directive it spells, so a macro can produce one. |
 | `#include_next` | rare in user code (system headers) | refused | cinrs never searches the platform's include directories, so there is no next header to reach. |
 | `__has_include`, `__has_include_next` | common (portability) | supported | Resolved exactly as `#include` is; `__has_include_next` searches the angled path, since there is no file below the current one. |
-| `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, `__has_c_attribute` | common (portability) | supported | Answered from [`crate::gnu`](../crates/cinrs-core/src/gnu.rs)'s tables, so the answer is true of *this* implementation: `__has_attribute(packed)` is 1 and `__has_attribute(cleanup)` is 0. |
+| `__has_attribute`, `__has_builtin`, `__has_feature`, `__has_extension`, `__has_c_attribute` | common (portability) | supported | Answered from [`crate::gnu`](../crates/cinrs-core/src/gnu.rs)'s tables, so the answer is true of *this* implementation: `__has_attribute(packed)` and `__has_attribute(cleanup)` are 1, and `__has_attribute(vector_size)` is 0. |
 | `#warning` | common | supported (accepted, no output) | Standard in C23. |
 | `#ident`, `#sccs` | rare | accepted | Ignored: there is no object-file section to put the string in. |
 | `#assert` / `#unassert` | rare | not planned | Removed from GCC itself. |
@@ -297,6 +296,6 @@ Everything in the tables above marked *supported* is implemented and tested;
 `tests/ui/gnu_leniencies_in_a_strict_block.rs` for the other half of each
 row — that a strict entry point still refuses it. What is left is the
 *planned* rows — computed
-`goto`, `cleanup`, casts to a union type — plus the rows that say
+`goto`, casts to a union type — plus the rows that say
 `not planned` or `impossible`, and the c-testsuite report
 ([`doc/c-testsuite.md`](c-testsuite.md)) lists which cases each one would fix.

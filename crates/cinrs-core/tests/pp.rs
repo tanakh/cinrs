@@ -700,14 +700,15 @@ fn the_target_is_described_consistently_with_the_target_model() {
         "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
     ));
     assert!(cond("!defined(__clang__)"));
-    // The three parts of C11 this crate leaves out say so, which is what
-    // makes leaving them out conforming — and atomics, which it does *not*
-    // leave out, deliberately says nothing.
+    // The two parts of C11 this crate leaves out say so, which is what makes
+    // leaving them out conforming — and atomics and variable length arrays,
+    // which it does *not* leave out, deliberately say nothing.
     assert!(cond(
-        "defined(__STDC_NO_THREADS__) && defined(__STDC_NO_VLA__) \
-         && defined(__STDC_NO_COMPLEX__)"
+        "defined(__STDC_NO_THREADS__) && defined(__STDC_NO_COMPLEX__)"
     ));
-    assert!(cond("!defined(__STDC_NO_ATOMICS__)"));
+    assert!(cond(
+        "!defined(__STDC_NO_ATOMICS__) && !defined(__STDC_NO_VLA__)"
+    ));
     // The atomic builtins' own macros, which a program passes to them.
     assert!(cond(
         "__ATOMIC_RELAXED == 0 && __ATOMIC_CONSUME == 1 && __ATOMIC_ACQUIRE == 2 \
@@ -1465,10 +1466,12 @@ fn has_include_answers_from_the_search_path() {
 
 #[test]
 fn the_has_family_answers_from_this_implementations_tables() {
-    // `packed` is honoured, `cleanup` is refused, and the answers say so.
+    // `packed` and `cleanup` are honoured, `vector_size` is refused, and the
+    // answers say so.
     assert_eq!(pp("#if __has_attribute(packed)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_attribute(__packed__)\n1\n#endif"), "1");
-    assert_eq!(pp("#if __has_attribute(cleanup)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_attribute(cleanup)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_attribute(vector_size)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_attribute(no_such_thing)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_builtin(__builtin_popcount)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_builtin(__builtin_apply)\n1\n#endif"), "");

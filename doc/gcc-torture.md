@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | total | rate |
 | --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1361/1691 (80.5 %) | 37/78 (47.4 %) | **1398/1769** | **79.0 %** |
-| `gnu11!` | 1267/1691 (74.9 %) | 37/78 (47.4 %) | 1304/1769 | 73.7 % |
+| **`gnu89!`** | 1365/1691 (80.7 %) | 37/78 (47.4 %) | **1402/1769** | **79.3 %** |
+| `gnu11!` | 1270/1691 (75.1 %) | 37/78 (47.4 %) | 1307/1769 | 73.9 % |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -174,7 +174,7 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 368 of the 371 failures are refused at compile time, in 45
+Under `gnu89!`, 364 of the 367 failures are refused at compile time, in 44
 distinct causes. The ones worth a line each, with what the same cause costs
 under `gnu11!` beside it:
 
@@ -195,14 +195,13 @@ under `gnu11!` beside it:
 | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
 | 5 | 5 | a `#include` of a corpus file the harness does not put on the path | `execute/pr105777` |
 | 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
-| 5 | 5 | a struct member with a variably modified type | `execute/20020412-1` |
-| 5 | 5 | a variably modified type other than a one-dimensional array — a *pointer* to a variable length array, mostly, which is what an `a[2][n]` parameter is | `execute/20040411-1` |
+| 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
 | 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
 | — | 3 | a K&R parameter with no declaration, which is implicit `int` again | `execute/930429-2` |
-| — | 2 | implicit declaration of a function, which `gnu89!` has | `execute/20000412-3` |
+| — | 3 | implicit declaration of a function, which `gnu89!` has | `execute/20000412-3` |
 
 The remaining causes have three cases or fewer each; the report prints all
-forty-five. The `__builtin_…` count is the sum of four rows the report prints
+forty-four. The `__builtin_…` count is the sum of four rows the report prints
 separately, because a diagnostic raised inside an `#include`d corpus file
 carries the file name and is grouped on its own.
 
@@ -215,10 +214,10 @@ other. Nothing here optimises, so the call survives and the link fails. They
 would pass under `-O`, and asking `rustc` for that would change what the whole
 suite measures.
 
-**What the C89 rules are worth here is the first row and the last two.** 103
+**What the C89 rules are worth here is the first row and the last two.** 104
 cases — a fifth of every compile failure under `gnu11!` — are implicit `int`,
 an implicit function declaration or a K&R parameter with no declaration, and
-under `gnu89!` they are not diagnostics at all: 94 of them build and run,
+under `gnu89!` they are not diagnostics at all: 95 of them build and run,
 which is the whole difference between the two lines of the table, and the rest
 meet a second gap behind the first. The Rust 1.99 variadic gap (38 + 8) comes
 next, and those simply pass on a newer toolchain, which is why they are marked
@@ -258,7 +257,7 @@ where the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 465 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 371.
+`gnu11!`'s, 462 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 367.
 One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has

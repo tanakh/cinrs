@@ -568,6 +568,16 @@ impl Parser<'_> {
                 attrs.deprecated = Some(Spanned::new(message, range));
                 return Ok(());
             }
+            Some(gnu::Attribute::Cleanup) => {
+                // The argument is an identifier naming a function, and nothing
+                // else: GCC's own two diagnostics are "cleanup argument not an
+                // identifier" and "cleanup argument not a function", and only
+                // sema can tell the second one.
+                let func = self.attribute_identifier()?;
+                let range = self.span_to_here(start);
+                attrs.cleanup = Some(Cleanup { func, range });
+                return Ok(());
+            }
             Some(gnu::Attribute::Section) => {
                 let name = self.attribute_string()?;
                 let range = self.span_to_here(start);
@@ -610,6 +620,41 @@ impl Parser<'_> {
         }
         let _ = close;
         Ok(())
+    }
+
+    /// The single identifier an attribute's argument clause holds, if that is
+    /// what it holds; whatever else is there is skipped as balanced tokens.
+    fn attribute_identifier(&mut self) -> PResult<Option<Ident>> {
+        if !self.at_punct(Punct::LParen) {
+            return Ok(None);
+        }
+        self.advance();
+        let name = match &self.peek().kind {
+            TokenKind::Ident(name) => {
+                let ident = Ident {
+                    name: name.clone(),
+                    range: self.cur_range(),
+                };
+                self.advance();
+                // `cleanup(f, g)` is not an identifier argument either.
+                self.at_punct(Punct::RParen).then_some(ident)
+            }
+            _ => None,
+        };
+        let mut depth = 1i32;
+        while depth > 0 && !self.at_eof() {
+            if self.at_punct(Punct::LParen) {
+                depth += 1;
+            } else if self.at_punct(Punct::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    break;
+                }
+            }
+            self.advance();
+        }
+        Ok(name)
     }
 
     /// The single string literal an attribute's argument clause holds, if it
@@ -2305,6 +2350,21 @@ impl Parser<'_> {
                 self.declare(&name.name.clone(), SymKind::Ordinary);
             }
             let range = self.span_to_here(start);
+            // A parameter is not an object whose scope a `cleanup` could hang
+            // on: it is the caller's value, and GCC drops the attribute with
+            // "'cleanup' attribute ignored". Dropping it silently would change
+            // what the program does.
+            for cleanup in [&declarator.attrs.cleanup, &specs.attrs.cleanup]
+                .into_iter()
+                .flatten()
+            {
+                self.error(
+                    cleanup.range,
+                    "'cleanup' attribute ignored on a parameter: it calls the function when \
+                     the object goes out of scope, and only an object with automatic storage \
+                     duration ever does",
+                );
+            }
             params.push(ParamDecl {
                 specifiers: specs,
                 name: declarator.name,

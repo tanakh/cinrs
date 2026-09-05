@@ -42,10 +42,11 @@ use std::collections::HashSet;
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
-    self, BitField, EnumDef, Field, Layout, RecordDef, RecordId, RecordKind, RustField, Ty,
+    self, BitField, EnumDef, Field, Layout, ObjectId, RecordDef, RecordId, RecordKind, RustField,
+    Stmt, Ty,
 };
 
-use super::{Entry, Sema, TagEntry, TypeError};
+use super::{BoundMode, Entry, Sema, TagEntry, TypeError};
 
 /// A member as written, before the layout decides where it goes.
 struct Member {
@@ -87,8 +88,9 @@ enum ArrayLen {
     /// An integer constant expression.
     Fixed(u64),
     /// Anything else: a variable length array, whose bound has been left in
-    /// [`Sema::vla_bound`].
-    Variable,
+    /// [`Sema::vm_bounds`] and, where the context gives it one, in the hidden
+    /// object named here.
+    Variable(Option<ObjectId>),
     /// No bound at all — `int j[]`, an incomplete array type (6.2.5p22).
     Unspecified,
 }
@@ -299,12 +301,8 @@ impl Sema<'_> {
             ast::TypeKind::Pointer(inner) => {
                 let pointee = self.resolve_ty(inner)?;
                 // `int (*p)[n]` is a pointer to a variably modified type: the
-                // pointer arithmetic on it would have to scale by a run-time
-                // size, which is exactly the part of C99's VM machinery this
-                // release leaves out.
-                if self.types().is_vla(pointee) {
-                    return Err(TypeError::at(range, super::VM_UNSUPPORTED));
-                }
+                // arithmetic on it scales by a run-time size, which the
+                // pointee type carries. See [`ir::Types::vm_dims`].
                 if pointee.is_va_list() {
                     // Some code passes `va_list *` around to work with the
                     // array form of `va_list`; Rust's is a value, so there is
@@ -322,7 +320,7 @@ impl Sema<'_> {
                 let konst = elem.qualifiers.is_const;
                 Ok(match self.array_len(size, range)? {
                     ArrayLen::Fixed(len) => self.program.types.array(element, len, konst),
-                    ArrayLen::Variable => self.program.types.vla_array(element, konst),
+                    ArrayLen::Variable(len) => self.program.types.vla_array(element, konst, len),
                     ArrayLen::Unspecified => self.program.types.incomplete_array(element, konst),
                 })
             }
@@ -411,13 +409,80 @@ impl Sema<'_> {
         }
     }
 
+    /// Resolves the type of a *declaration*: one that gives every variable
+    /// bound in it a hidden object of its own, evaluated where the declarator
+    /// stands.
+    ///
+    /// [`Sema::take_vm_bounds`] is the other half — the statements that bind
+    /// those objects, which the declaration has to put in front of whatever it
+    /// generates.
+    pub(super) fn resolve_declared_ty(
+        &mut self,
+        ty: &ast::Type,
+        name: &str,
+    ) -> Result<Ty, TypeError> {
+        self.vm_bounds.clear();
+        let outer = (
+            std::mem::replace(&mut self.bound_mode, BoundMode::Object),
+            std::mem::replace(&mut self.vm_name, name.to_owned()),
+        );
+        let resolved = self.resolve_ty(ty);
+        (self.bound_mode, self.vm_name) = outer;
+        resolved
+    }
+
+    /// The `let`s that bind the hidden bound objects the last
+    /// [declared](Sema::resolve_declared_ty) type left behind.
+    ///
+    /// They come out in the order they were resolved — innermost dimension
+    /// first, which is the order GCC evaluates them in — and each is
+    /// `explicit`, so that a [hoisted](crate::cfg) definition still assigns
+    /// where the declaration was written.
+    pub(super) fn take_vm_bounds(&mut self) -> Vec<Stmt> {
+        std::mem::take(&mut self.vm_bounds)
+            .into_iter()
+            .filter_map(|bound| {
+                Some(Stmt::Let {
+                    object: bound.object?,
+                    init: bound.value,
+                    explicit: true,
+                })
+            })
+            .collect()
+    }
+
     /// Resolves the type of a parameter, applying the adjustments C makes to
     /// one: an array parameter is a pointer, and a function parameter is a
     /// pointer to a function.
     pub(super) fn resolve_param_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
-        let outer = std::mem::replace(&mut self.in_param_type, true);
+        let outer = (
+            std::mem::replace(&mut self.in_param_type, true),
+            // A declaration that is not a definition never evaluates a bound;
+            // the *definition* re-resolves the same declarator on entry, with
+            // objects to keep the lengths in. See
+            // [`Sema::parameter_size_effects`].
+            std::mem::replace(&mut self.bound_mode, BoundMode::Unevaluated),
+        );
         let resolved = self.resolve_param_ty_inner(ty);
-        self.in_param_type = outer;
+        (self.in_param_type, self.bound_mode) = outer;
+        resolved
+    }
+
+    /// Resolves a parameter's type where the bounds *are* evaluated: the
+    /// definition's own prologue (C99 6.9.1p10).
+    pub(super) fn resolve_param_ty_declared(
+        &mut self,
+        ty: &ast::Type,
+        name: &str,
+    ) -> Result<Ty, TypeError> {
+        self.vm_bounds.clear();
+        let outer = (
+            std::mem::replace(&mut self.in_param_type, true),
+            std::mem::replace(&mut self.bound_mode, BoundMode::Object),
+            std::mem::replace(&mut self.vm_name, name.to_owned()),
+        );
+        let resolved = self.resolve_param_ty_inner(ty);
+        (self.in_param_type, self.bound_mode, self.vm_name) = outer;
         resolved
     }
 
@@ -429,13 +494,11 @@ impl Sema<'_> {
             // evaluated here either — a *definition* evaluates it on entry,
             // which is `Sema::parameter_size_effects`, and a declaration that
             // is not one never evaluates it at all.
+            //
+            // The *element* type is part of it: `double a[n][m]` is a pointer
+            // to a variably modified `double[m]`, whose bound a definition
+            // gives an object of its own on entry (C99 6.9.1p10).
             let element = self.resolve_ty(elem)?;
-            // ... but the *element* type still has to be one this crate can
-            // point at, and `int a[3][n]` would be a pointer to a variable
-            // length array.
-            if self.types().is_vla(element) {
-                return Err(TypeError::at(ty.range, super::VM_UNSUPPORTED));
-            }
             return Ok(self.ptr_to(element, elem.qualifiers.is_const));
         }
         let resolved = self.resolve_ty(ty)?;
@@ -457,10 +520,12 @@ impl Sema<'_> {
     ///
     /// A bound that is not an integer constant expression makes the type a
     /// [variable length array](ir::ArrayType::vla). The expression is checked
-    /// and converted to `size_t` here and left in [`Sema::vla_bound`] for
-    /// whoever is resolving the type: the declaration that creates the object
-    /// evaluates it exactly once, where it was written (C99 6.7.5.2p5), and
-    /// every other context refuses it.
+    /// and converted to `size_t` here and left in [`Sema::vm_bounds`] for
+    /// whoever is resolving the type; what becomes of it there is
+    /// [`BoundMode`]'s business. A declaration also gives the dimension a
+    /// hidden object of its own, which is what the *type* carries — so that
+    /// `sizeof`, indexing and pointer arithmetic can find the length again
+    /// wherever the type turns up later.
     fn array_len(
         &mut self,
         size: &ast::ArraySize,
@@ -477,9 +542,11 @@ impl Sema<'_> {
             ast::ArraySize::Unspecified => return Ok(ArrayLen::Unspecified),
             // `int a[*]` says "variably modified, bound unspecified", and is
             // only allowed in a declaration that is not a definition — where
-            // the parameter is a pointer and the bound never mattered. Reaching
-            // here means it was written somewhere else.
+            // the parameter is a pointer and the bound never mattered.
             ast::ArraySize::Star => {
+                if self.bound_mode == BoundMode::Unevaluated {
+                    return Ok(ArrayLen::Variable(None));
+                }
                 return Err(TypeError::at(
                     range,
                     "'[*]' is only allowed in a function prototype",
@@ -487,7 +554,18 @@ impl Sema<'_> {
             }
             ast::ArraySize::Expr(expr) => expr,
         };
-        let Some(value) = self.expr(expr) else {
+        // The bound is an expression, and an expression may name a type of its
+        // own — `int a[sizeof(int[k])]`. Resolving *that* one declares
+        // nothing, so the mode and the name the hidden objects are derived
+        // from are put aside while it is checked.
+        let outer = (
+            std::mem::replace(&mut self.bound_mode, BoundMode::Expression),
+            std::mem::take(&mut self.vm_name),
+            std::mem::replace(&mut self.in_param_type, false),
+        );
+        let value = self.expr(expr);
+        (self.bound_mode, self.vm_name, self.in_param_type) = outer;
+        let Some(value) = value else {
             return Err(TypeError::silent(range));
         };
         if !value.ty.is_integer() {
@@ -500,27 +578,39 @@ impl Sema<'_> {
             ));
         }
         let Some(ir::ConstValue::Int(len)) = self.const_eval(&value) else {
-            // Inside a parameter's type the bound is allowed to be anything,
-            // prototype at file scope or not (6.7.5.3p7) — but it is the
-            // *element* type here, so the parameter is a pointer to a variable
-            // length array, which is the part of C99's variably modified
-            // machinery this release leaves out. `execute/pr22061-1`'s
-            // `char a[2][N]` is that.
-            if self.in_param_type {
-                return Err(TypeError::at(expr.range, super::VM_UNSUPPORTED));
-            }
             // A bound that is not constant is a variable length array inside a
             // function, and simply invalid at file scope, where there is no
-            // moment at which the bound could be evaluated.
-            if self.at_file_scope() {
+            // moment at which the bound could be evaluated. Inside a
+            // parameter's type it is allowed to be anything, prototype at file
+            // scope or not (6.7.5.3p7).
+            if self.at_file_scope() && self.bound_mode != BoundMode::Unevaluated {
                 return Err(TypeError::at(
                     expr.range,
                     "array size is not an integer constant expression",
                 ));
             }
             let size_ty = self.size_ty();
-            self.vla_bound = Some(self.convert(value, size_ty));
-            return Ok(ArrayLen::Variable);
+            let value = self.convert(value, size_ty);
+            let object = (self.bound_mode == BoundMode::Object).then(|| {
+                let name = match self.vm_bounds.len() {
+                    0 => format!("__cinrs_vla_len_{}", self.vm_name),
+                    n => format!("__cinrs_vla_len{n}_{}", self.vm_name),
+                };
+                let object =
+                    self.new_object(&name, size_ty, ir::Storage::Automatic, false, expr.range);
+                // Everything from here to the end of the block is inside the
+                // scope of an identifier with a variably modified type, which
+                // nothing may jump into (C99 6.8.6.1p1): the bound would not
+                // have been evaluated. It is the *bound* that is pushed rather
+                // than the object being declared, because `int (*p)[n]` and
+                // `typedef int T[n]` have one too.
+                self.vla_scopes.push(object);
+                object
+            });
+            if self.bound_mode != BoundMode::Unevaluated {
+                self.vm_bounds.push(super::VmBound { object, value });
+            }
+            return Ok(ArrayLen::Variable(object));
         };
         if len < 0 {
             return Err(TypeError::at(expr.range, "array size is negative"));
@@ -534,12 +624,6 @@ impl Sema<'_> {
     fn check_element_type(&mut self, elem: Ty, range: SourceRange) -> Result<(), TypeError> {
         if elem.is_func() {
             return Err(TypeError::at(range, "an array of functions is not allowed"));
-        }
-        // `int a[3][n]` and `int a[n][m]`: an array *of* a variable length
-        // array is variably modified in more than one dimension, and indexing
-        // it would have to scale by a run-time size.
-        if self.types().is_vla(elem) {
-            return Err(TypeError::at(range, super::VM_UNSUPPORTED));
         }
         if elem.is_va_list() {
             return Err(TypeError::at(range, super::VA_LIST_PLACEMENT));
@@ -558,16 +642,21 @@ impl Sema<'_> {
         match self.resolve_ty(ty) {
             Ok(ty) => Some(ty),
             Err(err) => {
-                if !err.message.is_empty() {
-                    match err.note {
-                        Some((range, note)) => {
-                            self.error_note(err.range, err.message, range, note);
-                        }
-                        None => self.error(err.range, err.message),
-                    }
-                }
+                self.report_type_error(err);
                 None
             }
+        }
+    }
+
+    /// Reports what a type could not be resolved for, unless the reason has
+    /// already been reported where it was found.
+    pub(super) fn report_type_error(&mut self, err: TypeError) {
+        if err.message.is_empty() {
+            return;
+        }
+        match err.note {
+            Some((range, note)) => self.error_note(err.range, err.message, range, note),
+            None => self.error(err.range, err.message),
         }
     }
 
@@ -585,7 +674,13 @@ impl Sema<'_> {
         name: &str,
         incomplete_array: bool,
     ) -> Option<Ty> {
-        let resolved = self.ty_of(ty)?;
+        let resolved = match self.resolve_declared_ty(ty, name) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                self.report_type_error(err);
+                return None;
+            }
+        };
         if resolved.is_void() {
             self.error(
                 ty.range,
@@ -788,7 +883,7 @@ impl Sema<'_> {
             // A member's size is part of the record's layout, so it has to be
             // known when the tag is defined; C99 6.7.2.1p8 says the same thing
             // by requiring a complete type that is not variably modified.
-            if self.types().is_vla(ty) {
+            if self.types().is_vm(ty) {
                 self.error(
                     field.range,
                     format!(
@@ -1125,8 +1220,14 @@ impl Sema<'_> {
             return None;
         }
         let element = self.ty_of(elem)?;
-        if self.types().is_vla(element) {
-            self.error(field.range, super::VM_UNSUPPORTED);
+        if self.types().is_vm(element) {
+            self.error(
+                field.range,
+                format!(
+                    "a member of a {} cannot have a variably modified type",
+                    kind.as_str()
+                ),
+            );
             return None;
         }
         if element.is_func() || !self.types().is_complete(element) {

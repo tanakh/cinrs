@@ -4,22 +4,22 @@ error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage
 5 |     int weak_function(void) __attribute__((weak));
   |                                            ^^^^
 
-error: 'cleanup' is not supported yet: it needs a drop guard around the object's scope
- --> tests/ui/gnu_unsupported.rs:8:31
+error: 'mode' is not supported: write the type the mode names instead
+ --> tests/ui/gnu_unsupported.rs:7:35
   |
-8 |         int fd __attribute__((cleanup(close_it)));
-  |                               ^^^^^^^
+7 |     typedef int hi __attribute__((mode(HI)));
+  |                                   ^^^^
 
 error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-  --> tests/ui/gnu_unsupported.rs:11:37
-   |
-11 |     typedef int v4si __attribute__((vector_size(16)));
-   |                                     ^^^^^^^^^^^
+ --> tests/ui/gnu_unsupported.rs:9:37
+  |
+9 |     typedef int v4si __attribute__((vector_size(16)));
+  |                                     ^^^^^^^^^^^
 
 error: 'alias' is not supported: write a function that forwards to the other one instead
-  --> tests/ui/gnu_unsupported.rs:13:38
+  --> tests/ui/gnu_unsupported.rs:11:38
    |
-13 |     int aliased(void) __attribute__((alias("weak_function")));
+11 |     int aliased(void) __attribute__((alias("weak_function")));
    |                                      ^^^^^
 
 error: aborting due to 4 previous errors

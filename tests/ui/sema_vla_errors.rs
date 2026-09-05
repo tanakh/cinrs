@@ -1,15 +1,22 @@
-//! Where a variable length array may not be declared, and what may not be
+//! Where a variably modified type may not be declared, and what may not be
 //! jumped over.
 //!
-//! A one-dimensional variable length array at block scope is supported; every
-//! other variably modified type is refused, because the size would have to be
-//! carried around by the *type* rather than by the object.
+//! Variable length arrays and the types built on them — `int a[n][m]`,
+//! `int (*p)[n]`, `typedef int T[n]`, and the parameter forms — work at block
+//! scope. What is left here is what C itself forbids: a size nobody could
+//! evaluate, a member whose record would have no layout, and a jump past the
+//! declaration that computes the bound.
 
 cinrs::c99! {
     int n;
     /* At file scope there is no moment at which the bound could be evaluated,
        so an array there needs a constant one as it always did. */
     int at_file_scope[n]; //~ ERROR: array size is not an integer constant expression
+    int two_dimensions[n][n]; //~ ERROR: array size is not an integer constant expression
+    /* A `typedef` of one is refused where the type is *used*, which is the
+       first place the missing bound could matter. */
+    typedef int Row[n];
+    Row a_row; //~ ERROR: array size is not an integer constant expression
 
     void a_member(int len) {
         struct Buffer {
@@ -18,36 +25,62 @@ cinrs::c99! {
         };
         union Either {
             int one;
-            char many[len]; //~ ERROR: a member of a union cannot have a variably modified type
+            char many[len][2]; //~ ERROR: a member of a union cannot have a variably modified type
         };
-    }
-
-    void a_typedef(int len) {
-        typedef int Row[len]; //~ ERROR: variably modified types other than a one-dimensional array
     }
 
     void storage_classes(int len) {
         static int kept[len]; //~ ERROR: a variable length array cannot have static storage duration
         extern int elsewhere[len]; //~ ERROR: a variable length array cannot have static storage duration
+        static int (*row)[len]; //~ ERROR: a variably modified type cannot have static storage duration
         (void)kept;
+        (void)row;
     }
 
     void with_an_initializer(int len) {
         int values[len] = { 1, 2, 3 }; //~ ERROR: a variable length array cannot have an initializer
+        int square[len][2] = { { 1, 2 } }; //~ ERROR: a variable length array cannot have an initializer
+        (void)values; (void)square;
+    }
+
+    void alignment(int len) {
+        _Alignas(16) int values[len];
+        //~^ ERROR: '_Alignas' requires C11 or later
+        //~| ERROR: an alignment specifier on an object is not supported yet
         (void)values;
     }
 
-    void more_than_one_dimension(int len) {
-        int square[len][len]; //~ ERROR: variably modified types other than a one-dimensional array
-        int mixed[3][len]; //~ ERROR: variably modified types other than a one-dimensional array
-        int (*row)[len]; //~ ERROR: variably modified types other than a one-dimensional array
-        (void)square; (void)mixed; (void)row;
+    void a_bound_that_is_not_in_scope(int len) {
+        int square[len][cols]; //~ ERROR: use of undeclared identifier 'cols'
+        (void)square;
+    }
+
+    void a_star_outside_a_prototype(int len) {
+        int values[*]; //~ ERROR: '[*]' is only allowed in a function prototype
+        (void)values;
+        (void)len;
     }
 
     int jump_into_the_scope(int len) {
         goto past; //~ ERROR: jump into the scope of an identifier with variably modified type
         int values[len];
         values[0] = 1;
+    past:
+        return len;
+    }
+
+    int jump_into_a_two_dimensional_scope(int len) {
+        goto past; //~ ERROR: jump into the scope of an identifier with variably modified type
+        int values[len][len];
+        values[0][0] = 1;
+    past:
+        return len;
+    }
+
+    int jump_into_the_scope_of_a_pointer(int len) {
+        goto past; //~ ERROR: jump into the scope of an identifier with variably modified type
+        int (*row)[len];
+        row = 0;
     past:
         return len;
     }

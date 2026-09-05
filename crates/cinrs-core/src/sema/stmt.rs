@@ -26,8 +26,10 @@ impl Sema<'_> {
         // nested block claims only its own.
         let enclosing = std::mem::take(&mut self.compound_literals);
         // The scope of a variable length array declared here ends with the
-        // block, and so does the lifetime of its storage.
+        // block, and so does the lifetime of its storage — and so does what a
+        // `cleanup` attribute written here owes.
         let vla_depth = self.vla_scopes.len();
+        let cleanup_depth = self.cleanup_depth;
         let mut out = Vec::new();
         for item in items {
             match item {
@@ -47,6 +49,7 @@ impl Sema<'_> {
             }
         }
         self.vla_scopes.truncate(vla_depth);
+        self.cleanup_depth = cleanup_depth;
         let mine = std::mem::replace(&mut self.compound_literals, enclosing);
         if mine.is_empty() {
             return out;
@@ -261,6 +264,7 @@ impl Sema<'_> {
                 // C99 scopes a declaration in the init clause to the loop.
                 self.push_scope();
                 let vla_depth = self.vla_scopes.len();
+                let cleanup_depth = self.cleanup_depth;
                 let init = match init {
                     ast::ForInit::None => Vec::new(),
                     ast::ForInit::Expr(expr) => match self.expr(expr) {
@@ -282,6 +286,7 @@ impl Sema<'_> {
                 self.breakables.pop();
                 self.pop_scope();
                 self.vla_scopes.truncate(vla_depth);
+                self.cleanup_depth = cleanup_depth;
                 Stmt::For {
                     id,
                     init,
@@ -367,6 +372,50 @@ impl Sema<'_> {
                 Some(value) => Some(self.convert_for(value, ret, ConvContext::Return)),
             },
         };
+        // GCC computes the returned value and *then* runs the cleanups the
+        // scopes being left owe. Rust's own drop order says that already in
+        // the structured lowering; in the [CFG](crate::cfg) one the calls are
+        // statements in front of the `return`, so the value has to be put
+        // somewhere they cannot change it.
+        if self.cfg_mode
+            && self.cleanup_depth > 0
+            && let Some(value) = value
+        {
+            if matches!(value.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+                return Stmt::Return {
+                    value: Some(value),
+                    range,
+                };
+            }
+            let object = self.new_object(
+                "__cinrs_ret",
+                ret,
+                crate::ir::Storage::Automatic,
+                false,
+                range,
+            );
+            let load = Expr::new(
+                ExprKind::Load(super::place_of(
+                    PlaceKind::Object(object),
+                    ret,
+                    false,
+                    range,
+                )),
+                ret,
+                range,
+            );
+            return Stmt::Block(vec![
+                Stmt::Let {
+                    object,
+                    init: value,
+                    explicit: true,
+                },
+                Stmt::Return {
+                    value: Some(load),
+                    range,
+                },
+            ]);
+        }
         Stmt::Return { value, range }
     }
 
@@ -760,6 +809,7 @@ impl Sema<'_> {
     fn hoisted_decl(&mut self, decl: &ast::Decl, hoisted: &mut Vec<ObjectId>) -> Vec<Stmt> {
         let mut out = Vec::new();
         for declarator in &decl.declarators {
+            let vla_depth = self.vla_scopes.len();
             for stmt in self.declarator(decl, declarator, false) {
                 match stmt {
                     // A variable length array cannot be hoisted ahead of the
@@ -775,7 +825,7 @@ impl Sema<'_> {
                         // The declaration is refused, so nothing after it is
                         // inside its scope: leaving the entry behind would
                         // report every later label as well.
-                        self.vla_scopes.retain(|object| *object != def.object);
+                        self.vla_scopes.truncate(vla_depth);
                     }
                     Stmt::Let {
                         object,
@@ -1019,6 +1069,15 @@ const MAX_SWITCH_GROUPS: usize = 200;
 fn block_needs_cfg(block: &ast::Block, switch_depth: u32, at_top: bool) -> bool {
     block.items.iter().any(|item| match item {
         ast::BlockItem::Stmt(stmt) => stmt_needs_cfg(stmt, switch_depth, at_top),
+        // A declaration directly in a `switch` body is hoisted ahead of the
+        // dispatch, and a drop guard hoisted with it would run at the end of
+        // its own group rather than at the end of the body. The CFG lowering
+        // has no such trouble: it emits the call on the edges that leave the
+        // scope, wherever they are.
+        ast::BlockItem::Decl(decl) if at_top && switch_depth > 0 => decl
+            .declarators
+            .iter()
+            .any(|d| d.attrs.cleanup.is_some() || decl.specifiers.attrs.cleanup.is_some()),
         ast::BlockItem::Decl(_) | ast::BlockItem::StaticAssert(_) => false,
     })
 }

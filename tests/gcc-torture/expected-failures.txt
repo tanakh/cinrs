@@ -59,7 +59,6 @@ execute/20030910-1                    compile error: complex types are not suppo
 execute/20031211-2                    compile error: implicit declaration of function 'foo' is invalid in C99
 execute/20040302-1                    compile error: expected expression, found '&&'
 execute/20040308-1                    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
-execute/20040411-1                    compile error: variably modified types other than a one-dimensional array are not supported yet
 execute/20040423-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20040520-1                    compile error: expected ';' after declaration, found '{'
 execute/20040709-1                    compile error: '__builtin_classify_type' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
@@ -101,7 +100,6 @@ execute/20121108-1                    compile error: '__builtin_printf' needs 'p
 execute/20141022-1                    compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 ?execute/20180921-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20210505-1                    compile error: type specifier missing; C99 does not support implicit 'int'
-execute/20221006-1                    compile error: variably modified types other than a one-dimensional array are not supported yet
 execute/20230630-2                    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/20230630-4                    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/920302-1                      compile error: expected expression, found '&&'
@@ -288,8 +286,7 @@ execute/pr126405                      compile error: 'vector_size' is not suppor
 execute/pr126405-2                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr126405-3                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr17377                       compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr22061-1                     compile error: variably modified types other than a one-dimensional array are not supported yet
-execute/pr22061-2                     compile error: variably modified types other than a one-dimensional array are not supported yet
+execute/pr22061-1                     compile error: implicit declaration of function '…' is invalid in C99
 execute/pr22061-3                     compile error: expected ';' after declaration, found '{'
 execute/pr22061-4                     compile error: expected ';' after declaration, found '{'
 execute/pr23135                       compile error: 'mode' is not supported: write the type the mode names instead
@@ -305,7 +302,7 @@ execute/pr39228                       compile error: '__builtin_isinff' is not a
 execute/pr40022                       compile error: inline assembly is not supported
 execute/pr40657                       compile error: inline assembly is not supported
 execute/pr41239                       compile error: inline assembly is not supported
-execute/pr41935                       compile error: variably modified types other than a one-dimensional array are not supported yet
+execute/pr41935                       compile error: a member of a struct cannot have a variably modified type
 execute/pr42248                       compile error: complex types are not supported
 execute/pr43385                       compile error: inline assembly is not supported
 execute/pr43560                       compile error: inline assembly is not supported

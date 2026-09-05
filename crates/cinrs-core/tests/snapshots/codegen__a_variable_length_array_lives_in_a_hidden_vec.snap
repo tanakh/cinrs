@@ -15,8 +15,8 @@ mod __cinrs_unit_dbedfd3e {
                         break 'l0;
                     }
                     'l0_body: {
-                        let __cinrs_vla_len_buf: ::core::ffi::c_ulong = i.wrapping_add(1)
-                            as ::core::ffi::c_ulong;
+                        let mut __cinrs_vla_len_buf: ::core::ffi::c_ulong = i
+                            .wrapping_add(1) as ::core::ffi::c_ulong;
                         let mut __cinrs_vla_buf: ::std::vec::Vec<::core::ffi::c_char> = ::std::vec::from_elem(
                             0,
                             __cinrs_vla_len_buf as ::core::primitive::usize,

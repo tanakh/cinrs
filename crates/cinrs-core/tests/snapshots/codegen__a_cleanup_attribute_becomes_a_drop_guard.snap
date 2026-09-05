@@ -1,0 +1,46 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        static void note(int *p);\n\n        int scoped(int c) {\n            int a __attribute__((cleanup(note))) = 1;\n            {\n                int b __attribute__((cleanup(note))) = 2;\n                if (c) {\n                    return b;\n                }\n            }\n            return a;\n        }\n        \"#)"
+---
+mod __cinrs_unit_b4c988d4 {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    struct __cinrs_cleanup<P: ::core::marker::Copy, R>(P, unsafe extern "C" fn(P) -> R);
+    #[allow(…)]
+    impl<P: ::core::marker::Copy, R> ::core::ops::Drop for __cinrs_cleanup<P, R> {
+        fn drop(&mut self) {
+            unsafe {
+                (self.1)(self.0);
+            }
+        }
+    }
+    #[allow(…)]
+    unsafe extern "C" {
+        #[link_name = "note"]
+        pub fn __cinrs_b4c988d4_note(p: *mut ::core::ffi::c_int);
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn scoped(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut a: ::core::ffi::c_int = 1;
+            let __cinrs_cleanup3 = __cinrs_cleanup(
+                (&raw mut a),
+                __cinrs_b4c988d4_note as unsafe extern "C" fn(*mut ::core::ffi::c_int),
+            );
+            {
+                let mut b: ::core::ffi::c_int = 2;
+                let __cinrs_cleanup4 = __cinrs_cleanup(
+                    (&raw mut b),
+                    __cinrs_b4c988d4_note
+                        as unsafe extern "C" fn(*mut ::core::ffi::c_int),
+                );
+                if c != 0 {
+                    return b;
+                }
+            }
+            return a;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_b4c988d4::*;

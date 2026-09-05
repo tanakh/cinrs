@@ -168,8 +168,11 @@ impl Sema<'_> {
                 unreachable!("just matched");
             };
             let element = self.ty_of(elem)?;
-            if self.types().is_vla(element) {
-                self.error(type_name.range, super::VM_UNSUPPORTED);
+            if self.types().is_vm(element) {
+                self.error(
+                    type_name.range,
+                    "a compound literal cannot have a variable length array type",
+                );
                 return None;
             }
             let elem_const = elem.qualifiers.is_const;
@@ -178,7 +181,7 @@ impl Sema<'_> {
             let ty = self.ty_of(&type_name.ty)?;
             // C99 6.5.2.5p1: the type name may not be a variable length array,
             // and an initialiser could not say how many elements it has.
-            if self.types().is_vla(ty) {
+            if self.types().is_vm(ty) {
                 self.error(
                     type_name.range,
                     "a compound literal cannot have a variable length array type",

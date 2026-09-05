@@ -974,12 +974,12 @@ fn a_flexible_array_member_is_a_zero_length_tail() {
 
 #[test]
 fn a_variable_length_array_lives_in_a_hidden_vec() {
-    // Three bindings: the number of elements, evaluated once where the
-    // declaration stands; the `Vec` that holds them, whose `Drop` at the end of
-    // the block is the object's lifetime; and the object itself, which is a
-    // pointer to the first element. `sizeof a` reads the first of the three
-    // back, so it is a run-time value — and a declaration inside a loop
-    // allocates afresh on every pass.
+    // Three bindings: the bound, evaluated once where the declaration stands
+    // and kept in an object of its own; the `Vec` that holds the elements,
+    // whose `Drop` at the end of the block is the object's lifetime; and the
+    // object itself, which is a pointer to the first element. `sizeof a` reads
+    // the bound back, so it is a run-time value — and a declaration inside a
+    // loop allocates afresh on every pass.
     insta::assert_snapshot!(generate(
         r#"
         unsigned long sum(int n) {
@@ -990,6 +990,82 @@ fn a_variable_length_array_lives_in_a_hidden_vec() {
                 total += sizeof buf + (unsigned long)buf[i];
             }
             return total;
+        }
+        "#
+    ));
+}
+
+#[test]
+fn a_variably_modified_type_carries_its_bounds_in_hidden_objects() {
+    // One `size_t` object per variable dimension, one `Vec` for the whole
+    // object however many dimensions there are, and a pointer to the innermost
+    // element type. Everything else follows from those: `a[i][j]` scales the
+    // row index by the run-time width, `sizeof a` is the product of the
+    // bounds, and a pointer to a row is the same pointer with a different C
+    // type. The parameter form reads its bounds on entry (C99 6.9.1p10).
+    insta::assert_snapshot!(generate(
+        r#"
+        double corner(int n, int m) {
+            double a[n][m];
+            a[1][2] = 3;
+            double (*row)[m] = a;
+            return a[1][2] + (double)sizeof a + (double)sizeof row[0] + (*row)[0];
+        }
+
+        double at(int n, int m, double a[n][m], int i, int j) {
+            return a[i][j] + (double)(sizeof a[0] / sizeof a[0][0]);
+        }
+        "#
+    ));
+}
+
+#[test]
+fn a_cleanup_attribute_becomes_a_drop_guard() {
+    // In the structured lowering the guard is bound right after the object, so
+    // Rust's drop order — reverse declaration order, on every path out of the
+    // block — is C's. The guard type is one generic item per unit.
+    insta::assert_snapshot!(generate(
+        r#"
+        static void note(int *p);
+
+        int scoped(int c) {
+            int a __attribute__((cleanup(note))) = 1;
+            {
+                int b __attribute__((cleanup(note))) = 2;
+                if (c) {
+                    return b;
+                }
+            }
+            return a;
+        }
+        "#
+    ));
+}
+
+#[test]
+fn a_cleanup_attribute_in_a_cfg_body_runs_on_the_edges() {
+    // A hoisted local lives to the end of the function, so there is no scope
+    // left for a guard to hang on: every edge that leaves the scope carries
+    // the call instead — the `continue` and the bottom of the loop body alike,
+    // which is what runs it once per iteration. The `return` computes its
+    // value into a temporary first, because C runs the cleanups after the
+    // result is known.
+    insta::assert_snapshot!(generate(
+        r#"
+        static void note(int *p);
+
+        int jumping(int c) {
+            int a __attribute__((cleanup(note))) = 1;
+            while (c) {
+                int b __attribute__((cleanup(note))) = 2;
+                if (b) {
+                    continue;
+                }
+                goto out;
+            }
+            return a;
+        out:
+            return 0;
         }
         "#
     ));

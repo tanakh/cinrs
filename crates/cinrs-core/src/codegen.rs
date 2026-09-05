@@ -188,6 +188,9 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
         return out;
     }
     let mut items = cg.data_model_check();
+    if cg.uses_cleanup.get() {
+        items.extend(cg.cleanup_guard_item(Span::call_site()));
+    }
     items.extend(out);
     items
 }
@@ -408,6 +411,12 @@ fn c_ident(name: &str, span: Span) -> Ident {
 /// panicking at run time if it is ever reached is a perfectly good answer to
 /// undefined behaviour, and is what the same code already does when the
 /// divisor is only zero at run time.
+/// The name of a unit's `cleanup` drop guard type, in this crate's own
+/// hygiene: nothing a C program can write reaches it.
+fn cleanup_guard_ty() -> Ident {
+    Ident::new("__cinrs_cleanup", Span::mixed_site())
+}
+
 fn allow_attr(span: Span) -> TokenStream {
     quote_spanned! {span=>
         #[allow(
@@ -599,6 +608,8 @@ struct Codegen<'a> {
     /// A [`Cell`] because [`Codegen::ty`] takes `&self`; the check is built
     /// after every item, so it sees the final answer.
     uses_int128: Cell<bool>,
+    /// Whether anything in the unit needs the `cleanup` drop guard item.
+    uses_cleanup: Cell<bool>,
 }
 
 impl<'a> Codegen<'a> {
@@ -627,6 +638,7 @@ impl<'a> Codegen<'a> {
             in_cfg: false,
             temporaries: 0,
             uses_int128: Cell::new(false),
+            uses_cleanup: Cell::new(false),
         }
     }
 
@@ -743,15 +755,17 @@ impl<'a> Codegen<'a> {
                 };
             }
             Ty::Array(id) => {
+                // A variably modified array's object *is* a pointer to its
+                // first element: the elements themselves live in one hidden
+                // `Vec`, however many dimensions there are, and nothing in the
+                // generated code ever names the array as a value. See
+                // [`ir::VlaDef`].
+                if self.program.types.is_vm(ty) {
+                    let step = self.ty(self.program.types.vm_step_ty(ty), span);
+                    return quote_spanned! {span=> *mut #step };
+                }
                 let array = self.program.types.array_type(id);
                 let elem = self.ty(array.elem, span);
-                // A variable length array's object *is* a pointer to its first
-                // element: the elements themselves live in a hidden `Vec`, and
-                // nothing in the generated code ever names the array as a
-                // value. See [`ir::VlaDef`].
-                if array.vla {
-                    return quote_spanned! {span=> *mut #elem };
-                }
                 let len = usize_literal(array.len, span);
                 let inner = quote_spanned! {span=> #elem ; #len };
                 return bracketed(inner, span);
@@ -833,6 +847,13 @@ impl<'a> Codegen<'a> {
         if ty.is_void() {
             let ident = Ident::new("c_void", span);
             return quote_spanned! {span=> ::core::ffi::#ident };
+        }
+        // A pointer to a variably modified type points at what is left under
+        // the variable dimensions — `double (*)[m]` is a `*mut c_double` —
+        // and every offset through it is scaled by the bound at run time. See
+        // [`Codegen::vm_scale`].
+        if self.program.types.is_vm(ty) {
+            return self.ty(self.program.types.vm_step_ty(ty), span);
         }
         self.ty(ty, span)
     }
@@ -2033,6 +2054,7 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> let mut #name: #ty = #init; }
             }
             Stmt::Vla(def) => self.vla_def(def),
+            Stmt::Cleanup(def) => self.cleanup_def(def),
             Stmt::Block(items) => {
                 let span = self.stmts_span(items);
                 let items = self.stmts(items);
@@ -2188,34 +2210,94 @@ impl<'a> Codegen<'a> {
     fn vla_def(&mut self, def: &ir::VlaDef) -> TokenStream {
         let span = self.sp(def.range);
         let object = self.program.object(def.object);
-        let elem = self
-            .program
-            .types
-            .elem(object.ty)
-            .expect("a variable length array is an array type");
-        let count_ty = self.program.object(def.len).ty;
-        let len = self.object_ident(def.len, span);
+        // Whatever is left under the variable dimensions: one `Vec` holds the
+        // whole object, however many of them there are.
+        let elem = self.program.types.vm_step_ty(object.ty);
         let store = self.object_ident(def.storage, span);
         let name = self.object_ident(def.object, span);
-        let count = self.expr_at(&def.count, count_ty);
+        let count = self.expr(&def.count).at(prec::CAST, span);
         let zero = self.zero_tokens(elem, span);
         let elem_ty = self.ty(elem, span);
         let usize_ty = primitive_ty("usize", span);
-        let elements = self.vec_of(zero, quote_spanned! {span=> #len as #usize_ty }, span);
+        let elements = self.vec_of(zero, quote_spanned! {span=> #count as #usize_ty }, span);
         if self.in_cfg {
             return quote_spanned! {span=>
-                #len = #count;
                 #store = #elements;
                 #name = #store.as_mut_ptr();
             };
         }
-        let len_ty = self.ty(count_ty, span);
         let vec_ty = self.vec_ty(elem_ty.clone(), span);
         quote_spanned! {span=>
-            let #len: #len_ty = #count;
             let mut #store: #vec_ty = #elements;
             let mut #name: *mut #elem_ty = #store.as_mut_ptr();
         }
+    }
+
+    /// A `cleanup` attribute's drop guard, in the structured lowering.
+    ///
+    /// The binding stands right after the object's own, so Rust drops it
+    /// first — and drops it on every way out of the block, which is exactly
+    /// what GCC promises. See [`ir::CleanupDef`].
+    fn cleanup_def(&mut self, def: &ir::CleanupDef) -> TokenStream {
+        let span = self.sp(def.range);
+        let guard = cleanup_guard_ty();
+        // One binding per object, in this crate's own hygiene: the C program
+        // cannot name it, and two guards in one block cannot collide.
+        let name = Ident::new(
+            &format!("__cinrs_cleanup{}", def.object.0),
+            Span::mixed_site(),
+        );
+        let object = self.program.object(def.object);
+        let place = ir::Place {
+            kind: PlaceKind::Object(def.object),
+            ty: object.ty,
+            is_const: object.is_const,
+            range: def.range,
+        };
+        let address = self
+            .address_of(&place, def.param, span)
+            .at(prec::LOWEST, span);
+        let function = self.func_pointer(def.func, span);
+        self.uses_cleanup.set(true);
+        quote_spanned! {span=>
+            let #name = #guard(#address, #function);
+        }
+    }
+
+    /// `struct __cinrs_cleanup<P, R>(P, unsafe extern "C" fn(P) -> R);` and
+    /// its `Drop`.
+    ///
+    /// One item per unit — each unit is a module of its own, so two of them in
+    /// one Rust module do not collide — generated only when something asks for
+    /// it. It is generic over the *pointer* the function takes rather than
+    /// over the object's type, so that a `void *`-taking cleanup (the
+    /// `_cleanup_free_` idiom) needs nothing special, and over the return
+    /// type, which GCC ignores.
+    fn cleanup_guard_item(&self, span: Span) -> TokenStream {
+        let name = cleanup_guard_ty();
+        let attrs = allow_attr(span);
+        let p = Ident::new("P", Span::mixed_site());
+        let r = Ident::new("R", Span::mixed_site());
+        quote_spanned! {span=>
+            #attrs
+            struct #name<#p: ::core::marker::Copy, #r>(#p, unsafe extern "C" fn(#p) -> #r);
+            #attrs
+            impl<#p: ::core::marker::Copy, #r> ::core::ops::Drop for #name<#p, #r> {
+                fn drop(&mut self) {
+                    unsafe {
+                        (self.1)(self.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `f as unsafe extern "C" fn(…) -> R`, the function a drop guard holds.
+    fn func_pointer(&self, id: ir::FuncId, span: Span) -> TokenStream {
+        let function = self.program.function(id);
+        let name = self.function_path(function, span);
+        let signature = self.function_pointer_ty(function, span);
+        quote_spanned! {span=> #name as #signature }
     }
 
     /// A span standing for a run of statements.
@@ -2231,6 +2313,7 @@ impl<'a> Codegen<'a> {
             Stmt::Expr(expr) => expr.range,
             Stmt::Let { object, .. } => self.program.object(*object).range,
             Stmt::Vla(def) => def.range,
+            Stmt::Cleanup(def) => def.range,
             Stmt::If { cond, .. } => cond.range,
             Stmt::While { range, .. }
             | Stmt::DoWhile { range, .. }
@@ -2649,19 +2732,27 @@ impl<'a> Codegen<'a> {
             }
             ExprKind::Binary { .. } => self.binary_chain(expr),
             ExprKind::PtrOffset { ptr, index, sub } => {
+                let pointee = self.program.types.pointee(ptr.ty).unwrap_or(Ty::Void);
                 let base = self.expr(ptr).at(prec::CALL, span);
-                let offset = self.offset_argument(index, *sub, span);
+                let offset = self.scaled_offset(pointee, index, *sub, span);
                 Value::new(quote_spanned! {span=> #base.offset(#offset) }, prec::CALL)
             }
             ExprKind::PtrDiff { lhs, rhs } => {
+                let pointee = self.program.types.pointee(lhs.ty).unwrap_or(Ty::Void);
+                let scale = self.vm_scale(pointee, span);
                 let left = self.expr(lhs).at(prec::CALL, span);
                 let right = self.expr(rhs).at(prec::LOWEST, span);
                 let target = self.ty(expr.ty, span);
-                Value::new(
-                    quote_spanned! {span=> #left.offset_from(#right) as #target },
-                    prec::CAST,
-                )
-                .type_end(true)
+                // The difference the generated pointers give is in step-type
+                // elements; C's is in whole ones.
+                let difference = match scale {
+                    None => quote_spanned! {span=> #left.offset_from(#right) },
+                    Some(scale) => {
+                        quote_spanned! {span=> (#left.offset_from(#right) / (#scale)) }
+                    }
+                };
+                Value::new(quote_spanned! {span=> #difference as #target }, prec::CAST)
+                    .type_end(true)
             }
             ExprKind::Compare { .. } | ExprKind::Logical { .. } => {
                 // C's comparisons and logical operators produce an `int`.
@@ -3705,6 +3796,65 @@ impl<'a> Codegen<'a> {
     }
 
     /// The argument of `offset`, which is always an `isize`.
+    /// How far one element of a variably modified pointee is, in units of the
+    /// [step type](ir::Types::vm_step_ty) the generated pointer points at.
+    ///
+    /// `double (*p)[m]` is a `*mut c_double` in the expansion, so `p + 1` has
+    /// to move by `m` of them, and `double (*p)[n][3]` by `n` of the `[f64; 3]`
+    /// it points at. Everything C says about such a pointer follows from
+    /// scaling every offset by this product; `None` is the ordinary case,
+    /// where Rust's own pointer arithmetic already has the right stride.
+    fn vm_scale(&self, pointee: Ty, span: Span) -> Option<TokenStream> {
+        if !self.program.types.is_vm(pointee) {
+            return None;
+        }
+        let isize_ty = primitive_ty("isize", span);
+        let mut product: Option<TokenStream> = None;
+        for dim in self.program.types.vm_dims(pointee).iter().rev() {
+            let factor = match dim {
+                ir::VmDim::Fixed(len) => {
+                    let literal = Literal::isize_unsuffixed(*len as isize);
+                    quote_spanned! {span=> #literal }
+                }
+                ir::VmDim::Len(id) => {
+                    let name = self.object_ident(*id, span);
+                    quote_spanned! {span=> #name as #isize_ty }
+                }
+                // Sema refuses every expression that would need a bound it
+                // never evaluated, so nothing reaches here.
+                ir::VmDim::Unknown => quote_spanned! {span=> 1 },
+            };
+            product = Some(match product {
+                None => factor,
+                Some(left) => quote_spanned! {span=> (#left).wrapping_mul(#factor) },
+            });
+        }
+        product
+    }
+
+    /// An offset in elements, scaled for a [variably
+    /// modified](Codegen::vm_scale) pointee.
+    fn scaled_offset(&mut self, pointee: Ty, index: &Expr, sub: bool, span: Span) -> TokenStream {
+        let Some(scale) = self.vm_scale(pointee, span) else {
+            return self.offset_argument(index, sub, span);
+        };
+        let isize_ty = primitive_ty("isize", span);
+        // A constant subscript comes out of `offset_argument` as a bare
+        // literal, whose type `wrapping_mul` would have nothing to infer from.
+        let offset = match &index.kind {
+            ExprKind::Int(value) => {
+                let value = if sub { -*value } else { *value };
+                let literal = int_literal_token(value, span);
+                quote_spanned! {span=> (#literal as #isize_ty) }
+            }
+            _ => {
+                let inner = self.offset_argument(index, sub, span);
+                quote_spanned! {span=> (#inner) }
+            }
+        };
+        quote_spanned! {span=> #offset.wrapping_mul(#scale) }
+    }
+
     fn offset_argument(&mut self, index: &Expr, sub: bool, span: Span) -> TokenStream {
         if let ExprKind::Int(value) = &index.kind {
             let value = if sub { -*value } else { *value };
@@ -4347,6 +4497,11 @@ impl<'a> Codegen<'a> {
                 Some(index) => self.offset_of_value(index, op == BinOp::Sub, span),
                 None => self.offset_argument(value, op == BinOp::Sub, span),
             };
+            let pointee = self.program.types.pointee(place_ty).unwrap_or(Ty::Void);
+            let offset = match self.vm_scale(pointee, span) {
+                None => offset,
+                Some(scale) => quote_spanned! {span=> (#offset).wrapping_mul(#scale) },
+            };
             return Value::new(quote_spanned! {span=> #access.offset(#offset) }, prec::CALL);
         }
         let current = self.cast(current, place_ty, compute, span);
@@ -4405,10 +4560,12 @@ impl<'a> Codegen<'a> {
     fn step_value(&mut self, current: Value, ty: Ty, dec: bool, span: Span) -> TokenStream {
         if ty.is_pointer() {
             let access = current.at(prec::CALL, span);
-            let one = if dec {
-                quote_spanned! {span=> -1 }
-            } else {
-                quote_spanned! {span=> 1 }
+            let pointee = self.program.types.pointee(ty).unwrap_or(Ty::Void);
+            let one = match (self.vm_scale(pointee, span), dec) {
+                (None, true) => quote_spanned! {span=> -1 },
+                (None, false) => quote_spanned! {span=> 1 },
+                (Some(scale), true) => quote_spanned! {span=> -(#scale) },
+                (Some(scale), false) => scale,
             };
             return quote_spanned! {span=> #access.offset(#one) };
         }
@@ -4677,7 +4834,7 @@ impl<'a> Codegen<'a> {
             PlaceKind::Deref(ptr) => self.deref_place(ptr, place.ty, mutable, span),
             PlaceKind::Index { base, index } => {
                 let pointer = self.pointer_operand(base, place.ty, mutable, span);
-                let offset = self.offset_argument(index, false, span);
+                let offset = self.scaled_offset(place.ty, index, false, span);
                 let tmp = self.temporary();
                 LoweredPlace::plain(
                     quote_spanned! {span=> let #tmp = #pointer.offset(#offset); },
@@ -4854,11 +5011,11 @@ impl<'a> Codegen<'a> {
 
     /// The address of a place, as a pointer of type `want`.
     fn address_of(&mut self, place: &Place, want: Ty, span: Span) -> Value {
-        // A variable length array's binding already *is* the address of its
+        // A variably modified object's binding already *is* the address of its
         // first element, so both the decay `a` and the array pointer `&a` are
         // that binding — the second one only differs in its C type.
         if let PlaceKind::Object(id) = &place.kind
-            && self.program.types.is_vla(place.ty)
+            && self.program.types.is_vm(place.ty)
         {
             let name = self.object_ident(*id, span);
             let value = Value::atom(quote_spanned! {span=> #name });
@@ -4884,7 +5041,7 @@ impl<'a> Codegen<'a> {
             PlaceKind::Index { base, index } => {
                 let from = base.ty;
                 let pointer = self.expr(base).at(prec::CALL, span);
-                let offset = self.offset_argument(index, false, span);
+                let offset = self.scaled_offset(place.ty, index, false, span);
                 let value = Value::new(
                     quote_spanned! {span=> #pointer.offset(#offset) },
                     prec::CALL,
@@ -5046,12 +5203,12 @@ impl<'a> Codegen<'a> {
             Ty::Atomic(id) => self.zero_tokens(self.program.types.atomic_inner(id), span),
             _ if ty.is_floating() => bare_float_literal(0.0, span),
             _ if ty.is_integer() => bare_int_literal(0, ty, span),
-            // A variable length array is generated as a pointer, and the only
-            // thing that ever asks for its zero is the hoisting a [CFG
+            // A variably modified array is generated as a pointer, and the
+            // only thing that ever asks for its zero is the hoisting a [CFG
             // body](crate::cfg) does before the declaration is reached.
-            Ty::Array(id) if self.program.types.array_type(id).vla => {
-                let elem = self.ty(self.program.types.array_type(id).elem, span);
-                quote_spanned! {span=> ::core::ptr::null_mut::<#elem>() }
+            Ty::Array(_) if self.program.types.is_vm(ty) => {
+                let step = self.ty(self.program.types.vm_step_ty(ty), span);
+                quote_spanned! {span=> ::core::ptr::null_mut::<#step>() }
             }
             Ty::Pointer(id) => {
                 let pointer = self.program.types.pointer_type(id);

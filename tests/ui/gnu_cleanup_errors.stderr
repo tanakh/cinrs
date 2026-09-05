@@ -1,0 +1,76 @@
+error: 'cleanup' attribute ignored on an object at file scope: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:15:38
+   |
+15 |     int at_file_scope __attribute__((cleanup(f)));
+   |                                      ^^^^^^^
+
+error: 'cleanup' attribute ignored on a 'typedef': it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:17:40
+   |
+17 |     typedef int Cleaned __attribute__((cleanup(f)));
+   |                                        ^^^^^^^
+
+error: 'cleanup' attribute ignored on a parameter: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:19:46
+   |
+19 |     void on_a_parameter(int p __attribute__((cleanup(f)))) { (void)p; }
+   |                                              ^^^^^^^
+
+error: 'cleanup' attribute ignored on a function: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:21:42
+   |
+21 |     void a_function(void) __attribute__((cleanup(f)));
+   |                                          ^^^^^^^
+
+error: 'cleanup' attribute ignored on an object with static storage duration: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:24:40
+   |
+24 |         static int kept __attribute__((cleanup(f)));
+   |                                        ^^^^^^^
+
+error: 'cleanup' attribute ignored on an 'extern' declaration: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:25:45
+   |
+25 |         extern int elsewhere __attribute__((cleanup(f)));
+   |                                             ^^^^^^^
+
+error: 'cleanup' attribute ignored on a thread-local object: it calls the function when the object goes out of scope, and only an object with automatic storage duration ever does
+  --> tests/ui/gnu_cleanup_errors.rs:26:60
+   |
+26 | ...   static _Thread_local int per_thread __attribute__((cleanup(f)));
+   |                                                          ^^^^^^^
+
+error: cleanup argument not an identifier
+  --> tests/ui/gnu_cleanup_errors.rs:33:30
+   |
+33 |         int a __attribute__((cleanup("f"))) = 0;
+   |                              ^^^^^^^
+
+error: cleanup argument not a function
+  --> tests/ui/gnu_cleanup_errors.rs:34:38
+   |
+34 |         int b __attribute__((cleanup(not_a_function))) = 0;
+   |                                      ^^^^^^^^^^^^^^
+
+error: cleanup argument not a function
+  --> tests/ui/gnu_cleanup_errors.rs:35:38
+   |
+35 |         int c __attribute__((cleanup(nowhere))) = 0;
+   |                                      ^^^^^^^
+
+error: the cleanup function is called with one argument, the object's address: too few arguments to function call, expected 2, have 1
+       note: 'two' is declared at line 12
+  --> tests/ui/gnu_cleanup_errors.rs:36:30
+   |
+36 |         int d __attribute__((cleanup(two))) = 0;
+   |                              ^^^^^^^
+
+error: passing 'int *' to parameter 1 of 'wrong', of incompatible type 'long *'
+       note: the pointee types differ; add a cast if the conversion is intended
+  --> tests/ui/gnu_cleanup_errors.rs:37:13
+   |
+37 |         int e __attribute__((cleanup(wrong))) = 0;
+   |             ^
+
+error: aborting due to 12 previous errors
+

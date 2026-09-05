@@ -156,6 +156,37 @@ pub fn check_pragmas(program: &Program) -> Diagnostics {
 // symbol table
 // ---------------------------------------------------------------------------
 
+/// One bound of a variably modified type, as the declaration that wrote it
+/// left it behind.
+#[derive(Clone, Debug)]
+struct VmBound {
+    /// The hidden `size_t` object the length lives in, when the context is one
+    /// that gives it one; see [`BoundMode`].
+    object: Option<ObjectId>,
+    /// The bound, converted to `size_t` and evaluated exactly once.
+    value: Expr,
+}
+
+/// What [`Sema::array_len`] does with an array bound that is not an integer
+/// constant expression.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BoundMode {
+    /// A declaration: the bound gets a hidden object of its own, which the
+    /// type points at and which the generated code assigns where the
+    /// declarator stands. This is what makes `sizeof a`, `a[i][j]` and `p + 1`
+    /// computable later, from the type alone.
+    Object,
+    /// A type name: the bound is evaluated where it is written and the
+    /// expression is handed back, but there is no object to keep it in and
+    /// nothing later can ask for it. `sizeof(int[n][m])` is the one context
+    /// that needs it (C99 6.5.3.4p2).
+    Expression,
+    /// A parameter's type in a declaration that is not a definition: the bound
+    /// is checked and thrown away, because C99 6.7.5.3p7 keeps it out of the
+    /// type and there is no moment at which it could be evaluated.
+    Unevaluated,
+}
+
 /// What a name in the ordinary namespace refers to.
 #[derive(Clone, Debug)]
 enum Entry {
@@ -330,26 +361,33 @@ struct Sema<'a> {
     /// expression could not offer. [`Sema::block_items`] empties this list into
     /// definitions at the head of the block it belongs to.
     compound_literals: Vec<ObjectId>,
-    /// The bound the array type being resolved was given, when it was not a
-    /// constant expression.
+    /// The bounds the array type being resolved was given, in the order they
+    /// were resolved (innermost dimension first), for the ones that were not
+    /// constant expressions.
     ///
-    /// `Sema::array_len` leaves it here, already converted to `size_t`, and
-    /// the declaration being checked takes it: that is the expression the
-    /// generated code evaluates, exactly once, where the declarator stands
-    /// (C99 6.7.5.2p5). A variable length array type that reaches a
-    /// declaration *without* one — through `typeof`, say — is refused, so the
-    /// pair can never come apart.
-    vla_bound: Option<Expr>,
+    /// `Sema::array_len` leaves them here, already converted to `size_t`, and
+    /// whoever asked for the type takes them: a declaration binds each one to
+    /// the hidden object its dimension names and evaluates it exactly once,
+    /// where the declarator stands (C99 6.7.5.2p5), while `sizeof` of a type
+    /// name evaluates them in place (6.5.3.4p2).
+    vm_bounds: Vec<VmBound>,
+    /// What [`Sema::array_len`] does with a bound that is not a constant.
+    bound_mode: BoundMode,
+    /// The name the hidden bound objects of the declarator being resolved are
+    /// derived from; empty for a type name or an abstract declarator.
+    vm_name: String,
+    /// How many of [`Sema::scopes`] are [prototype
+    /// scopes](Sema::push_prototype_scope), which are not blocks.
+    proto_depth: usize,
     /// Whether the type being resolved is a *parameter's*.
     ///
     /// A parameter's array bound is not part of its type at all (C99
     /// 6.7.5.3p7): `void f(int n, int a[n])` declares an `int *`, and the
     /// bound may be anything even in a prototype at file scope, where an
-    /// object's could not be. What the bound *can* still run into is the
-    /// variably modified machinery this release leaves out — `int a[2][n]` is
-    /// a pointer to a variable length array — and this is what makes that the
-    /// diagnostic rather than "array size is not an integer constant
-    /// expression", which would be simply untrue.
+    /// object's could not be. The *inner* dimensions of `void f(int n, double
+    /// a[3][n])` are part of it — the parameter is a pointer to a variably
+    /// modified type — and it is a definition, where the bounds are evaluated
+    /// on entry (6.9.1p10), that gives them objects to live in.
     in_param_type: bool,
     /// The variable length arrays whose scope encloses the statement being
     /// checked, innermost last.
@@ -378,9 +416,14 @@ struct Sema<'a> {
     /// of the node it builds, so it is never carried from one call to the
     /// next.
     pending_discard: Vec<Expr>,
-    /// The hidden objects a variable length array's `sizeof` is read out of,
-    /// by the object the C program declared.
-    vla_lengths: HashMap<ObjectId, ObjectId>,
+    /// How many `cleanup` attributes are active in the scopes enclosing the
+    /// statement being checked.
+    ///
+    /// Only one thing depends on it: a `return expr;` in [CFG
+    /// mode](crate::cfg) has to compute the value *before* the cleanups run
+    /// (GCC's order), and the temporary that says so is only worth emitting
+    /// when there is a cleanup owed at all.
+    cleanup_depth: usize,
     /// The file-scope compound literals, by the `statics` entry holding their
     /// value.
     ///
@@ -439,7 +482,10 @@ impl<'a> Sema<'a> {
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
-            vla_bound: None,
+            vm_bounds: Vec::new(),
+            bound_mode: BoundMode::Expression,
+            vm_name: String::new(),
+            proto_depth: 0,
             in_param_type: false,
             vla_scopes: Vec::new(),
             label_vla_scopes: HashMap::new(),
@@ -447,7 +493,7 @@ impl<'a> Sema<'a> {
             switch_vla_depths: Vec::new(),
             func_uses_alloca: false,
             pending_discard: Vec::new(),
-            vla_lengths: HashMap::new(),
+            cleanup_depth: 0,
             static_literals: HashMap::new(),
             ret_ty: Ty::Void,
             func_name: String::new(),
@@ -626,9 +672,28 @@ impl<'a> Sema<'a> {
         self.tags.pop();
     }
 
+    /// Enters C99 6.2.1p4's *function prototype scope*: the parameter names of
+    /// a parameter list, visible to the declarators that follow them and
+    /// nowhere else.
+    ///
+    /// Only the ordinary namespace gets a scope of its own — a tag first
+    /// mentioned in a parameter list is left where this crate has always put
+    /// it — and the scope does not count as a block, so a compound literal or
+    /// an array bound written in the list is still at file scope when the
+    /// declaration is.
+    fn push_prototype_scope(&mut self) {
+        self.scopes.push(Scope::default());
+        self.proto_depth += 1;
+    }
+
+    fn pop_prototype_scope(&mut self) {
+        self.scopes.pop();
+        self.proto_depth -= 1;
+    }
+
     /// Whether the declaration being processed is at file scope.
     fn at_file_scope(&self) -> bool {
-        self.scopes.len() == 1
+        self.scopes.len() - self.proto_depth == 1
     }
 
     fn lookup(&self, name: &str) -> Option<&Entry> {
@@ -716,6 +781,12 @@ impl<'a> Sema<'a> {
     }
 
     fn ptr_to(&mut self, pointee: Ty, konst: bool) -> Ty {
+        // An array type carries its qualifiers on its *elements* (6.7.3p9), so
+        // `const double (*)[m]` is a pointer to an array whose elements are
+        // const — and the pointer is the one that has to say so, because that
+        // is what the generated `*const` is.
+        let konst =
+            konst || matches!(pointee, Ty::Array(id) if self.types().array_type(id).elem_const);
         self.program.types.pointer(pointee, konst)
     }
 
@@ -1260,16 +1331,6 @@ impl<'a> Sema<'a> {
 
 /// The diagnostic every place `va_list` may not appear shares.
 const VA_LIST_PLACEMENT: &str = "va_list is only supported as a local variable or parameter";
-
-/// The diagnostic for the variably modified types this release leaves out.
-///
-/// One-dimensional variable length arrays at block scope are supported; a
-/// pointer to one, an array of one, and a `typedef` of one are the rest of
-/// C99's variably modified machinery, and each of them would need a size
-/// carried along at run time by the *type* rather than by the object. See
-/// `doc/c-status.md`.
-const VM_UNSUPPORTED: &str =
-    "variably modified types other than a one-dimensional array are not supported yet";
 
 /// C99 6.8.6.1p1 for `goto` and 6.8.4.2p2 for `switch`, which say the same
 /// thing: the storage a variable length array's declaration allocates is not

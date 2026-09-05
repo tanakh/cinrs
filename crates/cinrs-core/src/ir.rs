@@ -228,6 +228,18 @@ pub struct PointerType {
     pub konst: bool,
 }
 
+/// One dimension of a [variably modified](Types::is_vm) array type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum VmDim {
+    /// A constant bound, outside a variable one: the `3` of `int a[3][n]`.
+    Fixed(u64),
+    /// A run-time bound, held by a hidden `size_t` object.
+    Len(ObjectId),
+    /// A run-time bound the type does not carry — `int a[*]`, or a
+    /// prototype's, which is never evaluated (C99 6.7.5.3p7).
+    Unknown,
+}
+
 /// An array type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ArrayType {
@@ -242,10 +254,21 @@ pub struct ArrayType {
     /// Whether this is a variable length array (C99 6.7.5.2), whose bound was
     /// not an integer constant expression.
     ///
-    /// The type carries no bound at all: the number of elements belongs to the
-    /// *object*, which is why `sizeof` of one is a run-time value read out of a
-    /// hidden local rather than a constant. See [`Stmt::Vla`].
+    /// The bound itself is not a number here but a *run-time object*, named by
+    /// [`ArrayType::vla_len`], which is why `sizeof` of one is an expression
+    /// rather than a constant. See [`Stmt::Vla`].
     pub vla: bool,
+    /// The hidden `size_t` object holding this dimension's length, for a
+    /// [variable length array](ArrayType::vla) whose declaration evaluated its
+    /// bound.
+    ///
+    /// `None` says the length is not available: `int a[*]`, and the parameter
+    /// types of a prototype, whose bounds are never evaluated because C99
+    /// 6.7.5.3p7 leaves them out of the type. Two variably modified types are
+    /// compatible whatever their bounds (6.7.5.2p6), so this is deliberately
+    /// *not* part of what [`crate::sema`] compares — only of what the
+    /// generated code computes with.
+    pub vla_len: Option<ObjectId>,
     /// Whether the bound was left out — `int j[]`, C99 6.2.5p22's *incomplete*
     /// array type.
     ///
@@ -585,18 +608,20 @@ impl Types {
             len,
             elem_const,
             vla: false,
+            vla_len: None,
             incomplete: false,
         })
     }
 
     /// The type `elem[n]` for a bound that is not a constant: a variable
-    /// length array.
-    pub fn vla_array(&mut self, elem: Ty, elem_const: bool) -> Ty {
+    /// length array, whose length lives in the object `vla_len` names.
+    pub fn vla_array(&mut self, elem: Ty, elem_const: bool, vla_len: Option<ObjectId>) -> Ty {
         self.array_type_of(ArrayType {
             elem,
             len: 0,
             elem_const,
             vla: true,
+            vla_len,
             incomplete: false,
         })
     }
@@ -608,6 +633,7 @@ impl Types {
             len: 0,
             elem_const,
             vla: false,
+            vla_len: None,
             incomplete: true,
         })
     }
@@ -767,13 +793,70 @@ impl Types {
         }
     }
 
-    /// Whether `ty` is a variable length array.
+    /// Whether `ty` is an array whose own bound is a run-time value.
     ///
-    /// It is the only *variably modified* type this crate has: a pointer to
-    /// one, an array of one and a `typedef` of one are all refused where they
-    /// are written, so nothing else can carry a run-time size around.
+    /// `int a[n]` is one and `int a[3][n]` is not — that one is an array *of*
+    /// variable length arrays, which C calls variably modified all the same.
+    /// [`Types::is_vm`] is the question to ask about the type as a whole.
     pub fn is_vla(&self, ty: Ty) -> bool {
         matches!(ty, Ty::Array(id) if self.array_type(id).vla)
+    }
+
+    /// Whether `ty` is *variably modified* (C99 6.7.5.2p4): an array with a
+    /// run-time bound anywhere in it.
+    ///
+    /// A pointer to one is variably modified too by C's definition, but what
+    /// the question is asked for here is "does this type have a size only the
+    /// running program knows", and a pointer's size is a constant.
+    pub fn is_vm(&self, ty: Ty) -> bool {
+        match ty {
+            Ty::Array(id) => {
+                let array = self.array_type(id);
+                array.vla || self.is_vm(array.elem)
+            }
+            _ => false,
+        }
+    }
+
+    /// The type a pointer into a [variably modified](Types::is_vm) array
+    /// addresses: what is left after every dimension with a run-time size is
+    /// taken off.
+    ///
+    /// It is the element type of the hidden `Vec` a [`Stmt::Vla`] allocates
+    /// and the pointee of the generated Rust pointer — `double a[n][m]` is a
+    /// `*mut c_double` over `n * m` of them, and `double a[n][3]` a
+    /// `*mut [c_double; 3]` over `n`. Everything else about a variably
+    /// modified type is arithmetic on top of that: see [`Types::vm_dims`].
+    pub fn vm_step_ty(&self, ty: Ty) -> Ty {
+        match ty {
+            Ty::Array(id) if self.is_vm(ty) => self.vm_step_ty(self.array_type(id).elem),
+            other => other,
+        }
+    }
+
+    /// The dimensions between `ty` and its [step type](Types::vm_step_ty),
+    /// outermost first.
+    ///
+    /// Their product is how many step-type elements the type holds, which is
+    /// what `sizeof` multiplies by the element size and what pointer
+    /// arithmetic on a pointer to `ty` scales by.
+    pub fn vm_dims(&self, ty: Ty) -> Vec<VmDim> {
+        let mut out = Vec::new();
+        let mut ty = ty;
+        while self.is_vm(ty) {
+            let Ty::Array(id) = ty else { break };
+            let array = self.array_type(id);
+            out.push(match (array.vla, array.vla_len) {
+                (true, Some(len)) => VmDim::Len(len),
+                (true, None) => VmDim::Unknown,
+                // A fixed dimension outside a variable one counts too: the
+                // rows of `int a[3][n]` are `n` ints apart, and there are
+                // three of them.
+                (false, _) => VmDim::Fixed(array.len),
+            });
+            ty = array.elem;
+        }
+        out
     }
 
     /// Whether `ty` is an array whose bound was left out — `int j[]`.
@@ -2557,9 +2640,12 @@ pub enum Stmt {
     },
     /// The definition of a variable length array (C99 6.7.5.2).
     ///
-    /// It is a [`Stmt::Let`] with three bindings instead of one, because the
+    /// It is a [`Stmt::Let`] with two bindings instead of one, because the
     /// object needs storage whose size is only known here; see [`VlaDef`].
     Vla(Box<VlaDef>),
+    /// `T x __attribute__((cleanup(f)));` — the registration of the call that
+    /// runs when `x` goes out of scope. See [`CleanupDef`].
+    Cleanup(Box<CleanupDef>),
     /// A compound statement.
     Block(Vec<Stmt>),
     /// `if (cond) then_branch else else_branch`
@@ -2666,24 +2752,34 @@ pub enum Stmt {
     },
 }
 
-/// A variable length array's definition: `T a[n];`.
+impl Stmt {
+    /// Whether this is a [`cleanup`](CleanupDef) registration.
+    pub fn is_cleanup(&self) -> bool {
+        matches!(self, Stmt::Cleanup(_))
+    }
+}
+
+/// A variably modified object's definition: `T a[n];`, `T a[n][m];`.
 ///
 /// C99 6.7.5.2 gives the object automatic storage duration, a size fixed when
 /// the declaration is reached, and the lifetime of the block it is written in;
-/// `n` is evaluated exactly once, here. This crate emulates it on the heap —
-/// the elements live in a hidden `Vec` whose `Drop` is that lifetime — so the
-/// one definition becomes three bindings:
+/// each bound is evaluated exactly once, where the declaration stands, and
+/// lives in a hidden `size_t` object the [type](ArrayType::vla_len) points at.
+/// This crate emulates the storage on the heap — the elements live in a hidden
+/// `Vec` whose `Drop` is that lifetime — so the one definition becomes a
+/// [`Stmt::Let`] per bound followed by two more bindings:
 ///
 /// ```text
-/// let __cinrs_vla_len_a: size_t = <count>;                 // len
-/// let mut __cinrs_vla_a: Vec<T> = vec![<zero>; len];       // storage
+/// let __cinrs_vla_len_a: size_t = <n>;                     // one per bound
+/// let mut __cinrs_vla_a: Vec<T> = vec![<zero>; count];     // storage
 /// let mut a: *mut T = __cinrs_vla_a.as_mut_ptr();          // object
 /// ```
 ///
-/// From there the object *is* a pointer: decay is the identity, `a[i]` is
-/// ordinary pointer indexing, and `sizeof a` is `len * sizeof(T)` — a run-time
-/// value read out of [`VlaDef::len`], which is why it is an object of its own
-/// rather than a number in this struct.
+/// From there the object *is* a pointer to the first element: decay is the
+/// identity, `a[i]` is pointer indexing scaled by the run-time size of a row,
+/// and `sizeof a` is the product of the bounds times the element size — see
+/// [`Types::vm_step_ty`] for what "element" means once more than one dimension
+/// is variable.
 #[derive(Clone, Debug)]
 pub struct VlaDef {
     /// The object the C program declared, whose type is the array type and
@@ -2691,11 +2787,35 @@ pub struct VlaDef {
     pub object: ObjectId,
     /// The hidden `Vec` the elements live in; see [`Object::vla_storage`].
     pub storage: ObjectId,
-    /// The hidden object holding the number of elements, of type `size_t`.
-    pub len: ObjectId,
-    /// The number of elements, converted to `size_t` and evaluated exactly
-    /// once, where the declaration stands.
+    /// The number of elements to allocate: the product of every dimension,
+    /// read out of the hidden bound objects, in units of the storage's
+    /// element type.
     pub count: Expr,
+    /// Where the declarator was written.
+    pub range: SourceRange,
+}
+
+/// A `cleanup` attribute's registration: `T x __attribute__((cleanup(f)));`.
+///
+/// GCC calls `f(&x)` on *every* exit from the scope `x` was declared in, in
+/// reverse declaration order. The two lowerings say that in different ways:
+///
+/// * the structured one binds a drop guard right after the object, so that
+///   Rust's own drop order — reverse declaration order, on every path out of
+///   the block, `return` from inside a statement expression included — is C's;
+/// * the [CFG](crate::cfg) one has no scopes left to drop in, so it emits
+///   [`CleanupDef::call`] on each edge that leaves the scope.
+#[derive(Clone, Debug)]
+pub struct CleanupDef {
+    /// The variable whose address the function is given.
+    pub object: ObjectId,
+    /// The function called with it.
+    pub func: FuncId,
+    /// The type of that function's one parameter, which is the pointer type
+    /// the address is converted to.
+    pub param: Ty,
+    /// `f(&x)`, ready to be emitted where a scope is left.
+    pub call: Expr,
     /// Where the declarator was written.
     pub range: SourceRange,
 }

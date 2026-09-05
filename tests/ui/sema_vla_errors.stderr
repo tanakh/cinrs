@@ -1,98 +1,135 @@
 error: array size is not an integer constant expression
-  --> tests/ui/sema_vla_errors.rs:12:23
+  --> tests/ui/sema_vla_errors.rs:14:23
    |
-12 |     int at_file_scope[n];
+14 |     int at_file_scope[n];
    |                       ^
 
-error: a member of a struct cannot have a variably modified type
-  --> tests/ui/sema_vla_errors.rs:17:17
+error: array size is not an integer constant expression
+  --> tests/ui/sema_vla_errors.rs:15:27
    |
-17 |             int data[len];
+15 |     int two_dimensions[n][n];
+   |                           ^
+
+error: array size is not an integer constant expression
+       note: 'Row' is declared at line 18
+  --> tests/ui/sema_vla_errors.rs:19:5
+   |
+19 |     Row a_row;
+   |     ^^^
+
+error: a member of a struct cannot have a variably modified type
+  --> tests/ui/sema_vla_errors.rs:24:17
+   |
+24 |             int data[len];
    |                 ^^^^
 
 error: a member of a union cannot have a variably modified type
-  --> tests/ui/sema_vla_errors.rs:21:18
+  --> tests/ui/sema_vla_errors.rs:28:18
    |
-21 |             char many[len];
+28 |             char many[len][2];
    |                  ^^^^
 
-error: variably modified types other than a one-dimensional array are not supported yet
-  --> tests/ui/sema_vla_errors.rs:26:24
-   |
-26 |         typedef int Row[len];
-   |                        ^
-
 error: a variable length array cannot have static storage duration
-  --> tests/ui/sema_vla_errors.rs:30:20
+  --> tests/ui/sema_vla_errors.rs:33:20
    |
-30 |         static int kept[len];
+33 |         static int kept[len];
    |                    ^^^^
 
 error: a variable length array cannot have static storage duration
-  --> tests/ui/sema_vla_errors.rs:31:20
+  --> tests/ui/sema_vla_errors.rs:34:20
    |
-31 |         extern int elsewhere[len];
+34 |         extern int elsewhere[len];
    |                    ^^^^^^^^^
 
-error: a variable length array cannot have an initializer
-  --> tests/ui/sema_vla_errors.rs:36:13
+error: a variably modified type cannot have static storage duration
+  --> tests/ui/sema_vla_errors.rs:35:20
    |
-36 |         int values[len] = { 1, 2, 3 };
+35 |         static int (*row)[len];
+   |                    ^
+
+error: a variable length array cannot have an initializer
+  --> tests/ui/sema_vla_errors.rs:41:13
+   |
+41 |         int values[len] = { 1, 2, 3 };
    |             ^^^^^^
 
-error: variably modified types other than a one-dimensional array are not supported yet
-  --> tests/ui/sema_vla_errors.rs:41:24
+error: a variable length array cannot have an initializer
+  --> tests/ui/sema_vla_errors.rs:42:13
    |
-41 |         int square[len][len];
-   |                        ^
+42 |         int square[len][2] = { { 1, 2 } };
+   |             ^^^^^^
 
-error: variably modified types other than a one-dimensional array are not supported yet
-  --> tests/ui/sema_vla_errors.rs:42:21
+error: '_Alignas' requires C11 or later (this block is c99!)
+  --> tests/ui/sema_vla_errors.rs:47:9
    |
-42 |         int mixed[3][len];
-   |                     ^
+47 |         _Alignas(16) int values[len];
+   |         ^^^^^^^^
 
-error: variably modified types other than a one-dimensional array are not supported yet
-  --> tests/ui/sema_vla_errors.rs:43:14
+error: an alignment specifier on an object is not supported yet; '_Alignas' and '__attribute__((aligned))' are honoured on the members of a struct or union, where the generated Rust type can carry the alignment
+  --> tests/ui/sema_vla_errors.rs:47:9
    |
-43 |         int (*row)[len];
-   |              ^
+47 |         _Alignas(16) int values[len];
+   |         ^^^^^^^^
+
+error: use of undeclared identifier 'cols'
+  --> tests/ui/sema_vla_errors.rs:54:25
+   |
+54 |         int square[len][cols];
+   |                         ^^^^
+
+error: '[*]' is only allowed in a function prototype
+  --> tests/ui/sema_vla_errors.rs:59:19
+   |
+59 |         int values[*];
+   |                   ^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:48:9
+  --> tests/ui/sema_vla_errors.rs:65:9
    |
-48 |         goto past;
+65 |         goto past;
    |         ^^^^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:60:9
+  --> tests/ui/sema_vla_errors.rs:73:9
    |
-60 |         case 1:
+73 |         goto past;
+   |         ^^^^
+
+error: jump into the scope of an identifier with variably modified type
+  --> tests/ui/sema_vla_errors.rs:81:9
+   |
+81 |         goto past;
+   |         ^^^^
+
+error: jump into the scope of an identifier with variably modified type
+  --> tests/ui/sema_vla_errors.rs:93:9
+   |
+93 |         case 1:
    |         ^^^^
 
 error: a variable length array cannot be declared directly in the body of a 'switch'; a label after it would jump into its scope
-  --> tests/ui/sema_vla_errors.rs:69:13
-   |
-69 |         int values[len];
-   |             ^^^^^^
+   --> tests/ui/sema_vla_errors.rs:102:13
+    |
+102 |         int values[len];
+    |             ^^^^^^
 
 error: a variable length array cannot have static storage duration
-  --> tests/ui/sema_vla_errors.rs:80:20
-   |
-80 |         static int table[sizeof values];
-   |                    ^^^^^
+   --> tests/ui/sema_vla_errors.rs:113:20
+    |
+113 |         static int table[sizeof values];
+    |                    ^^^^^
 
 error: initializer is not a compile-time constant expression
-  --> tests/ui/sema_vla_errors.rs:81:37
-   |
-81 |         static unsigned long size = sizeof values;
-   |                                     ^^^^^^
+   --> tests/ui/sema_vla_errors.rs:114:37
+    |
+114 |         static unsigned long size = sizeof values;
+    |                                     ^^^^^^
 
 error: 'case' label is not a compile-time constant expression
-  --> tests/ui/sema_vla_errors.rs:83:14
-   |
-83 |         case sizeof values:
-   |              ^^^^^^
+   --> tests/ui/sema_vla_errors.rs:116:14
+    |
+116 |         case sizeof values:
+    |              ^^^^^^
 
-error: aborting due to 16 previous errors
+error: aborting due to 22 previous errors
 

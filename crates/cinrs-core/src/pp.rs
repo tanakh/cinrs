@@ -4394,14 +4394,16 @@ impl Pp<'_> {
         self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
         // implementation a macro to say it left each one out. `cinrs` has left
-        // three of the four out, so saying so turns them from gaps into
+        // two of the four out, so saying so turns them from gaps into
         // conforming omissions — and lets a portable program take the other
-        // branch. Atomics are *not* among them any more: `_Atomic`,
-        // `<stdatomic.h>` and the `__atomic_*` builtins are all here, so
-        // `__STDC_NO_ATOMICS__` is deliberately not defined.
+        // branch. The other two are *not* among them: `_Atomic`,
+        // `<stdatomic.h>` and the `__atomic_*` builtins are all here, and so
+        // are variable length arrays and the variably modified types built on
+        // them — `int a[n][m]`, `int (*p)[n]`, `typedef int T[n]` and the
+        // parameter forms — so neither `__STDC_NO_ATOMICS__` nor
+        // `__STDC_NO_VLA__` is defined.
         self.define_object("__STDC_NO_COMPLEX__", "1");
         self.define_object("__STDC_NO_THREADS__", "1");
-        self.define_object("__STDC_NO_VLA__", "1");
         self.define_atomic_macros(options.target.max_scalar_align.min(8));
         // C11 7.28p2: these two say that `char16_t` and `char32_t` really are
         // UTF-16 and UTF-32, which is what the lexer encodes `u"…"` and `U"…"`

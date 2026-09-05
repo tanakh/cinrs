@@ -212,15 +212,12 @@
 //! than a silent mistranslation. `_Thread_local` *is* there — see
 //! [Thread-local objects](#thread-local-objects) — and so are
 //! [atomics](#atomics), but the rest of C11's threads, `<threads.h>` and all,
-//! is not. Three of C11's four subsetting macros —
-//! `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
+//! is not. Two of C11's four subsetting macros — `__STDC_NO_THREADS__` and
 //! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
-//! saying that those parts are left out; `__STDC_NO_ATOMICS__` is not, because
-//! that part is here. `__STDC_NO_VLA__` is the cautious one
-//! of the three: [one-dimensional variable length
-//! arrays](#variable-length-arrays-and-alloca) do work, and the macro stays
-//! defined until the rest of C99's variably modified types do, so that a
-//! program which tests it keeps taking its `malloc` path. Three things are
+//! saying that those parts are left out; `__STDC_NO_ATOMICS__` and
+//! `__STDC_NO_VLA__` are not, because those parts are here — see
+//! [atomics](#atomics) and [Variably modified types and
+//! `alloca`](#variably-modified-types-and-alloca). Three things are
 //! simplifications rather than omissions:
 //!
 //! * An alignment specifier — `_Alignas(N)` or
@@ -304,15 +301,63 @@
 //! how common it is, and whether it is supported, accepted and ignored, refused
 //! with a reason, or still to come. The short version of what is *refused* —
 //! recognised and reported rather than mistranslated — is inline assembly,
-//! `__attribute__((weak))`, `alias`, `cleanup`, `vector_size`, `mode`,
-//! `__complex__` and `#include_next`. `alloca` is *not* on that list any more:
-//! see [Variable length arrays and
-//! `alloca`](#variable-length-arrays-and-alloca).
+//! `__attribute__((weak))`, `alias`, `vector_size`, `mode`,
+//! `__complex__` and `#include_next`. Neither `alloca` nor `cleanup` is on
+//! that list any more: see [Variably modified types and
+//! `alloca`](#variably-modified-types-and-alloca) and
+//! [`cleanup`](#the-cleanup-attribute).
 //!
 //! `unreachable()` becomes [`core::hint::unreachable_unchecked`], which is
 //! exactly the promise C attaches to it: reaching it is undefined behaviour.
 //! It is the one place the expansion trusts the C program with undefined
 //! behaviour, because the program asked for it by name.
+//!
+//! ## The `cleanup` attribute
+//!
+//! `T x __attribute__((cleanup(f)));` calls `f(&x)` when `x` goes out of
+//! scope, in reverse declaration order, on *every* way out of that scope —
+//! falling off the end, `break`, `continue`, `return`, or a `goto` that leaves
+//! several scopes at once. It is what systemd's `_cleanup_free_` and glib's
+//! `g_autofree` are made of, and it is the one GNU extension whose meaning is
+//! a Rust feature outright:
+//!
+//! ```
+//! cinrs::gnu99! {
+//!     #include <stdlib.h>
+//!     #include <string.h>
+//!
+//!     static void freep(void *p) { free(*(void **)p); }
+//!
+//!     int length_of_a_copy(const char *text) {
+//!         char *copy __attribute__((cleanup(freep))) = malloc(strlen(text) + 1);
+//!         if (copy == 0) {
+//!             return -1;                  /* freed here … */
+//!         }
+//!         strcpy(copy, text);
+//!         return (int)strlen(copy);       /* … and here */
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { length_of_a_copy(c"cinrs".as_ptr()) }, 5);
+//! ```
+//!
+//! In the ordinary lowering the attribute becomes a **drop guard** bound right
+//! after the object, so that Rust's own drop order — reverse declaration
+//! order, on every path out of the block, including a `return` from inside a
+//! statement expression — *is* C's. In a function lowered through a
+//! [control-flow graph](#control-flow) there are no scopes left to drop in:
+//! every local is hoisted to the top, so the call is emitted on each edge that
+//! leaves the scope instead, which is also what runs it once per pass through
+//! a loop body. `return expr;` computes its value before the cleanups run, as
+//! GCC does.
+//!
+//! The function must take one argument, a pointer to the variable's type
+//! (`void *` included, which is how the idiom above works), and the attribute
+//! belongs on a variable with automatic storage duration: on a parameter, a
+//! `static`, a thread-local or a file-scope object GCC drops it with a
+//! warning, and `cinrs` refuses it with the reason rather than changing what
+//! the program does. A `goto` *into* the scope of one is allowed, and the
+//! cleanup still runs when the scope ends — which is GCC's behaviour too.
 //!
 //! ## `__int128`
 //!
@@ -545,7 +590,7 @@
 //! `static mut` item of its own, so its initialiser has to be a constant
 //! expression like any other.
 //!
-//! ## Variable length arrays and `alloca`
+//! ## Variably modified types and `alloca`
 //!
 //! `T a[n];` where `n` is not a constant is an ordinary C99 declaration, and
 //! it works here: the bound is evaluated once, where the declaration stands;
@@ -595,21 +640,55 @@
 //! function returns rather than when the block ends. A C program can only
 //! observe that as memory it expected to have been given back sooner.
 //!
-//! A one-dimensional array is what is supported. `int a[n][3]` is one of
-//! those — its element type `int[3]` has a fixed size — but `int a[3][n]`,
-//! `int a[n][m]`, `int (*p)[n]` and `typedef int A[n];` are *variably
-//! modified* types that would have to carry a run-time size around in the type
-//! itself, and each is a located error rather than a mistranslation. So is a
-//! variable length array at file scope, one declared `static` or `extern`, one
-//! with an initialiser, one among the members of a `struct` — and a `goto` or
-//! a `case` that would jump into the scope of one, which C99 6.8.6.1p1 and
-//! 6.8.4.2p2 both forbid because the storage would not have been allocated.
-//! `__STDC_NO_VLA__` stays predefined while any of that is missing, so a
-//! program that asks takes its `malloc` path, which is always safe.
+//! ### More than one dimension
 //!
-//! These two are the only constructs whose expansion needs more than `core`;
-//! see [`no_std`](#no_std) for what that means in a crate without an
-//! allocator.
+//! A *variably modified* type is any type with a run-time bound in it, and
+//! they all work: `double a[n][m]`, `int a[3][n]` and `int a[n][3]`,
+//! `int (*p)[n]`, `typedef int T[n];`, and the parameter form
+//! `void f(int n, int m, double a[n][m])` that C adjusts to
+//! `double (*a)[m]`.
+//!
+//! The model is one hidden `size_t` object per variable dimension, created
+//! where the *type* is declared and named by the type itself. A `typedef`
+//! evaluates its bound once, at the `typedef` (6.7.7p4), and every object
+//! declared with it shares that length; a definition's parameter evaluates its
+//! bounds on entry, in declaration order (6.9.1p10), so assigning to `m`
+//! inside the body cannot change the shape of `a`. Everything else is
+//! arithmetic over those objects: one heap buffer of `n * m` elements holds
+//! `double a[n][m]`, `a[i][j]` is `*(base + i * m + j)`, `a[i]` decays to a
+//! `double (*)[m]` — the same pointer with a different C type — `p + 1` moves
+//! by a whole row, and `sizeof a`, `sizeof a[0]` and `sizeof *p` are products
+//! of the bounds.
+//!
+//! ```
+//! cinrs::c99! {
+//!     /* Called from Rust with a flat buffer, and indexed as a matrix. */
+//!     void scale(int n, int m, double a[n][m], double by) {
+//!         for (int i = 0; i < n; i++)
+//!             for (int j = 0; j < m; j++)
+//!                 a[i][j] *= by;
+//!     }
+//! }
+//!
+//! let mut buf = [1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+//! unsafe { scale(2, 3, buf.as_mut_ptr(), 10.0) };
+//! assert_eq!(buf, [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+//! ```
+//!
+//! What is refused is what C itself forbids: a variably modified type at file
+//! scope or among the members of a `struct`, an object of one declared
+//! `static` or `extern` or with an initialiser, `[*]` outside a prototype, and
+//! a `goto` or a `case` that would jump into the scope of one, which C99
+//! 6.8.6.1p1 and 6.8.4.2p2 both forbid because the bound would not have been
+//! evaluated. The one gap of this crate's own is a bound written in a *type
+//! name* — `(double (*)[m])p`, where there is no declaration to keep the
+//! length in — which is refused where the length would be needed;
+//! `sizeof(int[n][m])`, whose bounds C evaluates on the spot (6.5.3.4p2),
+//! works.
+//!
+//! Variably modified types and `alloca` are the only constructs whose
+//! expansion needs more than `core`; see [`no_std`](#no_std) for what that
+//! means in a crate without an allocator.
 //!
 //! # One block, one module
 //!
@@ -692,8 +771,8 @@
 //! because the C code calls it — that is a link-time dependency of the
 //! program, not a Rust one, and it is what the bundled headers declare.
 //!
-//! Two of the exceptions are [variable length arrays and
-//! `alloca`](#variable-length-arrays-and-alloca), whose storage is a `Vec`.
+//! Two of the exceptions are [variably modified types and
+//! `alloca`](#variably-modified-types-and-alloca), whose storage is a `Vec`.
 //! Nothing in the C says which kind of crate the expansion is going into, so
 //! that `Vec` is spelled `::std::vec::Vec` unless the unit says otherwise:
 //!
@@ -1242,10 +1321,9 @@
 //! the `__builtin_*` family, case ranges, flexible array members, `alloca`,
 //! [`__int128`](#__int128), [`__thread`](#thread-local-objects) and the rest.
 //!
-//! [Variable length arrays](#variable-length-arrays-and-alloca) are there in
-//! their one-dimensional form, emulated on the heap; the variably modified
-//! types around them — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA —
-//! are not.
+//! [Variably modified types](#variably-modified-types-and-alloca) are there —
+//! `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the
+//! parameter forms — emulated on the heap.
 //!
 //! Deliberately never: `_Complex`, `setjmp`/`longjmp`, `_BitInt`, an
 //! `_Atomic` aggregate,
@@ -1255,7 +1333,7 @@
 //! mistranslation.
 //!
 //! The other things worth knowing before reaching for this crate: everything
-//! generated is `core`-only except the storage a variable length array or
+//! generated is `core`-only except the storage a variably modified object or
 //! `alloca` needs, which is a `Vec`, and a [thread-local
 //! object](#thread-local-objects), which is a `std::thread_local!` — see
 //! [`no_std`](#no_std); the

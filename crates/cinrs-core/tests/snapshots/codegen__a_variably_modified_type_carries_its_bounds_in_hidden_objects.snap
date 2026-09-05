@@ -1,0 +1,72 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        double corner(int n, int m) {\n            double a[n][m];\n            a[1][2] = 3;\n            double (*row)[m] = a;\n            return a[1][2] + (double)sizeof a + (double)sizeof row[0] + (*row)[0];\n        }\n\n        double at(int n, int m, double a[n][m], int i, int j) {\n            return a[i][j] + (double)(sizeof a[0] / sizeof a[0][0]);\n        }\n        \"#)"
+---
+mod __cinrs_unit_514a36ce {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    pub unsafe extern "C" fn corner(
+        mut n: ::core::ffi::c_int,
+        mut m: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_double {
+        unsafe {
+            let mut __cinrs_vla_len_a: ::core::ffi::c_ulong = m as ::core::ffi::c_ulong;
+            let mut __cinrs_vla_len1_a: ::core::ffi::c_ulong = n as ::core::ffi::c_ulong;
+            let mut __cinrs_vla_a: ::std::vec::Vec<::core::ffi::c_double> = ::std::vec::from_elem(
+                0.0,
+                __cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a)
+                    as ::core::primitive::usize,
+            );
+            let mut a: *mut ::core::ffi::c_double = __cinrs_vla_a.as_mut_ptr();
+            let __cinrs_tmp0 = (a
+                .offset(
+                    (1 as ::core::primitive::isize)
+                        .wrapping_mul(__cinrs_vla_len_a as ::core::primitive::isize),
+                ) as *mut ::core::ffi::c_double)
+                .offset(2);
+            (*__cinrs_tmp0) = 3.0;
+            let mut __cinrs_vla_len_row: ::core::ffi::c_ulong = m
+                as ::core::ffi::c_ulong;
+            let mut row: *mut ::core::ffi::c_double = a as *mut ::core::ffi::c_double;
+            return ({
+                let __cinrs_tmp1 = (a
+                    .offset(
+                        (1 as ::core::primitive::isize)
+                            .wrapping_mul(__cinrs_vla_len_a as ::core::primitive::isize),
+                    ) as *mut ::core::ffi::c_double)
+                    .offset(2);
+                (*__cinrs_tmp1)
+            })
+                + __cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a).wrapping_mul(8)
+                    as ::core::ffi::c_double
+                + __cinrs_vla_len_row.wrapping_mul(8) as ::core::ffi::c_double
+                + ({
+                    let __cinrs_tmp2 = (row as *mut ::core::ffi::c_double).offset(0);
+                    (*__cinrs_tmp2)
+                });
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn at(
+        mut n: ::core::ffi::c_int,
+        mut m: ::core::ffi::c_int,
+        mut a: *mut ::core::ffi::c_double,
+        mut i: ::core::ffi::c_int,
+        mut j: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_double {
+        unsafe {
+            let mut __cinrs_vla_len_a: ::core::ffi::c_ulong = m as ::core::ffi::c_ulong;
+            return ({
+                let __cinrs_tmp0 = (a
+                    .offset(
+                        (i as ::core::primitive::isize)
+                            .wrapping_mul(__cinrs_vla_len_a as ::core::primitive::isize),
+                    ) as *mut ::core::ffi::c_double)
+                    .offset(j as ::core::primitive::isize);
+                (*__cinrs_tmp0)
+            }) + (__cinrs_vla_len_a.wrapping_mul(8) / 8) as ::core::ffi::c_double;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_514a36ce::*;

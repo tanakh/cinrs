@@ -528,6 +528,18 @@ pub struct Attributes {
     pub constructor: Option<SourceRange>,
     /// `destructor`, likewise.
     pub destructor: Option<SourceRange>,
+    /// `cleanup(f)`, on a variable with automatic storage duration.
+    pub cleanup: Option<Cleanup>,
+}
+
+/// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cleanup {
+    /// The function named, or `None` when the argument was not an identifier
+    /// at all — which GCC refuses with "cleanup argument not an identifier".
+    pub func: Option<Ident>,
+    /// Where the attribute was written.
+    pub range: SourceRange,
 }
 
 impl Attributes {
@@ -551,6 +563,7 @@ impl Attributes {
         self.section = self.section.take().or(other.section);
         self.constructor = self.constructor.or(other.constructor);
         self.destructor = self.destructor.or(other.destructor);
+        self.cleanup = self.cleanup.take().or(other.cleanup);
     }
 }
 

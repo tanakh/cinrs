@@ -46,6 +46,21 @@
 //! Objects with static storage duration are not hoisted at all; they are
 //! separate items already.
 //!
+//! # Cleanups
+//!
+//! Hoisting is also why `__attribute__((cleanup(f)))` cannot be a drop guard
+//! here: the local it would hang on lives to the end of the function, so the
+//! guard would run once, and far too late. The registration
+//! ([`ir::Stmt::Cleanup`]) is read as "from here to the end of this scope,
+//! this call is owed", and every edge that *leaves* a scope emits what it owes
+//! — innermost first — before it jumps: the bottom of a block, `break`,
+//! `continue`, `return` and a `goto` whose label is outside. That is also the
+//! only way to run a cleanup once per pass through a loop body. A forward
+//! `goto` names a label this pass has not reached yet, so how deep each label
+//! stands is collected up front, by the same walk over the same tree.
+//!
+//! [`ir::Stmt::Cleanup`]: crate::ir::Stmt::Cleanup
+//!
 //! # Readability
 //!
 //! A naive lowering produces a state per statement, which is unreadable. Three
@@ -220,7 +235,12 @@ pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object]) -> Cfg {
         switches: HashMap::new(),
         locals: Vec::new(),
         used,
+        cleanups: Vec::new(),
+        label_cleanups: HashMap::new(),
     };
+    // A `goto` has to know how many cleanups its *target* is inside, and a
+    // forward one names a label the walk below has not reached yet.
+    lowerer.collect_label_cleanups(&body, 0);
     let entry = lowerer.new_block();
     lowerer.current = Some(entry);
     lowerer.stmts(body);
@@ -232,16 +252,20 @@ pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object]) -> Cfg {
     lowerer.finish(entry)
 }
 
-/// What a loop's `break` and `continue` jump to.
+/// What a loop's `break` and `continue` jump to, and how many cleanups each of
+/// the two edges leaves behind.
 #[derive(Clone, Copy)]
 struct LoopBlocks {
     brk: BlockId,
+    brk_cleanups: usize,
     cont: BlockId,
+    cont_cleanups: usize,
 }
 
 /// A `switch` whose body is being walked.
 struct SwitchFrame {
     brk: BlockId,
+    brk_cleanups: usize,
     cases: Vec<(CaseRange, BlockId)>,
     default: Option<BlockId>,
 }
@@ -256,6 +280,17 @@ struct Lowerer<'a> {
     switches: HashMap<SwitchId, SwitchFrame>,
     locals: Vec<Local>,
     used: HashSet<String>,
+    /// The `cleanup` calls owed by the scopes enclosing the statement being
+    /// lowered, innermost last.
+    ///
+    /// A hoisted local lives to the end of the function, so there is no scope
+    /// left for a drop guard to hang on; every edge that leaves a scope emits
+    /// the calls it owes instead — which is also the only way to run a
+    /// cleanup once per pass through a loop body.
+    cleanups: Vec<Expr>,
+    /// How many cleanups are owed where each label stands, from the pre-pass
+    /// over the same tree; see [`Lowerer::collect_label_cleanups`].
+    label_cleanups: HashMap<LabelId, usize>,
 }
 
 impl Lowerer<'_> {
@@ -315,12 +350,83 @@ impl Lowerer<'_> {
         block
     }
 
+    // -- cleanups -----------------------------------------------------------
+
+    /// Records how many `cleanup` calls are owed where each label stands.
+    ///
+    /// It is the same walk [`Lowerer::stmt`] makes, over the same tree, so the
+    /// two agree by construction; doing it ahead of time is what lets a
+    /// forward `goto` know how many scopes it leaves. A jump *into* the scope
+    /// of a cleanup is not refused — GCC allows it, and runs the cleanup at
+    /// the end of the scope all the same, which is what a lexical count does
+    /// here too.
+    fn collect_label_cleanups(&mut self, stmts: &[Stmt], depth: usize) {
+        let mut depth = depth;
+        for stmt in stmts {
+            match stmt {
+                Stmt::Cleanup(_) => depth += 1,
+                Stmt::Block(items) => self.collect_label_cleanups(items, depth),
+                Stmt::Label { id, body, .. } => {
+                    self.label_cleanups.insert(*id, depth);
+                    self.collect_label_cleanups(std::slice::from_ref(body), depth);
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    self.collect_label_cleanups(std::slice::from_ref(then_branch), depth);
+                    if let Some(branch) = else_branch {
+                        self.collect_label_cleanups(std::slice::from_ref(branch), depth);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    self.collect_label_cleanups(std::slice::from_ref(body), depth);
+                }
+                Stmt::For { init, body, .. } => {
+                    // A declaration in the init clause is scoped to the loop,
+                    // so its cleanup is owed by everything inside it.
+                    let inner = depth + init.iter().filter(|s| s.is_cleanup()).count();
+                    self.collect_label_cleanups(std::slice::from_ref(body), inner);
+                }
+                Stmt::SwitchTree(switch) => {
+                    self.collect_label_cleanups(std::slice::from_ref(&switch.body), depth);
+                }
+                Stmt::Case { body, .. } => {
+                    self.collect_label_cleanups(std::slice::from_ref(body), depth);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Emits the cleanup calls owed by the scopes between here and `depth`,
+    /// innermost first, on the edge about to be taken.
+    fn leave_cleanups(&mut self, depth: usize) {
+        if self.cleanups.len() <= depth || self.current.is_none() {
+            return;
+        }
+        let owed: Vec<Expr> = self.cleanups[depth..].iter().rev().cloned().collect();
+        for call in owed {
+            self.push(Stmt::Expr(call));
+        }
+    }
+
     // -- statements ---------------------------------------------------------
 
     fn stmts(&mut self, stmts: Vec<Stmt>) {
         for stmt in stmts {
             self.stmt(stmt);
         }
+    }
+
+    /// Lowers a scope: its statements, then the cleanups it owes on the way
+    /// out of it.
+    fn scope(&mut self, stmts: Vec<Stmt>) {
+        let depth = self.cleanups.len();
+        self.stmts(stmts);
+        self.leave_cleanups(depth);
+        self.cleanups.truncate(depth);
     }
 
     fn stmt(&mut self, stmt: Stmt) {
@@ -333,7 +439,10 @@ impl Lowerer<'_> {
                 explicit,
             } => self.local(object, init, explicit),
             Stmt::Vla(def) => self.vla(*def),
-            Stmt::Block(items) => self.stmts(items),
+            // The registration itself generates nothing: what it means is the
+            // calls the edges out of this scope now owe.
+            Stmt::Cleanup(def) => self.cleanups.push(def.call),
+            Stmt::Block(items) => self.scope(items),
             Stmt::If {
                 cond,
                 then_branch,
@@ -374,24 +483,44 @@ impl Lowerer<'_> {
             }
             Stmt::Goto { id, range } => {
                 let block = self.label_block(id);
+                // Only the scopes the jump leaves are cleaned up; the label's
+                // own scopes stay, and are cleaned up where they end.
+                let depth = self.label_cleanups.get(&id).copied().unwrap_or(0);
+                self.leave_cleanups(depth.min(self.cleanups.len()));
                 self.jump(block, range);
             }
             Stmt::Break { target, range } => {
                 let block = match target {
-                    BreakTarget::Loop(id) => self.loops.get(&id).map(|l| l.brk),
-                    BreakTarget::Switch(id) => self.switches.get(&id).map(|s| s.brk),
+                    BreakTarget::Loop(id) => self.loops.get(&id).map(|l| (l.brk, l.brk_cleanups)),
+                    BreakTarget::Switch(id) => {
+                        self.switches.get(&id).map(|s| (s.brk, s.brk_cleanups))
+                    }
                 };
                 match block {
-                    Some(block) => self.jump(block, range),
+                    Some((block, depth)) => {
+                        self.leave_cleanups(depth);
+                        self.jump(block, range);
+                    }
                     // Sema rejects a `break` with nothing to leave.
                     None => self.terminate(Terminator::Unreachable),
                 }
             }
-            Stmt::Continue { id, range } => match self.loops.get(&id).map(|l| l.cont) {
-                Some(block) => self.jump(block, range),
-                None => self.terminate(Terminator::Unreachable),
-            },
-            Stmt::Return { value, range } => self.terminate(Terminator::Return { value, range }),
+            Stmt::Continue { id, range } => {
+                match self.loops.get(&id).map(|l| (l.cont, l.cont_cleanups)) {
+                    Some((block, depth)) => {
+                        self.leave_cleanups(depth);
+                        self.jump(block, range);
+                    }
+                    None => self.terminate(Terminator::Unreachable),
+                }
+            }
+            // The value is already in a temporary where a cleanup could see
+            // it: sema puts it there, because GCC computes the result before
+            // the cleanups run.
+            Stmt::Return { value, range } => {
+                self.leave_cleanups(0);
+                self.terminate(Terminator::Return { value, range });
+            }
             Stmt::Switch(_) => {
                 unreachable!("sema lowers every switch into a SwitchTree in CFG mode")
             }
@@ -428,7 +557,7 @@ impl Lowerer<'_> {
         )));
     }
 
-    /// Hoists the three bindings a variable length array needs, leaving the
+    /// Hoists the two bindings a variably modified object needs, leaving the
     /// allocation itself where the declaration was written.
     ///
     /// The storage therefore lives from the top of the function to its end
@@ -438,7 +567,7 @@ impl Lowerer<'_> {
     /// the `Vec`, which frees the old one and is the fresh object C99 6.2.4p7
     /// asks for.
     fn vla(&mut self, def: crate::ir::VlaDef) {
-        for object in [def.len, def.storage, def.object] {
+        for object in [def.storage, def.object] {
             let name = self.objects[object.0 as usize].name.clone();
             let rust_name = self.unique_name(&name);
             self.locals.push(Local { object, rust_name });
@@ -492,11 +621,14 @@ impl Lowerer<'_> {
         self.jump(head, range);
         self.continue_at(head);
         self.test(cond, body_blk, exit, range);
+        let depth = self.cleanups.len();
         self.loops.insert(
             id,
             LoopBlocks {
                 brk: exit,
+                brk_cleanups: depth,
                 cont: head,
+                cont_cleanups: depth,
             },
         );
         self.continue_at(body_blk);
@@ -510,11 +642,14 @@ impl Lowerer<'_> {
         let test = self.new_block();
         let exit = self.new_block();
         self.jump(body_blk, range);
+        let depth = self.cleanups.len();
         self.loops.insert(
             id,
             LoopBlocks {
                 brk: exit,
+                brk_cleanups: depth,
                 cont: test,
+                cont_cleanups: depth,
             },
         );
         self.continue_at(body_blk);
@@ -534,7 +669,13 @@ impl Lowerer<'_> {
         body: Stmt,
         range: SourceRange,
     ) {
+        // C99 scopes a declaration in the init clause to the whole loop, so a
+        // `cleanup` on one is owed by everything that leaves the loop — the
+        // `break` and the falling-out edge, but not the `continue`, which
+        // stays inside.
+        let outer = self.cleanups.len();
         self.stmts(init);
+        let inner = self.cleanups.len();
         let head = self.new_block();
         let body_blk = self.new_block();
         let step_blk = self.new_block();
@@ -548,8 +689,12 @@ impl Lowerer<'_> {
         self.loops.insert(
             id,
             LoopBlocks {
+                // The exit block runs what the init clause owes, whichever
+                // way the loop was left, so a `break` only has the body's.
                 brk: exit,
+                brk_cleanups: inner,
                 cont: step_blk,
+                cont_cleanups: inner,
             },
         );
         self.continue_at(body_blk);
@@ -561,6 +706,10 @@ impl Lowerer<'_> {
         }
         self.jump(head, range);
         self.continue_at(exit);
+        // Both ways out of the loop arrive here; the cleanups the init clause
+        // owes run once, on the way past.
+        self.leave_cleanups(outer);
+        self.cleanups.truncate(outer);
     }
 
     /// Ends the current block on a loop's controlling expression, which a
@@ -590,6 +739,7 @@ impl Lowerer<'_> {
             id,
             SwitchFrame {
                 brk: exit,
+                brk_cleanups: self.cleanups.len(),
                 cases: Vec::new(),
                 default: None,
             },

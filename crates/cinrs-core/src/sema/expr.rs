@@ -4,7 +4,7 @@ use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
     BinOp, Callee, CmpOp, Expr, ExprKind, FuncId, Function, LogicalOp, Place, PlaceKind, Signature,
-    StrData, StrId, Ty, UNREACHABLE_BUILTIN,
+    StrData, StrId, Ty, UNREACHABLE_BUILTIN, VmDim,
 };
 use crate::lex::{CharLit, FloatLit, FloatSuffix, IntLit, LongKind, NumBase, StrKind, StrLit};
 
@@ -206,22 +206,13 @@ impl Sema<'_> {
             ast::ExprKind::SizeofType(ty) => {
                 // A bound written here is evaluated here (C99 6.5.3.4p2),
                 // which is the one thing `sizeof` of a variably modified type
-                // does that `sizeof` of any other type does not.
-                self.vla_bound = None;
-                let target = self.ty_of(&ty.ty)?;
-                let bound = self.vla_bound.take();
-                if self.types().is_vla(target) {
-                    let Some(count) = bound else {
-                        self.error(ty.range, super::VM_UNSUPPORTED);
-                        return None;
-                    };
-                    let elem = self
-                        .types()
-                        .elem(target)
-                        .expect("a variable length array is an array type");
-                    return self.vla_size(count, elem, ty.range, range);
-                }
-                self.sizeof(target, ty.range, range)
+                // does that `sizeof` of any other type does not. The mark is
+                // what keeps a bound belonging to an enclosing declarator —
+                // `int a[sizeof(int[k])]` — out of this one's product.
+                let mark = self.vm_bounds.len();
+                let target = self.ty_of(&ty.ty);
+                let supplied: Vec<_> = self.vm_bounds.drain(mark..).collect();
+                self.sizeof_with(target?, supplied, ty.range, range)
             }
             ast::ExprKind::AlignofExpr(operand) => {
                 let (_, ty) = self.operand_place(operand, "_Alignof")?;
@@ -371,10 +362,11 @@ impl Sema<'_> {
             return None;
         }
         // An array is as strictly aligned as its elements, which is an answer
-        // even for a variable length one, whose *size* nobody knows here.
-        let ty = match self.types().elem(ty) {
-            Some(elem) if self.types().is_vla(ty) => elem,
-            _ => ty,
+        // even for a variably modified one, whose *size* is a run-time value.
+        let ty = if self.types().is_vm(ty) {
+            self.types().vm_step_ty(ty)
+        } else {
+            ty
         };
         if ty.is_void() && self.gnu_leniency() {
             return Some(Expr::int(1, self.size_ty(), range));
@@ -1256,7 +1248,25 @@ impl Sema<'_> {
 
     /// Whether `a - b` is defined for two pointer types.
     fn subtractable(&self, a: Ty, b: Ty) -> bool {
-        self.types().same_pointee(a, b)
+        self.same_pointee(a, b)
+    }
+
+    /// [`ir::Types::same_pointee`], with the bounds of a variably modified
+    /// pointee left out of the comparison.
+    ///
+    /// C99 6.7.5.2p6: two variably modified array types are compatible when
+    /// their element types are, whatever their bounds — so `double (*)[m]` and
+    /// `double (*)[k]` are the same type as far as an assignment or a
+    /// subtraction is concerned, and whether the two lengths agree is the
+    /// program's business.
+    pub(super) fn same_pointee(&self, a: Ty, b: Ty) -> bool {
+        if self.types().same_pointee(a, b) {
+            return true;
+        }
+        let (Some(a), Some(b)) = (self.pointee(a), self.pointee(b)) else {
+            return false;
+        };
+        (self.types().is_vm(a) || self.types().is_vm(b)) && self.compatible(a, b)
     }
 
     /// Arithmetic needs to know how big the pointee is.
@@ -1373,7 +1383,7 @@ impl Sema<'_> {
         }
 
         if lhs.ty != rhs.ty
-            && !self.types().same_pointee(lhs.ty, rhs.ty)
+            && !self.same_pointee(lhs.ty, rhs.ty)
             && !self.types().is_void_pointer(lhs.ty)
             && !self.types().is_void_pointer(rhs.ty)
         {
@@ -1593,7 +1603,7 @@ impl Sema<'_> {
         if !lhs.ty.is_pointer() || !rhs.ty.is_pointer() {
             return None;
         }
-        if self.types().same_pointee(lhs.ty, rhs.ty) {
+        if self.same_pointee(lhs.ty, rhs.ty) {
             // The result keeps `const` if either side has it.
             let pointee = self.pointee(lhs.ty).expect("a pointer");
             let konst =
@@ -2238,29 +2248,72 @@ impl Sema<'_> {
     /// `sizeof expr`, whose operand is not evaluated — except that a variable
     /// length array's size is only known at run time.
     fn sizeof_expr(&mut self, operand: &ast::Expr, range: SourceRange) -> Option<Expr> {
-        let (place, ty) = self.operand_place(operand, "sizeof")?;
-        // `sizeof a` where `a` is a variable length array is the number of
-        // elements the declaration allocated times the element size, read out
-        // of the hidden object that declaration left behind.
-        if let Some(Place {
-            kind: PlaceKind::Object(id),
-            ..
-        }) = &place
-            && let Some(len) = self.vla_lengths.get(id).copied()
-        {
-            let elem = self
-                .types()
-                .elem(ty)
-                .expect("a variable length array is an array type");
-            let size_ty = self.size_ty();
-            let count = Expr::new(
-                ExprKind::Load(place_of(PlaceKind::Object(len), size_ty, false, range)),
-                size_ty,
-                range,
-            );
-            return self.vla_size(count, elem, operand.range, range);
-        }
+        // `sizeof a`, `sizeof a[0]` and `sizeof *p` of a variably modified
+        // type are run-time values, computed from the hidden objects the
+        // declaration bound; the type carries them, so the place itself says
+        // nothing more than its type does.
+        let (_, ty) = self.operand_place(operand, "sizeof")?;
         self.sizeof(ty, operand.range, range)
+    }
+
+    /// How many [step-type](ir::Types::vm_step_ty) elements a variably
+    /// modified type holds, as a `size_t` computed at run time.
+    ///
+    /// Every dimension contributes a factor: a constant one its length, a
+    /// variable one the hidden object its declaration bound — and, for a type
+    /// name that has just been resolved and has no objects, one of `supplied`,
+    /// which the resolution recorded in the order C evaluates them (innermost
+    /// dimension first, which is GCC's order). The product is folded in that
+    /// same order so that the side effects of `int[p(1)][p(2)]` happen where
+    /// GCC has them.
+    pub(super) fn vm_count(
+        &mut self,
+        ty: Ty,
+        supplied: Vec<super::VmBound>,
+        operand_range: SourceRange,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let size_ty = self.size_ty();
+        let dims = self.types().vm_dims(ty);
+        let mut supplied = supplied.into_iter();
+        let mut product: Option<Expr> = None;
+        for dim in dims.iter().rev() {
+            let factor = match dim {
+                VmDim::Fixed(len) => Expr::int(i128::from(*len as i64), size_ty, range),
+                VmDim::Len(id) => Expr::new(
+                    ExprKind::Load(place_of(PlaceKind::Object(*id), size_ty, false, range)),
+                    size_ty,
+                    range,
+                ),
+                VmDim::Unknown => match supplied.next() {
+                    Some(bound) => bound.value,
+                    None => {
+                        // A bound that was never evaluated: `int a[*]`, or a
+                        // parameter type read out of a prototype. Nothing in
+                        // the running program knows the length.
+                        self.error(
+                            operand_range,
+                            "the length of this variably modified type is not available here: \
+                             its bound was never evaluated",
+                        );
+                        return None;
+                    }
+                },
+            };
+            product = Some(match product {
+                None => factor,
+                Some(lhs) => Expr::new(
+                    ExprKind::Binary {
+                        op: BinOp::Mul,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(factor),
+                    },
+                    size_ty,
+                    range,
+                ),
+            });
+        }
+        product
     }
 
     /// `count * sizeof(elem)`, as a `size_t` computed at run time.
@@ -2297,15 +2350,28 @@ impl Sema<'_> {
     }
 
     fn sizeof(&mut self, ty: Ty, operand_range: SourceRange, range: SourceRange) -> Option<Expr> {
+        self.sizeof_with(ty, Vec::new(), operand_range, range)
+    }
+
+    /// `sizeof`, with the bounds a type name written here evaluated on the
+    /// spot rather than read out of the hidden objects a declaration left
+    /// behind (C99 6.5.3.4p2).
+    fn sizeof_with(
+        &mut self,
+        ty: Ty,
+        supplied: Vec<super::VmBound>,
+        operand_range: SourceRange,
+        range: SourceRange,
+    ) -> Option<Expr> {
         if ty.is_error() {
             return None;
         }
-        // A variable length array reached from somewhere that does not carry
-        // its bound: `sizeof *&a`, or a type name whose bound was evaluated
-        // elsewhere. The two forms that *do* know it are handled above.
-        if self.types().is_vla(ty) {
-            self.error(operand_range, super::VM_UNSUPPORTED);
-            return None;
+        // A variably modified type's size is a run-time value: the product of
+        // its dimensions times the size of what is left under them.
+        if self.types().is_vm(ty) {
+            let count = self.vm_count(ty, supplied, operand_range, range)?;
+            let step = self.types().vm_step_ty(ty);
+            return self.vla_size(count, step, operand_range, range);
         }
         if ty.is_func() {
             self.error(
@@ -2469,7 +2535,7 @@ impl Sema<'_> {
         if self.types().is_void_pointer(to) || self.types().is_void_pointer(from) {
             return true;
         }
-        if self.types().same_pointee(to, from) {
+        if self.same_pointee(to, from) {
             return true;
         }
         // C99 6.7.2.2p4 makes an enumerated type compatible with an
@@ -2486,7 +2552,32 @@ impl Sema<'_> {
         {
             return true;
         }
+        if self.array_adds_qualifiers(a, b) {
+            return true;
+        }
         self.differ_only_in_sign(a, b)
+    }
+
+    /// Whether two array pointee types are the same but for a `const` the
+    /// target adds: `float (*)[n]` to `const float (*)[n]`.
+    ///
+    /// An array carries its qualifiers on its *elements* (6.7.3p9), so before
+    /// C23 the two were formally incompatible and passing `float x[n][n]` to a
+    /// `const float x[n][n]` parameter was a constraint violation — which no
+    /// compiler enforced. WG14 N2607 made it legal outright; GCC warns only
+    /// under `-pedantic` in the older revisions ("invalid use of pointers to
+    /// arrays with different qualifiers in ISO C before C23") and Clang says
+    /// nothing at all. `cinrs` accepts it in every entry point.
+    fn array_adds_qualifiers(&self, to: Ty, from: Ty) -> bool {
+        let (Ty::Array(x), Ty::Array(y)) = (to, from) else {
+            return false;
+        };
+        let (x, y) = (self.types().array_type(x), self.types().array_type(y));
+        // Adding `const` is a conversion; dropping it is not.
+        (x.elem_const || !y.elem_const)
+            && x.vla == y.vla
+            && (x.incomplete || y.incomplete || x.len == y.len)
+            && (self.compatible(x.elem, y.elem) || self.array_adds_qualifiers(x.elem, y.elem))
     }
 
     /// Whether two pointee types are the same integer type but for its
