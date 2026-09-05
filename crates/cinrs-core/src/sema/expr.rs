@@ -118,16 +118,29 @@ impl Sema {
             ast::ExprKind::PostIncDec { op, operand } => self.inc_dec(*op, operand, true, range),
             ast::ExprKind::PreIncDec { op, operand } => self.inc_dec(*op, operand, false, range),
             ast::ExprKind::Cast { ty, expr: operand } => self.cast_expr(ty, operand, range),
-            ast::ExprKind::SizeofExpr(operand) => {
-                let ty = self.operand_ty(operand, "sizeof")?;
-                self.sizeof(ty, operand.range, range)
-            }
+            ast::ExprKind::SizeofExpr(operand) => self.sizeof_expr(operand, range),
             ast::ExprKind::SizeofType(ty) => {
+                // A bound written here is evaluated here (C99 6.5.3.4p2),
+                // which is the one thing `sizeof` of a variably modified type
+                // does that `sizeof` of any other type does not.
+                self.vla_bound = None;
                 let target = self.ty_of(&ty.ty)?;
+                let bound = self.vla_bound.take();
+                if self.types().is_vla(target) {
+                    let Some(count) = bound else {
+                        self.error(ty.range, super::VM_UNSUPPORTED);
+                        return None;
+                    };
+                    let elem = self
+                        .types()
+                        .elem(target)
+                        .expect("a variable length array is an array type");
+                    return self.vla_size(count, elem, ty.range, range);
+                }
                 self.sizeof(target, ty.range, range)
             }
             ast::ExprKind::AlignofExpr(operand) => {
-                let ty = self.operand_ty(operand, "_Alignof")?;
+                let (_, ty) = self.operand_place(operand, "_Alignof")?;
                 self.alignof(ty, operand.range, range)
             }
             ast::ExprKind::AlignofType(name) => {
@@ -267,6 +280,12 @@ impl Sema {
             );
             return None;
         }
+        // An array is as strictly aligned as its elements, which is an answer
+        // even for a variable length one, whose *size* nobody knows here.
+        let ty = match self.types().elem(ty) {
+            Some(elem) if self.types().is_vla(ty) => elem,
+            _ => ty,
+        };
         let Some(layout) = self.types().size_align(ty, &self.target) else {
             self.error(
                 operand_range,
@@ -1796,11 +1815,15 @@ impl Sema {
         ))
     }
 
-    /// The type `sizeof` or `_Alignof` is being asked about, rejecting the one
+    /// What `sizeof` or `_Alignof` is being asked about, rejecting the one
     /// operand that has neither: a bit-field.
-    fn operand_ty(&mut self, operand: &ast::Expr, what: &str) -> Option<Ty> {
+    ///
+    /// The *place* comes back too, when the operand denotes an object at all,
+    /// because a variable length array's size belongs to the object rather
+    /// than to its type.
+    fn operand_place(&mut self, operand: &ast::Expr, what: &str) -> Option<(Option<Place>, Ty)> {
         if !self.is_lvalue_form(operand) {
-            return Some(self.expr(operand)?.ty);
+            return Some((None, self.expr(operand)?.ty));
         }
         let place = self.lvalue(operand)?;
         if self.bit_field_of(&place).is_some() {
@@ -1810,7 +1833,8 @@ impl Sema {
             );
             return None;
         }
-        Some(place.ty)
+        let ty = place.ty;
+        Some((Some(place), ty))
     }
 
     /// Whether the member a [path](Sema::member_path) reaches is a bit-field.
@@ -1823,8 +1847,76 @@ impl Sema {
         }
     }
 
+    /// `sizeof expr`, whose operand is not evaluated — except that a variable
+    /// length array's size is only known at run time.
+    fn sizeof_expr(&mut self, operand: &ast::Expr, range: SourceRange) -> Option<Expr> {
+        let (place, ty) = self.operand_place(operand, "sizeof")?;
+        // `sizeof a` where `a` is a variable length array is the number of
+        // elements the declaration allocated times the element size, read out
+        // of the hidden object that declaration left behind.
+        if let Some(Place {
+            kind: PlaceKind::Object(id),
+            ..
+        }) = &place
+            && let Some(len) = self.vla_lengths.get(id).copied()
+        {
+            let elem = self
+                .types()
+                .elem(ty)
+                .expect("a variable length array is an array type");
+            let size_ty = self.size_ty();
+            let count = Expr::new(
+                ExprKind::Load(place_of(PlaceKind::Object(len), size_ty, false, range)),
+                size_ty,
+                range,
+            );
+            return self.vla_size(count, elem, operand.range, range);
+        }
+        self.sizeof(ty, operand.range, range)
+    }
+
+    /// `count * sizeof(elem)`, as a `size_t` computed at run time.
+    fn vla_size(
+        &mut self,
+        count: Expr,
+        elem: Ty,
+        operand_range: SourceRange,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let size_ty = self.size_ty();
+        let Some(size) = self.size_of(elem) else {
+            self.error(
+                operand_range,
+                format!(
+                    "invalid application of 'sizeof' to an incomplete type '{}'",
+                    self.tyname(elem)
+                ),
+            );
+            return None;
+        };
+        if size == 1 {
+            return Some(count);
+        }
+        Some(Expr::new(
+            ExprKind::Binary {
+                op: BinOp::Mul,
+                lhs: Box::new(count),
+                rhs: Box::new(Expr::int(size as i128, size_ty, range)),
+            },
+            size_ty,
+            range,
+        ))
+    }
+
     fn sizeof(&mut self, ty: Ty, operand_range: SourceRange, range: SourceRange) -> Option<Expr> {
         if ty.is_error() {
+            return None;
+        }
+        // A variable length array reached from somewhere that does not carry
+        // its bound: `sizeof *&a`, or a type name whose bound was evaluated
+        // elsewhere. The two forms that *do* know it are handled above.
+        if self.types().is_vla(ty) {
+            self.error(operand_range, super::VM_UNSUPPORTED);
             return None;
         }
         if ty.is_func() {

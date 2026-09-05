@@ -199,11 +199,19 @@ pub struct PointerType {
 pub struct ArrayType {
     /// The element type.
     pub elem: Ty,
-    /// The number of elements.
+    /// The number of elements, zero for a [variable length
+    /// array](ArrayType::vla), whose length is only known at run time.
     pub len: u64,
     /// Whether the element type is `const`-qualified, which is what decides
     /// the constness of the pointer the array decays to.
     pub elem_const: bool,
+    /// Whether this is a variable length array (C99 6.7.5.2), whose bound was
+    /// not an integer constant expression.
+    ///
+    /// The type carries no bound at all: the number of elements belongs to the
+    /// *object*, which is why `sizeof` of one is a run-time value read out of a
+    /// hidden local rather than a constant. See [`Stmt::Vla`].
+    pub vla: bool,
 }
 
 /// A function type.
@@ -483,11 +491,26 @@ impl Types {
 
     /// The type `elem[len]`.
     pub fn array(&mut self, elem: Ty, len: u64, elem_const: bool) -> Ty {
-        let key = ArrayType {
+        self.array_type_of(ArrayType {
             elem,
             len,
             elem_const,
-        };
+            vla: false,
+        })
+    }
+
+    /// The type `elem[n]` for a bound that is not a constant: a variable
+    /// length array.
+    pub fn vla_array(&mut self, elem: Ty, elem_const: bool) -> Ty {
+        self.array_type_of(ArrayType {
+            elem,
+            len: 0,
+            elem_const,
+            vla: true,
+        })
+    }
+
+    fn array_type_of(&mut self, key: ArrayType) -> Ty {
         if let Some(id) = self.array_index.get(&key) {
             return Ty::Array(*id);
         }
@@ -642,6 +665,15 @@ impl Types {
         }
     }
 
+    /// Whether `ty` is a variable length array.
+    ///
+    /// It is the only *variably modified* type this crate has: a pointer to
+    /// one, an array of one and a `typedef` of one are all refused where they
+    /// are written, so nothing else can carry a run-time size around.
+    pub fn is_vla(&self, ty: Ty) -> bool {
+        matches!(ty, Ty::Array(id) if self.array_type(id).vla)
+    }
+
     /// Whether `ty` is a pointer to a function.
     pub fn is_func_pointer(&self, ty: Ty) -> bool {
         matches!(self.pointee(ty), Some(Ty::Func(_)))
@@ -697,6 +729,14 @@ impl Types {
             Ty::Array(id) => {
                 let array = self.array_type(id);
                 let elem = self.size_align(array.elem, target)?;
+                // A variable length array has no size the front end can know:
+                // `sizeof` of one is a run-time value, computed from the
+                // object's own hidden length. Answering `None` here is what
+                // keeps a path that forgot about that loud rather than silently
+                // wrong.
+                if array.vla {
+                    return None;
+                }
                 Layout {
                     size: elem.size.saturating_mul(array.len),
                     align: elem.align,
@@ -733,6 +773,12 @@ impl Types {
             Ty::Array(id) => {
                 let a = self.array_type(id);
                 let prefix = if a.elem_const { "const " } else { "" };
+                if a.vla {
+                    // C's own spelling for an array whose bound is not a
+                    // constant expression; the bound belongs to the object, so
+                    // there is nothing else honest to print.
+                    return format!("{prefix}{}[*]", self.name(a.elem));
+                }
                 format!("{prefix}{}[{}]", self.name(a.elem), a.len)
             }
             Ty::Func(id) => self.func_name(id, ""),
@@ -1182,6 +1228,14 @@ pub struct Object {
     pub storage: Storage,
     /// Whether the object's type is `const`-qualified.
     pub is_const: bool,
+    /// Set when this is the hidden `Vec` a [variable length array](Stmt::Vla)
+    /// keeps its elements in, in which case [`Object::ty`] is the *element*
+    /// type and the generated binding has type `Vec<T>`.
+    ///
+    /// It is not an object of the C program at all; it exists so that the
+    /// storage is dropped when the block ends, which is the lifetime C gives
+    /// the array.
+    pub vla_storage: bool,
     /// The symbol `__asm__("name")` renamed the object to.
     pub asm_label: Option<String>,
     /// The section `__attribute__((section("…")))` asked for.
@@ -1266,6 +1320,13 @@ pub struct Function {
     /// Whether `__attribute__((constructor))` asked for it to run before
     /// `main`, or `destructor` for after it.
     pub init_kind: Option<InitKind>,
+    /// Whether the body calls `alloca`, in which case the generated item opens
+    /// with the arena the emulation allocates out of.
+    ///
+    /// `alloca`'s memory lives until the function returns — not until the end
+    /// of the block it was called in — so the arena is per function and is
+    /// dropped by the `return`, which is exactly that lifetime.
+    pub uses_alloca: bool,
     /// Every automatic object the body declared, in declaration order.
     ///
     /// Code generation needs the whole list — not only the ones a `let`
@@ -1366,6 +1427,15 @@ pub struct Program {
     /// Filled in after semantic analysis, for the same reason as
     /// [`Program::link_libraries`].
     pub export: bool,
+    /// Whether `#pragma cinrs no_std` said the expansion goes into a
+    /// `#![no_std]` crate.
+    ///
+    /// Everything generated is `core`-only except the storage a [variable
+    /// length array](Stmt::Vla) and `alloca` need, which is a `Vec`; this
+    /// decides whether that `Vec` is spelled `::std::vec::Vec` or
+    /// `::alloc::vec::Vec`. Filled in after semantic analysis, for the same
+    /// reason as [`Program::link_libraries`].
+    pub no_std: bool,
 }
 
 impl Program {
@@ -1525,6 +1595,13 @@ pub enum BuiltinOp {
     /// `__builtin_assume`, which promise something the generated code cannot
     /// pass on.
     Discard,
+    /// `__builtin_alloca(size)`, whose one operand is the size in bytes,
+    /// converted to `size_t`.
+    ///
+    /// The memory comes out of the arena [`Function::uses_alloca`] puts at the
+    /// top of the function, so it is freed by the `return` — which is
+    /// `alloca`'s own lifetime.
+    Alloca,
 }
 
 /// An assignable location.
@@ -1868,6 +1945,11 @@ pub enum Stmt {
         /// program actually wrote has to run again where it was written.
         explicit: bool,
     },
+    /// The definition of a variable length array (C99 6.7.5.2).
+    ///
+    /// It is a [`Stmt::Let`] with three bindings instead of one, because the
+    /// object needs storage whose size is only known here; see [`VlaDef`].
+    Vla(Box<VlaDef>),
     /// A compound statement.
     Block(Vec<Stmt>),
     /// `if (cond) then_branch else else_branch`
@@ -1972,6 +2054,40 @@ pub enum Stmt {
         /// Where the statement was written.
         range: SourceRange,
     },
+}
+
+/// A variable length array's definition: `T a[n];`.
+///
+/// C99 6.7.5.2 gives the object automatic storage duration, a size fixed when
+/// the declaration is reached, and the lifetime of the block it is written in;
+/// `n` is evaluated exactly once, here. This crate emulates it on the heap —
+/// the elements live in a hidden `Vec` whose `Drop` is that lifetime — so the
+/// one definition becomes three bindings:
+///
+/// ```text
+/// let __cinrs_vla_len_a: size_t = <count>;                 // len
+/// let mut __cinrs_vla_a: Vec<T> = vec![<zero>; len];       // storage
+/// let mut a: *mut T = __cinrs_vla_a.as_mut_ptr();          // object
+/// ```
+///
+/// From there the object *is* a pointer: decay is the identity, `a[i]` is
+/// ordinary pointer indexing, and `sizeof a` is `len * sizeof(T)` — a run-time
+/// value read out of [`VlaDef::len`], which is why it is an object of its own
+/// rather than a number in this struct.
+#[derive(Clone, Debug)]
+pub struct VlaDef {
+    /// The object the C program declared, whose type is the array type and
+    /// whose generated binding is a pointer to the first element.
+    pub object: ObjectId,
+    /// The hidden `Vec` the elements live in; see [`Object::vla_storage`].
+    pub storage: ObjectId,
+    /// The hidden object holding the number of elements, of type `size_t`.
+    pub len: ObjectId,
+    /// The number of elements, converted to `size_t` and evaluated exactly
+    /// once, where the declaration stands.
+    pub count: Expr,
+    /// Where the declarator was written.
+    pub range: SourceRange,
 }
 
 /// A `switch` statement, flattened into the groups its labels delimit.

@@ -26,7 +26,6 @@
 
 ?00140  variadic function definition; needs Rust 1.99, so it passes there and not before
 00204   unsupported: `va_arg` with a struct type
-00207   unsupported: variable length array
 00213   unsupported: a `goto` out of a statement expression, and `?:` with one `void` operand
 00216   unsupported: initializing a flexible array member; under `c99!` also the C23 empty initializer `{}`
 00219   needs `c11!`: `_Generic`

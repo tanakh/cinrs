@@ -1193,6 +1193,25 @@ fn the_export_pragma_is_unit_wide_and_takes_no_argument() {
 }
 
 #[test]
+fn the_no_std_pragma_is_unit_wide_and_takes_no_argument() {
+    let (tokens, errors, out) = run_including("#pragma cinrs no_std\nkept", &[]);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(tokens, ["kept"]);
+    assert!(out.no_std);
+
+    let (_, errors, out) = run_including("#pragma cinrs no_std yes", &[]);
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].starts_with("unexpected identifier 'yes' after #pragma cinrs no_std"),
+        "{errors:#?}"
+    );
+    assert!(out.no_std);
+
+    let (_, _, out) = run_including("kept", &[]);
+    assert!(!out.no_std);
+}
+
+#[test]
 fn the_module_pragma_names_the_unit() {
     let (tokens, errors, out) = run_including("#pragma cinrs module \"geometry\"\nkept", &[]);
     assert!(errors.is_empty(), "{errors:#?}");

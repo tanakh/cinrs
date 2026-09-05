@@ -1,0 +1,44 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        void *first(unsigned long n) {\n            char *a = __builtin_alloca(n);\n            char *b = __builtin_alloca(2 * n);\n            a[0] = b[0];\n            return a;\n        }\n        \"#)"
+---
+mod __cinrs_unit_6af487af {
+    #[allow(…)]
+    pub unsafe extern "C" fn first(
+        mut n: ::core::ffi::c_ulong,
+    ) -> *mut ::core::ffi::c_void {
+        unsafe {
+            let mut __cinrs_alloca: ::std::vec::Vec<::std::vec::Vec<u128>> = ::std::vec::Vec::new();
+            let mut a: *mut ::core::ffi::c_char = ({
+                let mut __cinrs_tmp0 = ::std::vec::from_elem(
+                    0u128,
+                    (n as usize).div_ceil(16),
+                );
+                let __cinrs_tmp1 = __cinrs_tmp0
+                    .as_mut_ptr()
+                    .cast::<::core::ffi::c_void>();
+                __cinrs_alloca.push(__cinrs_tmp0);
+                __cinrs_tmp1
+            }) as *mut ::core::ffi::c_char;
+            let mut b: *mut ::core::ffi::c_char = ({
+                let mut __cinrs_tmp2 = ::std::vec::from_elem(
+                    0u128,
+                    ((2 as ::core::ffi::c_ulong).wrapping_mul(n) as usize).div_ceil(16),
+                );
+                let __cinrs_tmp3 = __cinrs_tmp2
+                    .as_mut_ptr()
+                    .cast::<::core::ffi::c_void>();
+                __cinrs_alloca.push(__cinrs_tmp2);
+                __cinrs_tmp3
+            }) as *mut ::core::ffi::c_char;
+            let __cinrs_tmp4 = a.offset(0);
+            (*__cinrs_tmp4) = {
+                let __cinrs_tmp5 = b.offset(0);
+                (*__cinrs_tmp5)
+            };
+            return a as *mut ::core::ffi::c_void;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_6af487af::*;

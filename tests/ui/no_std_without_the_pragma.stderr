@@ -1,0 +1,9 @@
+error[E0433]: cannot find `std` in the crate root
+  --> tests/ui/no_std_without_the_pragma.rs:16:13
+   |
+16 |         int a[n];
+   |             ^ could not find `std` in the crate root
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0433`.

@@ -1,0 +1,46 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        unsigned long sum(int n) {\n            unsigned long total = 0;\n            for (int i = 0; i < n; i++) {\n                char buf[i + 1];\n                buf[i] = (char)i;\n                total += sizeof buf + (unsigned long)buf[i];\n            }\n            return total;\n        }\n        \"#)"
+---
+mod __cinrs_unit_dbedfd3e {
+    #[allow(…)]
+    pub unsafe extern "C" fn sum(mut n: ::core::ffi::c_int) -> ::core::ffi::c_ulong {
+        unsafe {
+            let mut total: ::core::ffi::c_ulong = 0;
+            {
+                let mut i: ::core::ffi::c_int = 0;
+                'l0: loop {
+                    if !(i < n) {
+                        break 'l0;
+                    }
+                    'l0_body: {
+                        let __cinrs_vla_len_buf: ::core::ffi::c_ulong = i.wrapping_add(1)
+                            as ::core::ffi::c_ulong;
+                        let mut __cinrs_vla_buf: ::std::vec::Vec<::core::ffi::c_char> = ::std::vec::from_elem(
+                            0,
+                            __cinrs_vla_len_buf as usize,
+                        );
+                        let mut buf: *mut ::core::ffi::c_char = __cinrs_vla_buf
+                            .as_mut_ptr();
+                        let __cinrs_tmp0 = buf.offset(i as isize);
+                        (*__cinrs_tmp0) = i as ::core::ffi::c_char;
+                        total = total
+                            .wrapping_add(
+                                __cinrs_vla_len_buf
+                                    .wrapping_add(
+                                        ({
+                                            let __cinrs_tmp1 = buf.offset(i as isize);
+                                            (*__cinrs_tmp1)
+                                        }) as ::core::ffi::c_ulong,
+                                    ),
+                            );
+                    }
+                    i = i.wrapping_add(1);
+                }
+            }
+            return total;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_dbedfd3e::*;

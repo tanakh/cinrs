@@ -1,4 +1,4 @@
-error: unknown #pragma cinrs option 'unknown_option'; the options are 'include_path', 'link', 'export' and 'module'
+error: unknown #pragma cinrs option 'unknown_option'; the options are 'include_path', 'link', 'export', 'no_std' and 'module'
  --> tests/ui/pp_pragma_cinrs.rs:8:19
   |
 8 |     #pragma cinrs unknown_option "x"

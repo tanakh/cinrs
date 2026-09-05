@@ -94,11 +94,13 @@ pub struct Local {
 /// A straight-line run of statements ending in a [`Terminator`].
 #[derive(Clone, Debug)]
 pub struct BasicBlock {
-    /// Statements with no control flow of their own: [`ir::Stmt::Expr`] and
-    /// [`ir::Stmt::Nop`] only.
+    /// Statements with no control flow of their own: [`ir::Stmt::Expr`],
+    /// [`ir::Stmt::Nop`] and [`ir::Stmt::Vla`], whose three bindings are
+    /// hoisted like every other local and whose allocation stays here.
     ///
     /// [`ir::Stmt::Expr`]: crate::ir::Stmt::Expr
     /// [`ir::Stmt::Nop`]: crate::ir::Stmt::Nop
+    /// [`ir::Stmt::Vla`]: crate::ir::Stmt::Vla
     pub stmts: Vec<Stmt>,
     /// How the block ends.
     pub term: Terminator,
@@ -330,6 +332,7 @@ impl Lowerer<'_> {
                 init,
                 explicit,
             } => self.local(object, init, explicit),
+            Stmt::Vla(def) => self.vla(*def),
             Stmt::Block(items) => self.stmts(items),
             Stmt::If {
                 cond,
@@ -423,6 +426,24 @@ impl Lowerer<'_> {
             ty,
             range,
         )));
+    }
+
+    /// Hoists the three bindings a variable length array needs, leaving the
+    /// allocation itself where the declaration was written.
+    ///
+    /// The storage therefore lives from the top of the function to its end
+    /// rather than to the end of the block — the price of having no way to
+    /// jump over a `let` — which a C program can only observe as memory it
+    /// expected to have been given back. Re-reaching the declaration replaces
+    /// the `Vec`, which frees the old one and is the fresh object C99 6.2.4p7
+    /// asks for.
+    fn vla(&mut self, def: crate::ir::VlaDef) {
+        for object in [def.len, def.storage, def.object] {
+            let name = self.objects[object.0 as usize].name.clone();
+            let rust_name = self.unique_name(&name);
+            self.locals.push(Local { object, rust_name });
+        }
+        self.push(Stmt::Vla(Box::new(def)));
     }
 
     /// A Rust name for a hoisted local, derived from the C one.

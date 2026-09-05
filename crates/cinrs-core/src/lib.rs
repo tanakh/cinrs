@@ -376,6 +376,10 @@ pub struct Analysis {
     pub link_libraries: Vec<String>,
     /// Whether `#pragma cinrs export` asked for real C symbols.
     pub export: bool,
+    /// Whether `#pragma cinrs no_std` said the expansion goes into a
+    /// `#![no_std]` crate, so that the storage a variable length array or
+    /// `alloca` needs comes from `alloc` rather than from `std`.
+    pub no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module, if any.
     pub module: Option<String>,
 }
@@ -454,6 +458,7 @@ struct FrontEndOutput {
     user_headers: Vec<PathBuf>,
     link_libraries: Vec<String>,
     export: bool,
+    no_std: bool,
     module: Option<String>,
 }
 
@@ -473,6 +478,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         user_headers,
         link_libraries,
         export,
+        no_std,
         module,
         pack_events,
     } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
@@ -490,6 +496,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         user_headers,
         link_libraries,
         export,
+        no_std,
         module,
     }
 }
@@ -553,6 +560,7 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
         user_headers: out.user_headers,
         link_libraries: out.link_libraries,
         export: out.export,
+        no_std: out.no_std,
         module: out.module,
     }
 }
@@ -617,6 +625,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         user_headers,
         link_libraries,
         export,
+        no_std,
         module,
         ..
     } = analyze_with(input, options, subspan);
@@ -630,6 +639,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
     diagnostics.extend(sema_diagnostics);
     program.link_libraries = link_libraries;
     program.export = export;
+    program.no_std = no_std;
 
     // Emitted whether or not the unit compiled: a header that is being fixed
     // is exactly the one whose next edit has to trigger a rebuild.

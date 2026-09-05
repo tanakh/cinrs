@@ -933,3 +933,108 @@ fn a_flexible_array_member_is_a_zero_length_tail() {
         "#
     ));
 }
+
+#[test]
+fn a_variable_length_array_lives_in_a_hidden_vec() {
+    // Three bindings: the number of elements, evaluated once where the
+    // declaration stands; the `Vec` that holds them, whose `Drop` at the end of
+    // the block is the object's lifetime; and the object itself, which is a
+    // pointer to the first element. `sizeof a` reads the first of the three
+    // back, so it is a run-time value — and a declaration inside a loop
+    // allocates afresh on every pass.
+    insta::assert_snapshot!(generate(
+        r#"
+        unsigned long sum(int n) {
+            unsigned long total = 0;
+            for (int i = 0; i < n; i++) {
+                char buf[i + 1];
+                buf[i] = (char)i;
+                total += sizeof buf + (unsigned long)buf[i];
+            }
+            return total;
+        }
+        "#
+    ));
+}
+
+#[test]
+fn alloca_allocates_from_a_function_wide_arena() {
+    // `alloca`'s memory belongs to the *function*, so the arena is opened at
+    // the top and dropped by the `return`; every call pushes one 16-byte
+    // aligned block onto it.
+    insta::assert_snapshot!(generate(
+        r#"
+        void *first(unsigned long n) {
+            char *a = __builtin_alloca(n);
+            char *b = __builtin_alloca(2 * n);
+            a[0] = b[0];
+            return a;
+        }
+        "#
+    ));
+}
+
+#[test]
+fn the_no_std_pragma_moves_the_storage_to_the_alloc_crate() {
+    // The `Vec` behind a variable length array and `alloca` is the only thing
+    // the expansion needs beyond `core`. Nothing in the C says which kind of
+    // crate it is going into, so the pragma does.
+    let source = r#"
+        long sum(int n) {
+            int a[n];
+            char *p = __builtin_alloca(n);
+            a[0] = p[0];
+            return a[0] + (long)sizeof a;
+        }
+        "#;
+    let with_std = generate(source);
+    assert!(with_std.contains("::std::vec::Vec"), "{with_std}");
+    assert!(with_std.contains("::std::vec::from_elem"), "{with_std}");
+    assert!(!with_std.contains("::alloc::"), "{with_std}");
+
+    let no_std = generate(&format!("#pragma cinrs no_std\n{source}"));
+    assert!(no_std.contains("::alloc::vec::Vec"), "{no_std}");
+    assert!(no_std.contains("::alloc::vec::from_elem"), "{no_std}");
+    assert!(!no_std.contains("::std::"), "{no_std}");
+
+    // Nothing else the crate generates needs either of them, which is what
+    // makes an ordinary expansion `core`-only — the C library it calls is a
+    // link-time dependency of the program, not a Rust one.
+    let ordinary = generate_for(
+        Standard::C23,
+        r#"
+        #include <assert.h>
+        #include <stddef.h>
+        #include <stdarg.h>
+
+        struct S { unsigned int flag : 1; int other; };
+
+        static int counter = 3;
+        int table[4] = { 1, 2, 3, 4 };
+
+        __attribute__((constructor)) static void begin(void) { counter = 1; }
+
+        int printf(const char *, ...);
+
+        int f(struct S *s, int n) {
+            int a[4];
+            for (int i = 0; i < n; i++) a[i & 3] = i;
+            assert(n >= 0);
+            if (n == 7) __builtin_trap();
+            if (n == 8) unreachable();
+            const char *text = "core only";
+            printf("%s %d\n", text, n);
+            struct S *p = &(struct S){ 1, 0 };
+            int biggest = ({ int x = n; int y = 2; x > y ? x : y; });
+            if (n) goto out;
+            s->flag = 1;
+        out:
+            return a[0] + (int)s->flag + (int)p->flag + biggest + counter
+                 + table[0] + (int)offsetof(struct S, other)
+                 + (int)text[0] + __builtin_popcount(n);
+        }
+        "#,
+    );
+    assert!(!ordinary.contains("::std::"), "{ordinary}");
+    assert!(!ordinary.contains("::alloc::"), "{ordinary}");
+}

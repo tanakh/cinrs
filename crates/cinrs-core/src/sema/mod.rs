@@ -284,6 +284,38 @@ struct Sema {
     /// expression could not offer. [`Sema::block_items`] empties this list into
     /// definitions at the head of the block it belongs to.
     compound_literals: Vec<ObjectId>,
+    /// The bound the array type being resolved was given, when it was not a
+    /// constant expression.
+    ///
+    /// `Sema::array_len` leaves it here, already converted to `size_t`, and
+    /// the declaration being checked takes it: that is the expression the
+    /// generated code evaluates, exactly once, where the declarator stands
+    /// (C99 6.7.5.2p5). A variable length array type that reaches a
+    /// declaration *without* one — through `typeof`, say — is refused, so the
+    /// pair can never come apart.
+    vla_bound: Option<Expr>,
+    /// The variable length arrays whose scope encloses the statement being
+    /// checked, innermost last.
+    ///
+    /// C99 6.8.6.1p1 forbids a `goto` from outside the scope of an identifier
+    /// with a variably modified type to inside it, and 6.8.4.2p2 says the same
+    /// of a `switch`; comparing this list at the jump with the one recorded at
+    /// its target is what answers both.
+    vla_scopes: Vec<ObjectId>,
+    /// The variable length arrays in scope where each label was written.
+    label_vla_scopes: HashMap<ir::LabelId, Vec<ObjectId>>,
+    /// The `goto`s of the function being checked, with the scopes they jump
+    /// from, checked once the whole body has been walked — a forward jump
+    /// names a label that has not been reached yet.
+    goto_scopes: Vec<(SourceRange, ir::LabelId, Vec<ObjectId>)>,
+    /// The depth [`Sema::vla_scopes`] had when each enclosing `switch` began,
+    /// which is what a `case` label deeper than that would jump past.
+    switch_vla_depths: Vec<usize>,
+    /// Whether the function being checked calls `alloca`.
+    func_uses_alloca: bool,
+    /// The hidden objects a variable length array's `sizeof` is read out of,
+    /// by the object the C program declared.
+    vla_lengths: HashMap<ObjectId, ObjectId>,
     /// The file-scope compound literals, by the `statics` entry holding their
     /// value.
     ///
@@ -341,6 +373,13 @@ impl Sema {
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
+            vla_bound: None,
+            vla_scopes: Vec::new(),
+            label_vla_scopes: HashMap::new(),
+            goto_scopes: Vec::new(),
+            switch_vla_depths: Vec::new(),
+            func_uses_alloca: false,
+            vla_lengths: HashMap::new(),
             static_literals: HashMap::new(),
             ret_ty: Ty::Void,
             func_name: String::new(),
@@ -698,6 +737,7 @@ impl Sema {
             ty,
             storage,
             is_const,
+            vla_storage: false,
             asm_label: None,
             section: None,
             range,
@@ -935,6 +975,21 @@ impl Sema {
 
 /// The diagnostic every place `va_list` may not appear shares.
 const VA_LIST_PLACEMENT: &str = "va_list is only supported as a local variable or parameter";
+
+/// The diagnostic for the variably modified types this release leaves out.
+///
+/// One-dimensional variable length arrays at block scope are supported; a
+/// pointer to one, an array of one, and a `typedef` of one are the rest of
+/// C99's variably modified machinery, and each of them would need a size
+/// carried along at run time by the *type* rather than by the object. See
+/// `doc/c-status.md`.
+const VM_UNSUPPORTED: &str =
+    "variably modified types other than a one-dimensional array are not supported yet";
+
+/// C99 6.8.6.1p1 for `goto` and 6.8.4.2p2 for `switch`, which say the same
+/// thing: the storage a variable length array's declaration allocates is not
+/// there if the declaration was jumped over.
+const JUMP_INTO_VM_SCOPE: &str = "jump into the scope of an identifier with variably modified type";
 
 /// Where a conversion is happening, which is all the phrasing of the
 /// diagnostic depends on.

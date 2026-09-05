@@ -178,19 +178,86 @@ impl Sema {
                 let answer = size_ty.wrap(object_size_answer(mode), &self.target);
                 Some(Expr::int(answer, size_ty, range))
             }
-            "alloca" | "alloca_with_align" => {
-                self.error(
-                    range,
-                    "'alloca' is not supported: Rust has no stack allocation with a size \
-                     chosen at run time; use 'malloc' and 'free'",
-                );
-                None
-            }
+            "alloca" | "alloca_with_align" => self.alloca(name, args, range),
             // `__builtin_X` for a library function X is a call to X.
             _ if gnu::LIBRARY_BUILTINS.contains(&rest) => self.library_call(rest, args, range),
             _ => return None,
         };
         Some(result)
+    }
+
+    /// `__builtin_alloca(size)` and `__builtin_alloca_with_align(size, bits)`.
+    ///
+    /// The memory is taken from a per-function arena — see
+    /// [`ir::Function::uses_alloca`] — which is dropped by the `return`. That
+    /// is exactly `alloca`'s lifetime: its memory belongs to the *function*,
+    /// not to the block the call was written in, and a pointer to it returned
+    /// to the caller dangles in C too.
+    fn alloca(&mut self, name: &str, args: &[ast::Expr], range: SourceRange) -> Option<Expr> {
+        let with_align = name.ends_with("_with_align");
+        self.builtin_arity(name, args, 1 + usize::from(with_align), range)?;
+        // The arena belongs to a function, and an initialiser at file scope is
+        // not inside one. (The name of the function last *checked* is no use
+        // here: it outlives the body it came from.)
+        if self.at_file_scope() {
+            self.error(
+                range,
+                format!(
+                    "'{name}' is only allowed inside a function; the memory it returns lives \
+                     until that function returns"
+                ),
+            );
+            return None;
+        }
+        let size = self.expr(&args[0])?;
+        if !size.ty.is_integer() {
+            self.error(
+                args[0].range,
+                format!(
+                    "'{name}' requires an integer size, not '{}'",
+                    self.tyname(size.ty)
+                ),
+            );
+            return None;
+        }
+        if with_align {
+            // GCC's alignment is a constant *in bits*. The arena hands out
+            // 16-byte blocks, so anything up to 128 bits is already satisfied
+            // and anything above it would be a promise this cannot keep.
+            let alignment = self.expr(&args[1])?;
+            let bits = match self.const_eval(&alignment) {
+                Some(ir::ConstValue::Int(bits)) => bits,
+                _ => {
+                    self.error(
+                        args[1].range,
+                        format!("the alignment of '{name}' must be an integer constant"),
+                    );
+                    return None;
+                }
+            };
+            if bits <= 0 || bits > 128 {
+                self.error(
+                    args[1].range,
+                    format!(
+                        "the alignment of '{name}' must be between 1 and 128 bits; the \
+                         emulated arena is 16-byte aligned"
+                    ),
+                );
+                return None;
+            }
+        }
+        let size_ty = self.size_ty();
+        let size = self.convert(size, size_ty);
+        self.func_uses_alloca = true;
+        let void_ptr = self.ptr_to(Ty::Void, false);
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::Alloca,
+                args: vec![size],
+            },
+            void_ptr,
+            range,
+        ))
     }
 
     /// Checks a builtin's argument count.
@@ -437,6 +504,7 @@ impl Sema {
             asm_label: None,
             init_kind: None,
             locals: Vec::new(),
+            uses_alloca: false,
             body: None,
             range,
         });

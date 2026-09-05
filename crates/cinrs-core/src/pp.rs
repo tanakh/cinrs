@@ -82,6 +82,7 @@
 //! #pragma cinrs include_path "vendor/include"
 //! #pragma cinrs link "mylib"
 //! #pragma cinrs export
+//! #pragma cinrs no_std
 //! #pragma cinrs module "geometry"
 //! ```
 //!
@@ -681,6 +682,9 @@ pub struct Preprocessed {
     pub link_libraries: Vec<String>,
     /// Whether `#pragma cinrs export` asked for real C symbols.
     pub export: bool,
+    /// Whether `#pragma cinrs no_std` said the expansion goes into a
+    /// `#![no_std]` crate.
+    pub no_std: bool,
     /// The module name `#pragma cinrs module` asked for.
     pub module: Option<String>,
     /// Every `#pragma pack` the unit wrote, as `(token index, alignment)`.
@@ -735,6 +739,7 @@ pub fn preprocess(
         user_headers: pp.user_headers,
         link_libraries: pp.link_libraries,
         export: pp.export,
+        no_std: pp.no_std,
         module: pp.module,
         pack_events: pp.pack_events,
     }
@@ -924,6 +929,8 @@ struct Pp<'a> {
     link_libraries: Vec<String>,
     /// Set by `#pragma cinrs export`.
     export: bool,
+    /// Set by `#pragma cinrs no_std`.
+    no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module.
     module: Option<String>,
 }
@@ -985,6 +992,7 @@ impl<'a> Pp<'a> {
             user_headers: Vec::new(),
             link_libraries: Vec::new(),
             export: false,
+            no_std: false,
             module: None,
         };
         pp.define_predefined(options);
@@ -2200,12 +2208,13 @@ impl Pp<'_> {
     /// is addressed to *us*, so an option we do not know is a mistake worth
     /// reporting rather than a hint some other compiler might understand.
     ///
-    /// The four it does know configure the unit:
+    /// The five it does know configure the unit:
     ///
     /// ```c
     /// #pragma cinrs include_path "vendor/include"
     /// #pragma cinrs link "m"
     /// #pragma cinrs export
+    /// #pragma cinrs no_std
     /// #pragma cinrs module "geometry"
     /// ```
     ///
@@ -2392,7 +2401,7 @@ impl Pp<'_> {
     }
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
-    const OPTIONS: &'static str = "'include_path', 'link', 'export' and 'module'";
+    const OPTIONS: &'static str = "'include_path', 'link', 'export', 'no_std' and 'module'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2420,18 +2429,23 @@ impl Pp<'_> {
                 }
             }
             // Unit-wide and argument-less: everything with external linkage
-            // becomes a real C symbol.
-            "export" => {
+            // becomes a real C symbol, and the `Vec` a variable length array
+            // or `alloca` needs comes from `alloc` rather than from `std`.
+            "export" | "no_std" => {
                 if let Some(extra) = rest.get(1) {
                     self.diags.error(
                         extra.range,
                         format!(
-                            "unexpected {} after #pragma cinrs export, which takes no argument",
+                            "unexpected {} after #pragma cinrs {name}, which takes no argument",
                             extra.kind.describe()
                         ),
                     );
                 }
-                self.export = true;
+                if name == "export" {
+                    self.export = true;
+                } else {
+                    self.no_std = true;
+                }
             }
             other => {
                 let what = if other.is_empty() {

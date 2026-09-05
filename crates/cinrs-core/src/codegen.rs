@@ -473,6 +473,10 @@ struct Codegen<'a> {
     reserved: HashSet<String>,
     va_source: VaSource,
     ret_ty: Ty,
+    /// Whether the function being generated is a [state
+    /// machine](crate::cfg), in which case every local is already bound at the
+    /// top and a definition is an assignment.
+    in_cfg: bool,
     temporaries: u32,
 }
 
@@ -499,6 +503,7 @@ impl<'a> Codegen<'a> {
             reserved,
             va_source: VaSource::None,
             ret_ty: Ty::Void,
+            in_cfg: false,
             temporaries: 0,
         }
     }
@@ -602,6 +607,13 @@ impl<'a> Codegen<'a> {
             Ty::Array(id) => {
                 let array = self.program.types.array_type(id);
                 let elem = self.ty(array.elem, span);
+                // A variable length array's object *is* a pointer to its first
+                // element: the elements themselves live in a hidden `Vec`, and
+                // nothing in the generated code ever names the array as a
+                // value. See [`ir::VlaDef`].
+                if array.vla {
+                    return quote_spanned! {span=> *mut #elem };
+                }
                 let len = usize_literal(array.len, span);
                 let inner = quote_spanned! {span=> #elem ; #len };
                 return bracketed(inner, span);
@@ -629,6 +641,39 @@ impl<'a> Codegen<'a> {
     fn fn_ty(&self, id: ir::FuncTyId, span: Span) -> TokenStream {
         let func = self.program.types.func_type(id).clone();
         self.fn_ptr_ty(&func.params, func.variadic, func.ret, span)
+    }
+
+    // -- the heap the emulated automatic storage comes from -------------------
+
+    /// The crate the `Vec` behind a variable length array and `alloca` comes
+    /// from.
+    ///
+    /// Everything else the expansion generates is `core`-only; these two need
+    /// an allocator, which is `std` in an ordinary crate and `alloc` in one
+    /// that said `#pragma cinrs no_std` (and therefore wrote
+    /// `extern crate alloc;` itself, since a procedural macro cannot add one).
+    fn alloc_crate(&self, span: Span) -> Ident {
+        let name = if self.program.no_std { "alloc" } else { "std" };
+        Ident::new(name, span)
+    }
+
+    /// `::std::vec::Vec<T>`.
+    fn vec_ty(&self, elem: TokenStream, span: Span) -> TokenStream {
+        let krate = self.alloc_crate(span);
+        quote_spanned! {span=> ::#krate::vec::Vec<#elem> }
+    }
+
+    /// `::std::vec::Vec::new()`.
+    fn vec_new(&self, span: Span) -> TokenStream {
+        let krate = self.alloc_crate(span);
+        quote_spanned! {span=> ::#krate::vec::Vec::new() }
+    }
+
+    /// `::std::vec::from_elem(value, len)`, which is what `vec![value; len]`
+    /// expands to; a procedural macro is better off naming the function.
+    fn vec_of(&self, value: TokenStream, len: TokenStream, span: Span) -> TokenStream {
+        let krate = self.alloc_crate(span);
+        quote_spanned! {span=> ::#krate::vec::from_elem(#value, #len) }
     }
 
     /// The Rust type a *pointee* maps to.
@@ -1239,13 +1284,40 @@ impl<'a> Codegen<'a> {
             Body::Structured(stmts) => self.stmts(stmts),
             Body::Cfg(cfg) => self.cfg_body(cfg, span),
         };
+        // `alloca`'s memory belongs to the function, not to the block the call
+        // was written in, so the arena is opened here and dropped by whichever
+        // `return` runs.
+        let arena = if func.uses_alloca {
+            self.alloca_arena(span)
+        } else {
+            TokenStream::new()
+        };
         // One `unsafe` block around the whole body: in edition 2024 the body of
         // an `unsafe fn` is not itself an unsafe block any more.
         quote_spanned! {span=>
             #signature {
-                unsafe { #body }
+                unsafe { #arena #body }
             }
         }
+    }
+
+    /// The arena `alloca` allocates out of, at the top of a function that
+    /// calls it.
+    ///
+    /// One `Vec` per call, of `u128` so that every block is 16-byte aligned —
+    /// the alignment a real `alloca` gives — and all of them freed together
+    /// when the arena is dropped, which is when the function returns.
+    fn alloca_arena(&self, span: Span) -> TokenStream {
+        let name = self.alloca_ident();
+        let block = self.vec_ty(quote_spanned! {span=> u128 }, span);
+        let arena = self.vec_ty(block, span);
+        let empty = self.vec_new(span);
+        quote_spanned! {span=> let mut #name: #arena = #empty; }
+    }
+
+    /// The name of that arena, in this crate's own hygiene.
+    fn alloca_ident(&self) -> Ident {
+        Ident::new("__cinrs_alloca", Span::mixed_site())
     }
 
     fn stub_item(&mut self, func: &Function) -> TokenStream {
@@ -1262,6 +1334,7 @@ impl<'a> Codegen<'a> {
     /// Resets the per-function state before a body is generated.
     fn enter_function(&mut self, func: &Function) {
         self.ret_ty = func.sig.ret;
+        self.in_cfg = matches!(func.body, Some(Body::Cfg(_)));
         self.temporaries = 0;
         self.continue_styles.clear();
         self.local_names.clear();
@@ -1381,14 +1454,22 @@ impl<'a> Codegen<'a> {
             let object = self.program.object(local.object);
             let ospan = self.sp(object.range);
             let name = self.object_ident(local.object, ospan);
-            let ty = self.ty(object.ty, ospan);
-            // A `va_list` has no zero value; it starts out as a copy of the
-            // list the function was called with, exactly as it does when the
-            // declaration stays where it was written.
-            let init = if object.ty.is_va_list() {
-                self.va_pristine(ospan)
+            // The hidden `Vec` of a variable length array starts out empty and
+            // is replaced where the declaration was written, which is also
+            // what frees the storage of a previous pass over it.
+            let (ty, init) = if object.vla_storage {
+                let elem = self.ty(object.ty, ospan);
+                (self.vec_ty(elem, ospan), self.vec_new(ospan))
+            } else if object.ty.is_va_list() {
+                // A `va_list` has no zero value; it starts out as a copy of
+                // the list the function was called with, exactly as it does
+                // when the declaration stays where it was written.
+                (self.ty(object.ty, ospan), self.va_pristine(ospan))
             } else {
-                self.zero_tokens(object.ty, ospan)
+                (
+                    self.ty(object.ty, ospan),
+                    self.zero_tokens(object.ty, ospan),
+                )
             };
             out.extend(quote_spanned! {ospan=> let mut #name: #ty = #init; });
         }
@@ -1546,6 +1627,7 @@ impl<'a> Codegen<'a> {
                 let init = self.expr_at(init, object.ty);
                 quote_spanned! {span=> let mut #name: #ty = #init; }
             }
+            Stmt::Vla(def) => self.vla_def(def),
             Stmt::Block(items) => {
                 let span = self.stmts_span(items);
                 let items = self.stmts(items);
@@ -1690,6 +1772,46 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// A variable length array's definition, `T a[n];`.
+    ///
+    /// Three bindings: the number of elements, evaluated exactly once here; the
+    /// `Vec` that holds them, whose `Drop` at the end of the block is the
+    /// object's lifetime; and the object itself, which is a pointer to the
+    /// first element. In [CFG mode](crate::cfg) the three are already bound at
+    /// the top of the function — Rust has no way to jump over a `let` — so what
+    /// is written here is the three assignments instead.
+    fn vla_def(&mut self, def: &ir::VlaDef) -> TokenStream {
+        let span = self.sp(def.range);
+        let object = self.program.object(def.object);
+        let elem = self
+            .program
+            .types
+            .elem(object.ty)
+            .expect("a variable length array is an array type");
+        let count_ty = self.program.object(def.len).ty;
+        let len = self.object_ident(def.len, span);
+        let store = self.object_ident(def.storage, span);
+        let name = self.object_ident(def.object, span);
+        let count = self.expr_at(&def.count, count_ty);
+        let zero = self.zero_tokens(elem, span);
+        let elem_ty = self.ty(elem, span);
+        let elements = self.vec_of(zero, quote_spanned! {span=> #len as usize }, span);
+        if self.in_cfg {
+            return quote_spanned! {span=>
+                #len = #count;
+                #store = #elements;
+                #name = #store.as_mut_ptr();
+            };
+        }
+        let len_ty = self.ty(count_ty, span);
+        let vec_ty = self.vec_ty(elem_ty.clone(), span);
+        quote_spanned! {span=>
+            let #len: #len_ty = #count;
+            let mut #store: #vec_ty = #elements;
+            let mut #name: *mut #elem_ty = #store.as_mut_ptr();
+        }
+    }
+
     /// A span standing for a run of statements.
     fn stmts_span(&self, stmts: &[Stmt]) -> Span {
         stmts
@@ -1702,6 +1824,7 @@ impl<'a> Codegen<'a> {
         Some(match stmt {
             Stmt::Expr(expr) => expr.range,
             Stmt::Let { object, .. } => self.program.object(*object).range,
+            Stmt::Vla(def) => def.range,
             Stmt::If { cond, .. } => cond.range,
             Stmt::While { range, .. }
             | Stmt::DoWhile { range, .. }
@@ -2342,6 +2465,33 @@ impl<'a> Codegen<'a> {
                     out.extend(self.expr_stmt(arg));
                 }
                 Value::new(quote_spanned! {span=> { #out } }, prec::BLOCK)
+            }
+            // One block of the function's arena per call, rounded up to a
+            // whole number of `u128`s so that the pointer is 16-byte aligned.
+            // The pointer is taken before the block is put away, since moving
+            // a `Vec` does not move the memory it owns.
+            BuiltinOp::Alloca => {
+                let arena = self.alloca_ident();
+                let size = self.expr(&args[0]).at(prec::CAST, span);
+                let block = self.temporary();
+                let pointer = self.temporary();
+                let void = self.pointee_ty(Ty::Void, span);
+                let elements = self.vec_of(
+                    quote_spanned! {span=> 0u128 },
+                    quote_spanned! {span=> (#size as usize).div_ceil(16) },
+                    span,
+                );
+                Value::new(
+                    quote_spanned! {span=>
+                        {
+                            let mut #block = #elements;
+                            let #pointer = #block.as_mut_ptr().cast::<#void>();
+                            #arena.push(#block);
+                            #pointer
+                        }
+                    },
+                    prec::BLOCK,
+                )
             }
             BuiltinOp::Bswap => {
                 let operand = args[0].ty;
@@ -3237,6 +3387,25 @@ impl<'a> Codegen<'a> {
 
     /// The address of a place, as a pointer of type `want`.
     fn address_of(&mut self, place: &Place, want: Ty, span: Span) -> Value {
+        // A variable length array's binding already *is* the address of its
+        // first element, so both the decay `a` and the array pointer `&a` are
+        // that binding — the second one only differs in its C type.
+        if let PlaceKind::Object(id) = &place.kind
+            && self.program.types.is_vla(place.ty)
+        {
+            let name = self.object_ident(*id, span);
+            let value = Value::atom(quote_spanned! {span=> #name });
+            let elem = self.program.types.elem(place.ty);
+            let natural = self.program.types.pointee(want) == elem
+                && !self.program.types.points_to_const(want);
+            if natural {
+                return value;
+            }
+            let target = self.ty(want, span);
+            let tokens = value.at(prec::CAST, span);
+            return Value::new(quote_spanned! {span=> #tokens as #target }, prec::CAST)
+                .type_end(true);
+        }
         // `&*p` is `p`, and `&a[i]` is `a + i`; saying so keeps the output
         // free of pointless round trips through a place.
         match &place.kind {
@@ -3393,6 +3562,13 @@ impl<'a> Codegen<'a> {
         match ty {
             _ if ty.is_floating() => bare_float_literal(0.0, span),
             _ if ty.is_integer() => bare_int_literal(0, ty, span),
+            // A variable length array is generated as a pointer, and the only
+            // thing that ever asks for its zero is the hoisting a [CFG
+            // body](crate::cfg) does before the declaration is reached.
+            Ty::Array(id) if self.program.types.array_type(id).vla => {
+                let elem = self.ty(self.program.types.array_type(id).elem, span);
+                quote_spanned! {span=> ::core::ptr::null_mut::<#elem>() }
+            }
             Ty::Pointer(id) => {
                 let pointer = self.program.types.pointer_type(id);
                 if let Ty::Func(func) = pointer.pointee {

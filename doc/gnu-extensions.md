@@ -69,7 +69,11 @@ exactly the same place.
 C11 6.10.8.3's subsetting macros — `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`,
 `__STDC_NO_VLA__` and `__STDC_NO_COMPLEX__` — are all defined as `1` in every
 entry point, which turns those four gaps into the conforming omissions the
-standard provides for.
+standard provides for. `__STDC_NO_VLA__` stays defined even though
+one-dimensional variable length arrays now work, because the *rest* of C99's
+variably modified types do not; a program that tests the macro takes its
+`malloc` path, which is always correct. See
+[`doc/c-status.md`](c-status.md#c99).
 
 ## Language extensions
 
@@ -125,7 +129,7 @@ standard provides for.
 | `__builtin_return_address`, `__builtin_frame_address`, `__builtin_apply` | | rare | not planned | |
 | `__builtin_LINE`, `__builtin_FILE`, `__builtin_FUNCTION` | | rare | supported | Predefined macros for `__LINE__`, `__FILE__` and `__func__`, so each reports the *use*. |
 | `__builtin_object_size`, `__builtin_dynamic_object_size` | fortified headers | rare in user code | supported | `(size_t) -1` and `0`, the two answers GCC documents for "unknown". |
-| `__builtin_alloca`, `alloca()` | | occasional | refused | No stack allocation with a dynamic size in Rust; VLAs have the same problem. |
+| `__builtin_alloca`, `alloca()`, `__builtin_alloca_with_align` | `char *p = alloca(n);` | occasional | supported (emulated) | Rust has no stack allocation with a size chosen at run time, so the memory comes from a per-function arena on the heap: one 16-byte aligned block per call, all of them freed when the function returns — which is `alloca`'s own lifetime, and why a pointer that outlives the call dangles here exactly as it does in C. The bundled `<alloca.h>` defines the plain name in terms of the builtin, the way every platform's own header does. `__builtin_alloca_with_align` takes its alignment in bits and accepts up to 128, which the arena already satisfies. The arena is a `Vec`, so this and variable length arrays are the only two constructs whose expansion needs more than `core`; see the crate documentation for `#pragma cinrs no_std`. |
 | `__builtin_prefetch`, `__builtin_assume_aligned`, `__builtin_assume`, `__builtin_speculation_safe_value` | | occasional | supported (no-ops) | The operands are still evaluated; `assume_aligned` gives the pointer back. |
 | Non-standard predefined macros | `__GNUC__`, `__GNUC_MINOR__`, `__VERSION__`, `__STRICT_ANSI__`, `__BASE_FILE__`, `__FILE_NAME__`, `__INCLUDE_LEVEL__`, `__TIMESTAMP__`, `__x86_64__`, `__linux__`, `__SIZEOF_INT__`, `__CHAR_BIT__`, `__INT_MAX__`, `__BYTE_ORDER__`, `__ORDER_LITTLE_ENDIAN__` | very common (portability `#if`s) | supported | See [Strict and GNU entry points](#strict-and-gnu-entry-points) for what `__GNUC__` commits to. `__TIMESTAMP__` is a fixed placeholder like `__DATE__`, so a build gives the same output twice. `__INT_MAX__` and the other limit macros are not predefined; `<limits.h>` has them. |
 

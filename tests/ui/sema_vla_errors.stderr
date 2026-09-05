@@ -1,0 +1,98 @@
+error: array size is not an integer constant expression
+  --> tests/ui/sema_vla_errors.rs:12:23
+   |
+12 |     int at_file_scope[n];
+   |                       ^
+
+error: a member of a struct cannot have a variably modified type
+  --> tests/ui/sema_vla_errors.rs:17:17
+   |
+17 |             int data[len];
+   |                 ^^^^
+
+error: a member of a union cannot have a variably modified type
+  --> tests/ui/sema_vla_errors.rs:21:18
+   |
+21 |             char many[len];
+   |                  ^^^^
+
+error: variably modified types other than a one-dimensional array are not supported yet
+  --> tests/ui/sema_vla_errors.rs:26:24
+   |
+26 |         typedef int Row[len];
+   |                        ^
+
+error: a variable length array cannot have static storage duration
+  --> tests/ui/sema_vla_errors.rs:30:20
+   |
+30 |         static int kept[len];
+   |                    ^^^^
+
+error: a variable length array cannot have static storage duration
+  --> tests/ui/sema_vla_errors.rs:31:20
+   |
+31 |         extern int elsewhere[len];
+   |                    ^^^^^^^^^
+
+error: a variable length array cannot have an initializer
+  --> tests/ui/sema_vla_errors.rs:36:13
+   |
+36 |         int values[len] = { 1, 2, 3 };
+   |             ^^^^^^
+
+error: variably modified types other than a one-dimensional array are not supported yet
+  --> tests/ui/sema_vla_errors.rs:41:24
+   |
+41 |         int square[len][len];
+   |                        ^
+
+error: variably modified types other than a one-dimensional array are not supported yet
+  --> tests/ui/sema_vla_errors.rs:42:21
+   |
+42 |         int mixed[3][len];
+   |                     ^
+
+error: variably modified types other than a one-dimensional array are not supported yet
+  --> tests/ui/sema_vla_errors.rs:43:14
+   |
+43 |         int (*row)[len];
+   |              ^
+
+error: jump into the scope of an identifier with variably modified type
+  --> tests/ui/sema_vla_errors.rs:48:9
+   |
+48 |         goto past;
+   |         ^^^^
+
+error: jump into the scope of an identifier with variably modified type
+  --> tests/ui/sema_vla_errors.rs:60:9
+   |
+60 |         case 1:
+   |         ^^^^
+
+error: a variable length array cannot be declared directly in the body of a 'switch'; a label after it would jump into its scope
+  --> tests/ui/sema_vla_errors.rs:69:13
+   |
+69 |         int values[len];
+   |             ^^^^^^
+
+error: a variable length array cannot have static storage duration
+  --> tests/ui/sema_vla_errors.rs:80:20
+   |
+80 |         static int table[sizeof values];
+   |                    ^^^^^
+
+error: initializer is not a compile-time constant expression
+  --> tests/ui/sema_vla_errors.rs:81:37
+   |
+81 |         static unsigned long size = sizeof values;
+   |                                     ^^^^^^
+
+error: 'case' label is not a compile-time constant expression
+  --> tests/ui/sema_vla_errors.rs:83:14
+   |
+83 |         case sizeof values:
+   |              ^^^^^^
+
+error: aborting due to 16 previous errors
+

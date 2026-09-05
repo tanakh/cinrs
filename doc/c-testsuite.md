@@ -166,8 +166,8 @@ Two rules, both out of the corpus's own tags:
 Nothing is excluded by the other two tags. `needs-cpp` is fine — `cinrs` has
 the whole C99 preprocessor — and so is `needs-libc`, since the bundled headers
 declare the platform's real library and the calls link against it. A case that
-needs something `cinrs` does not have, such as `00207`'s variable length array,
-is left in and *fails*, so that it shows up in the count instead of being
+needs something `cinrs` does not have, such as `00204`'s `va_arg` with a struct
+type, is left in and *fails*, so that it shows up in the count instead of being
 quietly filtered out of it.
 
 ## How a case becomes a Rust file
@@ -243,12 +243,12 @@ corpus revision.
 
 | entry point | selected | passed | rate | rejected | failed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `c99!` | 218 | 212 | **97.2 %** | — | 6 |
-| `c11!` | 220 | 215 | **97.7 %** | — | 5 |
-| `c23!` | 220 | 214 | **97.3 %** | 1 | 5 |
-| `gnu99!` | 220 | 215 | **97.7 %** | — | 5 |
-| `gnu11!` | 220 | 215 | **97.7 %** | — | 5 |
-| `gnu23!` | 220 | 214 | **97.3 %** | 1 | 5 |
+| `c99!` | 218 | 213 | **97.7 %** | — | 5 |
+| `c11!` | 220 | 216 | **98.2 %** | — | 4 |
+| `c23!` | 220 | 215 | **97.7 %** | 1 | 4 |
+| `gnu99!` | 220 | 216 | **98.2 %** | — | 4 |
+| `gnu11!` | 220 | 216 | **98.2 %** | — | 4 |
+| `gnu23!` | 220 | 215 | **97.7 %** | 1 | 4 |
 
 *rejected* is the `!` category: a case this entry point is *required* to
 refuse, which is neither a pass nor a failure. It stays in the denominator —
@@ -258,7 +258,7 @@ and produced the right output. The report mode summary line says the same
 thing:
 
 ```
-c-testsuite / single-exec through `c23!`: 214/220 passed (97.3%), 1 rejected as the standard requires, 5 failed
+c-testsuite / single-exec through `c23!`: 215/220 passed (97.7%), 1 rejected as the standard requires, 4 failed
 ```
 
 Per tag, under `c23!` (a run that selects everything and has a rejection in
@@ -266,22 +266,22 @@ it):
 
 | tag | passed | rate | rejected |
 | --- | ---: | ---: | ---: |
-| `portable` | 214/220 | 97.3 % | 1 |
-| `c89` | 170/174 | 97.7 % | 1 |
+| `portable` | 215/220 | 97.7 % | 1 |
+| `c89` | 171/174 | 98.3 % | 1 |
 | `c99` | 42/43 | 97.7 % | — |
 | `c11` | 2/2 | 100 % | — |
-| `needs-cpp` | 95/98 | 96.9 % | — |
-| `needs-libc` | 60/63 | 95.2 % | — |
+| `needs-cpp` | 96/98 | 98.0 % | — |
+| `needs-libc` | 61/63 | 96.8 % | — |
 
-Under `c11!`, where nothing is rejected, the same rows are 215/220 (97.7 %)
-`portable`, 171/174 (98.3 %) `c89`, 42/43 `c99`, 2/2 `c11`, 95/98 `needs-cpp`
-and 60/63 `needs-libc`.
+Under `c11!`, where nothing is rejected, the same rows are 216/220 (98.2 %)
+`portable`, 172/174 (98.9 %) `c89`, 42/43 `c99`, 2/2 `c11`, 96/98 `needs-cpp`
+and 61/63 `needs-libc`.
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
 fails on 1.97.1. The tables above count it as a failure; on 1.99 the rows are
-213/218 (97.7 %) for `c99!`, 216/220 (98.2 %) for `c11!`, `gnu99!` and
-`gnu11!`, and 215/220 (97.7 %) for the two C23 entry points.
+214/218 (98.2 %) for `c99!`, 217/220 (98.6 %) for `c11!`, `gnu99!` and
+`gnu11!`, and 216/220 (98.2 %) for the two C23 entry points.
 
 The GNU dialects select all 220 cases and pass the same ones as their ISO
 counterparts: nothing in the corpus needs a *plain*-spelled GNU keyword, so
@@ -289,20 +289,22 @@ switching the dialect on buys eligibility rather than passes.
 
 ### The failures, by cause
 
-Five cases fail under `c11!`, all of them to compile, and the two C23 entry
-points fail the same five. `c99!` adds `00219`, which wants a later entry
+Four cases fail under `c11!`, all of them to compile, and the two C23 entry
+points fail the same four. `c99!` adds `00219`, which wants a later entry
 point. None of them is a `cinrs` bug: the earlier
 measurements' failures — `00110`, `00149`, `00150`, `00152`, `00159`, `00200`,
-`00209`, `00218`, `00219` and `00220` — are fixed and have regression tests of
-their own, and so are the six the GNU extensions closed (`00095`, `00170`,
-`00206`, `00210` and `00214`, plus `00209`'s incomplete `enum`).
+`00207`, `00209`, `00218`, `00219` and `00220` — are fixed and have regression
+tests of their own, and so are the six the GNU extensions closed (`00095`,
+`00170`, `00206`, `00210` and `00214`, plus `00209`'s incomplete `enum`).
+`00207` is the newest of them: it declares a variable length array in a
+function that also uses `goto`, which is now translated (`tests/vla.rs` covers
+the same shape).
 
-**Something `cinrs` has not implemented (4).**
+**Something `cinrs` has not implemented (3).**
 
 | case | what it needs |
 | --- | --- |
 | `00204` | `va_arg` with a struct type |
-| `00207` | a variable length array |
 | `00213` | a `goto` out of a statement expression, and a `?:` one of whose operands is `void`. The `goto` is the hard half: whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. |
 | `00216` | initialising a flexible array member, which GCC allows with a warning by over-allocating the object — the Rust item would have to have a different type from the one `sizeof` reports. Under `c99!` the case also needs the C23 empty initialiser `{}`, which `gnu99!` and `c23!` accept. |
 

@@ -82,6 +82,15 @@ struct Member {
 /// should leave alone.
 type Packing = Option<u64>;
 
+/// What an array declarator's bound turned out to be.
+enum ArrayLen {
+    /// An integer constant expression.
+    Fixed(u64),
+    /// Anything else: a variable length array, whose bound has been left in
+    /// [`Sema::vla_bound`].
+    Variable,
+}
+
 /// Where a member ends up.
 enum Spot {
     /// A byte offset from the start of the record.
@@ -143,6 +152,13 @@ impl Sema {
             }
             ast::TypeKind::Pointer(inner) => {
                 let pointee = self.resolve_ty(inner)?;
+                // `int (*p)[n]` is a pointer to a variably modified type: the
+                // pointer arithmetic on it would have to scale by a run-time
+                // size, which is exactly the part of C99's VM machinery this
+                // release leaves out.
+                if self.types().is_vla(pointee) {
+                    return Err(TypeError::at(range, super::VM_UNSUPPORTED));
+                }
                 if pointee.is_va_list() {
                     // Some code passes `va_list *` around to work with the
                     // array form of `va_list`; Rust's is a value, so there is
@@ -156,12 +172,12 @@ impl Sema {
             }
             ast::TypeKind::Array { elem, size, .. } => {
                 let element = self.resolve_ty(elem)?;
-                let len = self.array_len(size, range)?;
                 self.check_element_type(element, elem.range)?;
-                Ok(self
-                    .program
-                    .types
-                    .array(element, len, elem.qualifiers.is_const))
+                let konst = elem.qualifiers.is_const;
+                Ok(match self.array_len(size, range)? {
+                    ArrayLen::Fixed(len) => self.program.types.array(element, len, konst),
+                    ArrayLen::Variable => self.program.types.vla_array(element, konst),
+                })
             }
             ast::TypeKind::Function(func) => {
                 let ret = self.resolve_ty(&func.ret)?;
@@ -242,8 +258,16 @@ impl Sema {
     pub(super) fn resolve_param_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         if let ast::TypeKind::Array { elem, .. } = &ty.kind {
             // The bound of an array parameter is not part of its type at all,
-            // so it is not even evaluated.
+            // so it is not even evaluated: `void f(int n, int a[n])`,
+            // `int a[*]` and `int a[static n]` all declare an `int *`, exactly
+            // as `int a[]` does.
             let element = self.resolve_ty(elem)?;
+            // ... but the *element* type still has to be one this crate can
+            // point at, and `int a[3][n]` would be a pointer to a variable
+            // length array.
+            if self.types().is_vla(element) {
+                return Err(TypeError::at(ty.range, super::VM_UNSUPPORTED));
+            }
             return Ok(self.ptr_to(element, elem.qualifiers.is_const));
         }
         let resolved = self.resolve_ty(ty)?;
@@ -262,14 +286,18 @@ impl Sema {
     }
 
     /// Evaluates an array bound.
-    fn array_len(&mut self, size: &ast::ArraySize, range: SourceRange) -> Result<u64, TypeError> {
-        let vla = |range| {
-            TypeError::at(
-                range,
-                "variable length arrays are not supported yet; the bound of an array \
-                 must be an integer constant expression",
-            )
-        };
+    ///
+    /// A bound that is not an integer constant expression makes the type a
+    /// [variable length array](ir::ArrayType::vla). The expression is checked
+    /// and converted to `size_t` here and left in [`Sema::vla_bound`] for
+    /// whoever is resolving the type: the declaration that creates the object
+    /// evaluates it exactly once, where it was written (C99 6.7.5.2p5), and
+    /// every other context refuses it.
+    fn array_len(
+        &mut self,
+        size: &ast::ArraySize,
+        range: SourceRange,
+    ) -> Result<ArrayLen, TypeError> {
         let expr = match size {
             ast::ArraySize::Unspecified => {
                 return Err(TypeError::at(
@@ -277,7 +305,16 @@ impl Sema {
                     "an array of unspecified size must have an initializer",
                 ));
             }
-            ast::ArraySize::Star => return Err(vla(range)),
+            // `int a[*]` says "variably modified, bound unspecified", and is
+            // only allowed in a declaration that is not a definition — where
+            // the parameter is a pointer and the bound never mattered. Reaching
+            // here means it was written somewhere else.
+            ast::ArraySize::Star => {
+                return Err(TypeError::at(
+                    range,
+                    "'[*]' is only allowed in a function prototype",
+                ));
+            }
             ast::ArraySize::Expr(expr) => expr,
         };
         let Some(value) = self.expr(expr) else {
@@ -293,27 +330,37 @@ impl Sema {
             ));
         }
         let Some(ir::ConstValue::Int(len)) = self.const_eval(&value) else {
-            // A bound that is not constant is a VLA inside a function, and
-            // simply invalid at file scope.
-            return Err(if self.at_file_scope() {
-                TypeError::at(
+            // A bound that is not constant is a variable length array inside a
+            // function, and simply invalid at file scope, where there is no
+            // moment at which the bound could be evaluated.
+            if self.at_file_scope() {
+                return Err(TypeError::at(
                     expr.range,
                     "array size is not an integer constant expression",
-                )
-            } else {
-                vla(expr.range)
-            });
+                ));
+            }
+            let size_ty = self.size_ty();
+            self.vla_bound = Some(self.convert(value, size_ty));
+            return Ok(ArrayLen::Variable);
         };
         if len < 0 {
             return Err(TypeError::at(expr.range, "array size is negative"));
         }
-        u64::try_from(len).map_err(|_| TypeError::at(expr.range, "array size is too large"))
+        u64::try_from(len)
+            .map(ArrayLen::Fixed)
+            .map_err(|_| TypeError::at(expr.range, "array size is too large"))
     }
 
     /// Rejects the element types an array cannot have.
     fn check_element_type(&mut self, elem: Ty, range: SourceRange) -> Result<(), TypeError> {
         if elem.is_func() {
             return Err(TypeError::at(range, "an array of functions is not allowed"));
+        }
+        // `int a[3][n]` and `int a[n][m]`: an array *of* a variable length
+        // array is variably modified in more than one dimension, and indexing
+        // it would have to scale by a run-time size.
+        if self.types().is_vla(elem) {
+            return Err(TypeError::at(range, super::VM_UNSUPPORTED));
         }
         if elem.is_va_list() {
             return Err(TypeError::at(range, super::VA_LIST_PLACEMENT));
@@ -544,6 +591,19 @@ impl Sema {
                     None => continue,
                 }
             };
+            // A member's size is part of the record's layout, so it has to be
+            // known when the tag is defined; C99 6.7.2.1p8 says the same thing
+            // by requiring a complete type that is not variably modified.
+            if self.types().is_vla(ty) {
+                self.error(
+                    field.range,
+                    format!(
+                        "a member of a {} cannot have a variably modified type",
+                        kind.as_str()
+                    ),
+                );
+                continue;
+            }
             // Rust's `VaList` borrows the caller's frame; a member would have
             // to name that lifetime, and the record would stop being a plain
             // `#[repr(C)]` type.
@@ -798,6 +858,10 @@ impl Sema {
             return None;
         }
         let element = self.ty_of(elem)?;
+        if self.types().is_vla(element) {
+            self.error(field.range, super::VM_UNSUPPORTED);
+            return None;
+        }
         if element.is_func() || !self.types().is_complete(element) {
             self.error(
                 field.range,

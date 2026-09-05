@@ -27,7 +27,10 @@ instead, exactly as `gcc -std=gnu99` does, and add the GNU extensions on top;
 Two of the rows below are answered by the *entry point* rather than by the
 front end: `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 `__STDC_NO_COMPLEX__` are all predefined, so the four features they name are
-conforming omissions rather than gaps.
+conforming omissions rather than gaps. `__STDC_NO_VLA__` is now the
+conservative half of a *partial* feature — one-dimensional variable length
+arrays work — and it stays defined until the rest of the variably modified
+types do.
 
 ## C99
 
@@ -36,9 +39,9 @@ conforming omissions rather than gaps.
 | Restricted character set support via digraphs and `<iso646.h>` | | Partial | Digraphs are lexed; `<iso646.h>` is not bundled yet. Trigraphs are not supported in any mode (removed in C23). |
 | More precise aliasing rules via effective type | | N/A | |
 | Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits. |
-| Variable length arrays | N683 | No | No stack allocation with a dynamic size in Rust. `__STDC_NO_VLA__` is predefined, which C11 makes the conforming way to leave them out. |
+| Variable length arrays | N683 | Partial | A *one-dimensional* array at block scope whose element type is complete and not itself variably modified: `T a[n];`, with `T` a scalar, a pointer, a record or a fixed-size array (`int a[n][3]` is one, `int a[3][n]` is not). The bound is evaluated once at the declaration, `sizeof` is a run-time value, the object's lifetime is the block, and a declaration inside a loop allocates afresh on every pass. Emulated on the heap — the elements live in a `Vec` — so the storage is not the stack; that and the `alloc` dependency are the only differences a program can observe. A jump into the scope of one is diagnosed (6.8.6.1p1, 6.8.4.2p2). Not there: every other variably modified type — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA — and `[*]` outside a prototype, each a located error. `__STDC_NO_VLA__` stays predefined for exactly that reason: see the [N1460 row](#c11). |
 | Flexible array members | | Yes | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is pointer arithmetic. Initialising one — which GCC allows with a warning — is refused. |
-| `static` and type qualifiers in parameter array declarators | | Accepted | Parsed; no effect on codegen. |
+| `static` and type qualifiers in parameter array declarators | | Accepted | Parsed; no effect on codegen. The *bound* of an array parameter is not part of its type either (6.7.5.3p7), so `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all declare an `int *` and the expression in the brackets is accepted and never evaluated — which is what makes `sizeof a` there the size of a pointer. |
 | Complex and imaginary support in `<complex.h>` | N693 | No | `_Complex` is rejected. |
 | Type-generic math macros in `<tgmath.h>` | N693 | No | Would be built on `_Generic`. |
 | The `long long int` type | N601 | Yes | |
@@ -116,7 +119,7 @@ Also standard C99 but absent from Clang's list:
 | Completeness of types | N1439 | N/A | |
 | Generic macro facility (`_Generic`) | N1441 | Yes | |
 | Dependency ordering for C memory model | N1444 | N/A | |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. It comes off when the [C99 row](#c99) does. |
 | Assumed types in F.9.2 | N1468 | N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | Yes | |
 | Updates to the memory model | N1480 | N/A | |
@@ -178,7 +181,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | IEC 60559 binding | N2749 | N/A | |
 | Annex F overflow and underflow | N2747 | N/A | |
 | Remove UB from incomplete types in function parameters | N2770 | N/A | |
-| Variably-modified types | N2778, N2992 | No | With VLAs. |
+| Variably-modified types | N2778, N2992 | Partial | The one-dimensional variable length array is there; the pointer and `typedef` forms that carry a size around in the *type* are not. See the [C99 row](#c99). |
 | Types do not have types | N2781 | N/A | |
 | Allow 16-bit `ptrdiff_t` | N2808 | N/A | |
 | CFP freestanding requirements | N2823 | N/A | |

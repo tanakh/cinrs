@@ -120,8 +120,12 @@
 //! than a silent mistranslation. C11's four subsetting macros —
 //! `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 //! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
-//! saying that those parts are left out. Three things are simplifications
-//! rather than omissions:
+//! saying that those parts are left out. `__STDC_NO_VLA__` is the cautious one
+//! of the four: [one-dimensional variable length
+//! arrays](#variable-length-arrays-and-alloca) do work, and the macro stays
+//! defined until the rest of C99's variably modified types do, so that a
+//! program which tests it keeps taking its `malloc` path. Three things are
+//! simplifications rather than omissions:
 //!
 //! * An alignment specifier — `_Alignas(N)` or
 //!   `__attribute__((aligned(N)))` — is honoured on the members of a `struct`
@@ -205,7 +209,9 @@
 //! with a reason, or still to come. The short version of what is *refused* —
 //! recognised and reported rather than mistranslated — is inline assembly,
 //! `__attribute__((weak))`, `alias`, `cleanup`, `vector_size`, `mode`,
-//! `__builtin_alloca`, `__complex__` and `#include_next`.
+//! `__complex__` and `#include_next`. `alloca` is *not* on that list any more:
+//! see [Variable length arrays and
+//! `alloca`](#variable-length-arrays-and-alloca).
 //!
 //! `unreachable()` becomes [`core::hint::unreachable_unchecked`], which is
 //! exactly the promise C attaches to it: reaching it is undefined behaviour.
@@ -397,6 +403,72 @@
 //! `static mut` item of its own, so its initialiser has to be a constant
 //! expression like any other.
 //!
+//! ## Variable length arrays and `alloca`
+//!
+//! `T a[n];` where `n` is not a constant is an ordinary C99 declaration, and
+//! it works here: the bound is evaluated once, where the declaration stands;
+//! the object lives until the end of the block; `sizeof a` is a value computed
+//! at run time; and a declaration inside a loop makes a fresh object on every
+//! pass. `alloca` — `<alloca.h>`, or `__builtin_alloca` spelled directly —
+//! works too, with the lifetime C gives it: until the *function* returns.
+//!
+//! ```
+//! cinrs::c99! {
+//!     #include <stdio.h>
+//!     #include <string.h>
+//!
+//!     int describe(const char *name, int size) {
+//!         char buf[size];                 /* size is not a constant */
+//!         int written = snprintf(buf, sizeof buf, "%s has %d letters",
+//!                                name, (int)strlen(name));
+//!         return written * 100 + (int)sizeof buf;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { describe(c"cinrs".as_ptr(), 32) }, 19 * 100 + 32);
+//! ```
+//!
+//! **The storage is the heap, not the stack.** Rust has no way to move the
+//! stack pointer by an amount chosen at run time, so the elements live in a
+//! hidden `Vec` whose `Drop` is the end of the block — the object's lifetime —
+//! and the C object itself is a pointer into it. Every observation a C program
+//! can make is the one C promises: the elements, the lifetime, the fresh
+//! object each pass through a loop, `sizeof` at run time, and `&a` with type
+//! `T (*)[n]`. What changes is where the bytes are, and that a very large one
+//! fails the way a `malloc` does rather than by running the stack out. A zero
+//! length allocates nothing, as it does in GCC; a *negative* one is undefined
+//! behaviour in C, and here it converts to a huge `size_t` and the allocation
+//! aborts rather than corrupting anything.
+//!
+//! `alloca(n)` takes one 16-byte aligned block out of a per-function arena,
+//! and the whole arena is freed by the `return`. That is `alloca`'s own
+//! lifetime — its memory belongs to the function, not to the block the call
+//! was written in — so a pointer to it returned to the caller dangles here
+//! exactly as it does in C, and nothing about the emulation makes a defined
+//! program behave differently.
+//!
+//! In a function that also uses `goto`, where [every local is hoisted to the
+//! top](#control-flow), the hidden `Vec` is hoisted with them: it is created
+//! empty, filled where the declaration was written, and dropped when the
+//! function returns rather than when the block ends. A C program can only
+//! observe that as memory it expected to have been given back sooner.
+//!
+//! A one-dimensional array is what is supported. `int a[n][3]` is one of
+//! those — its element type `int[3]` has a fixed size — but `int a[3][n]`,
+//! `int a[n][m]`, `int (*p)[n]` and `typedef int A[n];` are *variably
+//! modified* types that would have to carry a run-time size around in the type
+//! itself, and each is a located error rather than a mistranslation. So is a
+//! variable length array at file scope, one declared `static` or `extern`, one
+//! with an initialiser, one among the members of a `struct` — and a `goto` or
+//! a `case` that would jump into the scope of one, which C99 6.8.6.1p1 and
+//! 6.8.4.2p2 both forbid because the storage would not have been allocated.
+//! `__STDC_NO_VLA__` stays predefined while any of that is missing, so a
+//! program that asks takes its `malloc` path, which is always safe.
+//!
+//! These two are the only constructs whose expansion needs more than `core`;
+//! see [`no_std`](#no_std) for what that means in a crate without an
+//! allocator.
+//!
 //! # One block, one module
 //!
 //! A translation unit is a namespace, so each expansion goes into a private
@@ -463,6 +535,52 @@
 //! The risk is C's own: two exported units defining the same name is a
 //! duplicate symbol, and the linker says so rather than the compiler. Only
 //! export the units that something else has to link against.
+//!
+//! # `no_std`
+//!
+//! **Everything generated is [`core`]-only**, with two exceptions. A C
+//! function becomes a `pub unsafe extern "C" fn` over [`core::ffi`] types;
+//! records are `#[repr(C)]` items; pointers are raw pointers; a string literal
+//! is a byte string; `goto` is a state machine; `unreachable()` is
+//! [`core::hint::unreachable_unchecked`]; `offsetof` is
+//! [`core::mem::offset_of!`]; `__builtin_trap` and `assert` call the C
+//! library's `abort`; a `constructor` is a `#[used]` function pointer in
+//! `.init_array`. None of that touches `std`. The C *library* is still linked,
+//! because the C code calls it — that is a link-time dependency of the
+//! program, not a Rust one, and it is what the bundled headers declare.
+//!
+//! The two exceptions are [variable length arrays and
+//! `alloca`](#variable-length-arrays-and-alloca), whose storage is a `Vec`.
+//! Nothing in the C says which kind of crate the expansion is going into, so
+//! that `Vec` is spelled `::std::vec::Vec` unless the unit says otherwise:
+//!
+//! ```
+//! # #[cfg(any())]
+//! # mod example {
+//! #![no_std]
+//! extern crate alloc;         // the macro cannot add this for you
+//!
+//! cinrs::c99! {
+//!     #pragma cinrs no_std
+//!     long sum(int n) {
+//!         int a[n];
+//!         for (int i = 0; i < n; i++) a[i] = i;
+//!         long total = 0;
+//!         for (int i = 0; i < n; i++) total += a[i];
+//!         return total;
+//!     }
+//! }
+//! # }
+//! ```
+//!
+//! `#pragma cinrs no_std` makes the expansion say `::alloc::vec::Vec`
+//! instead. The `extern crate alloc;` has to be yours: an expansion is items,
+//! and a crate-level directive is not one of them.
+//!
+//! A unit that uses neither construct needs neither the pragma nor an
+//! allocator. One that uses them in a `#![no_std]` crate *without* the pragma
+//! gets `rustc`'s own `E0433` — "cannot find `std`" — with the caret on the
+//! declaration that needed it; the fix is the two lines above.
 //!
 //! # Control flow
 //!
@@ -658,8 +776,8 @@
 //! platform splits `PATH` and searched last. `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
-//! two `cinrs` pragmas are
-//! [`export`](#linking-two-blocks-together) and
+//! three `cinrs` pragmas are
+//! [`export`](#linking-two-blocks-together), [`no_std`](#no_std) and
 //! [`module`](#one-block-one-module).
 //!
 //! Every user header read is named by a `const _: &str = include_str!(…);` in
@@ -784,9 +902,15 @@
 //!
 //! On top of that come the [GNU extensions](#gnu-extensions), which real C
 //! leans on: statement expressions, `typeof`, `__attribute__`, `#pragma pack`,
-//! the `__builtin_*` family, case ranges, flexible array members and the rest.
+//! the `__builtin_*` family, case ranges, flexible array members, `alloca` and
+//! the rest.
 //!
-//! Deliberately never: variable length arrays, `_Complex`,
+//! [Variable length arrays](#variable-length-arrays-and-alloca) are there in
+//! their one-dimensional form, emulated on the heap; the variably modified
+//! types around them — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA —
+//! are not.
+//!
+//! Deliberately never: `_Complex`,
 //! old-style (K&R) definitions, `setjmp`/`longjmp`, `_Thread_local`,
 //! `_Atomic`, `_BitInt`, `#embed`, C11's `u8`/`u`/`U`
 //! literals, inline assembly, and
@@ -794,7 +918,9 @@
 //! implies). Each of them is a clear, located error rather than a silent
 //! mistranslation.
 //!
-//! The other things worth knowing before reaching for this crate: the
+//! The other things worth knowing before reaching for this crate: everything
+//! generated is `core`-only except the storage a variable length array or
+//! `alloca` needs, which is a `Vec` — see [`no_std`](#no_std); the
 //! platform's include directories are never searched, so anything outside the
 //! bundled headers is declared by hand or pointed at with an include path;
 //! `va_list` is [`core::ffi::VaList`], which cannot be stored in a `struct` or

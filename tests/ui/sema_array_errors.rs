@@ -1,14 +1,11 @@
-//! Array bounds must be constants, an array is not assignable, and a variable
-//! length array is not supported yet.
+//! An array bound at file scope must be a constant, and an array is not
+//! assignable. A bound that is not a constant *inside a function* is a
+//! variable length array, which is supported; `sema_vla_errors.rs` is where
+//! the rules about those live.
 
 cinrs::c99! {
     int length;
     int table[length]; //~ ERROR: array size is not an integer constant expression
-
-    int variable_length(int n) {
-        int values[n]; //~ ERROR: variable length arrays are not supported yet
-        return values[0];
-    }
 
     void assign_to_an_array(void) {
         int values[3];

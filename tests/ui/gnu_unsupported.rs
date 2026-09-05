@@ -11,10 +11,6 @@ cinrs::c99! {
     typedef int v4si __attribute__((vector_size(16))); //~ ERROR: the vector extensions need `core::simd`
 
     int aliased(void) __attribute__((alias("weak_function"))); //~ ERROR: write a function that forwards
-
-    void *scratch(unsigned long n) {
-        return __builtin_alloca(n); //~ ERROR: 'alloca' is not supported
-    }
 }
 
 fn main() {}

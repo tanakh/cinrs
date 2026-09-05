@@ -48,11 +48,24 @@ Run it with `cargo run --example fact`.
   `sizeof` with
   the real layout, casts, aggregate and designated initialisers, compound
   literals — `&(struct S){ 1, 2 }`, whose object lives as long as the block it
-  is written in — file-scope,
+  is written in — variable length arrays, file-scope,
   `static` and `extern` objects, every operator, every control structure —
   `if`, `while`, `do`/`while`, `for`, `switch` with fallthrough, `break`,
   `continue`, `return`, and `goto`, which is lowered to a state machine over
   basic blocks.
+* **Variable length arrays and `alloca`.** `int a[n];` with a bound that is not
+  a constant does what C99 says: the bound is evaluated once, at the
+  declaration; the object lives to the end of the block and is made afresh on
+  every pass through a loop; `sizeof a` is a run-time value. `alloca` — the
+  bundled `<alloca.h>`, or `__builtin_alloca` — gives memory that lives until
+  the *function* returns. Both are emulated on the heap, since Rust cannot move
+  the stack pointer by an amount chosen at run time, so the storage is not the
+  stack and the two of them are the only constructs whose expansion needs more
+  than `core`. What a C program can observe — the elements, the lifetimes, the
+  run-time `sizeof` — is unchanged. One dimension is what is supported:
+  `int a[n][3]` is fine, and `int a[3][n]`, `int (*p)[n]` and a `typedef` of a
+  VLA are located errors, as is a `goto` or a `case` that would jump into the
+  scope of one.
 * **The C99 preprocessor.** Object-like and function-like macros with `#`,
   `##`, `__VA_ARGS__` and the standard's rescanning rules, every conditional
   directive, `#error`, `#warning`, `#pragma`, and `#line` — which redirects
@@ -82,6 +95,8 @@ Run it with `cargo run --example fact`.
   `#pragma cinrs export` gives everything with external linkage a real C
   symbol, so that another block — or a C library — can call it by name (with
   C's own risk: two exported units defining one name is a duplicate symbol);
+  `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
+  needs from `alloc` rather than from `std`;
   `#pragma cinrs module "…"` names the module the expansion goes into.
 * **Two input forms.** C the Rust lexer accepts is written as raw tokens; C it
   refuses (hexadecimal floating constants, `'ab'`, `L"…"`, `\` line
@@ -101,13 +116,17 @@ Run it with `cargo run --example fact`.
 ## Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
-  variable length arrays, `_Complex`, old-style (K&R) function definitions,
+  the variably modified types other than a one-dimensional array
+  (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`, old-style
+  (K&R) function definitions,
   `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`, and
   C11's `u8"…"`/`u"…"`/`U"…"` literals with their `char16_t`/`char32_t`. On the
   GNU side: inline assembly, computed `goto`, `cleanup`, `__int128`, the vector
   extensions and the `__sync_*`/`__atomic_*` builtins. C11's four
   `__STDC_NO_*` macros are predefined, which is the standard's own way of
-  saying that atomics, threads, VLAs and complex arithmetic are left out.
+  saying that atomics, threads, VLAs and complex arithmetic are left out;
+  `__STDC_NO_VLA__` stays defined although one-dimensional VLAs work, so that a
+  program which tests it keeps taking its `malloc` path.
 * A bit-field has no address, so it is not a field of the generated Rust
   `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
   named member becomes a pair of inherent methods — `s.level()` reads it and
@@ -137,16 +156,39 @@ Run it with `cargo run --example fact`.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
 
+## `no_std`
+
+Everything generated is `core`-only: `core::ffi` types, `#[repr(C)]` items, raw
+pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
+`core::mem::offset_of!` for `offsetof`, and the C library's own `abort` for
+`__builtin_trap` and `assert`. The C library is still *linked*, because the C
+code calls it — that is a link-time dependency of the program rather than a
+Rust one.
+
+The two exceptions are variable length arrays and `alloca`, whose storage is a
+`Vec`. Nothing in the C says which kind of crate the expansion is going into, so
+that `Vec` is `::std::vec::Vec` unless the unit says otherwise:
+
+```c
+#pragma cinrs no_std
+```
+
+which makes it `::alloc::vec::Vec` instead. The crate then has to contain
+`extern crate alloc;` itself — an expansion is items, and a crate-level
+directive is not one of them. Without the pragma, a variable length array in a
+`#![no_std]` crate is `rustc`'s own "cannot find `std`", with the caret on the
+declaration that needed it.
+
 ## Conformance
 
 `cinrs` is measured against
 [c-testsuite](https://github.com/c-testsuite/c-testsuite), a public database of
 C compiler test cases: whole programs with the output each must produce. Of the
-220 in its `single-exec` suite, **212 of the 218 that `c99!` is eligible for
-pass (97.2 %)**, and 215 of 220 under `c11!`, `gnu99!` and `gnu11!` —
-compiled, run, and diffed against the expected output. What is left is the
-constructs listed as unsupported above — variable length arrays, `va_arg` with
-a struct — plus two corners GCC has and this does not: a `goto` out of a
+220 in its `single-exec` suite, **213 of the 218 that `c99!` is eligible for
+pass (97.7 %)**, and 216 of 220 under `c11!`, `gnu99!` and `gnu11!` —
+compiled, run, and diffed against the expected output. What is left is one
+construct listed as unsupported above — `va_arg` with a struct — plus two
+corners GCC has and this does not: a `goto` out of a
 statement expression, and initialising a flexible array member. One needs a
 newer Rust than 1.97, and the two C23 entry points give up one more case that
 C23 itself made invalid. The corpus is a git submodule, so a fresh checkout

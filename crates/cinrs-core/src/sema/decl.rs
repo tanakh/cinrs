@@ -141,9 +141,14 @@ impl Sema {
         // which means the type and the initialiser have to be built together.
         // A declaration that did not check out still declares its name, with a
         // type that silences every later complaint about it.
+        //
+        // A bound that is not a constant expression is left in `vla_bound` by
+        // the resolution below, and is this declaration's to take.
+        self.vla_bound = None;
         let (ty, init) = self
             .typed_initializer(declarator, &name.name)
             .unwrap_or((Ty::Error, None));
+        let vla_bound = self.vla_bound.take();
 
         if storage == Some(ast::StorageClass::Constexpr) {
             self.declare_constexpr(name, ty, init, declarator);
@@ -151,6 +156,13 @@ impl Sema {
         }
         let is_const = declarator.ty.qualifiers.is_const;
         let is_static = storage == Some(ast::StorageClass::Static);
+
+        // A variably modified type is the one type whose object cannot be a
+        // plain `let`, and the one C hedges around with rules about where it
+        // may be declared at all.
+        if self.types().is_vla(ty) {
+            return self.declare_vla(name, decl, declarator, ty, vla_bound, file_scope);
+        }
 
         if file_scope || is_static {
             // An object with static storage duration outlives every argument
@@ -217,6 +229,91 @@ impl Sema {
             init,
             explicit,
         }]
+    }
+
+    /// Declares a variable length array: `T a[n];` (C99 6.7.5.2).
+    ///
+    /// The elements live in a hidden `Vec` and the object itself is a pointer
+    /// into it — see [`ir::VlaDef`] — so the declaration contributes three
+    /// bindings rather than one. Everything C forbids about such a declaration
+    /// is reported here, because a block-scope object with automatic storage
+    /// duration is the only place a variably modified type is allowed to reach
+    /// at all.
+    fn declare_vla(
+        &mut self,
+        name: &ast::Ident,
+        decl: &ast::Decl,
+        declarator: &ast::InitDeclarator,
+        ty: Ty,
+        bound: Option<Expr>,
+        file_scope: bool,
+    ) -> Vec<Stmt> {
+        let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
+        let problem = if file_scope || storage == Some(ast::StorageClass::Static) {
+            // An object with static storage duration is an item whose size the
+            // linker has to know, and there is no moment at which the bound
+            // could be evaluated.
+            Some("a variable length array cannot have static storage duration".to_owned())
+        } else if declarator.init.is_some() {
+            // C99 6.7.8p3: there would be nothing to check the number of
+            // initialisers against.
+            Some("a variable length array cannot have an initializer".to_owned())
+        } else if bound.is_none() {
+            // The type arrived from somewhere that carries no bound with it,
+            // such as `typeof` of another variable length array.
+            Some(super::VM_UNSUPPORTED.to_owned())
+        } else {
+            None
+        };
+        if let Some(message) = problem {
+            self.error(declarator.range, message);
+            // The name is still declared, as something already reported, so
+            // that using it adds nothing to the diagnostics.
+            self.check_redefinition(name);
+            let id = self.new_object(&name.name, Ty::Error, Storage::Automatic, false, name.range);
+            self.insert(&name.name, Entry::Object(id));
+            return Vec::new();
+        }
+
+        let count = bound.expect("checked above");
+        let elem = self
+            .types()
+            .elem(ty)
+            .expect("a variable length array is an array type");
+        let is_const = declarator.ty.qualifiers.is_const;
+        self.check_redefinition(name);
+        let object = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
+        self.insert(&name.name, Entry::Object(object));
+        // The `Vec` is not an object of the C program; its type is the element
+        // type, and code generation knows to spell the binding `Vec<T>`.
+        let storage = self.new_object(
+            &format!("__cinrs_vla_{}", name.name),
+            elem,
+            Storage::Automatic,
+            false,
+            name.range,
+        );
+        self.program.objects[storage.0 as usize].vla_storage = true;
+        let size_ty = self.size_ty();
+        let len = self.new_object(
+            &format!("__cinrs_vla_len_{}", name.name),
+            size_ty,
+            Storage::Automatic,
+            false,
+            name.range,
+        );
+        self.vla_lengths.insert(object, len);
+        // Everything from here to the end of the block is inside the scope of
+        // an identifier with a variably modified type, which nothing may jump
+        // into.
+        self.vla_scopes.push(object);
+        vec![Stmt::Vla(Box::new(ir::VlaDef {
+            object,
+            storage,
+            len,
+            count,
+            range: declarator.range,
+        }))]
     }
 
     /// Puts what `__asm__("symbol")` and `__attribute__((section("…")))`
@@ -335,6 +432,11 @@ impl Sema {
         } = &declarator.ty.kind
         {
             let element = self.ty_of(elem)?;
+            if self.types().is_vla(element) {
+                // `int x[][n] = { … }`: an array of a variable length array.
+                self.error(declarator.ty.range, super::VM_UNSUPPORTED);
+                return None;
+            }
             let elem_const = elem.qualifiers.is_const;
             let Some(init) = &declarator.init else {
                 self.error(
@@ -352,6 +454,10 @@ impl Sema {
 
         let ty = self.object_ty_of(&declarator.ty, name)?;
         let init = match &declarator.init {
+            // A variable length array may not have one at all (C99 6.7.8p3);
+            // `Sema::declare_vla` says so, and checking a list against a
+            // length nobody knows would only add noise on top.
+            Some(_) if self.types().is_vla(ty) => None,
             Some(init) => Some(self.initializer(init, ty, name)?),
             None => None,
         };
@@ -504,6 +610,13 @@ impl Sema {
         let Some(ty) = self.object_ty_of(&declarator.ty, &name.name) else {
             return;
         };
+        if self.types().is_vla(ty) {
+            self.error(
+                declarator.range,
+                "a variable length array cannot have static storage duration",
+            );
+            return;
+        }
         if let Some(init) = &declarator.init {
             self.error(
                 init.range,
@@ -556,10 +669,21 @@ impl Sema {
         }
         let file_scope = self.at_file_scope();
         let resolved = match self.resolve_ty(ty) {
+            // `typedef int A[n];` is a variably modified type: every later use
+            // of `A` would have to carry the bound this declaration evaluated,
+            // which is the part of C99's VM machinery that is left out.
+            Ok(resolved) if self.types().is_vla(resolved) => Err(super::VM_UNSUPPORTED.to_owned()),
             Ok(ty) => Ok(ty),
             Err(err) if err.message.is_empty() => return,
             Err(err) => Err(err.message),
         };
+        if let Err(message) = &resolved {
+            // A `typedef` of something unrepresentable is only a problem where
+            // it is used — except this one, which the program plainly meant.
+            if message == super::VM_UNSUPPORTED {
+                self.error(ty.range, super::VM_UNSUPPORTED);
+            }
+        }
         let already = self.declared_here(&name.name).is_some();
         if already {
             // Repeating a `typedef` is a C11 relaxation that GCC accepts in
@@ -879,6 +1003,7 @@ impl Sema {
                     asm_label: asm_label.map(|label| label.node.clone()),
                     init_kind,
                     locals: Vec::new(),
+                    uses_alloca: false,
                     body: None,
                     range: name.range,
                 });
@@ -922,6 +1047,11 @@ impl Sema {
         self.va_param = None;
         self.breakables.clear();
         self.switch_stack.clear();
+        self.vla_scopes.clear();
+        self.switch_vla_depths.clear();
+        self.goto_scopes.clear();
+        self.label_vla_scopes.clear();
+        self.func_uses_alloca = false;
         self.next_loop = 0;
         self.next_switch = 0;
         self.next_label = 0;
@@ -969,6 +1099,9 @@ impl Sema {
         // what code generation names its locals from.
         let first_object = self.program.objects.len() as u32;
         let mut body = self.block_items(&def.body.items);
+        // A forward `goto` names a label the walk above had not reached yet, so
+        // the jumps are checked now that every label's scope is known.
+        self.check_goto_vla_scopes();
         let ret = self.ret_ty;
         // A C function may fall off its end; the value is then whatever the ABI
         // left behind. Returning a zero is the honest, safe translation —
@@ -1000,6 +1133,7 @@ impl Sema {
         let entry = &mut self.program.functions[id.0 as usize];
         entry.params = params;
         entry.locals = locals;
+        entry.uses_alloca = self.func_uses_alloca;
         entry.body = Some(body);
     }
 

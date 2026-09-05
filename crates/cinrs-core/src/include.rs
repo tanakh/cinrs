@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 /// They are compiled into the crate rather than installed anywhere, so no part
 /// of a build depends on where `cinrs` itself lives on disk.
 pub const BUNDLED: &[(&str, &str)] = &[
+    ("alloca.h", include_str!("../include/alloca.h")),
     ("assert.h", include_str!("../include/assert.h")),
     ("ctype.h", include_str!("../include/ctype.h")),
     ("errno.h", include_str!("../include/errno.h")),

@@ -193,13 +193,21 @@ fn a_bit_field_has_neither_an_address_nor_a_size() {
 
 #[test]
 fn constructs_that_are_still_out_of_reach_are_named() {
-    rejected(
-        "int f(int n) { int a[n]; return a[0]; }",
-        &[
-            "variable length arrays are not supported yet; the bound of an array must be \
-             an integer constant expression",
-        ],
-    );
+    // A one-dimensional variable length array is supported; the rest of C99's
+    // variably modified types are not, and say so.
+    accepted("int f(int n) { int a[n]; return a[0]; }");
+    accepted("int f(int n) { int a[n][3]; return a[0][2]; }");
+    for source in [
+        "int f(int n) { int a[n][n]; return a[0][0]; }",
+        "int f(int n) { int a[3][n]; return a[0][0]; }",
+        "int f(int n) { int (*p)[n]; return p != 0; }",
+        "int f(int n) { typedef int A[n]; return n; }",
+    ] {
+        rejected(
+            source,
+            &["variably modified types other than a one-dimensional array are not supported yet"],
+        );
+    }
 }
 
 #[test]

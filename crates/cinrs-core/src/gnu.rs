@@ -230,6 +230,8 @@ const SUPPORTED_FEATURES: &[&str] = &[
 pub const SPECIAL_BUILTINS: &[&str] = &[
     "add_overflow",
     "add_overflow_p",
+    "alloca",
+    "alloca_with_align",
     "assume",
     "assume_aligned",
     "bswap16",

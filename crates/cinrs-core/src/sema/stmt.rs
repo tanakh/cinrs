@@ -25,6 +25,9 @@ impl Sema {
         // long as the block does. The list is saved and restored so that a
         // nested block claims only its own.
         let enclosing = std::mem::take(&mut self.compound_literals);
+        // The scope of a variable length array declared here ends with the
+        // block, and so does the lifetime of its storage.
+        let vla_depth = self.vla_scopes.len();
         let mut out = Vec::new();
         for item in items {
             match item {
@@ -43,6 +46,7 @@ impl Sema {
                 ast::BlockItem::StaticAssert(assert) => self.static_assert(assert),
             }
         }
+        self.vla_scopes.truncate(vla_depth);
         let mine = std::mem::replace(&mut self.compound_literals, enclosing);
         if mine.is_empty() {
             return out;
@@ -154,6 +158,13 @@ impl Sema {
     pub(super) fn stmt(&mut self, stmt: &ast::Stmt) -> Stmt {
         match &stmt.kind {
             ast::StmtKind::Labeled { label, body } => {
+                // What a `goto` to this label would be jumping *into*; see
+                // `Sema::vla_scopes`.
+                if let Some(entry) = self.labels.get(&label.name) {
+                    let id = entry.id;
+                    let scopes = self.vla_scopes.clone();
+                    self.label_vla_scopes.entry(id).or_insert(scopes);
+                }
                 let body = Box::new(self.stmt(body));
                 match self.labels.get(&label.name) {
                     // Outside CFG mode nothing can jump to a label, so it is
@@ -237,6 +248,7 @@ impl Sema {
                 let id = self.new_loop();
                 // C99 scopes a declaration in the init clause to the loop.
                 self.push_scope();
+                let vla_depth = self.vla_scopes.len();
                 let init = match init {
                     ast::ForInit::None => Vec::new(),
                     ast::ForInit::Expr(expr) => match self.expr(expr) {
@@ -257,6 +269,7 @@ impl Sema {
                 let body = Box::new(self.stmt(body));
                 self.breakables.pop();
                 self.pop_scope();
+                self.vla_scopes.truncate(vla_depth);
                 Stmt::For {
                     id,
                     init,
@@ -268,10 +281,17 @@ impl Sema {
             }
             ast::StmtKind::Switch { cond, body } => self.switch(cond, body, stmt.range),
             ast::StmtKind::Goto(label) => match self.labels.get(&label.name) {
-                Some(entry) => Stmt::Goto {
-                    id: entry.id,
-                    range: stmt.range,
-                },
+                Some(entry) => {
+                    // The label may not have been reached yet, so what this
+                    // jump would enter is checked once the body is done.
+                    let id = entry.id;
+                    self.goto_scopes
+                        .push((stmt.range, id, self.vla_scopes.clone()));
+                    Stmt::Goto {
+                        id,
+                        range: stmt.range,
+                    }
+                }
                 None => {
                     self.error(
                         label.range,
@@ -465,7 +485,9 @@ impl Sema {
             default: None,
         });
         self.push_scope();
+        self.switch_vla_depths.push(self.vla_scopes.len());
         let body = self.stmt(body);
+        self.switch_vla_depths.pop();
         self.pop_scope();
         self.switch_stack.pop();
         self.breakables.pop();
@@ -492,6 +514,7 @@ impl Sema {
             return self.stmt(body);
         };
         let (switch, ty) = (state.id, state.ty);
+        self.check_jump_into_vla_scope(range);
         let value = match value {
             Some((expr, upper)) => {
                 let Some(v) = self.case_range(expr, upper, ty, range) else {
@@ -570,6 +593,7 @@ impl Sema {
 
         self.breakables.push(Breakable::Switch(id));
         self.push_scope();
+        self.switch_vla_depths.push(self.vla_scopes.len());
 
         let mut hoisted = Vec::new();
         let mut prelude = Vec::new();
@@ -613,6 +637,7 @@ impl Sema {
                         }
                     }
                     if !labels.is_empty() {
+                        self.check_jump_into_vla_scope(labels[0].1);
                         groups.push(ir::SwitchGroup {
                             values: Vec::new(),
                             body: Vec::new(),
@@ -667,6 +692,7 @@ impl Sema {
             }
         }
 
+        self.switch_vla_depths.pop();
         self.pop_scope();
         self.breakables.pop();
 
@@ -688,6 +714,21 @@ impl Sema {
         for declarator in &decl.declarators {
             for stmt in self.declarator(decl, declarator, false) {
                 match stmt {
+                    // A variable length array cannot be hoisted ahead of the
+                    // dispatch: its storage is only allocated where the
+                    // declaration stands, so every `case` after it would be a
+                    // jump into its scope — which is what C99 6.8.4.2p2 says.
+                    Stmt::Vla(def) => {
+                        self.error(
+                            def.range,
+                            "a variable length array cannot be declared directly in the body \
+                             of a 'switch'; a label after it would jump into its scope",
+                        );
+                        // The declaration is refused, so nothing after it is
+                        // inside its scope: leaving the entry behind would
+                        // report every later label as well.
+                        self.vla_scopes.retain(|object| *object != def.object);
+                    }
                     Stmt::Let {
                         object,
                         init,
@@ -721,6 +762,47 @@ impl Sema {
             }
         }
         out
+    }
+
+    /// Reports a `case` or `default` label that would jump into the scope of
+    /// an identifier with a variably modified type (C99 6.8.4.2p2).
+    ///
+    /// Entering a `switch` jumps straight to the label, past whatever the body
+    /// declared on the way — and past the allocation a variable length array's
+    /// declaration performs, which would leave the object without storage.
+    fn check_jump_into_vla_scope(&mut self, range: SourceRange) {
+        let entered = self
+            .switch_vla_depths
+            .last()
+            .is_some_and(|depth| self.vla_scopes.len() > *depth);
+        if entered {
+            self.error(range, super::JUMP_INTO_VM_SCOPE);
+        }
+    }
+
+    /// Reports the `goto`s of the function just checked that would jump into
+    /// the scope of an identifier with a variably modified type
+    /// (C99 6.8.6.1p1).
+    ///
+    /// A jump *out of* such a scope is fine — the storage is freed on the way
+    /// — so the test is one-sided: every variable length array in scope at the
+    /// label must already be in scope at the `goto`.
+    pub(super) fn check_goto_vla_scopes(&mut self) {
+        let bad: Vec<SourceRange> = self
+            .goto_scopes
+            .iter()
+            .filter(|(_, label, from)| {
+                self.label_vla_scopes
+                    .get(label)
+                    .is_some_and(|into| into.iter().any(|object| !from.contains(object)))
+            })
+            .map(|(range, _, _)| *range)
+            .collect();
+        for range in bad {
+            self.error(range, super::JUMP_INTO_VM_SCOPE);
+        }
+        self.goto_scopes.clear();
+        self.label_vla_scopes.clear();
     }
 
     /// Whether a function's body has to be lowered through a control-flow

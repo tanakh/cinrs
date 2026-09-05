@@ -22,11 +22,5 @@ error: 'alias' is not supported: write a function that forwards to the other one
 13 |     int aliased(void) __attribute__((alias("weak_function")));
    |                                      ^^^^^
 
-error: 'alloca' is not supported: Rust has no stack allocation with a size chosen at run time; use 'malloc' and 'free'
-  --> tests/ui/gnu_unsupported.rs:16:16
-   |
-16 |         return __builtin_alloca(n);
-   |                ^^^^^^^^^^^^^^^^
-
-error: aborting due to 5 previous errors
+error: aborting due to 4 previous errors
 

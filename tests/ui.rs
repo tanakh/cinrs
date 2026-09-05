@@ -73,6 +73,13 @@ fn build(root: &str, dependencies: DependencyBuilder) -> Config {
     let defaults = config.comment_defaults.base();
     defaults.set_custom("edition", Edition("2024".to_owned()));
     defaults.set_custom("dependencies", dependencies);
+    // `rustc` reworded `E0433` for a crate that is not there between 1.97 and
+    // 1.99 — "in the crate root" became "in the list of imported crates" —
+    // and the blessed output of `tests/ui` has to be the same on every
+    // supported toolchain. The message is `rustc`'s own and appears in exactly
+    // one test, `no_std_without_the_pragma.rs`, where what is being blessed is
+    // that the caret lands on the C declaration that needed the crate.
+    config.stderr_filter("in the list of imported crates", "in the crate root");
     config
 }
 
