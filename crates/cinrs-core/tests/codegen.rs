@@ -16,7 +16,9 @@ use proc_macro2::{TokenStream, TokenTree};
 /// The long `#[allow(…)]` every item carries is collapsed to a placeholder: it
 /// is identical everywhere and covered by its own test, so leaving it in would
 /// bury the code these snapshots exist to show. The short one on the glob
-/// re-export is left alone, since it says something about that line.
+/// re-export is left alone, since it says something about that line. The
+/// [data-model check](the_data_model_is_asserted) every unit opens with is
+/// collapsed for the same reason.
 fn generate(source: &str) -> String {
     generate_for(Standard::C99, source)
 }
@@ -56,33 +58,62 @@ fn generate_for(standard: Standard, source: &str) -> String {
         Ok(file) => file,
         Err(error) => panic!("the expansion must be valid Rust: {error}\n{text}"),
     };
-    collapse_allow_attributes(&prettyplease::unparse(&file))
+    collapse_data_model_check(&collapse_allow_attributes(&prettyplease::unparse(&file)))
 }
 
-fn collapse_allow_attributes(code: &str) -> String {
+/// Replaces the unit's data-model assertions with a one-line placeholder.
+///
+/// Every expansion opens with the same block — half a dozen `assert!`s over
+/// `core::ffi` sizes — and it has a test of its own; spelling it out in
+/// thirty-six snapshots would bury what each of them is about.
+fn collapse_data_model_check(code: &str) -> String {
     let mut out = String::with_capacity(code.len());
-    let mut depth = 0usize;
+    let mut inside = false;
     for line in code.lines() {
-        // The list is long enough that `prettyplease` always breaks it, so an
-        // `#[allow(` alone on its line is it; a short list stays as written.
-        if depth == 0 && line.trim_start() == "#[allow(" {
+        if !inside && line.trim_start() == "const _: () = {" {
             let indent = &line[..line.len() - line.trim_start().len()];
             out.push_str(indent);
-            out.push_str("#[allow(…)]\n");
-            if !line.trim_end().ends_with(")]") {
-                depth = 1;
-            }
+            out.push_str("const _: () = { /* the data-model check */ };\n");
+            inside = true;
             continue;
         }
-        if depth > 0 {
-            if line.trim_end().ends_with(")]") {
-                depth = 0;
-            }
+        if inside {
+            inside = line.trim_start() != "};";
             continue;
         }
         out.push_str(line);
         out.push('\n');
     }
+    out
+}
+
+/// Replaces the long lint exemption every generated item carries with a
+/// placeholder.
+///
+/// It is identical everywhere and has a test of its own, so leaving it in
+/// would bury the code these snapshots exist to show. Matching is on the
+/// *text* rather than on whole lines because `prettyplease` wraps the list
+/// differently inside a macro invocation than in front of an item; the short
+/// `#[allow(…)]` on the glob re-export says something about that line and is
+/// recognised by not mentioning `clippy::all`.
+fn collapse_allow_attributes(code: &str) -> String {
+    const OPEN: &str = "#[allow(";
+    const CLOSE: &str = ")]";
+    let mut out = String::with_capacity(code.len());
+    let mut rest = code;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let Some(end) = after.find(CLOSE) else { break };
+        if !after[..end].contains("clippy::all") {
+            out.push_str(&rest[..start + OPEN.len() + end + CLOSE.len()]);
+            rest = &after[end + CLOSE.len()..];
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        out.push_str("#[allow(…)]");
+        rest = &after[end + CLOSE.len()..];
+    }
+    out.push_str(rest);
     out
 }
 
@@ -1037,4 +1068,197 @@ fn the_no_std_pragma_moves_the_storage_to_the_alloc_crate() {
     );
     assert!(!ordinary.contains("::std::"), "{ordinary}");
     assert!(!ordinary.contains("::alloc::"), "{ordinary}");
+}
+
+// ---------------------------------------------------------------------------
+// the data-model check
+// ---------------------------------------------------------------------------
+
+/// Expands `source` for `target` and returns just the data-model check.
+fn data_model_check(target: cinrs_core::TargetModel, source: &str) -> String {
+    let input = TokenStream::from_str(source).expect("the C must lex as Rust tokens");
+    let mut options = Options::new(Standard::C99);
+    options.target = target;
+    let file: syn::File = syn::parse2(expand(input, &options)).expect("the expansion is Rust");
+    let text = prettyplease::unparse(&file);
+    let mut lines = Vec::new();
+    for line in text
+        .lines()
+        .skip_while(|line| line.trim_start() != "const _: () = {")
+    {
+        lines.push(line.strip_prefix("    ").unwrap_or(line));
+        if line.trim_start() == "};" {
+            break;
+        }
+    }
+    assert!(!lines.is_empty(), "no data-model check in\n{text}");
+    lines.join("\n")
+}
+
+/// Every expansion states the data model it was translated for, so that
+/// cross-compiling to a machine with a different one is a failed assertion
+/// rather than a program that quietly computes the wrong thing.
+#[test]
+fn the_data_model_is_asserted() {
+    insta::assert_snapshot!(data_model_check(
+        cinrs_core::TargetModel::LP64,
+        "int f(void) { return 0; }"
+    ));
+}
+
+/// The numbers come from the model, not from the host: a unit expanded for a
+/// different data model asserts *that* one, which is what makes the check a
+/// cross-compilation guard rather than a tautology.
+#[test]
+fn a_different_data_model_is_asserted_differently() {
+    let ilp32 = squeeze(&data_model_check(
+        cinrs_core::TargetModel::ILP32,
+        "int f(void) { return 0; }",
+    ));
+    // `long` and a pointer are four bytes in ILP32 and eight in LP64, so the
+    // check an ILP32 expansion carries is one an LP64 target fails.
+    assert!(
+        ilp32.contains("size_of::<::core::ffi::c_long>()==4"),
+        "{ilp32}"
+    );
+    assert!(
+        ilp32.contains("size_of::<*const::core::ffi::c_void>()==4"),
+        "{ilp32}"
+    );
+    // …while `long long` is eight either way, which is what makes the check a
+    // statement of the model rather than of the pointer width.
+    assert!(
+        ilp32.contains("size_of::<::core::ffi::c_longlong>()==8"),
+        "{ilp32}"
+    );
+
+    // An unsigned-`char` model asserts the other way round.
+    let mut unsigned_char = cinrs_core::TargetModel::LP64;
+    unsigned_char.char_signed = false;
+    let text = data_model_check(unsigned_char, "int f(void) { return 0; }");
+    assert!(text.contains("c_char::MIN == 0"), "{text}");
+    assert!(text.contains("plain 'char' is unsigned"), "{text}");
+}
+
+/// `__int128`'s alignment is the one thing that depends on more than a width,
+/// so it is asserted exactly where the unit has one.
+#[test]
+fn the_int128_alignment_is_asserted_only_where_it_is_used() {
+    let without = data_model_check(cinrs_core::TargetModel::LP64, "int f(void) { return 0; }");
+    assert!(!without.contains("align_of"), "{without}");
+
+    let with = squeeze(&data_model_check(
+        cinrs_core::TargetModel::LP64,
+        "__int128 f(__int128 v) { return v + 1; }",
+    ));
+    assert!(
+        with.contains("align_of::<::core::primitive::i128>()==16"),
+        "{with}"
+    );
+
+    let mut narrow = cinrs_core::TargetModel::LP64;
+    narrow.int128_align = 8;
+    let text = squeeze(&data_model_check(
+        narrow,
+        "__int128 f(__int128 v) { return v + 1; }",
+    ));
+    assert!(
+        text.contains("align_of::<::core::primitive::i128>()==8"),
+        "{text}"
+    );
+}
+
+/// Drops every space, so that an assertion about the generated code does not
+/// also depend on where `prettyplease` puts one.
+fn squeeze(code: &str) -> String {
+    code.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// A unit that declares nothing expands to nothing at all — the check included,
+/// since there is no generated code for the data model to be wrong about.
+#[test]
+fn an_empty_unit_carries_no_check() {
+    let input = TokenStream::from_str("").expect("valid tokens");
+    assert!(expand(input, &Options::new(Standard::C99)).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// __int128
+// ---------------------------------------------------------------------------
+
+#[test]
+fn int128_becomes_i128_and_u128() {
+    insta::assert_snapshot!(generate(
+        r"
+        __int128 mul_high(long long a, long long b) {
+            __int128 product = (__int128) a * (__int128) b;
+            return product >> 64;
+        }
+
+        unsigned __int128 divide(unsigned __int128 v) {
+            return v / 3;
+        }
+
+        struct Wide { int tag; unsigned __int128 value; };
+
+        unsigned long widths(void) {
+            return sizeof (struct Wide) + __alignof__(__int128) + sizeof (__int128_t);
+        }
+
+        __uint128_t from_typedef(__int128_t v) { return (__uint128_t) v; }
+        "
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// _Thread_local
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_thread_local_object_becomes_a_thread_local_item() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        _Thread_local int counter = 1;
+        static _Thread_local long private_total;
+
+        int bump(int by) {
+            counter += by;
+            return counter;
+        }
+
+        int *address(void) { return &counter; }
+
+        int calls(void) {
+            static _Thread_local int n = 0;
+            return ++n;
+        }
+        "
+    ));
+}
+
+/// An initialiser whose value is the address of another item cannot go inside
+/// a `const` block — `E0013` — so the item takes `thread_local!`'s lazy form.
+#[test]
+fn a_thread_local_whose_initializer_names_an_item_is_not_const() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        int anchor;
+        _Thread_local int *cursor = &anchor;
+        int read(void) { return *cursor; }
+        "
+    ));
+}
+
+#[test]
+fn a_wide_bit_field_reads_through_a_u128_window() {
+    insta::assert_snapshot!(generate(
+        r"
+        struct Packed { unsigned __int128 wide : 70; int tail : 3; };
+
+        unsigned __int128 read_wide(struct Packed *p) { return p->wide; }
+        void write_wide(struct Packed *p, unsigned __int128 v) { p->wide = v; }
+        "
+    ));
 }

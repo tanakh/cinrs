@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | total | rate |
 | --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1331/1691 (78.7 %) | 36/78 (46.2 %) | **1367/1769** | **77.3 %** |
-| `gnu11!` | 1241/1691 (73.4 %) | 36/78 (46.2 %) | 1277/1769 | 72.2 % |
+| **`gnu89!`** | 1333/1691 (78.8 %) | 36/78 (46.2 %) | **1369/1769** | **77.4 %** |
+| `gnu11!` | 1243/1691 (73.5 %) | 36/78 (46.2 %) | 1279/1769 | 72.3 % |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -174,14 +174,14 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 400 of the 402 failures are refused at compile time, in 60
+Under `gnu89!`, 398 of the 400 failures are refused at compile time, in 60
 distinct causes. The ones worth a line each, with what the same cause costs
 under `gnu11!` beside it:
 
 | `gnu89!` | `gnu11!` | cause | e.g. |
 | ---: | ---: | --- | --- |
 | — | 97 | `type specifier missing` — implicit `int`, which `gnu89!` has | `execute/20000717-3` |
-| 61 | 61 | inline assembly is not supported | `execute/20001009-2` |
+| 62 | 62 | inline assembly is not supported | `execute/20001009-2` |
 | 49 | 49 | a `__builtin_…` this crate does not implement | `execute/20010122-1` |
 | 41 | 41 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
 | 38 | 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
@@ -247,7 +247,7 @@ the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 492 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 402.
+`gnu11!`'s, 490 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 400.
 One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has

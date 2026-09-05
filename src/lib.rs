@@ -206,10 +206,11 @@
 //!
 //! ## What the later revisions add and this crate does not do
 //!
-//! `_Thread_local`/`thread_local` (Rust's `#[thread_local]` is unstable),
 //! `_Atomic`, `_BitInt` and C23's *named* universal character
 //! `\N{LATIN SMALL LETTER E WITH ACUTE}`: each is a located error rather
-//! than a silent mistranslation. C11's four subsetting macros —
+//! than a silent mistranslation. `_Thread_local` *is* there — see
+//! [Thread-local objects](#thread-local-objects) — but the rest of C11's
+//! threads, `<threads.h>` and all, is not. C11's four subsetting macros —
 //! `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 //! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
 //! saying that those parts are left out. `__STDC_NO_VLA__` is the cautious one
@@ -309,6 +310,52 @@
 //! exactly the promise C attaches to it: reaching it is undefined behaviour.
 //! It is the one place the expansion trusts the C program with undefined
 //! behaviour, because the program asked for it by name.
+//!
+//! ## `__int128`
+//!
+//! GCC's 128-bit integers are there, in every entry point — the double
+//! underscore is what makes that safe — and become Rust's `i128` and `u128`,
+//! whose x86-64 ABI has matched `__int128`'s since Rust 1.77. Sixteen bytes,
+//! aligned the way the compiling toolchain aligns an `i128`, and ranked above
+//! `long long`, so `(__int128) a * b` really is a 128-bit multiplication:
+//!
+//! ```
+//! cinrs::c99! {
+//!     /* The high half of a 64x64 product — the reason the type exists. */
+//!     unsigned long long mul_high(unsigned long long a, unsigned long long b) {
+//!         unsigned __int128 product = (unsigned __int128) a * b;
+//!         return (unsigned long long) (product >> 64);
+//!     }
+//!
+//!     /* C has no 128-bit *literal*, so a wide constant is built. */
+//!     __int128 bit_100(void) { return ((__int128) 1) << 100; }
+//! }
+//!
+//! assert_eq!(unsafe { mul_high(u64::MAX, u64::MAX) }, u64::MAX - 1);
+//! assert_eq!(unsafe { bit_100() }, 1i128 << 100);
+//! ```
+//!
+//! `__int128_t` and `__uint128_t` are predefined `typedef` names for the same
+//! two types, as they are in GCC, and `__SIZEOF_INT128__` is `16`. Bit-fields
+//! of them work — wider than sixty-four bits included, where the accessors
+//! read and write through a `u128` window — and so do `_Generic`, the
+//! conversions to and from every other scalar, and passing and returning one
+//! across the ABI, `...` included.
+//!
+//! Three things are not there, each a located error rather than a
+//! mistranslation. `1 << 100` is still a shift of an `int` by more
+//! than its width, because the type of a shift is the type of its left
+//! operand and widening the result afterwards does not go back and redo it —
+//! which is C's rule and GCC's behaviour, diagnosed here wherever the shift is
+//! in a constant expression. `__builtin_add_overflow` and its relatives
+//! refuse a 128-bit *operand*: they compute the check one width up from their
+//! operands, and there is nothing above 128 bits to compute it in. (A 128-bit
+//! *result* type is fine — `__builtin_mul_overflow(a, b, &wide)` with narrower
+//! operands says exactly what GCC says.) And `va_arg(ap, __int128)` reads an
+//! argument back out of a list, which needs a `VaArgSafe` implementation that
+//! Rust still keeps behind the unstable `c_variadic_int128` feature; *passing*
+//! a 128-bit value through `...` is unaffected, so a program can read it back
+//! as two `unsigned long long` halves.
 //!
 //! # What is generated
 //!
@@ -630,7 +677,7 @@
 //!
 //! # `no_std`
 //!
-//! **Everything generated is [`core`]-only**, with two exceptions. A C
+//! **Everything generated is [`core`]-only**, with three exceptions. A C
 //! function becomes a `pub unsafe extern "C" fn` over [`core::ffi`] types;
 //! records are `#[repr(C)]` items; pointers are raw pointers; a string literal
 //! is a byte string; `goto` is a state machine; `unreachable()` is
@@ -641,7 +688,7 @@
 //! because the C code calls it — that is a link-time dependency of the
 //! program, not a Rust one, and it is what the bundled headers declare.
 //!
-//! The two exceptions are [variable length arrays and
+//! Two of the exceptions are [variable length arrays and
 //! `alloca`](#variable-length-arrays-and-alloca), whose storage is a `Vec`.
 //! Nothing in the C says which kind of crate the expansion is going into, so
 //! that `Vec` is spelled `::std::vec::Vec` unless the unit says otherwise:
@@ -673,6 +720,67 @@
 //! allocator. One that uses them in a `#![no_std]` crate *without* the pragma
 //! gets `rustc`'s own `E0433` — "cannot find `std`" — with the caret on the
 //! declaration that needed it; the fix is the two lines above.
+//!
+//! The third exception is [`_Thread_local`](#thread-local-objects), and the
+//! pragma does not help there: `thread_local!` is a `std` macro and `core` has
+//! no thread-local storage at all, so a unit that declares a thread-local
+//! object under `#pragma cinrs no_std` is a located error saying so.
+//!
+//! # Thread-local objects
+//!
+//! C11's `_Thread_local` — `thread_local` in [`c23!`], `__thread` in GNU C and
+//! therefore in every entry point — gives an object static storage duration
+//! and one instance per thread. That is exactly what Rust's
+//! `std::thread_local!` provides, so the object becomes one, holding an
+//! [`UnsafeCell`](core::cell::UnsafeCell) because C code assigns to it:
+//!
+//! ```
+//! cinrs::c11! {
+//!     _Thread_local int counter;
+//!
+//!     int bump(int by) {
+//!         counter += by;
+//!         return counter;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { bump(1) }, 1);
+//! assert_eq!(unsafe { bump(2) }, 3);
+//!
+//! // Another thread has a counter of its own, starting from the initialiser.
+//! let other = std::thread::spawn(|| unsafe { bump(10) }).join().unwrap();
+//! assert_eq!(other, 10);
+//! assert_eq!(unsafe { bump(0) }, 3);
+//!
+//! // Rust reads the object through the generated item, which is `pub` when
+//! // the C object has external linkage.
+//! assert_eq!(counter.with(|cell| unsafe { *cell.get() }), 3);
+//! ```
+//!
+//! Every C access goes through the `*mut T` the cell hands out, which is valid
+//! for as long as *this thread's* copy of the object is — which is precisely
+//! what C promises about the address of one, so `&counter` is that pointer and
+//! nothing about the object model changes.
+//!
+//! Where it may be written is C's rule (6.7.1p3): at file scope on its own or
+//! beside `static`, and at block scope only on a `static`, since an object
+//! with automatic storage duration is per *call* rather than per thread. On a
+//! parameter or a function it is an error, and so is a non-constant
+//! initialiser, as it is for any object with static storage duration.
+//!
+//! The initialiser goes inside `thread_local!`'s `const { … }` block wherever
+//! Rust allows it — the cheap form, with no lazy-initialisation flag. One
+//! thing keeps it out: an initialiser whose value is the address of another
+//! item, such as `_Thread_local int *p = &global;`, since a Rust constant may
+//! not refer to a `static`. Such an object takes the lazy form instead, which
+//! is a difference in when the initialiser runs and in nothing a C program can
+//! observe.
+//!
+//! Two shapes are refused rather than mistranslated. `extern _Thread_local int
+//! x;` — a TLS symbol another object file defines — would need Rust's
+//! `#[thread_local]` attribute on an `extern` item, which is unstable; and
+//! `#pragma cinrs export` cannot give a `thread_local!` item a C symbol,
+//! because there is no stable way to.
 //!
 //! # Control flow
 //!
@@ -1010,31 +1118,63 @@
 //!
 //! On top of that come the [GNU extensions](#gnu-extensions), which real C
 //! leans on: statement expressions, `typeof`, `__attribute__`, `#pragma pack`,
-//! the `__builtin_*` family, case ranges, flexible array members, `alloca` and
-//! the rest.
+//! the `__builtin_*` family, case ranges, flexible array members, `alloca`,
+//! [`__int128`](#__int128), [`__thread`](#thread-local-objects) and the rest.
 //!
 //! [Variable length arrays](#variable-length-arrays-and-alloca) are there in
 //! their one-dimensional form, emulated on the heap; the variably modified
 //! types around them — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA —
 //! are not.
 //!
-//! Deliberately never: `_Complex`,
-//! `setjmp`/`longjmp`, `_Thread_local`,
-//! `_Atomic`, `_BitInt`, C23's *named* universal character
-//! `\N{…}`, inline assembly, and
+//! Deliberately never: `_Complex`, `setjmp`/`longjmp`, `_Atomic`, `_BitInt`,
+//! C23's *named* universal character `\N{…}`, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
 //! implies). Each of them is a clear, located error rather than a silent
 //! mistranslation.
 //!
 //! The other things worth knowing before reaching for this crate: everything
 //! generated is `core`-only except the storage a variable length array or
-//! `alloca` needs, which is a `Vec` — see [`no_std`](#no_std); the
+//! `alloca` needs, which is a `Vec`, and a [thread-local
+//! object](#thread-local-objects), which is a `std::thread_local!` — see
+//! [`no_std`](#no_std); the
 //! platform's include directories are never searched, so anything outside the
 //! bundled headers is declared by hand or pointed at with an include path;
 //! `va_list` is [`core::ffi::VaList`], which cannot be stored in a `struct` or
-//! returned; sizes and alignments come from a model of the target rather than
-//! from its own C compiler, and the host is taken to be LP64 where Cargo's
-//! environment does not say otherwise.
+//! returned; and sizes and alignments come from a
+//! [model of the target](#the-data-model) rather than from its own C
+//! compiler.
+//!
+//! # The data model
+//!
+//! `sizeof`, `_Alignof`, member offsets, bit-field storage, the type an
+//! integer constant gets, whether `-1 < 1u` and the value of an `#if` are all
+//! worked out while the macro is expanding, from a model of the machine: the
+//! widths of `short`, `int`, `long`, `long long` and a pointer, the signedness
+//! of plain `char`, and the alignment of `__int128`. That model is the machine
+//! the procedural macro itself was compiled for — the *host* — because nothing
+//! in Cargo tells a procedural macro what the target is.
+//!
+//! Cross-compiling to a machine with a different data model would leave every
+//! one of those answers quietly wrong: 64-bit Windows is LLP64, where `long`
+//! is four bytes; `wasm32` and the 32-bit targets are ILP32; AArch64, s390x
+//! and PowerPC make plain `char` unsigned. So **every expansion states the
+//! model it was translated for**, as a `const _: () = { assert!(…); };` block
+//! at the top of the unit's module — one assertion per width, over the
+//! [`core::ffi`] aliases, which follow the *target*:
+//!
+//! ```text
+//! const _: () = {
+//!     assert!(::core::mem::size_of::<::core::ffi::c_long>() == 8, "cinrs: …");
+//!     assert!(::core::ffi::c_char::MIN != 0, "cinrs: …");
+//!     // … and one for `short`, `int`, `long long` and a pointer.
+//! };
+//! ```
+//!
+//! A mismatch is therefore a failed compile-time assertion with the caret on
+//! the C, rather than a program that computes the wrong thing. It is a guard,
+//! not support: **cross-compilation to a different data model is detected and
+//! refused.** `__int128`'s alignment is asserted in a unit that has one, it
+//! being the only scalar whose alignment does not follow from its width.
 
 #![warn(missing_docs)]
 #![no_std]

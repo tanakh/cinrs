@@ -1,0 +1,38 @@
+error: shift count 100 is out of range for type 'int'
+  --> tests/ui/gnu_int128_errors.rs:10:31
+   |
+10 |     static __int128 too_far = 1 << 100;
+   |                               ^
+
+error: initializer is not a compile-time constant expression
+  --> tests/ui/gnu_int128_errors.rs:10:31
+   |
+10 |     static __int128 too_far = 1 << 100;
+   |                               ^
+
+error: integer constant '18446744073709551616' is too large for any integer type
+  --> tests/ui/gnu_int128_errors.rs:17:38
+   |
+17 |     static unsigned long long huge = 18446744073709551616;
+   |                                      ^^^^^^^^^^^^^^^^^^^^
+
+error: cannot combine '__int128' with other type specifiers
+  --> tests/ui/gnu_int128_errors.rs:22:5
+   |
+22 |     long __int128 mixed;
+   |     ^^^^
+
+error: '__builtin_add_overflow' with a 128-bit operand is not supported: the check is computed one width up from the operands, and there is nothing above 'unsigned __int128'
+  --> tests/ui/gnu_int128_errors.rs:26:16
+   |
+26 |         return __builtin_add_overflow(a, b, &r);
+   |                ^^^^^^^^^^^^^^^^^^^^^^
+
+error: va_arg with '__int128' is not supported: Rust's `VaArgSafe` covers the 128-bit types only behind the unstable `c_variadic_int128` feature
+  --> tests/ui/gnu_int128_errors.rs:36:43
+   |
+36 |         __int128 v = __builtin_va_arg(ap, __int128);
+   |                                           ^^^^^^^^
+
+error: aborting due to 6 previous errors
+

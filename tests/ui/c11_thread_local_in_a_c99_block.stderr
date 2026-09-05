@@ -1,0 +1,14 @@
+error: '_Thread_local' requires C11 or later (this block is c99!)
+ --> tests/ui/c11_thread_local_in_a_c99_block.rs:5:5
+  |
+5 |     _Thread_local int a;
+  |     ^^^^^^^^^^^^^
+
+error: 'thread_local' requires C23 or later (this block is c99!)
+  --> tests/ui/c11_thread_local_in_a_c99_block.rs:10:5
+   |
+10 |     thread_local int b;
+   |     ^^^^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

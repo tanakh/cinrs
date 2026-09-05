@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        static int started;\n        __attribute__((constructor)) static void begin(void) { started = 1; }\n        __attribute__((destructor)) static void end(void) { started = 0; }\n        int has_started(void) { return started; }\n        \"#)"
 ---
 mod __cinrs_unit_09a188b0 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     static mut started: ::core::ffi::c_int = 0;
     #[allow(…)]
@@ -24,24 +25,7 @@ mod __cinrs_unit_09a188b0 {
         }
     }
     #[allow(…)]
-    const _: () = {
-        #[cfg(
-            not(
-                any(
-                    target_os = "linux",
-                    target_os = "android",
-                    target_os = "freebsd",
-                    target_os = "netbsd",
-                    target_os = "openbsd",
-                    target_os = "dragonfly",
-                    target_vendor = "apple"
-                )
-            )
-        )]
-        ::core::compile_error!(
-            "'constructor' and 'destructor' need a target whose runtime walks an initialiser table (ELF or Mach-O)"
-        );
-    };
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[used]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,__mod_init_func"))]

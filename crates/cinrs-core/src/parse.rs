@@ -44,7 +44,7 @@ use crate::ast::*;
 use crate::capture::SourceRange;
 use crate::diag::Diagnostics;
 use crate::gnu;
-use crate::ir::VA_LIST_NAMES;
+use crate::ir::{INT128_TYPEDEF_NAMES, VA_LIST_NAMES};
 use crate::lex::{Keyword, Punct, StrKind, StrLit, TokenKind};
 use crate::pp::{Origin, PackMap, Token};
 use crate::{Gating, Options, Standard};
@@ -135,6 +135,12 @@ pub fn parse(
     // it, exactly as GCC's own header does.
     let mut builtins = Scope::default();
     for name in VA_LIST_NAMES {
+        builtins.syms.insert((*name).to_owned(), SymKind::Typedef);
+    }
+    // `__int128_t` and `__uint128_t` are the compiler's own names for the two
+    // 128-bit types, exactly as they are in GCC; `__int128` itself is a
+    // keyword the preprocessor hands over.
+    for (name, _) in INT128_TYPEDEF_NAMES {
         builtins.syms.insert((*name).to_owned(), SymKind::Typedef);
     }
     let mut parser = Parser {
@@ -1012,6 +1018,7 @@ struct SpecCounts {
     bool: u32,
     complex: u32,
     imaginary: u32,
+    int128: u32,
 }
 
 impl SpecCounts {
@@ -1028,6 +1035,7 @@ impl SpecCounts {
             + self.bool
             + self.complex
             + self.imaginary
+            + self.int128
             > 0
     }
 }
@@ -1096,6 +1104,7 @@ impl Parser<'_> {
                     | Keyword::TypeofUnqualGnu
                     | Keyword::AutoType
                     | Keyword::ThreadGnu
+                    | Keyword::Int128
                     | Keyword::InlineGnu
                     | Keyword::RestrictGnu
             );
@@ -1149,6 +1158,7 @@ impl Parser<'_> {
     fn parse_decl_specifiers(&mut self, allow_storage: bool) -> PResult<DeclSpecifiers> {
         let start = self.cur_range();
         let mut storage: Option<Spanned<StorageClass>> = None;
+        let mut thread_local: Option<SourceRange> = None;
         let mut inline = false;
         let mut noreturn: Option<SourceRange> = None;
         let mut alignas: Option<Alignment> = None;
@@ -1178,15 +1188,32 @@ impl Parser<'_> {
                 continue;
             }
             if let Some(k) = self.peek().keyword() {
+                // `_Thread_local` is not a storage class of its own: C11
+                // 6.7.1p2 lets it sit beside `static` or `extern`, and at
+                // block scope 6.7.1p3 requires one of them.
+                if matches!(
+                    k,
+                    Keyword::ThreadLocal | Keyword::ThreadLocalName | Keyword::ThreadGnu
+                ) {
+                    let range = self.bump_range();
+                    self.require_keyword(k, range);
+                    consumed_any = true;
+                    if !allow_storage {
+                        self.error(
+                            range,
+                            format!("storage class '{}' is not allowed here", k.as_str()),
+                        );
+                    } else if thread_local.is_none() {
+                        thread_local = Some(range);
+                    }
+                    continue;
+                }
                 let storage_class = match k {
                     Keyword::Typedef => Some(StorageClass::Typedef),
                     Keyword::Extern => Some(StorageClass::Extern),
                     Keyword::Static => Some(StorageClass::Static),
                     Keyword::Auto => Some(StorageClass::Auto),
                     Keyword::Register => Some(StorageClass::Register),
-                    Keyword::ThreadLocal | Keyword::ThreadLocalName | Keyword::ThreadGnu => {
-                        Some(StorageClass::ThreadLocal)
-                    }
                     Keyword::Constexpr => Some(StorageClass::Constexpr),
                     _ => None,
                 };
@@ -1306,6 +1333,7 @@ impl Parser<'_> {
                     Keyword::Bool | Keyword::BoolName => Some(&mut counts.bool),
                     Keyword::Complex => Some(&mut counts.complex),
                     Keyword::Imaginary => Some(&mut counts.imaginary),
+                    Keyword::Int128 => Some(&mut counts.int128),
                     _ => None,
                 };
                 if let Some(c) = counter {
@@ -1419,6 +1447,7 @@ impl Parser<'_> {
 
         Ok(DeclSpecifiers {
             storage,
+            thread_local,
             inline,
             noreturn,
             alignas,
@@ -1585,6 +1614,19 @@ impl Parser<'_> {
             } else {
                 TypeKind::Imaginary(FloatSize::Double)
             }
+        } else if counts.int128 > 0 {
+            // GCC's `__int128` combines with `signed` and `unsigned` and with
+            // nothing else — not even `int`.
+            if counts.int128 > 1 || counts.any_besides(&["__int128", "signed", "unsigned"]) {
+                self.error(
+                    range,
+                    "cannot combine '__int128' with other type specifiers",
+                );
+            }
+            TypeKind::Int {
+                sign: sign.unwrap_or(Sign::Signed),
+                size: IntSize::Int128,
+            }
         } else {
             let size = if counts.short > 0 {
                 if counts.long > 0 {
@@ -1615,7 +1657,8 @@ impl Parser<'_> {
 impl SpecCounts {
     /// Whether any counter outside `allowed` is non-zero.
     fn any_besides(&self, allowed: &[&str]) -> bool {
-        let all: [(&str, u32); 12] = [
+        let all: [(&str, u32); 13] = [
+            ("__int128", self.int128),
             ("void", self.void),
             ("char", self.char),
             ("short", self.short),

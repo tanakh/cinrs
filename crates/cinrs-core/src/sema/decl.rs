@@ -9,6 +9,17 @@ use crate::ir::{
 
 use super::{Entry, Sema, TypedefEntry};
 
+/// What a declaration's `_Thread_local` specifier came to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ThreadLocal {
+    /// There was none.
+    No,
+    /// The object is thread-local, and the declaration is well formed.
+    Yes,
+    /// The declaration was reported; nothing more should be made of it.
+    Rejected,
+}
+
 impl Sema<'_> {
     // -- static assertions --------------------------------------------------
 
@@ -85,6 +96,11 @@ impl Sema<'_> {
 
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
         if let ast::TypeKind::Function(func) = &declarator.ty.kind {
+            // C11 6.7.1p4: `_Thread_local` applies to an object, and a
+            // function is not one.
+            if let Some(range) = decl.specifiers.thread_local {
+                self.error(range, "'_Thread_local' is not allowed on a function");
+            }
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
             self.declare_function(
@@ -118,17 +134,13 @@ impl Sema<'_> {
             self.error(range, "'packed' is only meaningful on a record or a member");
         }
 
-        if storage == Some(ast::StorageClass::ThreadLocal) {
-            let range = decl
-                .specifiers
-                .storage
-                .as_ref()
-                .map_or(declarator.range, |s| s.range);
-            self.error(
-                range,
-                "'_Thread_local' is not supported yet; Rust's own `#[thread_local]` is \
-                 unstable",
-            );
+        let thread_local = self.check_thread_local(decl, storage, file_scope);
+        if thread_local == ThreadLocal::Rejected {
+            // The name is still declared, as something already reported, so
+            // that every use of it adds nothing to the diagnostics.
+            self.check_redefinition(name);
+            let id = self.new_object(&name.name, Ty::Error, Storage::Automatic, false, name.range);
+            self.insert(&name.name, Entry::Object(id));
             return Vec::new();
         }
         if storage == Some(ast::StorageClass::Extern) {
@@ -175,7 +187,16 @@ impl Sema<'_> {
             } else {
                 ty
             };
-            self.declare_static_object(name, ty, is_const, is_static, file_scope, declarator, init);
+            self.declare_static_object(
+                name,
+                ty,
+                is_const,
+                is_static,
+                file_scope,
+                thread_local == ThreadLocal::Yes,
+                declarator,
+                init,
+            );
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 self.apply_object_attributes(id, &attrs, declarator);
             }
@@ -231,6 +252,75 @@ impl Sema<'_> {
             init,
             explicit,
         }]
+    }
+
+    /// Checks a `_Thread_local` object declaration (C11 6.7.1).
+    ///
+    /// The three spellings — `_Thread_local`, C23's `thread_local` and GNU's
+    /// `__thread` — mean the same thing, and the parser has already gated the
+    /// two that a revision introduced. What is left is where the specifier may
+    /// appear and what this crate can generate for it:
+    ///
+    /// * at block scope it needs `static` or `extern` (6.7.1p3), because an
+    ///   object with automatic storage duration is per *call*, not per thread;
+    /// * `extern` is refused: naming a TLS symbol another object file defines
+    ///   needs Rust's `#[thread_local]` on an `extern` item, which is unstable;
+    /// * a function is not an object (6.7.1p4);
+    /// * and the object's initialiser must be a constant expression, which the
+    ///   static-initialiser path enforces on its own.
+    ///
+    /// [`ThreadLocal::Rejected`] means the declaration was reported and the
+    /// caller should register the name as an error and stop.
+    fn check_thread_local(
+        &mut self,
+        decl: &ast::Decl,
+        storage: Option<ast::StorageClass>,
+        file_scope: bool,
+    ) -> ThreadLocal {
+        let Some(range) = decl.specifiers.thread_local else {
+            return ThreadLocal::No;
+        };
+        if storage == Some(ast::StorageClass::Extern) {
+            self.error(
+                range,
+                "an 'extern' thread-local object is not supported: reaching a TLS symbol \
+                 defined elsewhere needs Rust's `#[thread_local]`, which is unstable. \
+                 Define the object in this unit instead",
+            );
+            return ThreadLocal::Rejected;
+        }
+        if matches!(
+            storage,
+            Some(ast::StorageClass::Auto | ast::StorageClass::Register)
+        ) {
+            self.error(
+                range,
+                "'_Thread_local' cannot be combined with 'auto' or 'register'; it goes with \
+                 'static' or 'extern', or on its own at file scope",
+            );
+            return ThreadLocal::Rejected;
+        }
+        if storage == Some(ast::StorageClass::Constexpr) {
+            self.error(
+                range,
+                "'_Thread_local' cannot be combined with 'constexpr'; a constant has no \
+                 storage to give a thread a copy of",
+            );
+            return ThreadLocal::Rejected;
+        }
+        if !file_scope && storage != Some(ast::StorageClass::Static) {
+            // C11 6.7.1p3. GCC says the same thing in the same place.
+            self.error(
+                range,
+                "'_Thread_local' on a block-scope object needs 'static' or 'extern': the \
+                 object has static storage duration, one copy per thread",
+            );
+            return ThreadLocal::Rejected;
+        }
+        // A variably modified type needs nothing here: the object has static
+        // storage duration either way, and the variable-length-array path
+        // already says so in more useful words.
+        ThreadLocal::Yes
     }
 
     /// Declares a variable length array: `T a[n];` (C99 6.7.5.2).
@@ -334,6 +424,26 @@ impl Sema<'_> {
         attrs: &ast::Attributes,
         declarator: &ast::InitDeclarator,
     ) {
+        // A thread-local object is a `thread_local!` item rather than a
+        // `static`, and neither of these has anywhere to go on one: a
+        // `link_section` and a symbol name both describe a linker symbol that
+        // a `thread_local!` does not have.
+        if self.program.object(id).storage.is_thread_local() {
+            for range in [
+                declarator.asm_label.as_ref().map(|label| label.range),
+                attrs.section.as_ref().map(|section| section.range),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                self.error(
+                    range,
+                    "a '_Thread_local' object has no linker symbol to name or to place in a \
+                     section: it becomes a `thread_local!` item",
+                );
+            }
+            return;
+        }
         if let Some(label) = &declarator.asm_label {
             self.program.objects[id.0 as usize].asm_label = Some(label.node.clone());
         }
@@ -483,6 +593,7 @@ impl Sema<'_> {
         is_const: bool,
         is_static: bool,
         file_scope: bool,
+        thread_local: bool,
         declarator: &ast::InitDeclarator,
         init: Option<Expr>,
     ) {
@@ -493,6 +604,24 @@ impl Sema<'_> {
             && let Some(Entry::Object(existing)) = self.declared_here(&name.name).cloned()
             && self.program.object(existing).ty == ty
         {
+            // C11 6.7.1p3: if `_Thread_local` appears in any declaration of an
+            // object it has to appear in every one. Letting the two disagree
+            // would silently give the object whichever storage the *first*
+            // declaration asked for.
+            if thread_local != self.program.object(existing).storage.is_thread_local() {
+                let previous = self.program.object(existing).range;
+                self.error_note(
+                    name.range,
+                    format!(
+                        "'{}' is declared '_Thread_local' here but not there; the specifier \
+                         has to be on every declaration of an object",
+                        name.name
+                    ),
+                    previous,
+                    format!("previous declaration of '{}' is", name.name),
+                );
+                return;
+            }
             self.complete_tentative_definition(name, existing, declarator, init, !is_static);
             return;
         }
@@ -517,16 +646,19 @@ impl Sema<'_> {
             )
         };
         let item_name = self.reserve_item_name(&base);
-        let id = self.new_object(
-            &name.name,
-            ty,
+        let exported = file_scope && !is_static;
+        let storage = if thread_local {
+            Storage::ThreadLocal {
+                item_name,
+                exported,
+            }
+        } else {
             Storage::Static {
                 item_name,
-                exported: file_scope && !is_static,
-            },
-            is_const,
-            name.range,
-        );
+                exported,
+            }
+        };
+        let id = self.new_object(&name.name, ty, storage, is_const, name.range);
         self.insert(&name.name, Entry::Object(id));
 
         // C zero-initialises static storage; an initialiser, if written, must
@@ -932,18 +1064,18 @@ impl Sema<'_> {
         let mut param_tys = Vec::with_capacity(func.params.len());
         let mut param_names = Vec::with_capacity(func.params.len());
         for param in &func.params {
-            // A parameter is an object of automatic storage duration; the two
-            // storage classes below cannot apply to one.
+            // A parameter is an object of automatic storage duration; neither
+            // of these can apply to one.
             if let Some(storage) = &param.specifiers.storage
-                && matches!(
-                    storage.node,
-                    ast::StorageClass::Constexpr | ast::StorageClass::ThreadLocal
-                )
+                && storage.node == ast::StorageClass::Constexpr
             {
                 self.error(
                     storage.range,
                     format!("'{}' is not allowed on a parameter", storage.node.as_str()),
                 );
+            }
+            if let Some(range) = param.specifiers.thread_local {
+                self.error(range, "'_Thread_local' is not allowed on a parameter");
             }
             let ty = match self.resolve_param_ty(&param.ty) {
                 Ok(ty) => ty,
@@ -1232,6 +1364,7 @@ impl Sema<'_> {
                     out.params.push(ast::ParamDecl {
                         specifiers: ast::DeclSpecifiers {
                             storage: None,
+                            thread_local: None,
                             inline: false,
                             noreturn: None,
                             alignas: None,
@@ -1556,7 +1689,11 @@ impl Sema<'_> {
     fn is_static_place(&self, place: &Place) -> bool {
         match &place.kind {
             PlaceKind::Object(id) => {
-                !matches!(self.program.object(*id).storage, Storage::Automatic)
+                let storage = &self.program.object(*id).storage;
+                // The address of a thread-local object is not a link-time
+                // constant: there is one per thread, and no thread exists yet
+                // when a static initialiser is evaluated. GCC says the same.
+                !matches!(storage, Storage::Automatic) && !storage.is_thread_local()
             }
             PlaceKind::Str(_) => true,
             PlaceKind::Field { base, .. } => self.is_static_place(base),

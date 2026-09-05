@@ -349,12 +349,40 @@ fn noreturn_ends_a_function() {
 }
 
 #[test]
-fn what_c11_added_and_this_crate_does_not_do() {
+fn thread_local_objects_are_accepted_where_c_allows_them() {
+    accepted(Standard::C11, "_Thread_local int counter;");
+    accepted(Standard::C11, "static _Thread_local int counter = 3;");
+    accepted(
+        Standard::C11,
+        "int f(void) { static _Thread_local int n; return ++n; }",
+    );
+    // C23 spells it `thread_local`, and GNU's `__thread` is reserved and
+    // therefore available in every entry point.
+    accepted(Standard::C23, "thread_local int counter;");
+    accepted(Standard::C89, "__thread int counter;");
+    // C11 6.7.1p3: at block scope one of `static` and `extern` is required.
     rejected(
         Standard::C11,
-        "_Thread_local int counter;",
-        &["'_Thread_local' is not supported yet; Rust's own `#[thread_local]` is unstable"],
+        "int f(void) { _Thread_local int n; return n; }",
+        &[
+            "'_Thread_local' on a block-scope object needs 'static' or 'extern': the object \
+           has static storage duration, one copy per thread",
+        ],
     );
+    // The one shape C allows and this crate cannot generate.
+    rejected(
+        Standard::C11,
+        "extern _Thread_local int elsewhere;",
+        &[
+            "an 'extern' thread-local object is not supported: reaching a TLS symbol defined \
+           elsewhere needs Rust's `#[thread_local]`, which is unstable. Define the object \
+           in this unit instead",
+        ],
+    );
+}
+
+#[test]
+fn what_c11_added_and_this_crate_does_not_do() {
     rejected(
         Standard::C11,
         "_Atomic int counter;",

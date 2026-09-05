@@ -104,6 +104,8 @@ pub enum IntSize {
     Long,
     /// `long long`
     LongLong,
+    /// GNU's `__int128`.
+    Int128,
 }
 
 /// Rank of a standard floating type.
@@ -442,8 +444,6 @@ pub enum StorageClass {
     Auto,
     /// `register`
     Register,
-    /// `_Thread_local` / `thread_local` — C11.
-    ThreadLocal,
     /// `constexpr` — C23.
     Constexpr,
 }
@@ -457,7 +457,6 @@ impl StorageClass {
             StorageClass::Static => "static",
             StorageClass::Auto => "auto",
             StorageClass::Register => "register",
-            StorageClass::ThreadLocal => "_Thread_local",
             StorageClass::Constexpr => "constexpr",
         }
     }
@@ -540,6 +539,14 @@ impl Attributes {
 pub struct DeclSpecifiers {
     /// The storage class, if one was written.
     pub storage: Option<Spanned<StorageClass>>,
+    /// Where `_Thread_local`, C23's `thread_local` or GNU's `__thread` was
+    /// written, if it was.
+    ///
+    /// It is not a [`StorageClass`], because C11 6.7.1p2 lets it appear
+    /// *beside* one: `static _Thread_local int x;` names a thread-local object
+    /// with internal linkage, and at block scope one of `static` or `extern`
+    /// is required (6.7.1p3).
+    pub thread_local: Option<SourceRange>,
     /// Whether `inline` was written.
     pub inline: bool,
     /// Whether the declaration was marked `_Noreturn`, `[[noreturn]]` or

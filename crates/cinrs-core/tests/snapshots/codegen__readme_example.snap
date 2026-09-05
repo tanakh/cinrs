@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int fact(int n) {\n            if (n == 0) {\n                return 1;\n            } else {\n                return n * fact(n - 1);\n            }\n        }\n        \")"
 ---
 mod __cinrs_unit_9481fa3b {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn fact(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {

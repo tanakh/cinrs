@@ -1,0 +1,8 @@
+error: a '_Thread_local' object cannot be exported: `#pragma cinrs export` gives an item a C symbol, and there is no stable way to give one to a `thread_local!`
+ --> tests/ui/thread_local_export.rs:8:23
+  |
+8 |     _Thread_local int shared;
+  |                       ^^^^^^
+
+error: aborting due to 1 previous error
+

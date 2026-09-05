@@ -1,0 +1,57 @@
+error: '_Thread_local' on a block-scope object needs 'static' or 'extern': the object has static storage duration, one copy per thread
+ --> tests/ui/c11_thread_local_errors.rs:9:9
+  |
+9 |         _Thread_local int local;
+  |         ^^^^^^^^^^^^^
+
+error: '_Thread_local' is not allowed on a parameter
+  --> tests/ui/c11_thread_local_errors.rs:12:12
+   |
+12 |     void g(_Thread_local int p);
+   |            ^^^^^^^^^^^^^
+
+error: '_Thread_local' is not allowed on a function
+  --> tests/ui/c11_thread_local_errors.rs:14:5
+   |
+14 |     _Thread_local void h(void);
+   |     ^^^^^^^^^^^^^
+
+error: an 'extern' thread-local object is not supported: reaching a TLS symbol defined elsewhere needs Rust's `#[thread_local]`, which is unstable. Define the object in this unit instead
+  --> tests/ui/c11_thread_local_errors.rs:16:12
+   |
+16 |     extern _Thread_local int elsewhere;
+   |            ^^^^^^^^^^^^^
+
+error: initializer is not a compile-time constant expression
+  --> tests/ui/c11_thread_local_errors.rs:19:31
+   |
+19 |     _Thread_local int *link = &seed;
+   |                               ^
+
+error: '_Thread_local' cannot be combined with 'auto' or 'register'; it goes with 'static' or 'extern', or on its own at file scope
+  --> tests/ui/c11_thread_local_errors.rs:22:18
+   |
+22 |         register _Thread_local int r;
+   |                  ^^^^^^^^^^^^^
+
+error: 'both' is declared '_Thread_local' here but not there; the specifier has to be on every declaration of an object
+       note: previous declaration of 'both' is at line 26
+  --> tests/ui/c11_thread_local_errors.rs:27:9
+   |
+27 |     int both = 1;
+   |         ^^^^
+
+error: a '_Thread_local' object has no linker symbol to name or to place in a section: it becomes a `thread_local!` item
+  --> tests/ui/c11_thread_local_errors.rs:30:45
+   |
+30 |     _Thread_local int placed __attribute__((section(".mine")));
+   |                                             ^^^^^^^
+
+error: a '_Thread_local' object has no linker symbol to name or to place in a section: it becomes a `thread_local!` item
+  --> tests/ui/c11_thread_local_errors.rs:32:31
+   |
+32 |     _Thread_local int renamed __asm__("other_name");
+   |                               ^^^^^^^
+
+error: aborting due to 9 previous errors
+

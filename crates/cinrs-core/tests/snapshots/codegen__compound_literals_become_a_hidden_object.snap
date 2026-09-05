@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        struct S { int a; int b; };\n\n        struct S *global = &(struct S){ 1, 2 };\n\n        int local(int n) {\n            struct S *p = &(struct S){ n, n + 1 };\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                total += (int[]){ i, i * 2 }[1];\n            }\n            return p->a + p->b + total;\n        }\n        \")"
 ---
 mod __cinrs_unit_e8e1058d {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

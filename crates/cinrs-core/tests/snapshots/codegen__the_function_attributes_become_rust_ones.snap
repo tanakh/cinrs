@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        __attribute__((always_inline)) int fast(int n) { return n + 1; }\n        __attribute__((noinline, cold)) int slow(int n) { return n + 2; }\n        __attribute__((deprecated(\"use fast\"))) int old(int n) { return n; }\n        __attribute__((section(\".text.hot\"))) int placed(void) { return 1; }\n        int renamed(int n) __asm__(\"other_symbol\");\n        int call_renamed(int n) { return renamed(n); }\n        \"#)"
 ---
 mod __cinrs_unit_c25379d4 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "other_symbol"]

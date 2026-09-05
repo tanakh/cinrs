@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int taker();\n        int made_here() { return 1; }\n\n        int call_them(void) {\n            char c = 3;\n            int (*fp)() = made_here;\n            return taker() + taker(c) + made_here() + fp(1.5f, c);\n        }\n        \")"
 ---
 mod __cinrs_unit_949d5fe9 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "taker"]

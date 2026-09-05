@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        int as_int(double d) { return (int)d; }\n\n        int describe(int i, double d, char *s) {\n            return _Generic(i, int: 1, double: 2, char *: 3, default: 0)\n                 + _Generic(d, int: 1, double: as_int(d), default: 0)\n                 + _Generic(s, char *: (int)*s, default: 0);\n        }\n\n        struct Pair { int a; double b; };\n        double d;\n\n        unsigned long alignments(void) {\n            return _Alignof(double) + _Alignof(struct Pair) + _Alignof(d);\n        }\n        \"#)"
 ---
 mod __cinrs_unit_16919680 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

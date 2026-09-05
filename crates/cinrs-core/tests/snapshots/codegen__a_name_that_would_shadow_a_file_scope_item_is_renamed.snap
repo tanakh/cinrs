@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int counter;\n        enum Level { Low, High };\n\n        int bump(int counter) {\n            int Low = counter + 1;\n            return Low;\n        }\n\n        int step(int n) {\n            switch (n) {\n                int counter;\n            case 0:\n                counter = 1;\n                return counter;\n            }\n            return 0;\n        }\n        \")"
 ---
 mod __cinrs_unit_679b7a79 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub type Level = ::core::ffi::c_int;
     #[allow(…)]

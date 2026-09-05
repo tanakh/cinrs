@@ -85,6 +85,12 @@ impl Rng {
 ///
 /// The widths of `long` stop at 32 so that the corpus is valid on a target
 /// where `long` is 32 bits too; everything wider is covered by `long long`.
+///
+/// The `__int128` widths stop at 120 for a different reason. A packed record
+/// switches the allocation-unit rule off, so a field may start at any bit
+/// offset — up to seven past a byte — and the accessors read the bytes it
+/// overlaps into one unsigned word, of which `u128` is the widest Rust has.
+/// 120 plus seven still fits; 128 plus seven would not.
 const BIT_TYPES: &[(&str, u32)] = &[
     ("_Bool", 1),
     ("char", 8),
@@ -98,6 +104,8 @@ const BIT_TYPES: &[(&str, u32)] = &[
     ("unsigned long", 32),
     ("long long", 64),
     ("unsigned long long", 64),
+    ("__int128", 120),
+    ("unsigned __int128", 120),
     ("enum BfSigned", 32),
     // One bit short of `int`: an enumeration whose underlying type is
     // unsigned can hold a full-width value that `int` cannot represent, and

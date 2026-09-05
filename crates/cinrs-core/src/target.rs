@@ -7,17 +7,23 @@
 //! `char` is signed. Sema therefore needs a concrete model of the machine
 //! before it can type a single expression.
 //!
-//! # Known limitation
+//! # Known limitation, and the check that guards it
 //!
 //! [`TargetModel::host`] reads the configuration of the machine the procedural
 //! macro itself was compiled for — that is, the *host*. When cross-compiling to
 //! a target with a different data model (say a 64-bit Linux host building for
 //! 64-bit Windows, where `long` is 32 bits) the model is wrong: integer
 //! promotions and the typing of constants would follow the host's rules while
-//! `::core::ffi::c_long` follows the target's. The generated code still uses
-//! the `core::ffi` aliases, so simple programs are unaffected; programs whose
-//! meaning depends on the width of `long` are not. Selecting the model through
-//! a macro option is planned.
+//! `::core::ffi::c_long` follows the target's.
+//!
+//! Which is why every expansion **states the model it was translated for**, as
+//! a `const _: () = { assert!(…); };` block at the top of the unit's module —
+//! one assertion per width, over the `core::ffi` aliases, which follow the
+//! target. See `codegen`'s `data_model_check`. A mismatch is therefore a
+//! failed compile-time assertion with the caret on the C rather than a program
+//! that quietly computes the wrong thing: cross-compilation to a different
+//! data model is *detected and refused*, not performed. Selecting the model
+//! through a macro option is what would turn the refusal into a translation.
 
 /// Widths (in bits) and `char` signedness of the machine the generated code
 /// runs on.
@@ -36,6 +42,16 @@ pub struct TargetModel {
     pub long_long_bits: u32,
     /// Width of a pointer; also the width `size_t` is derived from.
     pub ptr_bits: u32,
+    /// Alignment of `__int128`, **in bytes**.
+    ///
+    /// The width is not a knob: GCC's `__int128` is 128 bits wherever it
+    /// exists at all. The alignment is, and it is the one place where the
+    /// generated Rust could disagree with the model: `i128` is 16-byte aligned
+    /// on x86-64 (which is the ABI `__int128` has there, and what Rust matched
+    /// in 1.77) and 8-byte aligned on some others. Reading it off the compiling
+    /// toolchain — see [`TargetModel::host`] — is what keeps `sizeof`, member
+    /// offsets and `_Alignof` agreeing with what `rustc` will really lay out.
+    pub int128_align: u64,
 }
 
 impl TargetModel {
@@ -48,6 +64,7 @@ impl TargetModel {
         long_bits: 64,
         long_long_bits: 64,
         ptr_bits: 64,
+        int128_align: 16,
     };
 
     /// The ILP32 model used by 32-bit systems, and by 64-bit Windows for
@@ -59,6 +76,7 @@ impl TargetModel {
         long_bits: 32,
         long_long_bits: 64,
         ptr_bits: 32,
+        int128_align: 16,
     };
 
     /// The model of the machine this crate was compiled for.
@@ -104,6 +122,10 @@ impl TargetModel {
             } else {
                 16
             },
+            // Read off the compiling toolchain rather than guessed: `__int128`
+            // is generated as `i128`, so the alignment the layout code works
+            // with must be the one `rustc` will really give it.
+            int128_align: core::mem::align_of::<i128>() as u64,
         }
     }
 }

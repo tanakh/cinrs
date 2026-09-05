@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        enum Kind { EMPTY, FULL = 4 };\n\n        struct Point { int x; int y; };\n\n        union Bits { float f; unsigned int u; };\n\n        typedef struct Point Point;\n\n        struct Shape {\n            enum Kind kind;\n            struct Point origin;\n            union Bits tag;\n        };\n\n        static struct Shape current = {.kind = FULL, .origin = {1, 2}};\n\n        int move_by(struct Shape *shape, int dx, int dy) {\n            shape->origin.x += dx;\n            shape->origin.y += dy;\n            return shape->origin.x;\n        }\n\n        Point centre(struct Shape s) {\n            return s.origin;\n        }\n\n        unsigned long shape_size(void) {\n            return sizeof(struct Shape);\n        }\n        \")"
 ---
 mod __cinrs_unit_7fd40f37 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

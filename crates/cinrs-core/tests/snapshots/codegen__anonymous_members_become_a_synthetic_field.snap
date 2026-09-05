@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        struct Value {\n            int tag;\n            union {\n                int as_int;\n                double as_double;\n            };\n        };\n\n        int read(struct Value *v) { return v->as_int; }\n        void write(struct Value *v, double d) { v->as_double = d; }\n        struct Value make(void) {\n            struct Value v = { .tag = 2, .as_double = 1.5 };\n            return v;\n        }\n        unsigned long where(void) { return __builtin_offsetof(struct Value, as_double); }\n        \"#)"
 ---
 mod __cinrs_unit_fdfea189 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

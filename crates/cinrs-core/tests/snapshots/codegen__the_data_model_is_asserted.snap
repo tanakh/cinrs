@@ -1,0 +1,30 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "data_model_check(cinrs_core::TargetModel::LP64, \"int f(void) { return 0; }\")"
+---
+const _: () = {
+    assert!(
+        ::core::mem::size_of:: < ::core::ffi::c_short > () == 2,
+        "cinrs: this unit was translated for a data model where 'short' is 2 bytes, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+    assert!(
+        ::core::mem::size_of:: < ::core::ffi::c_int > () == 4,
+        "cinrs: this unit was translated for a data model where 'int' is 4 bytes, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+    assert!(
+        ::core::mem::size_of:: < ::core::ffi::c_long > () == 8,
+        "cinrs: this unit was translated for a data model where 'long' is 8 bytes, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+    assert!(
+        ::core::mem::size_of:: < ::core::ffi::c_longlong > () == 8,
+        "cinrs: this unit was translated for a data model where 'long long' is 8 bytes, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+    assert!(
+        ::core::mem::size_of:: < * const ::core::ffi::c_void > () == 8,
+        "cinrs: this unit was translated for a data model where a pointer is 8 bytes, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+    assert!(
+        ::core::ffi::c_char::MIN != 0,
+        "cinrs: this unit was translated for a data model where plain 'char' is signed, and this target's is not. Cross-compilation to a different data model is not supported."
+    );
+};

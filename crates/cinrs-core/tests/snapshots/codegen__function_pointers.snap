@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        typedef int (*BinOp)(int, int);\n\n        int add(int a, int b) { return a + b; }\n\n        int apply(BinOp op, int a, int b) {\n            if (op == 0) {\n                return 0;\n            }\n            return op(a, b);\n        }\n\n        int use_add(int a, int b) {\n            BinOp op = add;\n            return apply(op, a, b);\n        }\n        \")"
 ---
 mod __cinrs_unit_ae1f887f {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub type BinOp = ::core::option::Option<
         unsafe extern "C" fn(

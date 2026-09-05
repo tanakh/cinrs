@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #include <stddef.h>\n\n        struct Mixed { char tag; int count; double weight; };\n\n        size_t weight_offset(void) {\n            return offsetof(struct Mixed, weight);\n        }\n        \")"
 ---
 mod __cinrs_unit_8605ad16 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

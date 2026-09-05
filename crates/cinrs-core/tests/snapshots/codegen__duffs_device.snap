@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        void copy(char *to, const char *from, int count) {\n            int n = (count + 3) / 4;\n            switch (count % 4) {\n            case 0: do { *to++ = *from++;\n            case 3:      *to++ = *from++;\n            case 2:      *to++ = *from++;\n            case 1:      *to++ = *from++;\n                    } while (--n > 0);\n            }\n        }\n        \")"
 ---
 mod __cinrs_unit_e974c52e {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn copy(
         mut to: *mut ::core::ffi::c_char,

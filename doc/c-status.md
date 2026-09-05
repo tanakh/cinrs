@@ -45,10 +45,39 @@ What `gnu89!` keeps of C89 is only what a later revision **deleted**: implicit
 Two of the rows below are answered by the *entry point* rather than by the
 front end: `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 `__STDC_NO_COMPLEX__` are all predefined, so the four features they name are
-conforming omissions rather than gaps. `__STDC_NO_VLA__` is now the
-conservative half of a *partial* feature — one-dimensional variable length
-arrays work — and it stays defined until the rest of the variably modified
-types do.
+conforming omissions rather than gaps. Two of the four are now the
+conservative half of a feature that partly works: `__STDC_NO_VLA__` stays
+defined although one-dimensional variable length arrays do, until the rest of
+the variably modified types follow, and `__STDC_NO_THREADS__` stays defined
+although `_Thread_local` does, because `<threads.h>` is what the macro is
+about.
+
+## The target model
+
+Almost every row below is answered against a *model* of the machine rather than
+against the machine: `sizeof`, `_Alignof`, member offsets, bit-field storage,
+the type an integer constant gets, whether `-1 < 1u`, and the value of an `#if`
+are all computed while the macro is expanding, from
+`cinrs_core::TargetModel` — the widths of `short`, `int`, `long`, `long long`
+and a pointer, the signedness of plain `char`, and the alignment of
+`__int128`. It defaults to the machine the procedural macro itself was compiled
+for, which is the *host*, because nothing in Cargo tells a procedural macro
+what the target is.
+
+Cross-compiling to a machine with a different data model would therefore leave
+those answers quietly wrong — 64-bit Windows is LLP64, where `long` is four
+bytes; wasm32 and the 32-bit targets are ILP32; AArch64 and s390x make plain
+`char` unsigned. So **every expansion states the model it was translated for**,
+as a `const _: () = { assert!(…); };` block at the top of the unit's module:
+one assertion per width, over the `core::ffi` aliases, which follow the
+*target*. A mismatch is a failed assertion with the caret on the C, not a
+program that computes the wrong thing. `__int128`'s alignment is asserted in a
+unit that has one, being the only scalar whose alignment does not follow from
+its width.
+
+The check is a guard, not support: cross-compilation to a different data model
+is refused, not performed. Selecting the model through a macro option is what
+would turn the refusal into a translation.
 
 ## C99
 
@@ -86,7 +115,7 @@ types do.
 | Boolean type in `<stdbool.h>` | N815 | Yes | |
 | Idempotent type qualifiers | N505 | Unverified | |
 | Empty macro arguments | N570 | Yes | |
-| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, the four `__STDC_NO_*` subsetting macros, `__STDC_UTF_16__` and `__STDC_UTF_32__` (C11 7.28p2: `char16_t` and `char32_t` really are UTF-16 and UTF-32), and the three `__STDC_EMBED_*` answers `__has_embed` gives; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). Absent on purpose: `__SIZEOF_INT128__` (there is no `__int128`), `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
+| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, the four `__STDC_NO_*` subsetting macros, `__STDC_UTF_16__` and `__STDC_UTF_32__` (C11 7.28p2: `char16_t` and `char32_t` really are UTF-16 and UTF-32), and the three `__STDC_EMBED_*` answers `__has_embed` gives; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). `__SIZEOF_INT128__` is `16`, because `__int128` is a type this crate has. Absent on purpose: `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
 | `_Pragma` preprocessing operator | N634 | Yes | Destringized and executed as the directive it spells, so a macro can produce one. |
 | Standard pragmas (`STDC FP_CONTRACT`, …) | N631, N696 | Accepted | Ignored. |
 | `__func__` predefined identifier | N611 | Yes | A `const char[]` in every function body, so `sizeof(__func__)` is the name's length; GCC's `__FUNCTION__` and `__PRETTY_FUNCTION__` are the same thing. |
@@ -130,7 +159,7 @@ Also standard C99 but absent from Clang's list:
 | `_Bool` bit-fields | N1356 | Yes | Width 1, read as `bool`, promoted to `int`. |
 | Technical corrigendum for C1X | N1359 | N/A | |
 | Benign typedef redefinition | N1360 | Unverified | |
-| Thread-local storage | N1364 | No | `#[thread_local]` is unstable in Rust; `_Thread_local` is rejected. |
+| Thread-local storage | N1364 | Yes | `_Thread_local` at file scope and on a block-scope `static` (6.7.1p3 requires `static` or `extern` there), with a constant initialiser; C23's `thread_local` and GNU's `__thread` are the same thing. The object becomes a `std::thread_local!` item holding an `UnsafeCell<T>`, and every access goes through the `*mut T` its `with` hands out, which is valid for as long as the current thread's copy is — C's own guarantee about the address. Two shapes are refused: `extern _Thread_local`, which would need Rust's unstable `#[thread_local]` on an `extern` item, and exporting one under `#pragma cinrs export`, since a `thread_local!` has no stable way to be given a C symbol. Because `thread_local!` is a `std` macro, this is the third construct whose expansion needs more than `core`, after variable length arrays and `alloca`; `#pragma cinrs no_std` refuses it with that reason. `<threads.h>` and the rest of C11's threads are still absent, and `__STDC_NO_THREADS__` says so. |
 | Constant expressions | N1365 | N/A | |
 | Contractions and expression evaluation methods | N1367 | N/A | |
 | Floating-point to int/`_Bool` conversions | N1391 | Yes | |
@@ -140,7 +169,7 @@ Also standard C99 but absent from Clang's list:
 | Completeness of types | N1439 | N/A | |
 | Generic macro facility (`_Generic`) | N1441 | Yes | |
 | Dependency ordering for C memory model | N1444 | N/A | |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. It comes off when the [C99 row](#c99) does. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. Two of them are the conservative half of a feature that partly works. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. `__STDC_NO_THREADS__` likewise stays defined although `_Thread_local` works ([N1364](#c11)): the macro is about `<threads.h>` and 7.26, which are not there at all. Each comes off when the rest of its feature lands. |
 | Assumed types in F.9.2 | N1468 | N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | Yes | |
 | Updates to the memory model | N1480 | N/A | |
@@ -222,7 +251,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | `char8_t` | N2653 | Yes | A typedef of `unsigned char` in `<uchar.h>`, and — in `c23!` and `gnu23!` only — the element type of a `u8"…"` string and the type of a `u8'x'` constant; before C23 a `u8"…"` is still a `char[]`. `mbrtoc8` and `c8rtomb` are declared there too. |
 | Consistent, warningless and intuitive initialization with `{}` | N2900, N3011 | Yes | |
 | Not-so-magic: `typeof`, `typeof_unqual` | N2927, N2930 | Yes | `typeof_unqual` equals `typeof` (no top-level qualifiers in the type model). |
-| Revise spelling of keywords (`bool`, `static_assert`, `alignof`, `alignas`, `thread_local`) | N2934 | Partial | All are keywords; `thread_local` objects are rejected. |
+| Revise spelling of keywords (`bool`, `static_assert`, `alignof`, `alignas`, `thread_local`) | N2934 | Yes | All are keywords, and each means what the underscored spelling means; see the [N1364 row](#c11) for what `thread_local` comes to. |
 | Make `false` and `true` first-class language features | N2935 | Yes | |
 | Properly define blocks as part of the grammar | N2937 | N/A | |
 | Annex H (interchange and extended types) | N2601, N2844 | No | |

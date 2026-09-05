@@ -55,6 +55,7 @@ pub fn type_to_string(unit: &TranslationUnit, ty: &Type) -> String {
                 IntSize::Int => "int",
                 IntSize::Long => "long",
                 IntSize::LongLong => "long long",
+                IntSize::Int128 => "__int128",
             });
         }
         TypeKind::Float(size) => s.push_str(float_size(*size)),

@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C23,\nr#\"\n        constexpr int LIMIT = 4;\n\n        int sum(void) {\n            int values[LIMIT] = { 1, 2, 3, 4 };\n            typeof(values[0]) total = 0;\n            for (auto i = 0; i < LIMIT; i++) total += values[i];\n            return total;\n        }\n\n        enum Small : unsigned char { RED, GREEN };\n        bool is_red(enum Small s) { return s == RED; }\n        void *nothing(void) { return nullptr; }\n        \"#)"
 ---
 mod __cinrs_unit_8f5fa472 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub const RED: ::core::ffi::c_uchar = 0;
     #[allow(…)]

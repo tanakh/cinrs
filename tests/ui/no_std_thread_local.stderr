@@ -1,0 +1,8 @@
+error: '_Thread_local' requires std; this unit says no_std. Rust's `thread_local!` is a `std` macro, and `core` has no thread-local storage
+  --> tests/ui/no_std_thread_local.rs:13:23
+   |
+13 |     _Thread_local int counter;
+   |                       ^^^^^^^
+
+error: aborting due to 1 previous error
+

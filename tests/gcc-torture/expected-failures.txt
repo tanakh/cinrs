@@ -403,7 +403,6 @@ execute/pr82954                       compile error: inline assembly is not supp
 execute/pr84478                       compile error: inline assembly is not supported
 execute/pr84521                       compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr84524                       compile error: inline assembly is not supported
-execute/pr84748                       compile error: expected ';' after declaration, found identifier 'u128'
 execute/pr85156                       compile error: inline assembly is not supported
 execute/pr85169                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr85331                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -412,7 +411,6 @@ execute/pr86714                       compile error: initializer-string for char
 execute/pr88904                       compile error: inline assembly is not supported
 execute/pr92618                       compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr92904                       compile error: va_arg with a struct type is not supported yet
-execute/pr93213                       compile error: expected ';' after declaration, found identifier 'u128'
 execute/pr93945                       compile error: inline assembly is not supported
 execute/pr94130                       compile error: inline assembly is not supported
 execute/pr94412                       compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable

@@ -145,6 +145,7 @@
 //! nothing at all, because the list ends when its value is dropped. See
 //! [`crate::sema`]'s `va` module for the model.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
@@ -180,7 +181,14 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
         out.extend(cg.init_array_guard());
         out.extend(initialisers);
     }
-    out
+    if out.is_empty() {
+        // A unit that declares nothing expands to nothing at all — not even a
+        // module — and there is no code for the data model to be wrong about.
+        return out;
+    }
+    let mut items = cg.data_model_check();
+    items.extend(out);
+    items
 }
 
 /// Generates signature-only items for a program that did not type check.
@@ -468,6 +476,26 @@ struct BitAccess {
     setter: Ident,
 }
 
+/// The unsigned word a bit-field's bytes are gathered into, and what its
+/// accessors need to know about it.
+///
+/// See [`Codegen::bit_field_window`]; the word is `u64` for every bit-field
+/// standard C allows and `u128` for the wide ones GNU's `__int128` makes
+/// possible.
+struct BitWindow {
+    /// The expression that reads the overlapping bytes into the word.
+    read: TokenStream,
+    /// The field's bit offset inside the word.
+    shift: u32,
+    /// The field's bits, in place, inside the word.
+    mask: u128,
+    /// The word's Rust type: `u64` or `::core::primitive::u128`.
+    word: TokenStream,
+    /// Its width in bits, which is what a mask and a sign extension are
+    /// written against.
+    word_bits: u32,
+}
+
 /// Where the pristine argument list of the function being generated lives.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VaSource {
@@ -498,6 +526,13 @@ struct Codegen<'a> {
     /// top and a definition is an assignment.
     in_cfg: bool,
     temporaries: u32,
+    /// Set the first time a `__int128` reaches the output, which is what
+    /// decides whether the [data-model check](Codegen::data_model_check) has
+    /// anything to say about `i128`'s alignment.
+    ///
+    /// A [`Cell`] because [`Codegen::ty`] takes `&self`; the check is built
+    /// after every item, so it sees the final answer.
+    uses_int128: Cell<bool>,
 }
 
 impl<'a> Codegen<'a> {
@@ -507,8 +542,8 @@ impl<'a> Codegen<'a> {
         // A `static mut` and a `const` are both in the value namespace, so a
         // binding of the same name is `E0530` rather than a shadow.
         for var in &program.statics {
-            if let Storage::Static { item_name, .. } = &program.object(var.object).storage {
-                reserved.insert(item_name.clone());
+            if let Some(item_name) = program.object(var.object).storage.item_name() {
+                reserved.insert(item_name.to_owned());
             }
         }
         for constant in &program.enum_constants {
@@ -525,6 +560,7 @@ impl<'a> Codegen<'a> {
             ret_ty: Ty::Void,
             in_cfg: false,
             temporaries: 0,
+            uses_int128: Cell::new(false),
         }
     }
 
@@ -603,6 +639,19 @@ impl<'a> Codegen<'a> {
             Ty::ULong => "c_ulong",
             Ty::LongLong => "c_longlong",
             Ty::ULongLong => "c_ulonglong",
+            // `core::ffi` has no alias for these: `__int128` is not a C type
+            // the standard knows, and Rust's own `i128` has had its ABI since
+            // 1.77. The `core::primitive` path rather than the bare name,
+            // because `typedef unsigned __int128 u128;` is how real C spells
+            // it and `pub type u128 = u128;` is a cycle.
+            Ty::Int128 => {
+                self.uses_int128.set(true);
+                return primitive_ty("i128", span);
+            }
+            Ty::UInt128 => {
+                self.uses_int128.set(true);
+                return primitive_ty("u128", span);
+            }
             Ty::Float => "c_float",
             Ty::Double => "c_double",
             // The lifetime is elided: `VaList` only ever appears as the type of
@@ -857,23 +906,29 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=> #attrs impl #name { #methods } }
     }
 
-    /// Reads the bytes a bit-field overlaps into a `u64`.
+    /// Reads the bytes a bit-field overlaps into one unsigned integer.
     ///
-    /// The unit rule guarantees a field never spans more than eight bytes, so
-    /// one `u64` is always enough.
-    fn bit_field_window(&self, bits: &ir::BitField, span: Span) -> (TokenStream, u32, u64) {
+    /// The unit rule keeps a field inside one object of its own type, so eight
+    /// bytes are enough for every type standard C allows a bit-field to have.
+    /// GNU's `__int128` is the one that can ask for more — `unsigned __int128
+    /// x : 70` overlaps nine or ten bytes — and the window widens to `u128`
+    /// there. The word type and its width come back with the tokens, since the
+    /// getter and the setter have to spell them too.
+    fn bit_field_window(&self, bits: &ir::BitField, span: Span) -> BitWindow {
         let storage = Ident::new(&bits.storage, span);
         let start = bits.offset_in_storage();
         let first = start / 8;
         let shift = (start % 8) as u32;
         let count = (shift + bits.width).div_ceil(8);
+        let word_bits: u32 = if shift + bits.width > 64 { 128 } else { 64 };
+        let word = window_ty(word_bits, false, span);
         let mut read = TokenStream::new();
         for step in 0..count {
             let index = usize_literal(first + u64::from(step), span);
             let byte = if count == 1 {
-                quote_spanned! {span=> self.#storage[#index] as u64 }
+                quote_spanned! {span=> self.#storage[#index] as #word }
             } else {
-                quote_spanned! {span=> (self.#storage[#index] as u64) }
+                quote_spanned! {span=> (self.#storage[#index] as #word) }
             };
             read.extend(if step == 0 {
                 byte
@@ -882,11 +937,17 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> | (#byte << #by) }
             });
         }
-        // The mask of the field's bits inside that window. The unit rule keeps
-        // `shift + width` at 64 or less, and writing it this way makes that
-        // true of the shift as well.
-        let mask = mask_of(shift + bits.width) & !mask_of(shift);
-        (read, shift, mask)
+        // The mask of the field's bits inside that window; the window was
+        // chosen so that `shift + width` fits in it, which makes the shift fit
+        // too.
+        let mask = mask_of(shift + bits.width, word_bits) & !mask_of(shift, word_bits);
+        BitWindow {
+            read,
+            shift,
+            mask,
+            word,
+            word_bits,
+        }
     }
 
     fn bit_field_getter(
@@ -896,10 +957,16 @@ impl<'a> Codegen<'a> {
         bits: &ir::BitField,
         span: Span,
     ) -> TokenStream {
-        let (read, shift, _) = self.bit_field_window(bits, span);
+        let BitWindow {
+            read,
+            shift,
+            word,
+            word_bits,
+            ..
+        } = self.bit_field_window(bits, span);
         let ty = self.ty(field.ty, span);
         let name = c_ident(&bits.getter, span);
-        let mask = hex_literal(mask_of(bits.width), span);
+        let mask = word_literal(mask_of(bits.width, word_bits), word_bits, span);
         let shifted = if shift == 0 {
             quote_spanned! {span=> raw & #mask }
         } else {
@@ -908,19 +975,21 @@ impl<'a> Codegen<'a> {
         };
         let value = if field.ty.is_bool() {
             quote_spanned! {span=> value != 0 }
-        } else if !bits.signed || bits.width == 64 {
+        } else if !bits.signed || bits.width == word_bits {
             quote_spanned! {span=> value as #ty }
         } else {
             // Sign extension: shift the field's top bit up to the sign bit of
-            // an `i64` and let the arithmetic shift bring it back down.
-            let by = usize_literal(u64::from(64 - bits.width), span);
-            quote_spanned! {span=> (((value << #by) as i64) >> #by) as #ty }
+            // the window's signed counterpart and let the arithmetic shift
+            // bring it back down.
+            let signed = window_ty(word_bits, true, span);
+            let by = usize_literal(u64::from(word_bits - bits.width), span);
+            quote_spanned! {span=> (((value << #by) as #signed) >> #by) as #ty }
         };
         let body = self.accessor_body(
             record,
             quote_spanned! {span=>
-                let raw: u64 = #read;
-                let value: u64 = #shifted;
+                let raw: #word = #read;
+                let value: #word = #shifted;
                 #value
             },
             span,
@@ -938,18 +1007,24 @@ impl<'a> Codegen<'a> {
         bits: &ir::BitField,
         span: Span,
     ) -> TokenStream {
-        let (read, shift, mask) = self.bit_field_window(bits, span);
+        let BitWindow {
+            read,
+            shift,
+            mask,
+            word,
+            word_bits,
+        } = self.bit_field_window(bits, span);
         let ty = self.ty(field.ty, span);
         let name = c_ident(&bits.setter, span);
         let storage = Ident::new(&bits.storage, span);
         let value = Ident::new("value", span);
-        let field_mask = hex_literal(mask, span);
-        let keep = hex_literal(!mask, span);
+        let field_mask = word_literal(mask, word_bits, span);
+        let keep = word_literal(!mask & mask_of(word_bits, word_bits), word_bits, span);
         let shifted = if shift == 0 {
-            quote_spanned! {span=> (#value as u64) & #field_mask }
+            quote_spanned! {span=> (#value as #word) & #field_mask }
         } else {
             let by = usize_literal(u64::from(shift), span);
-            quote_spanned! {span=> ((#value as u64) << #by) & #field_mask }
+            quote_spanned! {span=> ((#value as #word) << #by) & #field_mask }
         };
         let start = bits.offset_in_storage();
         let first = start / 8;
@@ -967,9 +1042,9 @@ impl<'a> Codegen<'a> {
         let body = self.accessor_body(
             record,
             quote_spanned! {span=>
-                let bits: u64 = #shifted;
-                let raw: u64 = #read;
-                let raw: u64 = (raw & #keep) | bits;
+                let bits: #word = #shifted;
+                let raw: #word = #read;
+                let raw: #word = (raw & #keep) | bits;
                 #writes
             },
             span,
@@ -988,6 +1063,112 @@ impl<'a> Codegen<'a> {
             return quote_spanned! {span=> unsafe #block };
         }
         body
+    }
+
+    /// `const _: () = { assert!(…); };` — the assumptions the data model made,
+    /// checked against the target the expansion is really compiled for.
+    ///
+    /// Everything this crate computes at expansion time — `sizeof`, member
+    /// offsets, bit-field storage, the type of an integer constant, the value
+    /// of an `#if` — comes out of a [`TargetModel`](crate::TargetModel) that is
+    /// the *host's* unless something told it otherwise. Cross-compiling to a
+    /// machine with a different data model would leave every one of those
+    /// answers quietly wrong, so the expansion states them: `long` is this
+    /// many bytes, a pointer is that many, plain `char` is signed. The
+    /// generated code uses the `core::ffi` aliases, which follow the *target*,
+    /// so a mismatch is a failed assertion at the caret of the C rather than a
+    /// program that computes the wrong thing.
+    ///
+    /// The numbers come from the model itself, so a unit expanded with a
+    /// different [`Options::target`](crate::Options::target) asserts that
+    /// model. `__int128`'s alignment is included only where the unit has one —
+    /// it is the one scalar whose alignment is not fixed by its width, and a
+    /// unit that never mentions it must not be refused over it.
+    fn data_model_check(&self) -> TokenStream {
+        let span = self.map.span(SourceRange::at(0));
+        let target = &self.options.target;
+        let mut body = TokenStream::new();
+        let mut width = |ty: TokenStream, bits: u32, what: &str| {
+            let bytes = usize_literal(u64::from(bits).div_ceil(8), span);
+            let message = message_literal(
+                &format!(
+                    "cinrs: this unit was translated for a data model where {what} is {} \
+                     bytes, and this target's is not. Cross-compilation to a different data \
+                     model is not supported.",
+                    bits.div_ceil(8)
+                ),
+                span,
+            );
+            body.extend(quote_spanned! {span=>
+                assert!(::core::mem::size_of::<#ty>() == #bytes, #message);
+            });
+        };
+        width(
+            quote_spanned! {span=> ::core::ffi::c_short },
+            target.short_bits,
+            "'short'",
+        );
+        width(
+            quote_spanned! {span=> ::core::ffi::c_int },
+            target.int_bits,
+            "'int'",
+        );
+        width(
+            quote_spanned! {span=> ::core::ffi::c_long },
+            target.long_bits,
+            "'long'",
+        );
+        width(
+            quote_spanned! {span=> ::core::ffi::c_longlong },
+            target.long_long_bits,
+            "'long long'",
+        );
+        width(
+            quote_spanned! {span=> *const ::core::ffi::c_void },
+            target.ptr_bits,
+            "a pointer",
+        );
+        // Plain `char`'s signedness decides what `'\xff'` is worth and how a
+        // `char` widens, so it is an assumption like any other. `c_char` is an
+        // alias for `i8` or `u8`, and only the unsigned one has a zero minimum.
+        let (test, said) = if target.char_signed {
+            (
+                quote_spanned! {span=> ::core::ffi::c_char::MIN != 0 },
+                "signed",
+            )
+        } else {
+            (
+                quote_spanned! {span=> ::core::ffi::c_char::MIN == 0 },
+                "unsigned",
+            )
+        };
+        let message = message_literal(
+            &format!(
+                "cinrs: this unit was translated for a data model where plain 'char' is \
+                 {said}, and this target's is not. Cross-compilation to a different data \
+                 model is not supported."
+            ),
+            span,
+        );
+        body.extend(quote_spanned! {span=> assert!(#test, #message); });
+        if self.uses_int128.get() {
+            let align = usize_literal(target.int128_align, span);
+            let message = message_literal(
+                &format!(
+                    "cinrs: this unit was translated for a data model where '__int128' is \
+                     {}-byte aligned, and this target's is not. Cross-compilation to a \
+                     different data model is not supported.",
+                    target.int128_align
+                ),
+                span,
+            );
+            let i128 = primitive_ty("i128", span);
+            body.extend(quote_spanned! {span=>
+                assert!(::core::mem::align_of::<#i128>() == #align, #message);
+            });
+        }
+        let block = braced(body, span);
+        quote_spanned! {span=> const _: () = #block; }
     }
 
     /// The `extern` block declaring everything the unit does not define.
@@ -1074,6 +1255,9 @@ impl<'a> Codegen<'a> {
     fn static_item(&mut self, var: &ir::StaticVar) -> TokenStream {
         let object = self.program.object(var.object);
         let span = self.sp(object.range);
+        if object.storage.is_thread_local() {
+            return self.thread_local_item(var);
+        }
         let Storage::Static {
             item_name,
             exported,
@@ -1112,6 +1296,96 @@ impl<'a> Codegen<'a> {
             #export
             #section
             #vis static mut #name: #ty = #init;
+        }
+    }
+
+    /// `std::thread_local! { static X: UnsafeCell<T> = const { … }; }` — the
+    /// item a `_Thread_local` object becomes.
+    ///
+    /// C's thread-local object has static storage duration and one instance
+    /// per thread, and `thread_local!` is exactly that. The cell is what makes
+    /// the object *mutable*: `with` hands out a `&UnsafeCell<T>`, and the
+    /// `*mut T` inside it is valid for as long as the thread's copy is, which
+    /// is the lifetime C promises the address of such an object.
+    ///
+    /// The initialiser goes inside a `const` block wherever it can — that is
+    /// the form with no lazy-initialisation flag and no destructor to register
+    /// — and directly otherwise. Only one thing keeps it out: an initialiser
+    /// that mentions the address of another item, which a `const` may not
+    /// refer to (`E0013`).
+    fn thread_local_item(&mut self, var: &ir::StaticVar) -> TokenStream {
+        let object = self.program.object(var.object);
+        let span = self.sp(object.range);
+        let Storage::ThreadLocal {
+            item_name,
+            exported,
+        } = &object.storage
+        else {
+            return TokenStream::new();
+        };
+        if self.program.no_std {
+            // `sema::check_pragmas` has already said that a thread-local object
+            // needs `std`; emitting `::std::thread_local!` anyway would add
+            // `rustc`'s own "cannot find `std`" on top of it.
+            return TokenStream::new();
+        }
+        let name = c_ident(item_name, span);
+        let ty = self.ty(object.ty, span);
+        let init = self.static_init(&var.init, object.ty, span);
+        let attrs = allow_attr(span);
+        let vis = if *exported {
+            quote_spanned! {span=> pub }
+        } else {
+            TokenStream::new()
+        };
+        let cell = quote_spanned! {span=> ::core::cell::UnsafeCell<#ty> };
+        let value = quote_spanned! {span=> ::core::cell::UnsafeCell::new(#init) };
+        let value = if self.const_initialisable(&var.init) {
+            quote_spanned! {span=> const { #value } }
+        } else {
+            value
+        };
+        // The `#[allow(…)]` goes on the `static` rather than on the macro
+        // invocation: an attribute in front of one is ignored, with a warning
+        // of `rustc`'s own saying so.
+        quote_spanned! {span=>
+            ::std::thread_local! {
+                #attrs
+                #vis static #name: #cell = #value;
+            }
+        }
+    }
+
+    /// Whether an initialiser may go inside a `const { … }` block.
+    ///
+    /// A Rust constant may not refer to a `static` (`E0013`), which rules out
+    /// exactly the initialisers whose value is the address of another item: a
+    /// pointer to a file-scope object, a function pointer, and the `static`
+    /// that holds the characters of a wide string literal. A *narrow* literal
+    /// is a byte string whose `as_ptr` is const, and every arithmetic constant
+    /// is fine.
+    ///
+    /// This is what decides between `thread_local!`'s two forms; see
+    /// [`Codegen::thread_local_item`].
+    fn const_initialisable(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::FuncAddr(_) => false,
+            ExprKind::AddrOf(place) | ExprKind::Load(place) => match &place.kind {
+                PlaceKind::Str(id) => {
+                    let elem = self.program.string(*id).elem;
+                    elem.size_bytes(&self.options.target) == 1
+                }
+                _ => !rooted_in_static(place, self.program),
+            },
+            ExprKind::Cast(inner) => self.const_initialisable(inner),
+            ExprKind::PtrOffset { ptr, .. } => self.const_initialisable(ptr),
+            ExprKind::RecordLit { fields, .. } => {
+                fields.iter().all(|f| self.const_initialisable(f))
+            }
+            ExprKind::UnionLit { value, .. } => self.const_initialisable(value),
+            ExprKind::ArrayLit(items) => items.iter().all(|i| self.const_initialisable(i)),
+            ExprKind::ArrayRepeat { value, .. } => self.const_initialisable(value),
+            _ => true,
         }
     }
 
@@ -1457,7 +1731,9 @@ impl<'a> Codegen<'a> {
             },
             // A `static mut` is used as a place, never referenced, so
             // edition 2024's `static_mut_refs` lint has nothing to say.
-            Storage::Static { item_name, .. } => c_ident(item_name, span),
+            Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {
+                c_ident(item_name, span)
+            }
             Storage::Extern { item_name } => Ident::new(&self.program.extern_name(item_name), span),
         }
     }
@@ -2655,6 +2931,15 @@ impl<'a> Codegen<'a> {
     }
 
     /// `__builtin_add_overflow(a, b, &r)` and its relatives.
+    ///
+    /// The arithmetic happens in an `i128`, which is what "infinite precision"
+    /// comes to while both operands are at most 64 bits wide — sema refuses a
+    /// wider one. The *result* type may still be 128 bits, and that is the one
+    /// thing that changes how the answer is checked: the general test asks
+    /// whether the narrowed value converts back to what infinite precision
+    /// gave, and a 128-bit conversion is a reinterpretation that always does.
+    /// A signed 128-bit result therefore never overflows, and an unsigned one
+    /// overflows exactly when the exact answer was negative.
     fn overflow_builtin(
         &mut self,
         op: BinOp,
@@ -2682,17 +2967,26 @@ impl<'a> Codegen<'a> {
         let b = self.temporary();
         let wide = self.temporary();
         let narrow = self.temporary();
+        // Pathed, because `typedef __int128 i128;` is a name a C unit may take.
+        let i128 = primitive_ty("i128", span);
         let compute = quote_spanned! {span=>
-            let #a: i128 = #lhs as i128;
-            let #b: i128 = #rhs as i128;
-            let #wide: i128 = #a.#method(#b);
+            let #a: #i128 = #lhs as #i128;
+            let #b: #i128 = #rhs as #i128;
+            let #wide: #i128 = #a.#method(#b);
             let #narrow: #target = #wide as #target;
         };
         // The value overflows exactly when the wrapped result no longer equals
         // what infinite precision gave — and `i128` itself can only overflow
         // on a multiplication, where the answer is certainly out of range.
+        let fits = match result_ty {
+            // Both 128-bit conversions are reinterpretations, so the general
+            // test below is vacuous there; what is left is the sign.
+            Ty::Int128 => quote_spanned! {span=> false },
+            Ty::UInt128 => quote_spanned! {span=> #wide < 0 },
+            _ => quote_spanned! {span=> (#narrow as #i128) != #wide },
+        };
         let flag = quote_spanned! {span=>
-            #a.#checked(#b).is_none() || (#narrow as i128) != #wide
+            #a.#checked(#b).is_none() || #fits
         };
         if !store {
             // The `_p` forms still evaluate their third operand.
@@ -3009,7 +3303,10 @@ impl<'a> Codegen<'a> {
         loop {
             match &place.kind {
                 PlaceKind::Object(id) => {
-                    return !matches!(self.program.object(*id).storage, Storage::Automatic);
+                    let storage = &self.program.object(*id).storage;
+                    // A thread-local object is a `*mut T` out of its cell, so
+                    // it is behind a raw pointer like anything else below.
+                    return !matches!(storage, Storage::Automatic) && !storage.is_thread_local();
                 }
                 PlaceKind::Field { base, .. } => place = base,
                 // Anything reached through a pointer is behind a raw pointer
@@ -3650,6 +3947,23 @@ impl<'a> Codegen<'a> {
     fn place_access(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
         let span = self.sp(place.range);
         match &place.kind {
+            PlaceKind::Object(id) if self.program.object(*id).storage.is_thread_local() => {
+                // A thread-local object is reached through the `*mut T` inside
+                // its cell, which is valid for as long as this thread's copy
+                // of the object is — exactly the lifetime C gives it. The
+                // pointer is taken once and the place is a dereference of it,
+                // so an expression that reads the object twice still calls
+                // `with` once.
+                let name = self.object_ident(*id, span);
+                let tmp = self.temporary();
+                let cell = Ident::new("__cinrs_cell", Span::mixed_site());
+                LoweredPlace::plain(
+                    quote_spanned! {span=>
+                        let #tmp = #name.with(|#cell| ::core::cell::UnsafeCell::get(#cell));
+                    },
+                    parenthesize(quote_spanned! {span=> *#tmp }, span),
+                )
+            }
             PlaceKind::Object(id) => {
                 let name = self.object_ident(*id, span);
                 LoweredPlace::plain(TokenStream::new(), quote_spanned! {span=> #name })
@@ -3954,6 +4268,14 @@ impl<'a> Codegen<'a> {
         if ty.is_bool() {
             return Value::atom(bare_int_literal(value, ty, span));
         }
+        if ty == Ty::UInt128 {
+            // The constant is the bit pattern; the literal has to spell the
+            // `u128` it stands for rather than the `i128` those bits read as.
+            let literal = u128_literal_token(value as u128, span);
+            let target = self.ty(ty, span);
+            return Value::new(quote_spanned! {span=> #literal as #target }, prec::CAST)
+                .type_end(true);
+        }
         let literal = int_literal_token(value, span);
         let target = self.ty(ty, span);
         Value::new(quote_spanned! {span=> #literal as #target }, prec::CAST).type_end(true)
@@ -4066,13 +4388,19 @@ fn byte_array(bytes: &[u8], span: Span) -> TokenStream {
 ///
 /// The bit-field accessors borrow, and edition 2024 refuses a reference to a
 /// `static mut`; a place rooted in one is reached through `&raw mut` instead.
-/// Anything behind a pointer is already a raw dereference, so it needs nothing.
+/// Anything behind a pointer is already a raw dereference, so it needs nothing
+/// — a thread-local object included, since its place is the dereference of the
+/// pointer out of its cell.
+///
+/// It is also what says whether an initialiser refers to an item, which a Rust
+/// `const` may not; see [`Codegen::const_initialisable`].
 fn rooted_in_static(place: &Place, program: &Program) -> bool {
     let mut place = place;
     loop {
         match &place.kind {
             PlaceKind::Object(id) => {
-                return !matches!(program.object(*id).storage, Storage::Automatic);
+                let storage = &program.object(*id).storage;
+                return !matches!(storage, Storage::Automatic) && !storage.is_thread_local();
             }
             PlaceKind::Field { base, .. } => place = base,
             _ => return false,
@@ -4105,13 +4433,30 @@ fn signed_rust_ty(width: u32, span: Span) -> TokenStream {
     quote_spanned! {span=> #ident }
 }
 
-/// A mask of `width` low bits, in a `u64`.
-fn mask_of(width: u32) -> u64 {
-    if width >= 64 {
-        u64::MAX
+/// A mask of `width` low bits, inside a word of `word_bits`.
+fn mask_of(width: u32, word_bits: u32) -> u128 {
+    let width = width.min(word_bits);
+    if width >= 128 {
+        u128::MAX
     } else {
-        (1u64 << width) - 1
+        (1u128 << width) - 1
     }
+}
+
+/// A mask literal, written in hexadecimal at the width of its word.
+///
+/// A `u128` mask carries its suffix: a bare hexadecimal literal above
+/// `u64::MAX` would be out of range for whatever `u64` the surrounding
+/// annotation asked for, and the annotation is what makes the narrow case
+/// readable.
+fn word_literal(value: u128, word_bits: u32, span: Span) -> TokenStream {
+    if word_bits <= 64 {
+        return hex_literal(value as u64, span);
+    }
+    let mut literal = Literal::from_str(&format!("0x{value:x}u128"))
+        .unwrap_or_else(|_| Literal::u128_suffixed(value));
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
 }
 
 /// A `u64` literal written in hexadecimal, which is how a mask reads.
@@ -4221,8 +4566,25 @@ fn nul_terminated(values: &[u32]) -> Vec<u8> {
 /// `i32` for a literal with no other constraint.
 const UNSUFFIXED_LIMIT: i128 = i32::MAX as i128;
 
+/// A `u128` literal, always suffixed: nothing else can spell a value above
+/// `i128::MAX`.
+fn u128_literal_token(value: u128, span: Span) -> TokenStream {
+    let mut literal = Literal::u128_suffixed(value);
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
+}
+
 /// A literal for `value`, with a Rust suffix only when inference needs one.
 fn int_literal_token(value: i128, span: Span) -> TokenStream {
+    if value == i128::MIN {
+        // `-(2^127)` has no positive magnitude an `i128` can hold. Rust reads
+        // the negation of the out-of-range literal as exactly this value,
+        // which is how `i128::MIN` is written in Rust source too.
+        let mut literal = Literal::from_str("170141183460469231731687303715884105728i128")
+            .expect("a decimal literal followed by a suffix is a token");
+        literal.set_span(span);
+        return quote_spanned! {span=> -#literal };
+    }
     let magnitude = value.unsigned_abs();
     let mut literal = if magnitude <= UNSUFFIXED_LIMIT as u128 {
         Literal::u128_unsuffixed(magnitude)
@@ -4254,6 +4616,13 @@ fn bare_int_literal(value: i128, ty: Ty, span: Span) -> TokenStream {
         let ident = Ident::new(if value != 0 { "true" } else { "false" }, span);
         return quote_spanned! {span=> #ident };
     }
+    if ty == Ty::UInt128 {
+        // The value is carried as a bit pattern; `-1` in a `u128` context is
+        // not what the constant means.
+        let mut literal = Literal::u128_unsuffixed(value as u128);
+        literal.set_span(span);
+        return TokenStream::from(TokenTree::Literal(literal));
+    }
     let mut literal = Literal::u128_unsuffixed(value.unsigned_abs());
     literal.set_span(span);
     if value < 0 {
@@ -4261,6 +4630,42 @@ fn bare_int_literal(value: i128, ty: Ty, span: Span) -> TokenStream {
     } else {
         TokenStream::from(TokenTree::Literal(literal))
     }
+}
+
+/// The integer a bit-field's bytes are gathered into: `u64`/`i64` for a
+/// window of 64 bits and the 128-bit primitives for a wider one.
+///
+/// The 128-bit ones take the [`core::primitive`] path and the 64-bit ones do
+/// not, because `u128` and `i128` are the names a C unit really takes for
+/// GNU's 128-bit types — `typedef unsigned __int128 u128;` — while nothing
+/// spells `unsigned long long` `u64` and then puts a bit-field of it next to
+/// one.
+fn window_ty(word_bits: u32, signed: bool, span: Span) -> TokenStream {
+    match (word_bits, signed) {
+        (128, false) => primitive_ty("u128", span),
+        (128, true) => primitive_ty("i128", span),
+        (_, false) => quote_spanned! {span=> u64 },
+        (_, true) => quote_spanned! {span=> i64 },
+    }
+}
+
+/// `::core::primitive::u128` and its relatives.
+///
+/// A bare `u128` is a name a C `typedef` can take — `typedef unsigned __int128
+/// u128;` is how real C spells the type — and the generated alias would then
+/// either be a cycle or shadow the primitive for the rest of the module. The
+/// path is what [`core::primitive`] exists for.
+fn primitive_ty(name: &str, span: Span) -> TokenStream {
+    let ident = Ident::new(name, span);
+    quote_spanned! {span=> ::core::primitive::#ident }
+}
+
+/// A string literal for an `assert!` message, which a `const` context needs to
+/// be a literal rather than anything formatted.
+fn message_literal(text: &str, span: Span) -> TokenStream {
+    let mut literal = Literal::string(text);
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
 }
 
 /// An array length, which Rust counts in `usize`.

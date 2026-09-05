@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int sum(int n) {\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                if (i == 3) continue;\n                total += i;\n            }\n            while (n > 0) {\n                n--;\n                if (n == 1) break;\n            }\n            return total;\n        }\n        \")"
 ---
 mod __cinrs_unit_a53a4690 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn sum(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {

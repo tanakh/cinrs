@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        #pragma cinrs module \"geometry\"\n\n        struct Point { int x; int y; };\n\n        int manhattan(struct Point p) {\n            return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);\n        }\n        \"#)"
 ---
 pub mod geometry {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

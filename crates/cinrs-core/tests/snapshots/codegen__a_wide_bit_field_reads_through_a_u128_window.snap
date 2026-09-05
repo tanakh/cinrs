@@ -1,0 +1,90 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        struct Packed { unsigned __int128 wide : 70; int tail : 3; };\n\n        unsigned __int128 read_wide(struct Packed *p) { return p->wide; }\n        void write_wide(struct Packed *p, unsigned __int128 v) { p->wide = v; }\n        \")"
+---
+mod __cinrs_unit_faaff27e {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct Packed {
+        pub __cinrs_bits0: [u8; 10],
+    }
+    #[allow(…)]
+    impl Packed {
+        #[inline]
+        pub fn wide(&self) -> ::core::primitive::u128 {
+            let raw: ::core::primitive::u128 = (self.__cinrs_bits0[0]
+                as ::core::primitive::u128)
+                | ((self.__cinrs_bits0[1] as ::core::primitive::u128) << 8)
+                | ((self.__cinrs_bits0[2] as ::core::primitive::u128) << 16)
+                | ((self.__cinrs_bits0[3] as ::core::primitive::u128) << 24)
+                | ((self.__cinrs_bits0[4] as ::core::primitive::u128) << 32)
+                | ((self.__cinrs_bits0[5] as ::core::primitive::u128) << 40)
+                | ((self.__cinrs_bits0[6] as ::core::primitive::u128) << 48)
+                | ((self.__cinrs_bits0[7] as ::core::primitive::u128) << 56)
+                | ((self.__cinrs_bits0[8] as ::core::primitive::u128) << 64);
+            let value: ::core::primitive::u128 = raw & 0x3fffffffffffffffffu128;
+            value as ::core::primitive::u128
+        }
+        #[inline]
+        pub fn set_wide(&mut self, value: ::core::primitive::u128) {
+            let bits: ::core::primitive::u128 = (value as ::core::primitive::u128)
+                & 0x3fffffffffffffffffu128;
+            let raw: ::core::primitive::u128 = (self.__cinrs_bits0[0]
+                as ::core::primitive::u128)
+                | ((self.__cinrs_bits0[1] as ::core::primitive::u128) << 8)
+                | ((self.__cinrs_bits0[2] as ::core::primitive::u128) << 16)
+                | ((self.__cinrs_bits0[3] as ::core::primitive::u128) << 24)
+                | ((self.__cinrs_bits0[4] as ::core::primitive::u128) << 32)
+                | ((self.__cinrs_bits0[5] as ::core::primitive::u128) << 40)
+                | ((self.__cinrs_bits0[6] as ::core::primitive::u128) << 48)
+                | ((self.__cinrs_bits0[7] as ::core::primitive::u128) << 56)
+                | ((self.__cinrs_bits0[8] as ::core::primitive::u128) << 64);
+            let raw: ::core::primitive::u128 = (raw
+                & 0xffffffffffffffc00000000000000000u128) | bits;
+            self.__cinrs_bits0[0] = raw as u8;
+            self.__cinrs_bits0[1] = (raw >> 8) as u8;
+            self.__cinrs_bits0[2] = (raw >> 16) as u8;
+            self.__cinrs_bits0[3] = (raw >> 24) as u8;
+            self.__cinrs_bits0[4] = (raw >> 32) as u8;
+            self.__cinrs_bits0[5] = (raw >> 40) as u8;
+            self.__cinrs_bits0[6] = (raw >> 48) as u8;
+            self.__cinrs_bits0[7] = (raw >> 56) as u8;
+            self.__cinrs_bits0[8] = (raw >> 64) as u8;
+        }
+        #[inline]
+        pub fn tail(&self) -> ::core::ffi::c_int {
+            let raw: u64 = (self.__cinrs_bits0[8] as u64)
+                | ((self.__cinrs_bits0[9] as u64) << 8);
+            let value: u64 = (raw >> 6) & 0x7;
+            (((value << 61) as i64) >> 61) as ::core::ffi::c_int
+        }
+        #[inline]
+        pub fn set_tail(&mut self, value: ::core::ffi::c_int) {
+            let bits: u64 = ((value as u64) << 6) & 0x1c0;
+            let raw: u64 = (self.__cinrs_bits0[8] as u64)
+                | ((self.__cinrs_bits0[9] as u64) << 8);
+            let raw: u64 = (raw & 0xfffffffffffffe3f) | bits;
+            self.__cinrs_bits0[8] = raw as u8;
+            self.__cinrs_bits0[9] = (raw >> 8) as u8;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn read_wide(mut p: *mut Packed) -> ::core::primitive::u128 {
+        unsafe {
+            return (*p).wide();
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn write_wide(
+        mut p: *mut Packed,
+        mut v: ::core::primitive::u128,
+    ) {
+        unsafe {
+            (*p).set_wide(v);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_faaff27e::*;

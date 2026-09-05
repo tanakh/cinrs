@@ -247,7 +247,10 @@ pub struct Options {
     /// The data model the generated code is compiled for.
     ///
     /// Defaults to the host's; see [`TargetModel`] for what that means when
-    /// cross-compiling.
+    /// cross-compiling. Whatever it is set to, the expansion states it — the
+    /// `const _: () = { assert!(…); };` block every unit opens with is built
+    /// from *this* model, so a unit expanded for one data model and compiled
+    /// for another fails to compile.
     pub target: TargetModel,
     /// Whether `va_list` and variadic *definitions* may be generated.
     ///
@@ -686,6 +689,11 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
     program.link_libraries = link_libraries;
     program.export = export;
     program.no_std = no_std;
+    // The pragmas are the preprocessor's, so the two rules that depend on one
+    // can only be checked now that the program and the pragmas are together.
+    let mut pragma_diagnostics = sema::check_pragmas(&program);
+    expansions.annotate(&mut pragma_diagnostics);
+    diagnostics.extend(pragma_diagnostics);
 
     // Emitted whether or not the unit compiled: a header that is being fixed
     // is exactly the one whose next edit has to trigger a rebuild.

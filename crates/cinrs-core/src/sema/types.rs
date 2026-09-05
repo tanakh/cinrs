@@ -139,6 +139,8 @@ impl Sema<'_> {
                 (ast::Sign::Unsigned, ast::IntSize::Int) => Ty::UInt,
                 (ast::Sign::Unsigned, ast::IntSize::Long) => Ty::ULong,
                 (ast::Sign::Unsigned, ast::IntSize::LongLong) => Ty::ULongLong,
+                (ast::Sign::Signed, ast::IntSize::Int128) => Ty::Int128,
+                (ast::Sign::Unsigned, ast::IntSize::Int128) => Ty::UInt128,
             }),
             // `long double` has no portable Rust equivalent; it is mapped onto
             // `double`, which is what every other C-to-Rust translator does.

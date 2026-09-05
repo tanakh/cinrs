@@ -30,7 +30,11 @@
 //! that a `struct` member or a `static` would have to name. `va_arg` refuses a
 //! type the default argument promotions would have changed on the way in
 //! (`char`, `short`, `_Bool`, `float`), which is undefined behaviour in C and
-//! which GCC diagnoses in the same words.
+//! which GCC diagnoses in the same words. It also refuses `__int128`: Rust
+//! implements `VaArgSafe` for the 128-bit primitives only behind the unstable
+//! `c_variadic_int128` feature. *Passing* one through `...` is unaffected —
+//! that is the call site, and the ABI — so a program can still read it back as
+//! two `unsigned long long` halves.
 
 use crate::ast;
 use crate::capture::SourceRange;
@@ -160,6 +164,21 @@ impl Sema<'_> {
         }
         if ty.is_pointer() || ty.is_enum() || ty == Ty::Double {
             return Some(());
+        }
+        if ty.is_int128() {
+            // `VaArgSafe` is what `next_arg` needs, and Rust implements it for
+            // the 128-bit primitives behind the unstable `c_variadic_int128`
+            // feature. Nothing stable can read one out of an argument list, so
+            // saying so beats an `E0658` about a feature the user never named.
+            self.error(
+                range,
+                format!(
+                    "va_arg with '{}' is not supported: Rust's `VaArgSafe` covers the \
+                     128-bit types only behind the unstable `c_variadic_int128` feature",
+                    self.tyname(ty)
+                ),
+            );
+            return None;
         }
         if ty.is_arithmetic() {
             let promoted = ty.promote_argument(&self.target);

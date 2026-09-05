@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        #pragma cinrs export\n\n        int counter;\n        static int hidden;\n\n        inline int helper(int n) { return n + 1; }\n        static int secret(int n) { return n - 1; }\n        int match(int n) { return helper(n); }\n        \"#)"
 ---
 mod __cinrs_unit_d2da4ea0 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[unsafe(no_mangle)]
     pub static mut counter: ::core::ffi::c_int = 0;

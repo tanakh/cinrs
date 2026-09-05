@@ -2174,6 +2174,11 @@ impl Sema<'_> {
             (ExprKind::Int(v), t) if t.is_integer() => {
                 crate::ir::ConstValue::Int(t.wrap(*v, &self.target))
             }
+            // An `unsigned __int128` constant is carried as its bit pattern,
+            // so the value it converts to is the `u128` those bits spell.
+            (ExprKind::Int(v), t) if t.is_floating() && expr.ty == Ty::UInt128 => {
+                crate::ir::ConstValue::Float(round_to(*v as u128 as f64, t))
+            }
             (ExprKind::Int(v), t) if t.is_floating() => {
                 crate::ir::ConstValue::Float(round_to(*v as f64, t))
             }

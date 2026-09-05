@@ -69,8 +69,8 @@ use crate::ast;
 use crate::capture::SourceRange;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
-    self, ConstValue, Expr, ExprKind, FuncId, LoopId, ObjectId, Place, Program, RecordId,
-    Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
+    self, ConstValue, Expr, ExprKind, FuncId, INT128_TYPEDEF_NAMES, LoopId, ObjectId, Place,
+    Program, RecordId, Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
 };
 use crate::target::TargetModel;
 
@@ -108,6 +108,45 @@ pub fn analyze(
         }
     }
     (program, diags)
+}
+
+/// The two rules that depend on a `#pragma cinrs`, checked once the pragmas
+/// are known.
+///
+/// The preprocessor reads them, so they only reach the [`Program`] after
+/// [`analyze`] has finished — see [`crate::expand`], which sets them and then
+/// calls this. Both are about thread-local objects:
+///
+/// * `thread_local!` lives in `std`, and a unit that said `no_std` has none;
+/// * there is no stable way to give a `thread_local!` item a C symbol, so
+///   `#pragma cinrs export` cannot export one.
+pub fn check_pragmas(program: &Program) -> Diagnostics {
+    let mut diags = Diagnostics::new();
+    if !program.no_std && !program.export {
+        return diags;
+    }
+    for object in &program.objects {
+        let Storage::ThreadLocal { exported, .. } = &object.storage else {
+            continue;
+        };
+        if program.no_std {
+            diags.error(
+                object.range,
+                "'_Thread_local' requires std; this unit says no_std. Rust's `thread_local!` \
+                 is a `std` macro, and `core` has no thread-local storage"
+                    .to_owned(),
+            );
+        }
+        if program.export && *exported {
+            diags.error(
+                object.range,
+                "a '_Thread_local' object cannot be exported: `#pragma cinrs export` gives an \
+                 item a C symbol, and there is no stable way to give one to a `thread_local!`"
+                    .to_owned(),
+            );
+        }
+    }
+    diags
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +448,17 @@ impl<'a> Sema<'a> {
                 (*name).to_owned(),
                 Entry::Typedef(TypedefEntry {
                     resolved: Ok(Ty::VaList),
+                    range: SourceRange::at(0),
+                }),
+            );
+        }
+        // GCC's own names for the two 128-bit integer types, predefined in
+        // every mode beside the `__int128` keyword itself.
+        for (name, ty) in INT128_TYPEDEF_NAMES {
+            sema.scopes[0].entries.insert(
+                (*name).to_owned(),
+                Entry::Typedef(TypedefEntry {
+                    resolved: Ok(*ty),
                     range: SourceRange::at(0),
                 }),
             );
@@ -972,10 +1022,15 @@ impl<'a> Sema<'a> {
                 let value = self.const_eval(inner)?;
                 expr.ty
                     .is_arithmetic()
-                    .then(|| convert_const(value, expr.ty, &target))
+                    .then(|| convert_const(value, inner.ty, expr.ty, &target))
             }
             ExprKind::Neg(inner) => match self.const_eval(inner)? {
-                ConstValue::Int(v) => Some(ConstValue::Int(expr.ty.wrap(-v, &target))),
+                // Wrapping, because `-(-2^127)` is not an `i128` and the
+                // 128-bit types can reach it: C wraps there, and negating in
+                // Rust would abort the macro instead.
+                ConstValue::Int(v) => {
+                    Some(ConstValue::Int(expr.ty.wrap(v.wrapping_neg(), &target)))
+                }
                 ConstValue::Float(v) => Some(ConstValue::Float(-v)),
             },
             ExprKind::BitNot(inner) => match self.const_eval(inner)? {
@@ -988,9 +1043,19 @@ impl<'a> Sema<'a> {
                 self.const_binary(*op, lhs, rhs, expr)
             }
             ExprKind::Compare { op, lhs, rhs } => {
+                // Both operands have already been converted to their common
+                // type, so either one says how the pair is ordered.
+                let operand_ty = lhs.ty;
                 let lhs = self.const_eval(lhs)?;
                 let rhs = self.const_eval(rhs)?;
                 let result = match (lhs, rhs) {
+                    // An `unsigned __int128` above `i128::MAX` is carried as
+                    // its bit pattern, which orders wrongly as a signed value;
+                    // every narrower unsigned type's constant is its own
+                    // non-negative value and needs nothing.
+                    (ConstValue::Int(a), ConstValue::Int(b)) if unsigned_128(operand_ty) => {
+                        compare_values(*op, &(a as u128), &(b as u128))
+                    }
                     (ConstValue::Int(a), ConstValue::Int(b)) => compare_values(*op, &a, &b),
                     (ConstValue::Float(a), ConstValue::Float(b)) => compare_values(*op, &a, &b),
                     _ => return None,
@@ -1055,7 +1120,22 @@ impl<'a> Sema<'a> {
                     );
                     return None;
                 }
-                if op == BinOp::Div { a / b } else { a % b }
+                // `unsigned __int128` is the one type whose constants are
+                // carried as a bit pattern rather than as a value, so the
+                // quotient and the remainder have to be taken unsigned.
+                if unsigned_128(expr.ty) {
+                    let (a, b) = (a as u128, b as u128);
+                    let value = if op == BinOp::Div { a / b } else { a % b };
+                    return Some(ConstValue::Int(value as i128));
+                }
+                // Wrapping for the same reason `-` is: `-2^127 / -1` is the
+                // one signed division that leaves the type, and `__int128` is
+                // the type that can write it.
+                if op == BinOp::Div {
+                    a.wrapping_div(b)
+                } else {
+                    a.wrapping_rem(b)
+                }
             }
             BinOp::BitAnd => a & b,
             BinOp::BitXor => a ^ b,
@@ -1071,6 +1151,12 @@ impl<'a> Sema<'a> {
                         ),
                     );
                     return None;
+                }
+                // A right shift of an `unsigned __int128` is logical, and
+                // shifting the bit pattern as an `i128` would bring the sign
+                // bit down instead.
+                if op == BinOp::Shr && unsigned_128(expr.ty) {
+                    return Some(ConstValue::Int(((a as u128) >> b) as i128));
                 }
                 if op == BinOp::Shl { a << b } else { a >> b }
             }
@@ -1171,6 +1257,16 @@ fn compare_values<T: PartialOrd>(op: ir::CmpOp, a: &T, b: &T) -> bool {
     }
 }
 
+/// Whether constants of this type are carried as a bit pattern rather than as
+/// a value; see [`Ty::wrap`](crate::ir::Ty::wrap).
+///
+/// `unsigned __int128` is the only one: every other type this models has all
+/// of its values inside an `i128`, and the signedness of the two 128-bit types
+/// does not depend on the target.
+fn unsigned_128(ty: Ty) -> bool {
+    ty == Ty::UInt128
+}
+
 fn is_true(value: ConstValue) -> bool {
     match value {
         ConstValue::Int(v) => v != 0,
@@ -1178,14 +1274,23 @@ fn is_true(value: ConstValue) -> bool {
     }
 }
 
-fn convert_const(value: ConstValue, to: Ty, target: &TargetModel) -> ConstValue {
+fn convert_const(value: ConstValue, from: Ty, to: Ty, target: &TargetModel) -> ConstValue {
     match (value, to.is_floating()) {
         (ConstValue::Int(v), false) => ConstValue::Int(to.wrap(v, target)),
+        // An `unsigned __int128` carried as a bit pattern is that many, not
+        // the negative number the same bits read as an `i128`.
+        (ConstValue::Int(v), true) if unsigned_128(from) => {
+            ConstValue::Float(round_to(v as u128 as f64, to))
+        }
         (ConstValue::Int(v), true) => ConstValue::Float(round_to(v as f64, to)),
         (ConstValue::Float(v), true) => ConstValue::Float(round_to(v, to)),
         (ConstValue::Float(v), false) => {
             if to.is_bool() {
                 ConstValue::Int(i128::from(v != 0.0))
+            } else if unsigned_128(to) {
+                // The bit pattern of the `u128` the value really converts to;
+                // `as i128` would saturate at `i128::MAX` instead.
+                ConstValue::Int(v.trunc() as u128 as i128)
             } else {
                 ConstValue::Int(to.wrap(v.trunc() as i128, target))
             }

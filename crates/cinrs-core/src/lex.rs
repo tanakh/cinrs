@@ -129,6 +129,12 @@ pub enum Keyword {
     AutoType,
     /// `__thread`
     ThreadGnu,
+    /// `__int128`
+    ///
+    /// A type specifier of its own, which `signed` and `unsigned` combine
+    /// with; the `__int128_t` and `__uint128_t` spellings are `typedef` names
+    /// the compiler owns rather than keywords, exactly as they are in GCC.
+    Int128,
     /// `__real__`, `__real`
     RealGnu,
     /// `__imag__`, `__imag`
@@ -212,6 +218,7 @@ impl Keyword {
             Label => "__label__",
             AutoType => "__auto_type",
             ThreadGnu => "__thread",
+            Int128 => "__int128",
             RealGnu => "__real__",
             ImagGnu => "__imag__",
             InlineGnu => "__inline__",
@@ -234,6 +241,7 @@ impl Keyword {
                 | Label
                 | AutoType
                 | ThreadGnu
+                | Int128
                 | RealGnu
                 | ImagGnu
                 | InlineGnu

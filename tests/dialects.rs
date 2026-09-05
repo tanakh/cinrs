@@ -109,6 +109,9 @@ c99! {
     int strict_attribute(int n) { return n; }
     int strict_builtin(unsigned int n) { return __builtin_popcount(n); }
     unsigned long strict_alignof(void) { return __alignof__(long); }
+    unsigned __int128 strict_int128(unsigned long long n) { return (unsigned __int128) n * n; }
+    __thread int strict_thread_local = 4;
+    int strict_thread_read(void) { return strict_thread_local; }
 }
 
 #[test]
@@ -121,6 +124,11 @@ fn the_double_underscore_extensions_need_no_gnu_entry_point() {
         unsafe { strict_alignof() },
         align_of::<core::ffi::c_long>() as u64
     );
+    assert_eq!(
+        unsafe { strict_int128(u64::MAX) },
+        u128::from(u64::MAX) * u128::from(u64::MAX)
+    );
+    assert_eq!(unsafe { strict_thread_read() }, 4);
 }
 
 // ---------------------------------------------------------------------------

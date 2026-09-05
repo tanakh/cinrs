@@ -120,6 +120,25 @@ Run it with `cargo run --example fact`.
   than a guess, and so is every other extension with no honest translation.
   [`doc/gnu-extensions.md`](doc/gnu-extensions.md) is the catalogue, row by
   row.
+* **`__int128`.** GCC's 128-bit integers, in every entry point, as Rust's
+  `i128` and `u128` — whose x86-64 ABI has matched `__int128`'s since Rust
+  1.77. Sixteen bytes, ranked above `long long`, so `(__int128) a * b` really
+  is a 128-bit multiplication; `__int128_t` and `__uint128_t` are predefined
+  names for the same two types and `__SIZEOF_INT128__` is `16`. Bit-fields of
+  them work, wider than sixty-four bits included. C has no 128-bit *literal*
+  and neither does this: `((__int128) 1) << 100` is the idiom.
+  Two gaps: `__builtin_add_overflow` and its relatives compute their check one
+  width up from the operands, and there is nothing above 128 bits, so a
+  128-bit *operand* is refused (a 128-bit *result* is fine); and
+  `va_arg(ap, __int128)` needs a `VaArgSafe` implementation Rust still keeps
+  unstable, though *passing* one through `...` works.
+* **Thread-local objects.** `_Thread_local`, C23's `thread_local` and GNU's
+  `__thread` become a `std::thread_local!` holding an `UnsafeCell`, so a C
+  counter really is one per thread and `&x` is a pointer to *this* thread's
+  copy. C's own placement rules apply: file scope, or a block-scope `static`,
+  with a constant initialiser. An `extern` thread-local object and exporting
+  one under `#pragma cinrs export` are refused — both would need Rust's
+  unstable `#[thread_local]`.
 * **Pragmas that configure the unit.**
   `#pragma cinrs include_path "…"` adds a search directory;
   `#pragma cinrs link "…"` links a library;
@@ -127,7 +146,8 @@ Run it with `cargo run --example fact`.
   symbol, so that another block — or a C library — can call it by name (with
   C's own risk: two exported units defining one name is a duplicate symbol);
   `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
-  needs from `alloc` rather than from `std`;
+  needs from `alloc` rather than from `std`, and refuses a thread-local object,
+  which needs `std` outright;
   `#pragma cinrs module "…"` names the module the expansion goes into.
 * **Two input forms.** C the Rust lexer accepts is written as raw tokens —
   `int café(void)` included, since Rust's identifiers are UAX #31's too; C it
@@ -152,14 +172,16 @@ Run it with `cargo run --example fact`.
 * Not supported, each as a located error rather than a silent mistranslation:
   the variably modified types other than a one-dimensional array
   (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`,
-  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, and C23's *named*
-  universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the
-  GNU side: inline assembly, computed `goto`, `cleanup`, `__int128`, the vector
-  extensions and the `__sync_*`/`__atomic_*` builtins. C11's four
+  `setjmp`/`longjmp`, `_Atomic`, `_BitInt`, and C23's *named* universal
+  character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the GNU side: inline
+  assembly, computed `goto`, `cleanup`, the vector extensions and the
+  `__sync_*`/`__atomic_*` builtins. C11's four
   `__STDC_NO_*` macros are predefined, which is the standard's own way of
   saying that atomics, threads, VLAs and complex arithmetic are left out;
   `__STDC_NO_VLA__` stays defined although one-dimensional VLAs work, so that a
-  program which tests it keeps taking its `malloc` path.
+  program which tests it keeps taking its `malloc` path, and
+  `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
+  `<threads.h>` does not.
 * A bit-field has no address, so it is not a field of the generated Rust
   `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
   named member becomes a pair of inherent methods — `s.level()` reads it and
@@ -184,8 +206,14 @@ Run it with `cargo run --example fact`.
   not C, so anything outside the bundled set is declared by hand or pointed at
   with an include path.
 * Sizes and alignments come from a model of the target rather than from the
-  target's own C compiler; the host is assumed to be LP64 when
-  cross-compilation cannot be detected from Cargo's environment.
+  target's own C compiler, and that model is the *host*'s: nothing in Cargo
+  tells a procedural macro what the target is. **Cross-compilation to a
+  different data model is detected and refused** — every expansion opens with a
+  `const _: () = { assert!(…); };` block stating the widths it was translated
+  for, over the `core::ffi` aliases, which follow the target. Building for
+  64-bit Windows (LLP64, four-byte `long`), for a 32-bit target, or for one
+  where plain `char` is unsigned is therefore a failed compile-time assertion
+  with the caret on the C, not a program that computes the wrong thing.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
 
@@ -198,9 +226,10 @@ pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
 code calls it — that is a link-time dependency of the program rather than a
 Rust one.
 
-The two exceptions are variable length arrays and `alloca`, whose storage is a
-`Vec`. Nothing in the C says which kind of crate the expansion is going into, so
-that `Vec` is `::std::vec::Vec` unless the unit says otherwise:
+Three constructs are the exception. Two of them are variable length arrays and
+`alloca`, whose storage is a `Vec`. Nothing in the C says which kind of crate
+the expansion is going into, so that `Vec` is `::std::vec::Vec` unless the unit
+says otherwise:
 
 ```c
 #pragma cinrs no_std
@@ -211,6 +240,11 @@ which makes it `::alloc::vec::Vec` instead. The crate then has to contain
 directive is not one of them. Without the pragma, a variable length array in a
 `#![no_std]` crate is `rustc`'s own "cannot find `std`", with the caret on the
 declaration that needed it.
+
+The third is a **thread-local object**, and the pragma does not help there:
+`thread_local!` is a `std` macro and `core` has no thread-local storage at all,
+so `_Thread_local` under `#pragma cinrs no_std` is a located error saying
+exactly that.
 
 ## Conformance
 
@@ -236,8 +270,8 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,367 pass (77.3 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,277 (72.2 %) under
+  exit status zero. **1,369 pass (77.4 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,279 (72.3 %) under
   `gnu11!`. What is left is inline assembly, the vector extensions, the
   `__builtin_*` forms this crate does not implement, `_Complex`, nested
   functions, and the variadic definitions that need Rust 1.99 — plus two

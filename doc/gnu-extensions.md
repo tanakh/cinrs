@@ -145,13 +145,13 @@ variably modified types do not; a program that tests the macro takes its
 | Local labels | `__label__ retry;` | rare | supported | Accepted and dropped: every label already has function scope here, and no two may share a name. |
 | Labels as values (computed goto) | `void *t[] = { &&a, &&b }; goto *t[i];` | occasional (interpreters) | planned (CFG mode only) | Label addresses become state numbers; `goto *e` becomes a dispatch on the state. Only within one function. |
 | Nested functions | `int f(void) { int g(int x) { … } }` | rare | not planned | Needs closures with trampolines; nothing addressable in Rust. |
-| `__int128` / `unsigned __int128` | | occasional (crypto, hashing) | planned | `i128`/`u128` — the ABI matches on x86-64. |
+| `__int128` / `unsigned __int128` | `__int128 p = (__int128) a * b;` | occasional (crypto, hashing) | supported | `i128`/`u128`, which have had `__int128`'s x86-64 ABI since Rust 1.77. Sixteen bytes, aligned the way the compiling toolchain aligns an `i128`, and ranked above `long long`, so the usual arithmetic conversions widen to it. `__int128_t` and `__uint128_t` are predefined `typedef` names for the same two types, as they are in GCC, and `__SIZEOF_INT128__` is `16`. Every entry point has it, the double underscore being what makes that safe. C has no 128-bit *literal* and neither does this: `((__int128) 1) << 100` is the idiom, and `1 << 100` shifts an `int`. Bit-fields of it work, wider than sixty-four bits included. Two gaps, each a located error: `__builtin_add_overflow` and its relatives compute their check one width up from their operands and so have nowhere to go, which makes a 128-bit *operand* an error (a 128-bit *result* type is fine); and `va_arg(ap, __int128)` needs a `VaArgSafe` implementation Rust keeps behind the unstable `c_variadic_int128` feature, though *passing* one through `...` is unaffected. See `tests/int128.rs`. |
 | `_Float128`, `__float128`, `_Float16`, decimal floats, fixed-point | | rare | not planned | No stable Rust types (`f128`/`f16` are unstable). |
 | `_Complex`, `__complex__`, `__real__`, `__imag__` (standard C99) | | rare | refused | Each is recognised and reported; `__STDC_NO_COMPLEX__` says so to the program. |
 | Vector extensions | `typedef int v4si __attribute__((vector_size(16)));` | occasional (SIMD) | refused | `core::simd` is unstable. |
 | Inline assembly | `asm volatile("…" : "=r"(x) : "r"(y) : "memory")` | occasional (kernels, crypto) | refused | Rust has `core::arch::asm!`, but mapping GCC's operand constraints onto its own is a project rather than a feature, and half a translation of assembly is worse than none. The `asm` **label** on a declaration — `int f(void) __asm__("f_impl");` — is a different thing and is supported. |
 | `asm` labels on declarations | `int f(void) __asm__("f_impl");` | common (libc shims) | supported | On a declaration the unit does not define, `#[link_name = "…"]`; on one it defines, `#[unsafe(export_name = "…")]`. |
-| `__thread` | thread-local objects | occasional | impossible on stable | `#[thread_local]` is unstable; `thread_local!` changes the object model. The same diagnostic as `_Thread_local`. |
+| `__thread` | `__thread int counter;` | occasional | supported | GCC's spelling of `_Thread_local`, and — being reserved — available in every entry point. The object becomes a `std::thread_local!` holding an `UnsafeCell<T>`, and every C access goes through the `*mut T` its `with` hands out, which is valid for as long as this thread's copy is. Rust's own `#[thread_local]` is still unstable, so an `extern` thread-local object — one another object file defines — is a located error; so is exporting one under `#pragma cinrs export`. `thread_local!` lives in `std`, which makes this the third construct an expansion cannot have under `#pragma cinrs no_std`, after variable length arrays and `alloca`. See the [N1364 row](c-status.md#c11) and `tests/threads.rs`. |
 | `__sync_*` / `__atomic_*` builtins | lock-free code | occasional | planned (subset) | `core::sync::atomic` intrinsics exist for all sizes; needs `_Atomic`-free spellings only. |
 | `__auto_type` | `__auto_type x = expr;` | rare | supported | C23's `auto` under another name, and available in every entry point. |
 | Escaped newlines with trailing whitespace | `\ ` + newline | rare | planned | Lexer leniency. |
@@ -254,8 +254,9 @@ observe them anyway:
 
 Everything in the tables above marked *supported* is implemented and tested;
 `tests/gnu_language.rs`, `tests/gnu_attributes.rs`, `tests/gnu_builtins.rs`,
-`tests/gnu_preprocessor.rs` and `tests/dialects.rs` are where. What is left is
-the *planned* rows — computed `goto`, `cleanup`, `__int128`, the `__sync_*` and
+`tests/gnu_preprocessor.rs`, `tests/int128.rs`, `tests/threads.rs` and
+`tests/dialects.rs` are where. What is left is the *planned* rows — computed
+`goto`, `cleanup`, the `__sync_*` and
 `__atomic_*` builtins, casts to a union type — plus the rows that say
 `not planned` or `impossible`, and the c-testsuite report
 ([`doc/c-testsuite.md`](c-testsuite.md)) lists which cases each one would fix.

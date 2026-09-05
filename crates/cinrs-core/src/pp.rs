@@ -1309,6 +1309,7 @@ fn gnu_keyword(name: &str, dialect: Dialect) -> Option<Keyword> {
         "__label__" => Keyword::Label,
         "__auto_type" => Keyword::AutoType,
         "__thread" => Keyword::ThreadGnu,
+        "__int128" => Keyword::Int128,
         "__real" | "__real__" => Keyword::RealGnu,
         "__imag" | "__imag__" => Keyword::ImagGnu,
         "asm" if dialect.is_gnu() => Keyword::Asm,
@@ -4326,6 +4327,9 @@ fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
         (target.long_long_bits / 8).to_string(),
     ));
     out.push(("__SIZEOF_POINTER__", (target.ptr_bits / 8).to_string()));
+    // The macro a program tests before writing `__int128`; GCC defines it
+    // exactly where the type exists, and here it always does.
+    out.push(("__SIZEOF_INT128__", "16".to_owned()));
 
     // Byte order, spelled the way GCC spells it.
     out.push(("__ORDER_LITTLE_ENDIAN__", "1234".to_owned()));
@@ -4375,9 +4379,10 @@ fn unsigned_max(bits: u32) -> String {
 /// diff the result, and the suffixes on the *values* are the ones that give
 /// each constant the type its name says it has.
 ///
-/// What is deliberately absent: `__SIZEOF_INT128__` (there is no `__int128`),
-/// `__OPTIMIZE__` (nothing here optimises), and the `__INT8_C`-style
-/// function-like macros, which take an argument.
+/// What is deliberately absent: `__OPTIMIZE__` (nothing here optimises) and
+/// the `__INT8_C`-style function-like macros, which take an argument.
+/// `__SIZEOF_INT128__` is not here but is defined among the data-model macros,
+/// because `__int128` is a type this crate has.
 fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     let int_bits = target.int_bits;
     let long_bits = target.long_bits;

@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int counter = 0;\n        static long private_total;\n\n        static void bump(void) {\n            static int calls = 1;\n            calls++;\n            counter += calls;\n            private_total += counter;\n        }\n\n        int match(int type) {\n            bump();\n            return type + counter;\n        }\n        \")"
 ---
 mod __cinrs_unit_716967fa {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub static mut counter: ::core::ffi::c_int = 0;
     #[allow(…)]

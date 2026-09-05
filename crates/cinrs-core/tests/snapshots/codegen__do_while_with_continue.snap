@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int count_odd(int n) {\n            int seen = 0;\n            do {\n                n--;\n                if (n % 2 == 0) continue;\n                seen++;\n            } while (n > 0);\n            return seen;\n        }\n        \")"
 ---
 mod __cinrs_unit_a2d236b1 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn count_odd(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {

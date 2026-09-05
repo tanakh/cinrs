@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        _Noreturn void die(const char *why);\n\n        int checked(int n) {\n            if (n > 0) return n;\n            die(\"not positive\");\n        }\n        \"#)"
 ---
 mod __cinrs_unit_a52dbf73 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "die"]

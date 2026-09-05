@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        struct Flags {\n            unsigned int ready : 1;\n            int          level : 3;\n            unsigned int       : 0;\n            unsigned int mask  : 30;\n            char         tag;\n        };\n\n        static struct Flags defaults = { 1, -2, .mask = 5, .tag = 'x' };\n\n        void arm(struct Flags *f, int level) {\n            f->ready = 1;\n            f->level = level;\n            f->mask += 2;\n        }\n\n        int level_of(struct Flags f) { return f.level; }\n        \")"
 ---
 mod __cinrs_unit_53be85bc {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C, align(4))]
     #[derive(Copy, Clone)]

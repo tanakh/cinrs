@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int promote(void) {\n            unsigned char a = 200;\n            unsigned char b = 100;\n            int wide = a + b;\n            unsigned u = 1;\n            int signed_vs_unsigned = -1 < u;\n            double d = wide;\n            float f = (float) d / 2;\n            _Bool flag = f;\n            return wide + signed_vs_unsigned + (int) f + flag;\n        }\n        \")"
 ---
 mod __cinrs_unit_b1173e1a {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn promote() -> ::core::ffi::c_int {
         unsafe {

@@ -451,6 +451,26 @@ impl Sema<'_> {
             }
             third.ty
         };
+        // The arithmetic is done in an `i128`, which is exactly what "infinite
+        // precision" amounts to while both *operands* are at most 64 bits
+        // wide: their sum, difference and product all fit. A 128-bit operand
+        // would need 129 bits and then some, and quietly giving a wrong answer
+        // about overflow is worse than not having the builtin at all. The
+        // 128-bit *result* type is fine — see `Codegen::overflow_builtin`,
+        // where it only changes how the answer is checked.
+        if let Some(wide) = [lhs.ty, rhs.ty].into_iter().find(|t| t.is_int128()) {
+            self.error(
+                range,
+                format!(
+                    "'{name}' with a 128-bit operand is not supported: the check is computed \
+                     one width up from the operands, and there is nothing above '{}'",
+                    self.tyname(wide)
+                ),
+            );
+            return None;
+        }
+        // Resolving it was the point — it is where the third operand is
+        // checked — and code generation reads it off that operand again.
         let _ = result_ty;
         let op = if store {
             BuiltinOp::Overflow(op)

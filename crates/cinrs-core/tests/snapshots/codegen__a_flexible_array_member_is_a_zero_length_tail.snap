@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        struct Buffer { int len; int data[]; };\n\n        int sum(struct Buffer *b) {\n            int total = 0;\n            for (int i = 0; i < b->len; i++) total += b->data[i];\n            return total;\n        }\n\n        unsigned long header_size(void) { return sizeof(struct Buffer); }\n        \"#)"
 ---
 mod __cinrs_unit_517f0d70 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]

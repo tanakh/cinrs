@@ -73,6 +73,16 @@ use crate::target::TargetModel;
 /// `typedef` but not give the name a different meaning.
 pub const VA_LIST_NAMES: &[&str] = &["__builtin_va_list"];
 
+/// The `typedef` names the compiler owns for the two 128-bit integer types,
+/// with the [`Ty`] each one means.
+///
+/// GCC predefines `__int128_t` and `__uint128_t` in every mode alongside the
+/// `__int128` keyword, and a great deal of code spells them that way. Like
+/// [`VA_LIST_NAMES`] they are seeded into the parser's and sema's outermost
+/// scopes, so `__int128_t *p;` is a declaration rather than a multiplication.
+pub const INT128_TYPEDEF_NAMES: &[(&str, Ty)] =
+    &[("__int128_t", Ty::Int128), ("__uint128_t", Ty::UInt128)];
+
 /// The builtin C23's `unreachable()` stands for.
 ///
 /// The bundled `<stddef.h>` writes `#define unreachable() __builtin_unreachable()`,
@@ -153,6 +163,11 @@ pub enum Ty {
     LongLong,
     /// `unsigned long long`
     ULongLong,
+    /// GNU's `__int128` (also spelled `__int128_t`), which ranks above
+    /// `long long` and is generated as Rust's `i128`.
+    Int128,
+    /// `unsigned __int128` (also spelled `__uint128_t`), generated as `u128`.
+    UInt128,
     /// `float`
     Float,
     /// `double` (and `long double`)
@@ -747,6 +762,12 @@ impl Types {
                 let size = u64::from(target.int_bits).div_ceil(8);
                 Layout { size, align: size }
             }
+            // The one scalar whose alignment is not its size on every target;
+            // see [`TargetModel::int128_align`].
+            Ty::Int128 | Ty::UInt128 => Layout {
+                size: 16,
+                align: target.int128_align,
+            },
             scalar => {
                 let size = scalar.size_bytes(target);
                 Layout { size, align: size }
@@ -836,6 +857,8 @@ impl Ty {
             Ty::ULong => "unsigned long",
             Ty::LongLong => "long long",
             Ty::ULongLong => "unsigned long long",
+            Ty::Int128 => "__int128",
+            Ty::UInt128 => "unsigned __int128",
             Ty::Float => "float",
             Ty::Double => "double",
             Ty::Pointer(_) => "pointer",
@@ -910,8 +933,19 @@ impl Ty {
                 | Ty::ULong
                 | Ty::LongLong
                 | Ty::ULongLong
+                | Ty::Int128
+                | Ty::UInt128
                 | Ty::Enum(_)
         )
+    }
+
+    /// Whether this is one of the two 128-bit integer types.
+    ///
+    /// They are the only integers whose values do not all fit in the `i128` a
+    /// constant is carried in, so the places that fold, print or emit one have
+    /// to know; see [`Ty::wrap`].
+    pub fn is_int128(self) -> bool {
+        matches!(self, Ty::Int128 | Ty::UInt128)
     }
 
     /// Whether this is `float` or `double`.
@@ -934,6 +968,7 @@ impl Ty {
         match self {
             Ty::Char => target.char_signed,
             Ty::SChar | Ty::Short | Ty::Int | Ty::Long | Ty::LongLong | Ty::Enum(_) => true,
+            Ty::Int128 => true,
             Ty::Float | Ty::Double => true,
             _ => false,
         }
@@ -949,6 +984,8 @@ impl Ty {
             Ty::Int | Ty::UInt | Ty::Enum(_) => target.int_bits,
             Ty::Long | Ty::ULong => target.long_bits,
             Ty::LongLong | Ty::ULongLong => target.long_long_bits,
+            // Not a knob: GCC's `__int128` is 128 bits wherever it exists.
+            Ty::Int128 | Ty::UInt128 => 128,
             Ty::Float => 32,
             Ty::Double => 64,
             Ty::Pointer(_) => target.ptr_bits,
@@ -979,8 +1016,11 @@ impl Ty {
             Ty::Int | Ty::UInt | Ty::Enum(_) => 4,
             Ty::Long | Ty::ULong => 5,
             Ty::LongLong | Ty::ULongLong => 6,
-            Ty::Float => 7,
-            Ty::Double => 8,
+            // GCC ranks `__int128` above every standard integer type, which is
+            // what makes `(__int128)x * y` compute in 128 bits.
+            Ty::Int128 | Ty::UInt128 => 7,
+            Ty::Float => 8,
+            Ty::Double => 9,
             _ => 0,
         }
     }
@@ -993,6 +1033,7 @@ impl Ty {
             Ty::Int | Ty::Enum(_) => Ty::UInt,
             Ty::Long => Ty::ULong,
             Ty::LongLong => Ty::ULongLong,
+            Ty::Int128 => Ty::UInt128,
             other => other,
         }
     }
@@ -1002,15 +1043,29 @@ impl Ty {
         if !self.is_signed(target) {
             return 0;
         }
-        -(1i128 << (self.bits(target) - 1))
+        let bits = self.bits(target);
+        if bits >= 128 {
+            return i128::MIN;
+        }
+        -(1i128 << (bits - 1))
     }
 
     /// The largest value this integer type can hold.
+    ///
+    /// `unsigned __int128` is the one type whose largest value does not fit in
+    /// the `i128` this returns, and it is clamped to [`i128::MAX`]. Nothing
+    /// reads it: the only comparison of two maxima is the last step of the
+    /// [usual arithmetic conversions](Ty::usual_arithmetic), which is reached
+    /// only when the *unsigned* operand has the lower rank — and no integer
+    /// type ranks above `unsigned __int128`.
     pub fn max_value(self, target: &TargetModel) -> i128 {
         if self == Ty::Bool {
             return 1;
         }
         let bits = self.bits(target);
+        if bits >= 128 {
+            return i128::MAX;
+        }
         if self.is_signed(target) {
             (1i128 << (bits - 1)) - 1
         } else {
@@ -1026,6 +1081,18 @@ impl Ty {
     /// Converts an integer value to this type the way C's conversions do:
     /// modulo 2^N for unsigned types, and the same (implementation-defined)
     /// wrap-around for signed ones.
+    ///
+    /// # How a 128-bit constant is carried
+    ///
+    /// A folded constant is an `i128`, which holds every value of every type
+    /// this models except those of `unsigned __int128` above `i128::MAX`. Such
+    /// a value is carried as its **two's-complement bit pattern**, which is
+    /// what this returns unchanged for a 128-bit type: for every narrower type
+    /// the bit pattern and the mathematical value coincide, so the invariant is
+    /// "the value, except that an `unsigned __int128` is reinterpreted". The
+    /// places where the difference shows — division, remainder, a right shift,
+    /// a comparison and the literal that is finally emitted — dispatch on
+    /// [`Ty::is_signed`] instead of on the sign of the `i128`.
     pub fn wrap(self, value: i128, target: &TargetModel) -> i128 {
         if self == Ty::Bool {
             return i128::from(value != 0);
@@ -1221,12 +1288,45 @@ pub enum Storage {
         /// therefore be able to reach.
         exported: bool,
     },
+    /// A `thread_local!` item: an object declared `_Thread_local`,
+    /// `thread_local` or `__thread`.
+    ///
+    /// C gives it static storage duration and one instance per thread, which
+    /// is exactly what `std::thread_local!` provides. The item holds an
+    /// `UnsafeCell<T>`, and every access goes through the `*mut T` its `with`
+    /// hands out — valid for as long as the current thread's copy is, which is
+    /// the lifetime C promises. It is the third construct whose expansion
+    /// needs more than `core`, after variable length arrays and `alloca`.
+    ThreadLocal {
+        /// The name of the generated Rust item, already made unique.
+        item_name: String,
+        /// Whether the item is `pub`; see [`Storage::Static`].
+        exported: bool,
+    },
     /// An object defined outside the translation unit, declared in the
     /// expansion's `extern` block.
     Extern {
         /// The name the symbol has.
         item_name: String,
     },
+}
+
+impl Storage {
+    /// The name of the generated item, for the two storage classes that have
+    /// one of their own.
+    pub fn item_name(&self) -> Option<&str> {
+        match self {
+            Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {
+                Some(item_name)
+            }
+            Storage::Automatic | Storage::Extern { .. } => None,
+        }
+    }
+
+    /// Whether this is a thread-local object.
+    pub fn is_thread_local(&self) -> bool {
+        matches!(self, Storage::ThreadLocal { .. })
+    }
 }
 
 /// A named object.
@@ -2489,6 +2589,70 @@ mod tests {
         assert_eq!(u(Ty::UChar, Ty::Long), Ty::Long);
         assert_eq!(u(Ty::Float, Ty::LongLong), Ty::Float);
         assert_eq!(u(Ty::Double, Ty::Float), Ty::Double);
+    }
+
+    /// GNU's `__int128` ranks above every standard integer type, which is what
+    /// makes `(__int128) a * b` a 128-bit multiplication.
+    #[test]
+    fn int128_outranks_every_standard_integer_type() {
+        let u = |a, b| Ty::usual_arithmetic(a, b, &T);
+        assert_eq!(u(Ty::Int128, Ty::LongLong), Ty::Int128);
+        assert_eq!(u(Ty::Int128, Ty::ULongLong), Ty::Int128);
+        assert_eq!(u(Ty::UInt128, Ty::LongLong), Ty::UInt128);
+        assert_eq!(u(Ty::UInt128, Ty::Int128), Ty::UInt128);
+        assert_eq!(u(Ty::Int128, Ty::Int), Ty::Int128);
+        // …and a floating type still outranks it.
+        assert_eq!(u(Ty::Float, Ty::UInt128), Ty::Float);
+        assert_eq!(u(Ty::Double, Ty::Int128), Ty::Double);
+        // The promotions leave it alone, as they do every type of `int`'s rank
+        // or above.
+        assert_eq!(Ty::Int128.promote(&T), Ty::Int128);
+        assert_eq!(Ty::UInt128.promote(&T), Ty::UInt128);
+        assert_eq!(Ty::Int128.promote_argument(&T), Ty::Int128);
+        assert_eq!(Ty::Int128.to_unsigned(), Ty::UInt128);
+        assert!(Ty::Int128.is_signed(&T));
+        assert!(!Ty::UInt128.is_signed(&T));
+        assert_eq!(Ty::Int128.size_bytes(&T), 16);
+        assert_eq!(Ty::UInt128.bits(&T), 128);
+    }
+
+    /// A 128-bit constant is carried as its two's-complement bit pattern, so
+    /// `wrap` leaves it alone and the ends of the range come out exactly.
+    #[test]
+    fn int128_constants_are_carried_as_bit_patterns() {
+        assert_eq!(Ty::UInt128.wrap(-1, &T), -1);
+        assert_eq!(Ty::Int128.wrap(-1, &T), -1);
+        assert_eq!(Ty::Int128.wrap(i128::MIN, &T), i128::MIN);
+        assert_eq!(Ty::Int128.min_value(&T), i128::MIN);
+        assert_eq!(Ty::Int128.max_value(&T), i128::MAX);
+        assert_eq!(Ty::UInt128.min_value(&T), 0);
+        // Clamped, and documented as such: the real maximum is 2^128 - 1.
+        assert_eq!(Ty::UInt128.max_value(&T), i128::MAX);
+        // Converting a 128-bit pattern down to a narrower type is the ordinary
+        // truncation.
+        assert_eq!(Ty::UInt.wrap(-1, &T), 4_294_967_295);
+    }
+
+    /// `__int128` is sixteen bytes; its *alignment* is the one thing the model
+    /// decides, because it is the one scalar whose alignment is not its size
+    /// on every target.
+    #[test]
+    fn int128_takes_its_alignment_from_the_model() {
+        let types = Types::new();
+        let layout = types
+            .size_align(Ty::UInt128, &T)
+            .expect("a scalar has a layout");
+        assert_eq!(layout.size, 16);
+        assert_eq!(layout.align, 16);
+        let eight = TargetModel {
+            int128_align: 8,
+            ..TargetModel::LP64
+        };
+        let layout = types
+            .size_align(Ty::Int128, &eight)
+            .expect("a scalar has a layout");
+        assert_eq!(layout.size, 16);
+        assert_eq!(layout.align, 8);
     }
 
     #[test]

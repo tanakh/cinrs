@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        unsigned long strlen(const char *s);\n        int printf(const char *fmt, ...);\n        extern int errno;\n\n        static const char *messages[2] = {\"ok\", \"failed\"};\n\n        int report(int failed) {\n            const char *message = messages[failed != 0];\n            printf(\"%s (%lu)\\n\", message, strlen(message));\n            return errno;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_5cdf88e1 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "errno"]

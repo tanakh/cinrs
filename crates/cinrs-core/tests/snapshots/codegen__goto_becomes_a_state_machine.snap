@@ -3,6 +3,7 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int find(const int *values, int n, int needle) {\n            int i = 0;\n        loop:\n            if (i >= n) goto missing;\n            if (values[i] == needle) goto found;\n            i++;\n            goto loop;\n        found:\n            return i;\n        missing:\n            return -1;\n        }\n        \")"
 ---
 mod __cinrs_unit_3db7f700 {
+    const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn find(
         mut values: *const ::core::ffi::c_int,
