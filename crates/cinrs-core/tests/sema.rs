@@ -426,10 +426,48 @@ fn a_prototype_the_unit_never_defines_is_an_extern_declaration() {
 }
 
 #[test]
-fn old_style_definitions_are_not_supported() {
+fn old_style_definitions_are_accepted_and_checked() {
+    // Obsolescent, but valid C99: the identifier list and the declaration
+    // list make the parameters, and the function's type has no prototype.
+    accepted("int f(a, b) int a; int b; { return a + b; }");
+    accepted("int f(a, b) int a; char *b; { return a + (b != 0); }");
+    accepted("int f(a) register int a; { return a; }");
+    // A definition is the only place an identifier list may appear at all.
     rejected(
-        "int f(a, b) int a; int b; { return a + b; }",
-        &["old-style (K&R) function definitions are not supported; write a prototype instead"],
+        "int f(a, b); int f(a, b) int a; int b; { return a + b; }",
+        &[
+            "an identifier list is only allowed in a function definition; a declaration \
+             needs the parameter types",
+        ],
+    );
+    rejected(
+        "int f(a) int b; { return 0; }",
+        &[
+            "type specifier missing for parameter 'a'; C99 does not support implicit 'int'",
+            "declaration for parameter 'b', which is not in the identifier list",
+        ],
+    );
+    rejected(
+        "int f(a) int a; int a; { return 0; }",
+        &["redefinition of parameter 'a'"],
+    );
+    rejected(
+        "int f(a) int a = 1; { return 0; }",
+        &["parameter 'a' cannot have an initializer"],
+    );
+    rejected(
+        "int f(a) static int a; { return a; }",
+        &["'static' is not allowed on a parameter"],
+    );
+    rejected(
+        "int f(int a) int a; { return a; }",
+        &["a declaration list is not allowed after a parameter type list"],
+    );
+    // C99 removed implicit `int`, so a name the declaration list leaves out
+    // is a constraint violation rather than an `int`.
+    rejected(
+        "int f(a, b) int a; { return a; }",
+        &["type specifier missing for parameter 'b'; C99 does not support implicit 'int'"],
     );
 }
 

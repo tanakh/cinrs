@@ -52,16 +52,20 @@ with several is `drs/dr0xx.c:3`, counting from zero.
 
 | `-std=` on the RUN line | entry point |
 | --- | --- |
-| `c99` / `c11` / `c17`, `c18`, `iso9899:2017` / `c23`, `c2x` | `c99!` / `c11!` / `c17!` / `c23!` |
-| `gnu99` / `gnu11` / `gnu17`, `gnu18` / `gnu23`, `gnu2x` | `gnu99!` / `gnu11!` / `gnu17!` / `gnu23!` |
+| `c89`, `c90`, `iso9899:1990` / `c99` / `c11` / `c17`, `c18`, `iso9899:2017` / `c23`, `c2x` | `c89!` / `c99!` / `c11!` / `c17!` / `c23!` |
+| `gnu89`, `gnu90` / `gnu99` / `gnu11` / `gnu17`, `gnu18` / `gnu23`, `gnu2x` | `gnu89!` / `gnu99!` / `gnu11!` / `gnu17!` / `gnu23!` |
 | none at all | `gnu17!`, which is what `clang -cc1` defaults to for C |
-| `c89`, `c90`, `gnu89`, `iso9899:1990` | **skipped** — see below |
+| `iso9899:199409` | **skipped** — see below |
 
-**C89 has no entry point**, and standing `gnu99!` in for `gnu89` would be
-worse than skipping: these particular tests are about the places the two
-differ — implicit `int`, implicit function declarations, `//` comments, mixed
-declarations and code, `long long` — so every one of them would become a
-mismatch that says nothing.
+**C95 has no entry point.** `-std=iso9899:199409` is Amendment 1 — C89 plus
+`<iso646.h>`, `<wctype.h>` and a `__STDC_VERSION__` of `199409L` — and `c89!`
+would answer the amendment's own questions wrongly, so it is skipped rather
+than guessed at. The C89 revisions themselves are run: `c89!` gates what C99
+added and `gnu89!` accepts it, which is the line these tests are drawn along.
+Where a `-std=c89` revision uses a C99 feature that Clang takes as an
+*extension* — a `//` comment, `_Bool`, a declaration in a `for` clause — the
+strict entry point refuses it and the revision is a listed, deliberate
+refusal, exactly as `_Static_assert` in a `c99!` block already was.
 
 What else is honoured: `-verify` and `-verify=<prefixes>`, `-D` (as `#define`
 lines in front of the case), `-I` (as `#pragma cinrs include_path`, with `%S`
@@ -107,12 +111,12 @@ ignored.
 
 ## Skipped revisions
 
-101 of the 276 RUN lines are skipped rather than guessed at, each with a reason
-the report prints:
+73 of the 276 RUN lines are skipped rather than guessed at, each with a reason
+the report prints. The 28 that used to head this list — `-std=c89` and its
+spellings — are now run through `c89!` and `gnu89!`:
 
 | revisions | reason |
 | ---: | --- |
-| 27 | `-std=c89`: there is no C89 entry point |
 | 25 | `-ffreestanding`: `cinrs` has no freestanding mode — `__STDC_HOSTED__` is 1 and the bundled headers are the hosted ones |
 | 22 | a `\| FileCheck` pipeline, and the file has a `-verify` run too; there is nothing here that can check what `FileCheck` checks |
 | 5 | `-fms-extensions`, a Clang-only flag |
@@ -120,7 +124,7 @@ the report prints:
 | 2 | `-fexperimental-late-parse-attributes` |
 | 2 | `-x c++` |
 | 2 | the file is not valid UTF-8 (they are about extended characters) |
-| 1 each | `-fexperimental-new-constant-interpreter`, `-fms-compatibility`, `-fno-signed-char`, `-ftrigraphs`, `-std=gnu89`, the input being `%t.inc` rather than `%s` |
+| 1 each | `-fexperimental-new-constant-interpreter`, `-fms-compatibility`, `-fno-signed-char`, `-ftrigraphs`, the input being `%t.inc` rather than `%s` |
 | 5 | `-triple aarch64`, `arm`, `ppc32`, `ppc64`, `sparcv9` — not the LP64 model `cinrs` assumes |
 
 A `| FileCheck` pipeline in a file with **no** `-verify` run anywhere is *not*
@@ -133,35 +137,44 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 175 run, 79 as required (45.1 %)**,
-101 skipped, in about seven seconds.
+corpus revision: **99 files, 276 RUN lines, 203 run, 85 as required (41.9 %)**,
+73 skipped, in about seven seconds.
 
 | directory | run | as required | rate | revisions | skipped |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `C99` | 27 | 18 | **66.7 %** | 37 | 10 |
-| `C11` | 22 | 8 | 36.4 % | 30 | 8 |
-| `C23` | 42 | 9 | 21.4 % | 69 | 27 |
-| `drs` | 84 | 44 | **52.4 %** | 140 | 56 |
+| `C99` | 30 | 20 | **66.7 %** | 37 | 7 |
+| `C11` | 23 | 8 | 34.8 % | 30 | 7 |
+| `C23` | 45 | 9 | 20.0 % | 69 | 24 |
+| `drs` | 105 | 48 | **45.7 %** | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
 
+The rate went *down* when the C89 revisions started running — 79 of 175
+(45.1 %) became 85 of 203 (41.9 %) — and that is what one should expect: the
+28 revisions that joined are 6 more passes and 22 more mismatches, most of
+them a `-std=c89` RUN line using a C99 feature that Clang takes as an
+extension and `c89!` refuses on purpose. Those are `!` entries; see below.
+
 ### The mismatches, by cause
 
-96 revisions do not come out as the test asks. Every one of them is in
+118 revisions do not come out as the test asks. Every one of them is in
 `tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
 
-**Deliberate refusals (21, marked `!`).** These are not gaps. Guard mode
+**Deliberate refusals (34, marked `!`).** These are not gaps. Guard mode
 asserts that the refusal is still there.
 
-* *A later revision's feature in an earlier block* (10): `_Static_assert` and
+* *A later revision's feature in an earlier block* (22): `_Static_assert` and
   `_Alignof` in a `c99!` block, an anonymous `struct` member in `c99!`, a
   binary constant in `c17!`, a label at the end of a compound statement in
-  `c11!`. Clang takes each as an *extension* and warns
-  (`-Wc11-extensions`, `-Wc23-extensions`), which these RUN lines silence or
-  do not promote — an error only under `-pedantic-errors`. `cinrs` gates them
-  on the entry point instead, and says which macro to write.
-* *`_Complex` and `_Imaginary`* (6). C11 6.10.8.3 makes complex arithmetic
+  `c11!` — and, since the C89 revisions started running, a `//` comment,
+  `_Bool`, a declaration in a `for` clause, a designated initializer and
+  `_Static_assert` in a `c89!` block. Clang takes each as an *extension* and
+  warns (`-Wc99-extensions`, `-Wc11-extensions`, `-Wc23-extensions`), which
+  these RUN lines silence or do not promote — an error only under
+  `-pedantic-errors`. `cinrs` gates them on the entry point instead, and says
+  which macro to write.
+* *`_Complex` and `_Imaginary`* (7). C11 6.10.8.3 makes complex arithmetic
   optional and `cinrs` predefines `__STDC_NO_COMPLEX__`, so refusing them is
   conforming behaviour rather than a gap. `C11/n1460.c` is the same thing seen
   from the other side: the file's own `#error` fires *because* the macro is
@@ -169,15 +182,16 @@ asserts that the refusal is still there.
 * *`_Atomic`* (1), for the same reason with `__STDC_NO_ATOMICS__`.
 * *Clang-only builtins* (4): `__builtin_bit_cast`, `__builtin_complex`.
 
-**Genuine gaps, false rejections (33).** Valid C that `cinrs` refuses:
+**Genuine gaps, false rejections (34).** Valid C that `cinrs` refuses. There
+are 68 false rejections in all; the other 34 are the deliberate ones above.
 
 | cause | revisions |
 | --- | ---: |
+| trigraphs, which `cinrs` has in no mode (`C23/n2940.c` is *about* them) | 6 |
 | `offsetof(T, a.b)` — a nested member designator | 6 |
-| trigraphs, which `cinrs` has in no mode (`C23/n2940.c` is *about* them) | 5 |
 | a compound literal whose `struct` type is declared in the cast itself, `(struct X){ 0 }` | 5 |
+| `int j[];` — an incomplete array type, which C completes to `[1]` at the end of the unit; the same gap refuses `extern int j[];` | 5 |
 | a designator naming a nested member, `.a.b = 1` | 4 |
-| `int j[];` — an incomplete array type, which C completes to `[1]` at the end of the unit; the same gap refuses `extern int j[];` | 4 |
 | a label on a declaration at the end of a block | 2 |
 | an enumerator whose value does not fit `int` (C23 widens the enumeration instead) | 2 |
 | `<stdckdint.h>` is not bundled | 1 |
@@ -185,7 +199,7 @@ asserts that the refusal is still there.
 | C23's `void f(...)` — an ellipsis with no named parameter | 1 |
 | the line number of a macro invocation spanning spliced lines (unspecified; Clang's own comment calls its answer a FIXME) | 1 |
 
-**Wrong line (42).** The error came out somewhere other than where the test
+**Wrong line (49).** The error came out somewhere other than where the test
 asks. Almost all of these are files carrying *many* annotations — `drs/dr0xx.c`
 has forty — where `cinrs` reports one of them on a different line, or reports
 an unrelated refusal first and never reaches the one asked about. The four

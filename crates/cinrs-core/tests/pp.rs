@@ -890,13 +890,15 @@ fn a_keyword_may_be_a_macro_name() {
     // Keywords are ordinary identifiers in translation phase 4, and
     // `#define restrict` is what a header for an older compiler does.
     assert_eq!(pp("#define restrict\nint *restrict p;"), "int * p ;");
-    // `__inline` is one of the GNU spellings of `inline`, and the
-    // preprocessor turns it into that keyword on the way to the parser — after
-    // the macro has been replaced, which is what keeps `#define __inline` and
-    // `#ifdef __restrict` about the names that were written.
+    // `__inline` is the GNU spelling of `inline`, and the preprocessor turns
+    // it into a keyword on the way to the parser — after the macro has been
+    // replaced, which is what keeps `#define __inline` and `#ifdef __restrict`
+    // about the names that were written. It is a keyword of its own rather
+    // than `inline` itself, because `c89!` gates the plain spelling and not
+    // the reserved one.
     assert_eq!(
         pp("#define inline __inline\ninline int f();"),
-        "inline int f ( ) ;"
+        "__inline__ int f ( ) ;"
     );
     assert_eq!(pp("#define __restrict\nint *__restrict p;"), "int * p ;");
     assert_eq!(pp("#ifdef int\nno\n#endif\nyes"), "yes");

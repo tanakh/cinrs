@@ -58,7 +58,7 @@ typedef struct {
  * its alignment. */
 typedef struct {
     char __mbstate8[128];
-    long long _mbstateL;
+    __extension__ long long _mbstateL;
 } mbstate_t;
 #else
 /* glibc's `__mbstate_t`: eight bytes, four-byte aligned. */
@@ -104,8 +104,9 @@ wchar_t *wmemchr(const wchar_t *s, wchar_t c, size_t n);
 
 long wcstol(const wchar_t *nptr, wchar_t **endptr, int base);
 unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base);
-long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
-unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base);
+__extension__ long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
+__extension__ unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr,
+                                          int base);
 double wcstod(const wchar_t *nptr, wchar_t **endptr);
 float wcstof(const wchar_t *nptr, wchar_t **endptr);
 

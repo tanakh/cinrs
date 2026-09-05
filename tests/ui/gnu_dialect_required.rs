@@ -9,7 +9,7 @@ cinrs::c99! {
     }
 
     typeof(int) x; //~ ERROR: requires a GNU dialect
-    //~^ ERROR: expected a declaration
+    //~^ ERROR: type specifier missing
 }
 
 fn main() {}

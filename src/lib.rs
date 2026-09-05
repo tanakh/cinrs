@@ -24,9 +24,13 @@
 //!
 //! # Standards and dialects
 //!
-//! [`c99!`], [`c11!`], [`c17!`] and [`c23!`] are the same macro for four
-//! revisions of the language; `__STDC_VERSION__` is `199901L`, `201112L`,
-//! `201710L` and `202311L` respectively, and the bundled headers follow it.
+//! [`c89!`], [`c99!`], [`c11!`], [`c17!`] and [`c23!`] are the same macro for
+//! five revisions of the language; `__STDC_VERSION__` is `199901L`,
+//! `201112L`, `201710L` and `202311L` from C99 on, and *undefined* in
+//! [`c89!`], which is what C89 as published had. The bundled headers follow
+//! it. [`c90!`] is another name for [`c89!`]: ISO/IEC 9899:1990 is ANSI
+//! X3.159-1989 republished with no technical change.
+//!
 //! A construct a later revision introduced is a diagnostic in an earlier
 //! block, and the diagnostic says which macro to write instead:
 //!
@@ -34,9 +38,97 @@
 //! error: '_Static_assert' requires C11 or later (this block is c99!)
 //! ```
 //!
-//! [`gnu99!`], [`gnu11!`], [`gnu17!`] and [`gnu23!`] are those four with the
-//! GNU extensions switched on; see [GNU extensions](#gnu-extensions) for what
-//! that changes and what it does not.
+//! [`gnu89!`], [`gnu99!`], [`gnu11!`], [`gnu17!`] and [`gnu23!`] are those
+//! five with the GNU extensions switched on; see
+//! [GNU extensions](#gnu-extensions) for what that changes and what it does
+//! not.
+//!
+//! ## What `c89!` refuses
+//!
+//! The gate runs backwards in the oldest entry point: everything C99 added is
+//! `requires C99 or later (this block is c89!)`. That is `//` comments, mixed
+//! declarations and code, a declaration in a `for` clause, variable length
+//! arrays, `_Bool`, `restrict`, `inline`, `long long`, designated
+//! initializers, compound literals, variadic macros, flexible array members,
+//! hexadecimal floating constants, `__func__`, `_Pragma`, universal character
+//! names, a trailing comma in an enumerator list, `static` and `[*]` in an
+//! array parameter declarator, and `_Complex`.
+//!
+//! The library half of C99 is *not* gated: a bundled header is a set of
+//! declarations, and `snprintf` is one of them. The few declarations that
+//! need a C99 *type* — `llabs`, `strtoll`, `int64_t` where it is a
+//! `long long` — carry `__extension__`, which switches the gate off for the
+//! declaration it is written on, exactly as GCC's own headers do; a program
+//! may use it for the same purpose. Neither are the reserved
+//! spellings gated: `__inline` and `__restrict` work in `c89!` exactly as they
+//! do in `gcc -std=c89`, and for the same reason
+//! ([GNU extensions](#gnu-extensions)).
+//!
+//! [`gnu89!`] switches every one of those back on, as `gcc -std=gnu89` does.
+//! What it keeps of C89 is only what a later revision *deleted*: the two
+//! rules below.
+//!
+//! ## Implicit `int` and implicit function declarations
+//!
+//! In [`c89!`] and [`gnu89!`] — and nowhere else, because C99 removed both
+//! (N635, N636) and GCC 14 errors on them in every later mode, GNU dialects
+//! included — a declaration with no type specifier declares an `int`, and a
+//! call to a function nothing has declared declares one:
+//!
+//! ```
+//! cinrs::c89! {
+//!     static cinrs_doc_counter;          /* an `int` */
+//!
+//!     cinrs_doc_bump()                   /* returning an `int` */
+//!     {
+//!         cinrs_doc_counter = cinrs_doc_counter + 1;
+//!         /* Nothing declares `abs`: this declares `extern int abs();` at
+//!            file scope, and the linker resolves it. */
+//!         return abs(cinrs_doc_counter);
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { cinrs_doc_bump() }, 1);
+//! ```
+//!
+//! The implicit declaration has no prototype, so the arguments of the call
+//! that made it get the default argument promotions, and a later declaration
+//! of the same name has to be *compatible* with `int f()` or it is the
+//! ordinary "conflicting types". A `__builtin_` name is never declared this
+//! way: it belongs to the implementation, so a diagnostic naming it is more
+//! use than a link error.
+//!
+//! ## Old-style (K&R) function definitions
+//!
+//! `int f(a, b) int a; char *b; { … }` is valid, if obsolescent, C99, and
+//! works in **every entry point below [`c23!`]** — C23 is the revision that
+//! removed the form (N2432), and there it is a diagnostic that says so.
+//!
+//! ```
+//! cinrs::c99! {
+//!     int cinrs_doc_knr(c, n)
+//!         char c;
+//!         int n;
+//!     {
+//!         return c * n;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { cinrs_doc_knr(3, 4) }, 12);
+//! ```
+//!
+//! The identifier list and the declaration list become the parameter list
+//! (6.9.1p6); a name the declaration list leaves out is an `int`, which is
+//! implicit `int` and therefore [`c89!`] and [`gnu89!`] alone. The resulting
+//! function type has **no prototype** (6.9.1p7), so it is compatible with
+//! `int f();` and a caller applies the default argument promotions — and that
+//! is what the generated item takes: `char c` above is a `c_int` parameter
+//! converted on entry, `let c: c_char = c as c_char;`, exactly as C says the
+//! callee receives a promoted value and stores it in the declared type.
+//! `register` is allowed on a parameter; a declaration-list entry naming
+//! something that is not in the identifier list, naming one twice, or
+//! carrying an initialiser is a diagnostic, and so is an identifier list on a
+//! declaration that is not a definition.
 //!
 //! ## What `c11!` adds
 //!
@@ -645,7 +737,8 @@
 //! ## Predefined macros
 //!
 //! `__STDC__`, `__STDC_HOSTED__` and `__STDC_VERSION__` (which follows the
-//! entry point: `199901L`, `201112L`, `201710L` or `202311L`), the four
+//! entry point: `199901L`, `201112L`, `201710L` or `202311L`, and undefined
+//! in [`c89!`] and [`gnu89!`], which is what C89 as published had), the four
 //! `__STDC_NO_*` subsetting macros, `__cinrs__`, `__FILE__` and `__LINE__` —
 //! which name the *`.rs` file* and the line in it, so that they point where the
 //! user is looking — plus `__DATE__`, `__TIME__` and `__TIMESTAMP__` as fixed
@@ -911,7 +1004,7 @@
 //! are not.
 //!
 //! Deliberately never: `_Complex`,
-//! old-style (K&R) definitions, `setjmp`/`longjmp`, `_Thread_local`,
+//! `setjmp`/`longjmp`, `_Thread_local`,
 //! `_Atomic`, `_BitInt`, `#embed`, C11's `u8`/`u`/`U`
 //! literals, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
@@ -931,4 +1024,4 @@
 #![warn(missing_docs)]
 #![no_std]
 
-pub use cinrs_macros::{c11, c17, c23, c99, gnu11, gnu17, gnu23, gnu99};
+pub use cinrs_macros::{c11, c17, c23, c89, c90, c99, gnu11, gnu17, gnu23, gnu89, gnu99};

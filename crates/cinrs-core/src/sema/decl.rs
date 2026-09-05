@@ -250,6 +250,14 @@ impl Sema<'_> {
         bound: Option<Expr>,
         file_scope: bool,
     ) -> Vec<Stmt> {
+        // C99 6.7.5.2 introduced them (N683), so a `c89!` block is told to
+        // write a different macro rather than being told the bound is not a
+        // constant expression.
+        self.require_standard(
+            crate::Standard::C99,
+            "a variable length array",
+            declarator.range,
+        );
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
         let problem = if file_scope || storage == Some(ast::StorageClass::Static) {
             // An object with static storage duration is an item whose size the
@@ -884,11 +892,14 @@ impl Sema<'_> {
             self.error(at, "'constexpr' is not supported on a function");
         }
 
-        if !func.kr_names.is_empty() || definition.is_some_and(|def| !def.kr_decls.is_empty()) {
+        // A definition's identifier list has already become a parameter list
+        // (see `Sema::old_style_params`), so one that is still here belongs to
+        // a declaration — where C99 6.7.5.3p3 says it must be empty.
+        if let Some(first) = func.kr_names.first() {
             self.error(
-                range,
-                "old-style (K&R) function definitions are not supported; \
-                 write a prototype instead",
+                first.range,
+                "an identifier list is only allowed in a function definition; \
+                 a declaration needs the parameter types",
             );
             return None;
         }
@@ -962,6 +973,15 @@ impl Sema<'_> {
             param_names.push(param.name.as_ref().map(|n| n.name.clone()));
         }
 
+        if func.old_style {
+            // C99 6.9.1p7: the definition's type has no prototype, so every
+            // caller applies the default argument promotions — and the
+            // generated item has to take what a caller really passes. The
+            // declared types come back on entry; see `Sema::function_def`.
+            for ty in &mut param_tys {
+                *ty = ty.promote_argument(&self.target);
+            }
+        }
         let sig = Signature {
             ret,
             params: param_tys,
@@ -1083,9 +1103,165 @@ impl Sema<'_> {
         Some(id)
     }
 
+    /// The parameter list an old-style (K&R) definition really declares.
+    ///
+    /// `int f(a, b) int a; char *b; { … }` writes an *identifier list* and then
+    /// a declaration list saying what each name is; C99 6.9.1p6 makes the two
+    /// into the parameter list every other pass here expects, so sema builds
+    /// it once, up front, and works on that.
+    ///
+    /// Two things survive the translation. The type still has **no prototype**
+    /// (6.9.1p7): a call to it applies the default argument promotions and is
+    /// only compatible with a prototype whose parameters are already their own
+    /// promoted forms — which is why [`ast::FunctionType::old_style`] is set
+    /// and why [`Sema::declare_function`] builds the signature out of the
+    /// promoted types. And a name the declaration list leaves out is an `int`,
+    /// which is implicit `int` and therefore C89's alone (a constraint
+    /// violation from C99 on, and an error in GCC 14).
+    fn old_style_params(
+        &mut self,
+        def: &ast::FunctionDef,
+        func: &ast::FunctionType,
+    ) -> ast::FunctionType {
+        let mut out = func.clone();
+        out.kr_names = Vec::new();
+        out.old_style = true;
+        out.has_prototype = false;
+
+        if !self.gating.old_style_definitions() {
+            self.error(
+                def.ty.range,
+                "old-style function definitions were removed in C23",
+            );
+        }
+        if func.has_prototype {
+            // `int f(int a) int a; { … }` — the declaration list has nothing
+            // left to declare.
+            if let Some(first) = def.kr_decls.first() {
+                self.error(
+                    first.range,
+                    "a declaration list is not allowed after a parameter type list",
+                );
+            }
+            out.old_style = false;
+            out.has_prototype = true;
+            return out;
+        }
+
+        // What the declaration list says, by name.
+        let mut declared: Vec<(String, ast::ParamDecl)> = Vec::new();
+        for decl in &def.kr_decls {
+            if decl.declarators.is_empty() {
+                self.error(decl.range, "this declaration declares no parameter");
+                continue;
+            }
+            if let Some(storage) = &decl.specifiers.storage
+                && storage.node != ast::StorageClass::Register
+            {
+                // `register` is the one C allows on a parameter, and the only
+                // one a K&R declaration list is ever written with.
+                self.error(
+                    storage.range,
+                    format!("'{}' is not allowed on a parameter", storage.node.as_str()),
+                );
+            }
+            for declarator in &decl.declarators {
+                let Some(name) = &declarator.name else {
+                    self.error(declarator.range, "this declaration declares no parameter");
+                    continue;
+                };
+                if declarator.init.is_some() {
+                    self.error(
+                        declarator.range,
+                        format!("parameter '{}' cannot have an initializer", name.name),
+                    );
+                }
+                if !func.kr_names.iter().any(|n| n.name == name.name) {
+                    self.error(
+                        name.range,
+                        format!(
+                            "declaration for parameter '{}', which is not in the \
+                             identifier list",
+                            name.name
+                        ),
+                    );
+                    continue;
+                }
+                if declared.iter().any(|(other, _)| *other == name.name) {
+                    self.error(
+                        name.range,
+                        format!("redefinition of parameter '{}'", name.name),
+                    );
+                    continue;
+                }
+                declared.push((
+                    name.name.clone(),
+                    ast::ParamDecl {
+                        specifiers: decl.specifiers.clone(),
+                        name: Some(name.clone()),
+                        ty: declarator.ty.clone(),
+                        range: declarator.range,
+                    },
+                ));
+            }
+        }
+
+        let mut seen: Vec<&str> = Vec::new();
+        for ident in &func.kr_names {
+            if seen.contains(&ident.name.as_str()) {
+                self.error(
+                    ident.range,
+                    format!("redefinition of parameter '{}'", ident.name),
+                );
+                continue;
+            }
+            seen.push(&ident.name);
+            match declared.iter().find(|(name, _)| *name == ident.name) {
+                Some((_, param)) => out.params.push(param.clone()),
+                None => {
+                    if !self.gating.implicit_int() {
+                        self.error(
+                            ident.range,
+                            format!(
+                                "type specifier missing for parameter '{}'; C99 does \
+                                 not support implicit 'int'",
+                                ident.name
+                            ),
+                        );
+                    }
+                    out.params.push(ast::ParamDecl {
+                        specifiers: ast::DeclSpecifiers {
+                            storage: None,
+                            inline: false,
+                            noreturn: None,
+                            alignas: None,
+                            attrs: ast::Attributes::default(),
+                            base: implicit_int_type(ident.range),
+                            range: ident.range,
+                        },
+                        name: Some(ident.clone()),
+                        ty: implicit_int_type(ident.range),
+                        range: ident.range,
+                    });
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn function_def(&mut self, def: &ast::FunctionDef) {
         let ast::TypeKind::Function(func) = &def.ty.kind else {
             return;
+        };
+        // An old-style definition is turned into an ordinary parameter list
+        // here, once, so that nothing downstream has to know about identifier
+        // lists; see [`Sema::old_style_params`].
+        let synthesized;
+        let func = if func.kr_names.is_empty() && def.kr_decls.is_empty() {
+            func
+        } else {
+            synthesized = self.old_style_params(def, func);
+            &synthesized
         };
         let decl = ast::Decl {
             specifiers: def.specifiers.clone(),
@@ -1129,12 +1305,40 @@ impl Sema<'_> {
         self.collect_labels(&def.body);
 
         let mut params = Vec::with_capacity(func.params.len());
+        // The old-style parameters whose declared type is not what the ABI
+        // hands over: the item takes the promoted one under a hidden name, and
+        // the prologue below binds the C name to the declared type.
+        let mut converted: Vec<(ast::Ident, Ty, Ty, ObjectId, bool)> = Vec::new();
         for (param, ty) in func
             .params
             .iter()
             .zip(self.program.function(id).sig.params.clone())
         {
             let Some(name) = &param.name else { continue };
+            if func.old_style {
+                // `resolve_param_ty` already succeeded for this parameter in
+                // `declare_function`, or there would be no `id` to be here
+                // with; it neither reports nor changes anything.
+                let declared = self.resolve_param_ty(&param.ty).unwrap_or(ty);
+                if declared != ty {
+                    let object = self.new_object(
+                        &format!("__cinrs_kr_{}", name.name),
+                        ty,
+                        Storage::Automatic,
+                        false,
+                        name.range,
+                    );
+                    converted.push((
+                        name.clone(),
+                        declared,
+                        ty,
+                        object,
+                        param.ty.qualifiers.is_const,
+                    ));
+                    params.push(object);
+                    continue;
+                }
+            }
             if self.check_redefinition(name) {
                 // Two parameters under one name; leaving the second out keeps
                 // the generated signature from being invalid Rust on top of
@@ -1166,12 +1370,42 @@ impl Sema<'_> {
         // would find — is the function's, so the range of ids the body used is
         // what code generation names its locals from.
         let first_object = self.program.objects.len() as u32;
-        // C99 6.9.1p10: the size expressions of a variably modified parameter
-        // are evaluated on entry to the function. The bound is not part of the
+        // `let a: c_char = __cinrs_kr_a as c_char;` — C99 6.9.1p10 gives an
+        // old-style parameter the type its own declaration gave it, while the
+        // caller passed the promoted one, which is what the item takes.
+        let mut body = Vec::new();
+        for (name, declared, promoted, object, is_const) in converted {
+            let load = Expr::new(
+                ExprKind::Load(super::place_of(
+                    PlaceKind::Object(object),
+                    promoted,
+                    false,
+                    name.range,
+                )),
+                promoted,
+                name.range,
+            );
+            let init = self.convert(load, declared);
+            let local = self.new_object(
+                &name.name,
+                declared,
+                Storage::Automatic,
+                is_const,
+                name.range,
+            );
+            self.insert(&name.name, Entry::Object(local));
+            body.push(Stmt::Let {
+                object: local,
+                init,
+                explicit: true,
+            });
+        }
+        // C99 6.9.1p10 again: the size expressions of a variably modified
+        // parameter are evaluated on entry. The bound is not part of the
         // adjusted type — the parameter is a pointer — but `void f(int n, int
         // a[n++])` still increments `n`, and a definition is the one place
         // where that is observable.
-        let mut body = self.parameter_size_effects(func);
+        body.extend(self.parameter_size_effects(func));
         body.extend(self.block_items(&def.body.items));
         // A forward `goto` names a label the walk above had not reached yet, so
         // the jumps are checked now that every label's scope is known.
@@ -1336,4 +1570,15 @@ impl Sema<'_> {
             PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => false,
         }
     }
+}
+
+/// The `int` a parameter no declaration list entry named has (C89 6.5.2).
+fn implicit_int_type(range: SourceRange) -> ast::Type {
+    ast::Type::plain(
+        ast::TypeKind::Int {
+            sign: ast::Sign::Signed,
+            size: ast::IntSize::Int,
+        },
+        range,
+    )
 }

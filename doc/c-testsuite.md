@@ -5,8 +5,8 @@ has the memory rules a run has to be given.*
 
 [c-testsuite](https://github.com/c-testsuite/c-testsuite) is a collaborative
 database of C compiler test cases. `cinrs` runs its `single-exec` suite through
-any of its entry points — `c99!`, `c11!`, `c23!` and the GNU dialects
-`gnu99!`, `gnu11!` and `gnu23!` — so that "how much of C does the front end
+any of its entry points — `c89!`, `c99!`, `c11!`, `c23!` and the GNU dialects
+`gnu89!`, `gnu99!`, `gnu11!` and `gnu23!` — so that "how much of C does the front end
 actually get right" is a number that a test run can hold on to rather than an
 impression.
 
@@ -107,7 +107,7 @@ one-line classification as the note for a new one, and leaves every `?` and
 | variable | effect |
 | --- | --- |
 | `CINRS_CTESTSUITE_REQUIRED=1` | a missing corpus is a failure, not a skip |
-| `CINRS_CTESTSUITE_STANDARD=c99\|c11\|c23\|gnu99\|gnu11\|gnu23` | which entry point to translate with, and which cases are eligible; default `c99` |
+| `CINRS_CTESTSUITE_STANDARD=c89\|c99\|c11\|c23\|gnu89\|gnu99\|gnu11\|gnu23` | which entry point to translate with, and which cases are eligible; default `c99`. `c90` is another spelling of `c89` |
 | `CINRS_CTESTSUITE_FILTER=<substring>` | only the cases whose id contains it |
 | `CINRS_CTESTSUITE_REPORT=1` | report mode |
 | `CINRS_CTESTSUITE_STRICT=1` | a stale expected-failure entry is a failure — a broken `!` assertion is one either way |
@@ -116,9 +116,9 @@ one-line classification as the note for a new one, and leaves every `?` and
 
 The expected-failure list for `c99!` is
 `tests/c-testsuite/expected-failures.txt`; every other entry point has one of
-its own — `expected-failures-c11.txt`, `-c23.txt`, `-gnu99.txt`, `-gnu11.txt`
-and `-gnu23.txt` — because a case that needs C11 fails under `c99!` and passes
-under `c11!` and one list cannot say both. The format is one id per line with a
+its own — `expected-failures-c89.txt`, `-c11.txt`, `-c23.txt`, `-gnu89.txt`,
+`-gnu99.txt`, `-gnu11.txt` and `-gnu23.txt` — because a case that needs C11
+fails under `c99!` and passes under `c11!` and one list cannot say both. The format is one id per line with a
 note after it and `#` for a comment.
 
 ### The markers
@@ -159,12 +159,14 @@ Two rules, both out of the corpus's own tags:
 * **It has to run on this machine.** `portable`, or an `arch-…` tag naming the
   host. A case with neither kind of tag makes no claim and is kept. Every case
   in this revision is `portable`, so nothing is excluded here today.
-* **It must not need a newer revision of C than the entry point.** `c89` and
-  `c99` both mean "C99 is enough" (the corpus documents `c89` as implying
-  `c99`, and `c99` as implying `c11`), so `c99!` takes 218 of the 220 and
-  leaves the two `c11`-tagged ones; `c11!` and `c23!` take all 220. A GNU
-  dialect accepts everything a later revision added, so `gnu99!` takes all 220
-  as well.
+* **It must not need a newer revision of C than the entry point.** A `cNN`
+  tag names the *oldest* revision the program is valid in — the corpus
+  documents `c89` as implying `c99` and `c99` as implying `c11` — so a
+  `c89`-tagged case runs everywhere and a `c11`-tagged one only from `c11!`
+  up. `c89!` therefore takes the 175 cases that ask for nothing later than
+  C89, `c99!` takes 218 of the 220 and leaves the two `c11`-tagged ones, and
+  `c11!` and `c23!` take all 220. A GNU dialect accepts everything a later
+  revision added, so `gnu89!` and `gnu99!` take all 220 as well.
 
 Nothing is excluded by the other two tags. `needs-cpp` is fine — `cinrs` has
 the whole C99 preprocessor — and so is `needs-libc`, since the bundled headers
@@ -264,9 +266,11 @@ corpus revision.
 
 | entry point | selected | passed | rate | rejected | failed |
 | --- | ---: | ---: | ---: | ---: | ---: |
+| `c89!` | 175 | 152 | 86.9 % | — | 23 |
 | `c99!` | 218 | 213 | **97.7 %** | — | 5 |
 | `c11!` | 220 | 216 | **98.2 %** | — | 4 |
 | `c23!` | 220 | 215 | **97.7 %** | 1 | 4 |
+| `gnu89!` | 220 | 216 | **98.2 %** | — | 4 |
 | `gnu99!` | 220 | 216 | **98.2 %** | — | 4 |
 | `gnu11!` | 220 | 216 | **98.2 %** | — | 4 |
 | `gnu23!` | 220 | 215 | **97.7 %** | 1 | 4 |
@@ -298,6 +302,23 @@ Under `c11!`, where nothing is rejected, the same rows are 216/220 (98.2 %)
 `portable`, 172/174 (98.9 %) `c89`, 42/43 `c99`, 2/2 `c11`, 96/98 `needs-cpp`
 and 61/63 `needs-libc`.
 
+### The `c89!` row, which is the corpus's own tag being generous
+
+`c89!` is the only entry point that fails a lot, and **21 of its 23 failures
+are cases that use something a later revision added** — twenty of them tagged
+`c89`, and the twenty-first (`00216`) tagged with no revision at all: nine mix
+declarations and code, four write `long long`, three end an enumerator list
+with a comma, two define a variadic macro, and one each uses a variable length
+array, a compound literal and `_Generic`. The tag says the program is meant to
+be portable, not that it is strict C90, and running it through the entry point
+that *means* strict C90 is what shows the difference — which is the useful
+thing this row measures. The other two failures are `00140` (the Rust 1.99
+variadic gap) and `00213`, which every entry point fails.
+
+`gnu89!` is the same corpus with those gates switched off, and it passes
+216/220 — exactly what `gnu99!` and `gnu11!` pass. That is the point of the
+dialect: `gcc -std=gnu89` takes all of the above as extensions too.
+
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
 fails on 1.97.1. The tables above count it as a failure; on 1.99 the rows are
@@ -306,7 +327,8 @@ fails on 1.97.1. The tables above count it as a failure; on 1.99 the rows are
 
 The GNU dialects select all 220 cases and pass the same ones as their ISO
 counterparts: nothing in the corpus needs a *plain*-spelled GNU keyword, so
-switching the dialect on buys eligibility rather than passes.
+switching the dialect on buys eligibility rather than passes — except for
+`gnu89!`, where what it buys is the twenty-one cases `c89!` gates.
 
 ### The failures, by cause
 
@@ -332,9 +354,11 @@ the same shape).
 **Wanted a newer toolchain (1).** `00140` defines a variadic function, which
 needs Rust 1.99.
 
-**Wanted a later entry point (1, `c99!` only).** `00219` uses `_Generic` and is
-tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under every other
-entry point — including `gnu99!`, which accepts what C11 added — it passes.
+**Wanted a later entry point (1 under `c99!`, 21 under `c89!`).** `00219` uses
+`_Generic` and is tagged `c89`, so `c99!` refuses it and says to write `c11!`.
+Under every other *strict* entry point above C89 it passes, and under a GNU
+dialect — which accepts what a later revision added — it passes too. `c89!`
+refuses that one and twenty more; see [the `c89!` row](#the-c89-row-which-is-the-corpuss-own-tag-being-generous).
 
 ### Rejected as the standard requires
 

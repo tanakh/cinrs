@@ -1,12 +1,18 @@
-//! The eight entry points: four revisions, each strict or GNU.
+//! The ten entry points: five revisions, each strict or GNU.
 //!
 //! The line between them is GCC's own. Everything spelled with a leading
 //! double underscore is available either way, because those names are
 //! reserved; the plain spellings `typeof` and `asm` need a GNU dialect, and
 //! only there is a construct a later revision introduced accepted without a
 //! diagnostic naming the macro to write instead.
+//!
+//! `c89!` is the one entry point that is *older* than the rest rather than
+//! newer, so the gating runs the other way: everything C99 added is refused
+//! there, with the same message and the same shape. `gnu89!` switches all of
+//! it back on, exactly as `gcc -std=gnu89` does, and keeps only the three
+//! rules a later revision *deleted* — which is what `tests/knr.rs` is about.
 
-use cinrs::{c17, c23, gnu11, gnu17, gnu23, gnu99};
+use cinrs::{c17, c23, c89, c90, gnu11, gnu17, gnu23, gnu89, gnu99};
 
 gnu99! {
     /* Every one of these needs a later revision than C99, and `gnu99!` takes
@@ -114,5 +120,193 @@ fn the_double_underscore_extensions_need_no_gnu_entry_point() {
     assert_eq!(
         unsafe { strict_alignof() },
         align_of::<core::ffi::c_long>() as u64
+    );
+}
+
+// ---------------------------------------------------------------------------
+// C89 and its GNU dialect
+// ---------------------------------------------------------------------------
+
+c89! {
+    /* C89 as published has no `__STDC_VERSION__` at all — Amendment 1 added
+     * it in 1995 — so a program that tests for it must not find one. */
+    #ifdef __STDC_VERSION__
+    #error "__STDC_VERSION__ must not be defined in a c89! block"
+    #endif
+    #if __STDC__ != 1
+    #error "__STDC__ is 1 in every entry point, C89 included"
+    #endif
+    #ifndef __STRICT_ANSI__
+    #error "__STRICT_ANSI__ is defined in the strict entry points"
+    #endif
+
+    int c89_answer(void) { return 89; }
+}
+
+c90! {
+    /* ISO/IEC 9899:1990 is the same language under the other name. */
+    #ifdef __STDC_VERSION__
+    #error "__STDC_VERSION__ must not be defined in a c90! block"
+    #endif
+
+    int c90_answer(void) { return 90; }
+}
+
+gnu89! {
+    #ifdef __STDC_VERSION__
+    #error "__STDC_VERSION__ must not be defined in a gnu89! block either"
+    #endif
+    #ifdef __STRICT_ANSI__
+    #error "__STRICT_ANSI__ is for the strict entry points only"
+    #endif
+    #if __GNUC__ < 4
+    #error "__GNUC__ is 4 in every entry point"
+    #endif
+
+    // A `//` comment, which C99 took from C++ and `gnu89!` has anyway.
+    int gnu89_answer(void) { return 89; }
+}
+
+#[test]
+fn the_c89_entry_points_define_no_version_macro() {
+    assert_eq!(unsafe { c89_answer() }, 89);
+    assert_eq!(unsafe { c90_answer() }, 90);
+    assert_eq!(unsafe { gnu89_answer() }, 89);
+}
+
+// ---------------------------------------------------------------------------
+// what `c89!` refuses, in the words it refuses it with
+// ---------------------------------------------------------------------------
+
+use std::str::FromStr;
+
+use cinrs_core::{Dialect, Level, Options, Standard, analyze, sema};
+use proc_macro2::TokenStream;
+
+/// Every error `source` produces in `options`, the front end's and sema's
+/// alike — a feature may be gated in either.
+fn errors(options: &Options, source: &str) -> Vec<String> {
+    // String-literal mode accepts every C token, `//` comments included.
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, options);
+    let mut out: Vec<(cinrs_core::Pos, String)> = analysis
+        .diagnostics
+        .sorted()
+        .into_iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| (d.range.start, d.message.clone()))
+        .collect();
+    let (_program, diagnostics) = sema::analyze(&analysis.unit, options, analysis.source.unit_id());
+    out.extend(
+        diagnostics
+            .sorted()
+            .into_iter()
+            .filter(|d| d.level == Level::Error)
+            .map(|d| (d.range.start, d.message.clone())),
+    );
+    out.sort_by_key(|(pos, _)| *pos);
+    out.into_iter().map(|(_, message)| message).collect()
+}
+
+/// A C99 construct: refused in `c89!` with `message`, and accepted in
+/// `gnu89!`, which is what `gcc -std=gnu89` does with the same text.
+#[track_caller]
+fn c99_only(source: &str, message: &str) {
+    let strict = errors(&Options::new(Standard::C89), source);
+    assert_eq!(
+        strict.first().map(String::as_str),
+        Some(format!("{message} requires C99 or later (this block is c89!)").as_str()),
+        "for:\n{source}"
+    );
+    let gnu = errors(&Options::with_dialect(Standard::C89, Dialect::Gnu), source);
+    assert!(gnu.is_empty(), "gnu89! rejected it: {gnu:#?}\n{source}");
+    // And of course the revision that introduced it takes it.
+    let c99 = errors(&Options::new(Standard::C99), source);
+    assert!(c99.is_empty(), "c99! rejected it: {c99:#?}\n{source}");
+}
+
+#[test]
+fn c89_gates_what_c99_added() {
+    c99_only("int f(void) { return 1; } // a comment\n", "a '//' comment");
+    c99_only(
+        "int f(void) { int a = 1; a++; int b = 2; return a + b; }",
+        "a declaration after a statement",
+    );
+    c99_only(
+        "int f(void) { int t = 0; for (int i = 0; i < 3; i++) t += i; return t; }",
+        "a declaration in a 'for' clause",
+    );
+    c99_only("long long f(void) { return 1; }", "'long long'");
+    c99_only(
+        "struct S { int a; int b; }; int f(void) { struct S s = { .b = 1 }; return s.b; }",
+        "a designated initializer",
+    );
+    c99_only("int f(void) { _Bool b = 1; return b; }", "'_Bool'");
+    c99_only("int f(int *restrict p) { return *p; }", "'restrict'");
+    c99_only("inline int f(void) { return 1; }", "'inline'");
+    c99_only(
+        "int f(int n) { int a[n]; return (int)sizeof a; }",
+        "a variable length array",
+    );
+    c99_only(
+        "struct S { int a; }; int f(void) { return (struct S){ 1 }.a; }",
+        "a compound literal",
+    );
+    c99_only(
+        "#define LIST(...) __VA_ARGS__\nint f(void) { return LIST(1); }",
+        "a variadic macro",
+    );
+    c99_only(
+        "struct S { int n; int data[]; };",
+        "a flexible array member",
+    );
+    c99_only("const char *f(void) { return __func__; }", "'__func__'");
+    c99_only(
+        "enum E { A, B, };",
+        "a trailing comma in an enumerator list",
+    );
+    c99_only(
+        "int f(int a[static 3]) { return a[0]; }",
+        "'static' in an array parameter declarator",
+    );
+    c99_only("int f(int a[*]);", "'[*]'");
+}
+
+/// The reserved spellings of the two C99 keywords a `c89!` block may not
+/// write, which GCC keeps in `-std=c89` for the same reason this does: the
+/// names belong to the implementation.
+#[test]
+fn the_reserved_spellings_work_in_a_c89_block() {
+    let source = "__inline int f(int *__restrict p) { return *p; }";
+    let found = errors(&Options::new(Standard::C89), source);
+    assert!(found.is_empty(), "c89! rejected it: {found:#?}");
+}
+
+/// `__extension__` is GCC's "this is an extension and I know it", and it
+/// switches the gate off for the declaration it is written on — which is what
+/// lets the bundled headers declare `llabs` to a `c89!` block.
+#[test]
+fn extension_switches_the_gate_off() {
+    let c89 = Options::new(Standard::C89);
+    let accepted = [
+        "__extension__ long long wide(void) { return 1; }",
+        "__extension__ typedef struct { long long q; long long r; } lldiv_t;",
+        "int f(void) { __extension__ long long n = 1; return (int)n; }",
+        "#include <stdlib.h>\nint f(void) { return abs(-1); }",
+        "#include <stdio.h>\n#include <string.h>\n#include <stdint.h>\nint f(void) { return 0; }",
+    ];
+    for source in accepted {
+        let found = errors(&c89, source);
+        assert!(found.is_empty(), "c89! rejected it: {found:#?}\n{source}");
+    }
+    // It covers the declaration it is written on and no more.
+    let found = errors(
+        &c89,
+        "__extension__ long long wide(void) { long long n = 1; return n; }",
+    );
+    assert_eq!(
+        found.first().map(String::as_str),
+        Some("'long long' requires C99 or later (this block is c89!)"),
     );
 }

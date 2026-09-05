@@ -12,8 +12,11 @@
 typedef unsigned long size_t;
 typedef long ptrdiff_t;
 #elif __SIZEOF_POINTER__ == __SIZEOF_LONG_LONG__
-typedef unsigned long long size_t;
-typedef long long ptrdiff_t;
+/* `long long` is C99's; `__extension__` is how a header says "an extension,
+ * and I know it", so that a `c89!` block including this one is not told off
+ * for what the implementation wrote. */
+__extension__ typedef unsigned long long size_t;
+__extension__ typedef long long ptrdiff_t;
 #else
 typedef unsigned int size_t;
 typedef int ptrdiff_t;

@@ -1,0 +1,32 @@
+error: declaration for parameter 'b', which is not in the identifier list
+  --> tests/ui/knr_declaration_list.rs:11:13
+   |
+11 |         int b;
+   |             ^
+
+error: redefinition of parameter 'a'
+  --> tests/ui/knr_declaration_list.rs:18:14
+   |
+18 |         long a;
+   |              ^
+
+error: parameter 'a' cannot have an initializer
+  --> tests/ui/knr_declaration_list.rs:24:13
+   |
+24 |         int a = 1;
+   |             ^
+
+error: 'static' is not allowed on a parameter
+  --> tests/ui/knr_declaration_list.rs:30:9
+   |
+30 |         static int a;
+   |         ^^^^^^
+
+error: an identifier list is only allowed in a function definition; a declaration needs the parameter types
+  --> tests/ui/knr_declaration_list.rs:35:18
+   |
+35 |     int declared(a, b);
+   |                  ^
+
+error: aborting due to 5 previous errors
+

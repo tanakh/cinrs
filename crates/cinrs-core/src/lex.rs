@@ -133,6 +133,13 @@ pub enum Keyword {
     RealGnu,
     /// `__imag__`, `__imag`
     ImagGnu,
+    /// `__inline__`, `__inline`
+    ///
+    /// A variant of its own because the plain spelling is C99's and `c89!`
+    /// gates it, while this one — being reserved — is available everywhere.
+    InlineGnu,
+    /// `__restrict__`, `__restrict`; see [`Keyword::InlineGnu`].
+    RestrictGnu,
 }
 
 impl Keyword {
@@ -207,6 +214,8 @@ impl Keyword {
             ThreadGnu => "__thread",
             RealGnu => "__real__",
             ImagGnu => "__imag__",
+            InlineGnu => "__inline__",
+            RestrictGnu => "__restrict__",
         }
     }
 
@@ -227,6 +236,8 @@ impl Keyword {
                 | ThreadGnu
                 | RealGnu
                 | ImagGnu
+                | InlineGnu
+                | RestrictGnu
         )
     }
 
@@ -237,6 +248,11 @@ impl Keyword {
     /// parser's "requires C11 or later" is a better answer than a syntax
     /// error. The C23 ones are *not*: they are ordinary identifiers before
     /// C23, and `<stdbool.h>`'s `#define bool _Bool` depends on it.
+    ///
+    /// The four C99 added — `inline`, `restrict`, `_Bool` and `_Complex` (with
+    /// `_Imaginary` beside it) — are recognised in every mode for the same
+    /// reason the C11 ones are, and gated where they are parsed; everything
+    /// else has been a keyword since C89.
     pub fn since(self) -> Standard {
         use Keyword::*;
         match self {
@@ -245,7 +261,8 @@ impl Keyword {
             }
             BitInt | BoolName | True | False | Nullptr | Typeof | TypeofUnqual | Constexpr
             | StaticAssertName | AlignofName | AlignasName | ThreadLocalName => Standard::C23,
-            _ => Standard::C99,
+            Inline | Restrict | Bool | Complex | Imaginary => Standard::C99,
+            _ => Standard::C89,
         }
     }
 
@@ -932,6 +949,7 @@ impl<'a> Lexer<'a> {
                     space = true;
                 }
                 Some(b'/') if self.peek_at(1) == Some(b'/') => {
+                    let start = self.pos;
                     self.pos += 2;
                     while let Some(c) = self.peek() {
                         if c == b'\n' {
@@ -942,6 +960,17 @@ impl<'a> Lexer<'a> {
                             continue;
                         }
                         self.pos += 1;
+                    }
+                    // C99 took the `//` comment from C++ (N644); before that
+                    // `a //* b */ c` was a division, which is why the gate is
+                    // here rather than being a warning.
+                    if let Some(message) = self
+                        .options
+                        .gating
+                        .requires("a '//' comment", Standard::C99)
+                    {
+                        let range = self.range(start, self.pos);
+                        self.error(range, message);
                     }
                     space = true;
                 }
@@ -1300,6 +1329,14 @@ impl<'a> Lexer<'a> {
             }
         };
 
+        if hex
+            && let Some(message) = self
+                .options
+                .gating
+                .requires("a hexadecimal floating constant", Standard::C99)
+        {
+            self.error(range, message);
+        }
         let value = if hex {
             match parse_hex_float(body) {
                 Some(v) => v,
@@ -1501,6 +1538,14 @@ impl<'a> Lexer<'a> {
                 self.push_escape_value(v, wide, start, out);
             }
             b'u' | b'U' => {
+                if let Some(message) = self
+                    .options
+                    .gating
+                    .requires("a universal character name", Standard::C99)
+                {
+                    let range = self.range(start, self.pos);
+                    self.error(range, message);
+                }
                 let want = if e == b'u' { 4 } else { 8 };
                 let mut v: u32 = 0;
                 let mut count = 0;

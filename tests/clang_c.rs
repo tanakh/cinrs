@@ -127,15 +127,13 @@ impl EntryPoint {
 
 /// What a `-std=` on a RUN line means here.
 ///
-/// * The four ISO revisions and the four GNU ones map straight across;
-///   `c2x`/`gnu2x` are C23's working names and map to `c23!`/`gnu23!`.
-/// * **C89 has no entry point.** `-std=c89`, `-std=c90`, `-std=gnu89` and
-///   `-std=iso9899:1990` are *skipped* rather than run through `c99!` or
-///   `gnu99!`. C89 is not a subset of what `c99!` accepts and, more to the
-///   point, these particular tests are about the places the two differ —
-///   implicit `int`, implicit function declarations, `//` comments, mixed
-///   declarations and code, `long long`. Standing in `gnu99!` for `gnu89`
-///   would turn every one of them into a mismatch that says nothing.
+/// * The five ISO revisions and the five GNU ones map straight across;
+///   `c2x`/`gnu2x` are C23's working names and map to `c23!`/`gnu23!`, and
+///   `c90` is the other name for C89.
+/// * **C95 has no entry point.** `-std=iso9899:199409` is Amendment 1, which
+///   is C89 plus `<iso646.h>`, `<wctype.h>` and a `__STDC_VERSION__` of
+///   `199409L`; `c89!` would answer the amendment's own questions wrongly, so
+///   those revisions are skipped.
 /// * **No `-std=` at all** is `gnu17!`, which is what `clang -cc1` defaults to
 ///   for C.
 /// * C++ is skipped.
@@ -148,6 +146,8 @@ fn entry_point(std: Option<&str>) -> std::result::Result<EntryPoint, String> {
         })
     };
     match std.unwrap_or("gnu17") {
+        "c89" | "c90" | "iso9899:1990" => point("c89", Standard::C89, Dialect::Iso),
+        "gnu89" | "gnu90" => point("gnu89", Standard::C89, Dialect::Gnu),
         "c99" => point("c99", Standard::C99, Dialect::Iso),
         "c11" => point("c11", Standard::C11, Dialect::Iso),
         "c17" | "c18" | "iso9899:2017" => point("c17", Standard::C17, Dialect::Iso),
@@ -159,9 +159,7 @@ fn entry_point(std: Option<&str>) -> std::result::Result<EntryPoint, String> {
         other if other.starts_with("c++") || other.starts_with("gnu++") => {
             Err(format!("`-std={other}` is C++"))
         }
-        other @ ("c89" | "c90" | "gnu89" | "gnu90" | "iso9899:1990" | "iso9899:199409") => {
-            Err(format!("`-std={other}`: there is no C89 entry point"))
-        }
+        other @ "iso9899:199409" => Err(format!("`-std={other}`: there is no C95 entry point")),
         other => Err(format!("`-std={other}` is not a standard cinrs has")),
     }
 }
@@ -276,7 +274,7 @@ impl Revision {
     ///   line at all, in which case there are no annotations for anything and
     ///   the revision is taken as an accept case: valid C that has to compile;
     /// * a `-triple` that is not x86-64 (see [`triple_is_ours`]);
-    /// * `-x c++` or a C++ `-std=`, and `-std=c89` and its spellings (see
+    /// * `-x c++` or a C++ `-std=`, and `-std=iso9899:199409` (see
     ///   [`entry_point`]);
     /// * `-ffreestanding`, which `cinrs` has no mode for: `__STDC_HOSTED__` is
     ///   1 and the bundled headers are the hosted ones, so a test written

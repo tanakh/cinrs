@@ -3,8 +3,8 @@
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
-    BinOp, Callee, CmpOp, Expr, ExprKind, LogicalOp, Place, PlaceKind, Signature, StrData, StrId,
-    Ty, UNREACHABLE_BUILTIN,
+    BinOp, Callee, CmpOp, Expr, ExprKind, FuncId, Function, LogicalOp, Place, PlaceKind, Signature,
+    StrData, StrId, Ty, UNREACHABLE_BUILTIN,
 };
 use crate::lex::{CharLit, FloatLit, FloatSuffix, IntLit, LongKind, NumBase, StrKind, StrLit};
 
@@ -317,6 +317,12 @@ impl Sema<'_> {
         }
         if self.func_name.is_empty() {
             return None;
+        }
+        // C99 6.4.2.2 (N611). GCC's own two spellings are extensions rather
+        // than C, so a GNU dialect has them however old it is — which is what
+        // `Gating::requires` already says.
+        if name == "__func__" {
+            self.require_standard(crate::Standard::C99, "'__func__'", range);
         }
         let lit = StrLit {
             kind: StrKind::Narrow,
@@ -1611,6 +1617,47 @@ impl Sema<'_> {
         ))
     }
 
+    /// Declares `extern int f();` at file scope, as a call to an undeclared
+    /// `f` does in C89 (6.3.2.2).
+    ///
+    /// The type has no prototype, which is exactly what the standard's own
+    /// `extern int identifier();` says: the call passes what it passes, with
+    /// the default argument promotions applied, and a later declaration has to
+    /// be *compatible* with it or it is the ordinary "conflicting types"
+    /// error. Having no body makes it an `extern` declaration like any other,
+    /// so `abort()` in a program that never declared it links against the C
+    /// library.
+    fn implicit_function(&mut self, name: &ast::Ident) -> FuncId {
+        let id = FuncId(self.program.functions.len() as u32);
+        self.program.functions.push(Function {
+            name: name.name.clone(),
+            sig: Signature {
+                ret: Ty::Int,
+                params: Vec::new(),
+                variadic: false,
+                prototyped: false,
+            },
+            params: Vec::new(),
+            param_names: Vec::new(),
+            is_static: false,
+            is_inline: false,
+            noreturn: false,
+            inline_hint: None,
+            cold: false,
+            deprecated: None,
+            section: None,
+            asm_label: None,
+            init_kind: None,
+            locals: Vec::new(),
+            uses_alloca: false,
+            body: None,
+            range: name.range,
+        });
+        self.item_names.insert(name.name.clone());
+        self.insert_at_file_scope(&name.name, Entry::Function(id));
+        id
+    }
+
     /// Resolves what a call expression calls.
     fn callee(&mut self, callee: &ast::Expr) -> Option<(Callee, Signature, String)> {
         if let ast::ExprKind::Ident(name) = &callee.kind {
@@ -1648,13 +1695,42 @@ impl Sema<'_> {
                     // A name another entry point would have made a keyword is
                     // almost always that keyword rather than a function nobody
                     // declared — `asm("nop")` looks exactly like a call.
-                    let message = self.gating.newer_keyword(&name.name).unwrap_or_else(|| {
+                    if let Some(message) = self.gating.newer_keyword(&name.name) {
+                        self.error(callee.range, message);
+                        return None;
+                    }
+                    // C89 6.3.2.2: a call to a name nothing declares declares
+                    // `extern int name();` — no prototype, so the arguments
+                    // get the default argument promotions and the linker is
+                    // what resolves it. C99 removed the rule (N636).
+                    //
+                    // A `__builtin_` name is the one exception. It belongs to
+                    // the implementation, so nothing will ever define it and
+                    // the implicit declaration would turn a diagnostic this
+                    // crate can give into a link error nobody can read.
+                    if name.name.starts_with("__builtin_") {
+                        self.error(
+                            callee.range,
+                            format!(
+                                "'{}' is not a builtin this crate implements, and a \
+                                 '__builtin_' name is never implicitly declared",
+                                name.name
+                            ),
+                        );
+                        return None;
+                    }
+                    if self.gating.implicit_function_declarations() {
+                        let id = self.implicit_function(name);
+                        let sig = self.program.function(id).sig.clone();
+                        return Some((Callee::Direct(id), sig, name.name.clone()));
+                    }
+                    self.error(
+                        callee.range,
                         format!(
                             "implicit declaration of function '{}' is invalid in C99",
                             name.name
-                        )
-                    });
-                    self.error(callee.range, message);
+                        ),
+                    );
                     return None;
                 }
             }

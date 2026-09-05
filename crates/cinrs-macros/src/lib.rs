@@ -23,6 +23,46 @@ use proc_macro::TokenStream;
 
 use cinrs_core::{Options, Standard, Subspan};
 
+/// Compiles a C89 (C90) translation unit written inside Rust.
+///
+/// The oldest entry point, and the one written for code that predates the 1999
+/// standard: **implicit `int`** (`static x;`, `f() { … }`), **implicit
+/// function declarations** (calling `abs` with nothing declaring it declares
+/// `extern int abs();` from that point on) and **old-style (K&R) function
+/// definitions** all work here, and everything C99 added is a diagnostic that
+/// says so:
+///
+/// ```text
+/// error: '//' comments require C99 or later (this block is c89!)
+/// ```
+///
+/// What is gated: `//` comments, mixed declarations and code, a declaration in
+/// a `for` clause, variable length arrays, `_Bool`, `restrict`, `inline`,
+/// `long long`, designated initializers, compound literals, variadic macros,
+/// flexible array members, hexadecimal floating constants, `__func__`,
+/// `_Pragma`, universal character names, a trailing comma in an enumerator
+/// list, `static` and `[*]` in an array parameter declarator, and `_Complex`.
+/// The *library* additions are not: a bundled header is a set of declarations,
+/// and `snprintf` is one of them.
+///
+/// `__STDC_VERSION__` is **not defined** — C89 as published had no such macro
+/// — while `__STDC__` is `1`, exactly as in `gcc -std=c89`.
+/// [`c90!`](macro@c90) is another name for this macro, and
+/// [`gnu89!`](macro@gnu89) is the GNU dialect of it.
+#[proc_macro]
+pub fn c89(input: TokenStream) -> TokenStream {
+    expand(input, Standard::C89)
+}
+
+/// Compiles a C90 translation unit written inside Rust.
+///
+/// ISO/IEC 9899:1990 is ANSI X3.159-1989 republished with no technical change,
+/// so this is [`c89!`](macro@c89) under the other name the language has.
+#[proc_macro]
+pub fn c90(input: TokenStream) -> TokenStream {
+    expand(input, Standard::C89)
+}
+
 /// Compiles a C99 translation unit written inside Rust.
 ///
 /// The body may be written as raw Rust tokens:
@@ -134,6 +174,24 @@ pub fn c23(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn gnu99(input: TokenStream) -> TokenStream {
     expand_gnu(input, Standard::C99)
+}
+
+/// Compiles a C89 translation unit with the GNU extensions switched on.
+///
+/// What `gcc -std=gnu89` is: **everything a later revision added is accepted**
+/// — `//` comments, mixed declarations and code, `long long`, designated
+/// initializers and the rest, which C89 as an ISO document does not have and
+/// GCC has always taken as extensions — *and* the three C89 rules that are not
+/// a matter of extension at all, because a later revision deleted them:
+/// implicit `int`, implicit function declarations, and old-style (K&R)
+/// definitions (which every entry point below `c23!` has).
+///
+/// So `gnu89!` is [`gnu99!`](macro@gnu99) plus those three, with
+/// `__STDC_VERSION__` left undefined; it is the entry point for the C of the
+/// 1990s, and the one the GCC torture suite is measured with.
+#[proc_macro]
+pub fn gnu89(input: TokenStream) -> TokenStream {
+    expand_gnu(input, Standard::C89)
 }
 
 /// Compiles a C11 translation unit with the GNU extensions switched on.

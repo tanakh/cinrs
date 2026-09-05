@@ -18,11 +18,29 @@ Statuses:
 * **N/A** — no implementation work is involved (wording, library semantics we
   inherit from libc/Rust, or freedom we do not exercise).
 
-Entry points: `c99!`, `c11!`, `c17!`, `c23!`. A feature of a newer standard used
-in an older entry point is rejected with `requires C11/C23 or later`. The GNU
-entry points — `gnu99!`, `gnu11!`, `gnu17!`, `gnu23!` — accept those features
-instead, exactly as `gcc -std=gnu99` does, and add the GNU extensions on top;
+Entry points: `c89!` (`c90!` is the same macro), `c99!`, `c11!`, `c17!`,
+`c23!`. A feature of a newer standard used in an older entry point is rejected
+with `requires C99/C11/C23 or later`. The GNU entry points — `gnu89!`,
+`gnu99!`, `gnu11!`, `gnu17!`, `gnu23!` — accept those features instead, exactly
+as `gcc -std=gnu99` does, and add the GNU extensions on top;
 [`doc/gnu-extensions.md`](gnu-extensions.md) is the catalogue for both.
+
+`c89!` is the one that gates *backwards*, and the C99 column below doubles as
+its list: `//` comments, mixed declarations and code, a declaration in a `for`
+clause, variable length arrays, `_Bool`, `restrict`, `inline`, `long long`,
+designated initializers, compound literals, variadic macros, flexible array
+members, hexadecimal floating constants, `__func__`, `_Pragma`, universal
+character names, a trailing comma in an enumerator list, `static` and `[*]` in
+an array parameter declarator, and `_Complex` are each `requires C99 or later
+(this block is c89!)`. The *library* additions are not gated — a bundled header
+is a set of declarations, and `snprintf` is one of them; the C99 declarations
+that need a C99 *type* carry `__extension__`, which switches the gate off for
+the declaration it is written on, exactly as glibc's headers do, so
+`#include <stdlib.h>` in a `c89!` block still declares `llabs`. `__inline` and
+`__restrict`, being reserved spellings, work there as they do everywhere else.
+What `gnu89!` keeps of C89 is only what a later revision **deleted**: implicit
+`int`, implicit function declarations, and (with every entry point below
+`c23!`) old-style function definitions.
 
 Two of the rows below are answered by the *entry point* rather than by the
 front end: `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
@@ -47,7 +65,7 @@ types do.
 | The `long long int` type | N601 | Yes | |
 | Increase minimum translation limits | N590 | Yes | Every minimum in C23 5.2.5.2p1 is measured by `crates/cinrs-core/tests/limits.rs` and `tests/limits.rs`, allocation traffic and all. A left-associative chain — `a, b, c, …`, `a + b + …`, `a && b && …` — is bounded by nothing but memory, which is what lets a logical source line hold the 4095 characters the clause asks for; 4000 operands are accepted and run. *Nesting* is bounded at 200 levels, three times the 63 the clause asks for and close to Clang's own `-fbracket-depth` default of 256, and the right-associative `a ? b : c ? d : e` and `a = b = c`, and a run of postfix operators, count against it because each operator really is a level. |
 | Additional floating-point characteristics in `<float.h>` | | Partial | The common `FLT_*`/`DBL_*` macros; `FLT_EVAL_METHOD`, `DECIMAL_DIG` unverified. |
-| Remove implicit `int` | N635, N692, N722 | Yes | Error. |
+| Remove implicit `int` | N635, N692, N722 | Yes | Error from `c99!` up, GNU dialects included, as in GCC 14. `c89!` and `gnu89!` have the rule this paper removed: a declaration with no type specifier — `static x;`, `f() { … }`, `const limit = 10;`, a K&R parameter no declaration list entry names — declares an `int`. |
 | Reliable integer division | N617 | Yes | Truncation toward zero (Rust `/`, `%`). |
 | Universal character names (`\u` and `\U`) | | Partial | In character and string constants; not in identifiers. |
 | Extended identifiers | N717 | No | Identifiers are ASCII (plus `$` as an opt-in extension). |
@@ -56,7 +74,7 @@ types do.
 | Designated initializers | N494 | Partial | Nested member designators (`.a.b = 1`) are rejected; nested braces work. |
 | `//` comments | N644 | Yes | |
 | Extended integer types and library functions in `<inttypes.h>` and `<stdint.h>` | | Yes | Bundled headers. |
-| Remove implicit function declaration | N636 | Yes | Error. |
+| Remove implicit function declaration | N636 | Yes | Error from `c99!` up, GNU dialects included. In `c89!` and `gnu89!` a call to an undeclared `f` declares `extern int f();` at file scope from that point on — no prototype, so the arguments get the default argument promotions — and it becomes an `extern` declaration like any other, so `abs(-3)` in a program that includes nothing links against the C library. A later declaration must be compatible with it or it is the ordinary "conflicting types". A `__builtin_` name is never declared this way: it belongs to the implementation, and a diagnostic beats a link error. |
 | Preprocessor arithmetic done in `intmax_t`/`uintmax_t` | N736 | Yes | |
 | Mixed declarations and code; new block scopes for selection and iteration statements | N740 | Yes | `if`, `switch`, `while` and `do` are each a block of their own (6.8.4p3, 6.8.5p5), so a tag declared in a controlling expression — `if (sizeof(enum { a, b }))` — is scoped to the statement and does not leak into the enclosing block, which is what C89 did. Clang's `C99/block-scopes.c` is that test. |
 | Integer constant type rules | N629 | Yes | |
@@ -84,8 +102,8 @@ Also standard C99 but absent from Clang's list:
 | Feature | cinrs | Notes |
 | --- | --- | --- |
 | Bit-fields (also C89) | Yes | `_Bool`, `int` and `unsigned int` as the standard requires; `char`, `short`, `long`, `long long`, their signed and unsigned forms and `enum` as the GCC extension. The layout follows GCC and Clang, and is checked against the host compiler by `tests/bitfield_layout.rs`. A member has no address, so it becomes a pair of accessors on a shared `[u8; K]`; see the crate docs. |
-| Function declarators without a prototype (6.7.5.3p14, 6.5.2.2p6) | Yes | In `c99!`, `c11!`, `c17!` and the matching `gnu*!` dialects, `int f();` and `int (*fp)();` declare a function whose parameters are *unspecified*: a call may pass any number of arguments, each gets the default argument promotions, and the callee is invoked through the signature they make. A *definition* written `int f() { … }` takes no parameters, as 6.9.1p7 says, and calls to it through the unprototyped type are still legal. Two declarations of one function are compatible when the prototyped one is not variadic and no parameter type is changed by the promotions (6.7.5.3p15), which is also what `_Generic`, `__builtin_types_compatible_p` and assignment between function pointers use. `c23!` and `gnu23!` follow N2841 instead. |
-| Old-style (K&R) function definitions (obsolescent) | No | Rejected in every mode; removed in C23. `int f();` is *not* one of these — see the row above. |
+| Function declarators without a prototype (6.7.5.3p14, 6.5.2.2p6) | Yes | In `c89!`, `c99!`, `c11!`, `c17!` and the matching `gnu*!` dialects, `int f();` and `int (*fp)();` declare a function whose parameters are *unspecified*: a call may pass any number of arguments, each gets the default argument promotions, and the callee is invoked through the signature they make. A *definition* written `int f() { … }` takes no parameters, as 6.9.1p7 says, and calls to it through the unprototyped type are still legal. Two declarations of one function are compatible when the prototyped one is not variadic and no parameter type is changed by the promotions (6.7.5.3p15), which is also what `_Generic`, `__builtin_types_compatible_p` and assignment between function pointers use. `c23!` and `gnu23!` follow N2841 instead. |
+| Old-style (K&R) function definitions (obsolescent) | Yes | `int f(a, b) int a; char *b; { … }` in every entry point below `c23!`, which is where C removed it. The identifier list and the declaration list become the parameter list (6.9.1p6); a name the declaration list leaves out is an `int`, which is implicit `int` and therefore `c89!` and `gnu89!` only. The definition's type has **no prototype** (6.9.1p7), so it is compatible with `int f();` and a caller applies the default argument promotions — which is why the generated item takes the *promoted* types and converts to the declared ones on entry: `int f(c) char c;` is `fn f(c: c_int)` with `let c: c_char = c as c_char;` in front of the body. `register` is allowed on a parameter; a declaration-list entry that names something other than a parameter, names one twice, or carries an initialiser is diagnosed. `int f();` is *not* one of these — see the row above. |
 | `#line` and GCC's `# N "file" flags…` line marker (6.10.4) | Yes | Both forms, the macro-expanded one included, per file. Only `__LINE__`, `__FILE__` and `__FILE_NAME__` move: a diagnostic still points at the token that was really written, which is the whole point of the crate. `__BASE_FILE__` names the file the unit started in and is unaffected. A number outside 1…2147483647 is an error, which is what `-pedantic-errors` makes it. |
 | Translation phase 2 (line splicing, 5.1.1.2p1) | Yes | A backslash-newline is deleted *before* the source is split into tokens, so one may sit in the middle of an identifier: `__LI\<newline>NE__` is the one identifier `__LINE__`, which is what Clang's `drs/dr464.c` and `C99/n590.c` require. A splice needs string-literal input (see the README), because Rust's own lexer will not hand a line continuation over in raw-token form. A splice inside a *number* or a *punctuator* — `1\<newline>2`, `+\<newline>=` — is still a token boundary, which no real program depends on. |
 | `#include` of a computed header name, `#include __FILE__` | Yes | The name a header is known by is written relative to the working directory, so a header that includes itself by `__FILE__` asks for `some/dir/thing.h` from a directive written inside `some/dir`. A quoted include whose name *is* a path — it holds a directory separator — is therefore also looked for from the working directory, after the including file's own directory and the search path and before the bundled headers. A bare name never is, so nothing lying about can shadow the bundled `<stdio.h>`. |
@@ -157,7 +175,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | `fallthrough` attribute | N2408 | Yes | |
 | Two's complement sign representation | N2412 | Yes | |
 | Adding the `u8` character prefix | N2418 | No | |
-| Remove support for function definitions with identifier lists | N2432 | Yes | K&R definitions are rejected in every mode. |
+| Remove support for function definitions with identifier lists | N2432 | Yes | `c23!` and `gnu23!` refuse one with `old-style function definitions were removed in C23`; every earlier entry point accepts it, as the revision it implements does. |
 | Annex F.8 update | N2384 | N/A | |
 | Allowing unnamed parameters in function definitions | N2480 | Unverified | |
 | Free positioning of labels inside compound statements | N2508 | Yes | |

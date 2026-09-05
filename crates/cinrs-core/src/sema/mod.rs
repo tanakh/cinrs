@@ -437,6 +437,17 @@ impl<'a> Sema<'a> {
         self.diags.error(range, message);
     }
 
+    /// Reports a construct a newer revision than this block's introduced.
+    ///
+    /// The parser gates what it can see for itself; this is for the ones only
+    /// sema can tell apart — a variable length array is an array declarator
+    /// until the bound turns out not to be a constant.
+    fn require_standard(&mut self, needed: crate::Standard, what: &str, range: SourceRange) {
+        if let Some(message) = self.gating.requires(what, needed) {
+            self.error(range, message);
+        }
+    }
+
     /// Records that the program needs a toolchain this one is not.
     ///
     /// The diagnostic is held back until the end of the unit; see [`analyze`].

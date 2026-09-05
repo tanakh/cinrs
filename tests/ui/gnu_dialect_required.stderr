@@ -10,7 +10,7 @@ error: 'typeof' requires a GNU dialect (gnu99!) or C23 or later (this block is c
 11 |     typeof(int) x;
    |     ^^^^^^
 
-error: expected a declaration, found identifier 'x'
+error: type specifier missing; C99 does not support implicit 'int'
   --> tests/ui/gnu_dialect_required.rs:11:17
    |
 11 |     typeof(int) x;

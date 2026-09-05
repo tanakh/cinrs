@@ -65,10 +65,17 @@ extern void abort(void); extern void exit(int);
 
 The declarations are compatible with the ones the cases write for themselves
 and with the bundled `<stdlib.h>`, so a case that has its own is unaffected;
-**580 of the 1,769** need them. `CINRS_GCC_TORTURE_PRELUDE=0` leaves them out,
-which is how that number was measured. The `include_path` is there because
-about thirty cases `#include` a sibling `.c` or `.h` out of the corpus
-directory, which is not where the generated `.rs` file lives.
+**580 of the 1,769** need them.
+
+**`c89!` and `gnu89!` get them left out**, because those two entry points
+implement the rule the cases are leaning on: a call to an undeclared `abort`
+declares `extern int abort();` on the spot, and it becomes the same
+`#[link_name]` extern the prelude's declaration would have. Under every other
+entry point the two lines go in, and `CINRS_GCC_TORTURE_PRELUDE=0` or `=1`
+overrides the default either way — which is how the 580 was measured. The
+`include_path` is there because about thirty cases `#include` a sibling `.c`
+or `.h` out of the corpus directory, which is not where the generated `.rs`
+file lives.
 
 Because the prelude is *prepended*, a line of the upstream file is two lines
 further down in the generated one. That is the one thing this harness gives up
@@ -84,7 +91,7 @@ harness cannot give them:
 
 | asked for | cases | what it would mean |
 | --- | ---: | --- |
-| `-std=gnu89` | 75 | there is no C89 entry point; they run through `gnu11!` |
+| `-std=gnu89` | 75 | the whole suite can be run through `gnu89!`, and the second baseline below is that run; the default `gnu11!` gives them a later revision than they asked for |
 | `-fpermissive` | 32 | GCC downgrading constraint violations to warnings |
 | `-std=gnu17` | 18 | run through `gnu11!` instead |
 | `stack_size` | 14 | an effective-target the runner would set |
@@ -142,55 +149,71 @@ and peaks at **298 MiB** of resident set.
 
 ## Baseline
 
-Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, `gnu11!`, at the
-pinned corpus revision.
+Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
+corpus revision, under the two entry points worth pointing at this corpus:
+`gnu89!`, which is the language these programs were actually written in, and
+`gnu11!`, the harness default and the closest thing here to the
+`-std=gnu17 -w` GCC compiles them with.
 
-| group | run | passed | rate |
-| --- | ---: | ---: | ---: |
-| `execute` | 1691 | 1208 | **71.4 %** |
-| `execute/ieee` | 78 | 35 | 44.9 % |
-| **total** | **1769** | **1243** | **70.3 %** |
+| entry point | `execute` | `execute/ieee` | total | rate |
+| --- | ---: | ---: | ---: | ---: |
+| **`gnu89!`** | 1327/1691 (78.5 %) | 36/78 (46.2 %) | **1363/1769** | **77.0 %** |
+| `gnu11!` | 1237/1691 (73.2 %) | 36/78 (46.2 %) | 1273/1769 | 72.0 % |
 
-526 failed and 7 were not generated at all: five want the effective target
+**`gnu89!` is what this corpus should be measured with**, and what to reach
+for when compiling C of that era: it is `gnu99!` plus the three rules a later
+revision deleted — implicit `int`, implicit function declarations and (with
+every entry point below `c23!`) old-style definitions — which is exactly the
+set of things seventy-five of these cases ask for with `-std=gnu89` and
+another few hundred simply assume. It also needs no
+[prelude](#the-prelude): a call to an undeclared `abort` declares it.
+
+7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
 literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-524 of the 526 are refused at compile time, in 60 distinct causes. The ones
-worth a line each:
+Under `gnu89!`, 404 of the 406 failures are refused at compile time, in 60
+distinct causes. The ones worth a line each, with what the same cause costs
+under `gnu11!` beside it:
 
-| cases | cause | e.g. |
-| ---: | --- | --- |
-| 89 | `expected a declaration, found identifier` — old-style (K&R) definitions again, seen from the parser | `execute/20000717-3` |
-| 61 | inline assembly is not supported | `execute/20001009-2` |
-| 42 | old-style (K&R) function definitions are not supported | `execute/20000112-1` |
-| 41 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| 39 | implicit declaration of a function (C99 removed it; these are C89 programs) | `execute/20000412-3` |
-| 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
-| 23 | `expected ';' after declaration, found '{'` — K&R again | `execute/20000822-1` |
-| 21 | `_Complex` | `execute/20010605-2` |
-| 17 | a builtin that needs a type the unit has not declared | `execute/20020406-1` |
-| 15 | `va_arg` with a struct type | `execute/920625-1` |
-| 13 | an `ieee` case calling `__builtin_issignaling` and friends | `ieee/bfloat16-builtin-issignaling-1` |
-| 11 | `expected expression` — assorted parse gaps | `execute/20040302-1` |
-| 9 | `__attribute__((mode(…)))` | `execute/20020108-1` |
-| 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
-| 6 | an initialiser whose type does not convert | `execute/20020920-1` |
-| 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
-| 5 | a `#include` of a corpus file the harness does not put on the path | `execute/pr105777` |
-| 5 | a struct member with a variably modified type | `execute/20020412-1` |
+| `gnu89!` | `gnu11!` | cause | e.g. |
+| ---: | ---: | --- | --- |
+| — | 97 | `type specifier missing` — implicit `int`, which `gnu89!` has | `execute/20000717-3` |
+| 61 | 61 | inline assembly is not supported | `execute/20001009-2` |
+| 49 | 49 | a `__builtin_…` this crate does not implement | `execute/20010122-1` |
+| 41 | 41 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
+| 38 | 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
+| 29 | 23 | `expected ';' after declaration, found '{'` — a nested function definition, which is a GNU extension this crate does not have | `execute/20000822-1` |
+| 21 | 21 | `_Complex` | `execute/20010605-2` |
+| 17 | 17 | a builtin that needs a type the unit has not declared | `execute/20020406-1` |
+| 15 | 15 | `va_arg` with a struct type | `execute/920625-1` |
+| 11 | 11 | `expected expression` — assorted parse gaps | `execute/20040302-1` |
+| 9 | 9 | `__attribute__((mode(…)))` | `execute/20020108-1` |
+| 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
+| 7 | 6 | an initialiser whose type does not convert | `execute/20020920-1` |
+| 7 | 6 | `expected a declaration` — a stray `;` at file scope, mostly | `execute/20050106-1` |
+| 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
+| 5 | 5 | a `#include` of a corpus file the harness does not put on the path | `execute/pr105777` |
+| 5 | 5 | a struct member with a variably modified type | `execute/20020412-1` |
+| — | 4 | implicit declaration of a function, which `gnu89!` has | `execute/20000412-3` |
+| — | 3 | a K&R parameter with no declaration, which is implicit `int` again | `execute/930429-2` |
 
-The remaining 42 causes have four cases or fewer each; the report prints all
-sixty.
+The remaining causes have four cases or fewer each; the report prints all
+sixty. The `__builtin_…` count is the sum of four rows the report prints
+separately, because a diagnostic raised inside an `#include`d corpus file
+carries the file name and is grouped on its own.
 
-Three of the rows above — K&R definitions (89 + 42 + 23 = 154 cases), implicit
-declarations (39) and the Rust 1.99 variadic gap (38 + 8) — are **half of every
-compile failure between them**, and none of the three is about C the language
-being hard. K&R is a parser feature; implicit declarations are a C89 rule that
-`gnu89!` (which does not exist) would restore; and the variadic ones simply
-pass on a newer toolchain, which is why they are marked `?` in the
-expected-failure list.
+**What the C89 rules are worth here is the first row and the last two.** 104
+cases — a fifth of every compile failure under `gnu11!` — are implicit `int`,
+an implicit function declaration or a K&R parameter with no declaration, and
+under `gnu89!` they are not diagnostics at all: 90 of them build and run,
+which is the whole difference between the two lines of the table, and the rest
+meet a second gap behind the first. The Rust 1.99 variadic gap (38 + 8) comes
+next, and those simply pass on a newer toolchain, which is why they are marked
+`?` in both expected-failure lists. What is left after that is the honest list
+of what `cinrs` does not implement.
 
 ### The programs that built and then did the wrong thing
 
@@ -223,12 +246,15 @@ the current list lives if this one has gone stale.
 
 ## The expected-failure list
 
-`tests/gcc-torture/expected-failures.txt`, 526 lines, one id per line, in the
-same format the other two suites use — see
+One list per entry point: `tests/gcc-torture/expected-failures.txt` is
+`gnu11!`'s, 496 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 406.
+One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has
-started passing so the line can go. 45 lines carry `?`, which here means "this
-needs Rust 1.99": they pass on a newer toolchain and are guarded neither way.
+started passing so the line can go. 45 lines of the first and 46 of the second
+carry `?`, which here means "this needs Rust 1.99": they pass on a newer
+toolchain and are guarded neither way, and the harness marks them itself from
+the wording of the diagnostic, so a regenerated list keeps them.
 
 ## Reproducing the numbers
 
@@ -254,8 +280,18 @@ Every one of these is capped; see the memory section above.
       cargo test -q --test gcc_torture -- --test-threads=2 )
 ```
 
-`CINRS_GCC_TORTURE_STANDARD=gnu99|gnu11|gnu17|gnu23|c99|c11|c17|c23` picks the
-entry point (default `gnu11`, which is closest to the `-std=gnu17 -w` GCC
-compiles these with) and gives the list a file of its own.
-`CINRS_GCC_TORTURE_STRICT=1` makes a stale entry a failure rather than a
-warning. The full set is in the harness's own module documentation.
+`CINRS_GCC_TORTURE_STANDARD=gnu89|gnu99|gnu11|gnu17|gnu23|c89|c99|c11|c17|c23`
+picks the entry point (default `gnu11`, which is closest to the `-std=gnu17 -w`
+GCC compiles these with) and gives the list a file of its own — so the second
+baseline above is
+
+```
+( ulimit -v 8000000; CINRS_GCC_TORTURE_REPORT=1 \
+      CINRS_GCC_TORTURE_STANDARD=gnu89 timeout -k 30 3600 \
+      cargo test -q --test gcc_torture -- --test-threads=2 )
+```
+
+and guard mode reads `tests/gcc-torture/expected-failures-gnu89.txt` when it is
+given the same variable. `CINRS_GCC_TORTURE_STRICT=1` makes a stale entry a
+failure rather than a warning. The full set is in the harness's own module
+documentation.

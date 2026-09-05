@@ -1,0 +1,8 @@
+error: old-style function definitions were removed in C23
+ --> tests/ui/knr_in_c23.rs:6:12
+  |
+6 |     int add(a, b)
+  |            ^
+
+error: aborting due to 1 previous error
+

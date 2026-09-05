@@ -1,0 +1,9 @@
+error: conflicting types for 'measure'
+       note: previous declaration of 'measure' is at line 14
+  --> tests/ui/c89_implicit_declaration_conflict.rs:17:12
+   |
+17 |     double measure(n)
+   |            ^^^^^^^
+
+error: aborting due to 1 previous error
+

@@ -377,6 +377,16 @@ fn c_ident(name: &str, span: Span) -> Ident {
 /// `switch` leaves labels that nothing jumps to, and a function that ends in an
 /// infinite loop leaves code behind that cannot run. `unknown_lints` comes
 /// first so that the list may name a lint an older compiler has never heard of.
+///
+/// Two of them are about the `extern` block. A C program declares the library
+/// its own way — `int strlen();` with no prototype is what a C89 program
+/// writes, and an implicit declaration is exactly that — so the declaration
+/// `cinrs` generates may disagree with the one Rust's own standard library
+/// uses for the same symbol (`clashing_extern_declarations`, and Rust 1.99's
+/// deny-by-default `invalid_runtime_symbol_definitions`). Nothing is
+/// *defined*: the symbol is the C library's either way, and a call through a
+/// type with no prototype is transmuted to the signature its arguments make
+/// before it is made, which is the contract C's own ABI runs on.
 fn allow_attr(span: Span) -> TokenStream {
     quote_spanned! {span=>
         #[allow(
@@ -385,6 +395,7 @@ fn allow_attr(span: Span) -> TokenStream {
             dead_code,
             improper_ctypes,
             improper_ctypes_definitions,
+            invalid_runtime_symbol_definitions,
             non_camel_case_types,
             non_snake_case,
             non_upper_case_globals,

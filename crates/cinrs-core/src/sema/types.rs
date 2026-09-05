@@ -885,6 +885,9 @@ impl Sema<'_> {
         let ast::TypeKind::Array { elem, .. } = &field.ty.kind else {
             unreachable!("the caller matched an array of unspecified size");
         };
+        // C99 6.7.2.1p16; before that the idiom was `int data[1];` and a
+        // deliberate over-allocation.
+        self.require_standard(crate::Standard::C99, "a flexible array member", field.range);
         if !last {
             self.error(
                 field.range,

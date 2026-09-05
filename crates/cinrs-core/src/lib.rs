@@ -1,6 +1,6 @@
 //! The `cinrs` C front end.
 //!
-//! This crate holds everything the `c99!`, `c11!`, `c17!` and `c23!`
+//! This crate holds everything the `c89!`, `c99!`, `c11!`, `c17!` and `c23!`
 //! procedural macros do — they are one pipeline parameterised by
 //! [`Standard`] — but is built on [`proc_macro2`] alone and never touches
 //! `proc_macro`. That makes the whole pipeline — input capture, lexing,
@@ -114,6 +114,11 @@ pub use target::TargetModel;
 /// with a different `__STDC_VERSION__` and adds nothing else.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub enum Standard {
+    /// ISO/IEC 9899:1990, the standard everyone still calls C89.
+    ///
+    /// C90 is the ISO republication of ANSI X3.159-1989 with no technical
+    /// change, so `c89!` and `c90!` are one entry point under two names.
+    C89,
     /// ISO/IEC 9899:1999.
     #[default]
     C99,
@@ -129,6 +134,7 @@ impl Standard {
     /// The name used in diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
+            Standard::C89 => "C89",
             Standard::C99 => "C99",
             Standard::C11 => "C11",
             Standard::C17 => "C17",
@@ -144,6 +150,8 @@ impl Standard {
     /// The macro that selects this standard in `dialect`.
     pub fn macro_name_in(self, dialect: Dialect) -> &'static str {
         match (dialect, self) {
+            (Dialect::Iso, Standard::C89) => "c89!",
+            (Dialect::Gnu, Standard::C89) => "gnu89!",
             (Dialect::Iso, Standard::C99) => "c99!",
             (Dialect::Iso, Standard::C11) => "c11!",
             (Dialect::Iso, Standard::C17) => "c17!",
@@ -184,10 +192,11 @@ impl Standard {
 /// See `doc/gnu-extensions.md` for the whole catalogue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Dialect {
-    /// Strict ISO C: `c99!`, `c11!`, `c17!`, `c23!`.
+    /// Strict ISO C: `c89!`, `c99!`, `c11!`, `c17!`, `c23!`.
     #[default]
     Iso,
-    /// ISO C plus the GNU extensions: `gnu99!`, `gnu11!`, `gnu17!`, `gnu23!`.
+    /// ISO C plus the GNU extensions: `gnu89!`, `gnu99!`, `gnu11!`, `gnu17!`,
+    /// `gnu23!`.
     Gnu,
 }
 
@@ -316,6 +325,33 @@ impl Gating {
             needed.as_str(),
             self.standard.macro_name_in(self.dialect)
         ))
+    }
+
+    /// Whether a declaration with no type specifier at all means `int`
+    /// (C89 6.5.2).
+    ///
+    /// C99 removed implicit `int` (N635) and GCC diagnoses it in every later
+    /// mode, `-std=gnu99` included, so this is one of the three places where
+    /// `gnu89!` is *older* than `gnu99!` rather than a superset of it.
+    pub fn implicit_int(self) -> bool {
+        self.standard < Standard::C99
+    }
+
+    /// Whether a call to a function nobody declared declares `extern int f();`
+    /// at file scope (C89 6.3.2.2).
+    ///
+    /// C99 removed the rule (N636); see [`Gating::implicit_int`] for why the
+    /// GNU dialect does not bring it back.
+    pub fn implicit_function_declarations(self) -> bool {
+        self.standard < Standard::C99
+    }
+
+    /// Whether an old-style (K&R) function definition may be written.
+    ///
+    /// Obsolescent from C89 onwards and *removed* by C23 (N2432), so every
+    /// entry point below `c23!` has it and the two C23 ones do not.
+    pub fn old_style_definitions(self) -> bool {
+        self.standard < Standard::C23
     }
 
     /// The gate message for `name`, if another entry point would have made it

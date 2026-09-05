@@ -12,7 +12,9 @@
 #include <stddef.h>
 
 #if defined(_WIN32)
-typedef long long time_t;
+/* `__extension__`: `long long` is C99's, and a header may use it whatever the
+ * entry point is. */
+__extension__ typedef long long time_t;
 typedef long clock_t;
 #define CLOCKS_PER_SEC 1000
 #else

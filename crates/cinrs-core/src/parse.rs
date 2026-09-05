@@ -144,6 +144,7 @@ pub fn parse(
         scopes: vec![builtins],
         standard: options.standard,
         gating: options.gating(),
+        in_extension: false,
         packing,
         last_range,
         depth: 0,
@@ -213,6 +214,9 @@ struct Parser<'a> {
     standard: Standard,
     /// How that revision gates a newer one's features.
     gating: Gating,
+    /// Whether `__extension__` has switched the gates off for the declaration
+    /// being parsed; see [`Parser::require_standard`].
+    in_extension: bool,
     /// What `#pragma pack` was asking for, by token position.
     packing: &'a PackMap,
     /// Range of the most recently consumed token, used to close node ranges.
@@ -346,7 +350,17 @@ impl Parser<'_> {
     /// Parsing continues either way: the shape of the code is known, and
     /// carrying on means one diagnostic that says exactly what to change
     /// instead of a cascade of syntax errors after it.
+    ///
+    /// `__extension__` switches the gate off for the declaration it is written
+    /// in, which is exactly what it means in GCC — "this is an extension and I
+    /// know it". It is what the bundled headers put in front of their
+    /// `long long` declarations, so that `#include <stdlib.h>` in a `c89!`
+    /// block declares `llabs` instead of reporting the header, and it is
+    /// available to a program that wants the same bargain.
     fn require_standard(&mut self, needed: Standard, what: &str, range: SourceRange) {
+        if self.in_extension {
+            return;
+        }
         if let Some(message) = self.gating.requires(what, needed) {
             self.error(range, message);
         }
@@ -753,8 +767,14 @@ impl Parser<'_> {
     fn parse_external_decl(&mut self) -> PResult<ExternalDecl> {
         let start = self.cur_range();
         // `__extension__` marks what follows as a GNU extension and asks for
-        // the pedantic warnings to be held back; there are none to hold back.
-        while self.eat_keyword(Keyword::Extension).is_some() {}
+        // the diagnostics about using one to be held back, which here means
+        // the gates a `c89!` block puts on what C99 added. Every external
+        // declaration starts afresh, so the flag never outlives the one it
+        // was written in — including down an error path.
+        self.in_extension = false;
+        while self.eat_keyword(Keyword::Extension).is_some() {
+            self.in_extension = true;
+        }
         let attrs = self.parse_attributes()?;
         if self.at_static_assert() {
             return Ok(ExternalDecl::StaticAssert(self.parse_static_assert()?));
@@ -943,8 +963,21 @@ impl Parser<'_> {
     }
 
     fn parse_declaration(&mut self) -> PResult<Decl> {
+        // `__extension__` covers the declaration it is written on, so one
+        // nested inside another — a local in the body of a function whose
+        // definition carries it — starts afresh, and the enclosing one gets
+        // its answer back whichever way this goes.
+        let enclosing = std::mem::take(&mut self.in_extension);
+        let result = self.parse_declaration_inner();
+        self.in_extension = enclosing;
+        result
+    }
+
+    fn parse_declaration_inner(&mut self) -> PResult<Decl> {
         let start = self.cur_range();
-        while self.eat_keyword(Keyword::Extension).is_some() {}
+        while self.eat_keyword(Keyword::Extension).is_some() {
+            self.in_extension = true;
+        }
         let attrs = self.parse_attributes()?;
         let mut specs = self.parse_decl_specifiers(true)?;
         specs.attrs.merge(attrs);
@@ -1005,6 +1038,16 @@ impl Parser<'_> {
         self.starts_decl_specifier(0)
     }
 
+    /// Whether the current token can begin a declarator.
+    ///
+    /// Only asked where there were no declaration specifiers at all, to tell
+    /// `f() { … }` — implicit `int`, and a diagnostic that says so from C99 on
+    /// — from a stray token that begins nothing.
+    fn starts_declarator(&self) -> bool {
+        let tok = self.peek();
+        tok.ident().is_some() || tok.is_punct(Punct::Star) || tok.is_punct(Punct::LParen)
+    }
+
     /// Whether the token `n` positions ahead can begin a declaration
     /// specifier (or, for a type name, a specifier-qualifier list).
     fn starts_decl_specifier(&self, n: usize) -> bool {
@@ -1053,6 +1096,8 @@ impl Parser<'_> {
                     | Keyword::TypeofUnqualGnu
                     | Keyword::AutoType
                     | Keyword::ThreadGnu
+                    | Keyword::InlineGnu
+                    | Keyword::RestrictGnu
             );
         }
         match tok.ident() {
@@ -1065,7 +1110,8 @@ impl Parser<'_> {
     }
 
     fn eat_type_qualifier(&mut self) -> Option<TypeQualifiers> {
-        let q = match self.peek().keyword()? {
+        let keyword = self.peek().keyword()?;
+        let q = match keyword {
             Keyword::Const => TypeQualifiers {
                 is_const: true,
                 ..TypeQualifiers::NONE
@@ -1074,12 +1120,18 @@ impl Parser<'_> {
                 is_volatile: true,
                 ..TypeQualifiers::NONE
             },
-            Keyword::Restrict => TypeQualifiers {
+            Keyword::Restrict | Keyword::RestrictGnu => TypeQualifiers {
                 is_restrict: true,
                 ..TypeQualifiers::NONE
             },
             _ => return None,
         };
+        // `restrict` is C99's (N448); `__restrict` is reserved and works in
+        // every entry point, exactly as it does in GCC's own `-std=c89`.
+        if keyword == Keyword::Restrict {
+            let range = self.cur_range();
+            self.require_standard(Standard::C99, "'restrict'", range);
+        }
         self.advance();
         Some(q)
     }
@@ -1121,6 +1173,7 @@ impl Parser<'_> {
             }
             if self.at_keyword(Keyword::Extension) {
                 self.advance();
+                self.in_extension = true;
                 consumed_any = true;
                 continue;
             }
@@ -1165,8 +1218,13 @@ impl Parser<'_> {
                     consumed_any = true;
                     continue;
                 }
-                if k == Keyword::Inline {
-                    self.advance();
+                if matches!(k, Keyword::Inline | Keyword::InlineGnu) {
+                    let range = self.bump_range();
+                    // C99 added `inline` (N741); `__inline__` is GCC's
+                    // spelling of it and needs no entry point.
+                    if k == Keyword::Inline {
+                        self.require_standard(Standard::C99, "'inline'", range);
+                    }
                     inline = true;
                     consumed_any = true;
                     continue;
@@ -1314,11 +1372,29 @@ impl Parser<'_> {
             if let Some(message) = self.newer_keyword_here() {
                 return Err(self.error_bail(range, message));
             }
-            let found = self.describe_cur();
-            return Err(self.error_bail(range, format!("expected a declaration, found {found}")));
+            // A declaration with no specifiers at all is an `int` one —
+            // `f() { … }` and `(*fp)();` at file scope are the common
+            // shapes — so the declarator is parsed and `build_base_type`
+            // supplies the type, which is where C89's implicit `int` is
+            // accepted and every later revision's "type specifier missing"
+            // comes from. Anything that cannot begin a declarator is still
+            // nothing at all.
+            if !self.starts_declarator() {
+                let found = self.describe_cur();
+                return Err(
+                    self.error_bail(range, format!("expected a declaration, found {found}"))
+                );
+            }
         }
 
-        let specs_range = self.span_to_here(start);
+        // With nothing consumed the specifiers are where the declarator
+        // begins, which is where a diagnostic about the implicit `int` has to
+        // point.
+        let specs_range = if consumed_any {
+            self.span_to_here(start)
+        } else {
+            self.cur_range()
+        };
         // C23's `auto x = e;` and GNU's `__auto_type x = e;`: a declaration
         // with no type specifier at all takes its type from the initialiser.
         let no_type = !counts.any() && tag.is_none() && typedef_name.is_none();
@@ -1415,10 +1491,16 @@ impl Parser<'_> {
             return Type::new(TypeKind::Typedef(name), quals, range);
         }
         if !counts.any() {
-            self.error(
-                range,
-                "type specifier missing; C99 does not support implicit 'int'",
-            );
+            // C89 6.5.2: a declaration with no type specifier declares an
+            // `int`. C99 removed the rule (N635) and GCC diagnoses it in every
+            // later mode, GNU dialects included, so this is the standard
+            // rather than the dialect talking.
+            if !self.gating.implicit_int() {
+                self.error(
+                    range,
+                    "type specifier missing; C99 does not support implicit 'int'",
+                );
+            }
             return Type::new(
                 TypeKind::Int {
                     sign: Sign::Signed,
@@ -1427,6 +1509,18 @@ impl Parser<'_> {
                 quals,
                 range,
             );
+        }
+        if counts.bool > 0 {
+            self.require_standard(Standard::C99, "'_Bool'", range);
+        }
+        if counts.complex > 0 {
+            self.require_standard(Standard::C99, "'_Complex'", range);
+        }
+        if counts.imaginary > 0 {
+            self.require_standard(Standard::C99, "'_Imaginary'", range);
+        }
+        if counts.long > 1 {
+            self.require_standard(Standard::C99, "'long long'", range);
         }
 
         let sign = if counts.unsigned > 0 {
@@ -1646,7 +1740,9 @@ impl Parser<'_> {
                 continue;
             }
             let start = self.cur_range();
-            while self.eat_keyword(Keyword::Extension).is_some() {}
+            while self.eat_keyword(Keyword::Extension).is_some() {
+                self.in_extension = true;
+            }
             let leading = self.parse_attributes()?;
             let mut specs = self.parse_decl_specifiers(false)?;
             specs.attrs.merge(leading);
@@ -1752,8 +1848,15 @@ impl Parser<'_> {
                     value,
                     range,
                 });
-                if self.eat_punct(Punct::Comma).is_none() {
+                let Some(comma) = self.eat_punct(Punct::Comma) else {
                     break;
+                };
+                if self.at_punct(Punct::RBrace) {
+                    self.require_standard(
+                        Standard::C99,
+                        "a trailing comma in an enumerator list",
+                        comma,
+                    );
                 }
             }
             self.expect_punct(Punct::RBrace, " to close an enumerator list")?;
@@ -1980,10 +2083,18 @@ impl Parser<'_> {
                     None => break,
                 }
             }
+            if is_static {
+                self.require_standard(
+                    Standard::C99,
+                    "'static' in an array parameter declarator",
+                    lb,
+                );
+            }
             let size = if self.at_punct(Punct::RBracket) {
                 ArraySize::Unspecified
             } else if self.at_punct(Punct::Star) && self.nth(1).is_punct(Punct::RBracket) {
-                self.advance();
+                let star = self.bump_range();
+                self.require_standard(Standard::C99, "'[*]'", star);
                 ArraySize::Star
             } else {
                 ArraySize::Expr(Box::new(self.parse_assignment_expr()?))
@@ -2013,6 +2124,7 @@ impl Parser<'_> {
                     ellipsis: list.ellipsis,
                     has_prototype: list.has_prototype,
                     kr_names: list.kr_names,
+                    old_style: false,
                 })),
                 lp.join(rp),
             ));
@@ -2190,6 +2302,12 @@ impl Parser<'_> {
                     break;
                 }
             }
+            if !designators.is_empty() {
+                // C99's own form and GCC's older `name:` one alike: before
+                // C99 an initializer list was positional and nothing else.
+                let at = self.span_to_here(start);
+                self.require_standard(Standard::C99, "a designated initializer", at);
+            }
             if !designators.is_empty() && !old_style {
                 self.expect_punct(Punct::Assign, " after designator")?;
             }
@@ -2240,8 +2358,16 @@ impl Parser<'_> {
             }
         }
         let mut items = Vec::new();
+        // C89 6.6.2: a block is declarations *then* statements. C99 mixed the
+        // two (N740), and the gate is here rather than in sema because it is
+        // the block's shape that says which one this is.
+        let mut saw_statement = false;
         while !self.at_punct(Punct::RBrace) && !self.at_eof() {
             let before = self.pos;
+            if saw_statement && self.starts_declaration() {
+                let at = self.cur_range();
+                self.require_standard(Standard::C99, "a declaration after a statement", at);
+            }
             let item = if self.at_static_assert() {
                 self.parse_static_assert().map(BlockItem::StaticAssert)
             } else {
@@ -2264,7 +2390,10 @@ impl Parser<'_> {
                 }
             };
             match item {
-                Ok(item) => items.push(item),
+                Ok(item) => {
+                    saw_statement |= matches!(item, BlockItem::Stmt(_));
+                    items.push(item);
+                }
                 Err(bail) => {
                     self.pop_scope();
                     return Err(bail);
@@ -2536,7 +2665,13 @@ impl Parser<'_> {
         // `volatile`, `inline` and `goto` may qualify it.
         while matches!(
             self.peek().keyword(),
-            Some(Keyword::Volatile | Keyword::Const | Keyword::Inline | Keyword::Goto)
+            Some(
+                Keyword::Volatile
+                    | Keyword::Const
+                    | Keyword::Inline
+                    | Keyword::InlineGnu
+                    | Keyword::Goto
+            )
         ) {
             self.advance();
         }
@@ -2585,6 +2720,8 @@ impl Parser<'_> {
                 parser.advance();
                 ForInit::None
             } else if parser.starts_declaration() {
+                let at = parser.cur_range();
+                parser.require_standard(Standard::C99, "a declaration in a 'for' clause", at);
                 ForInit::Decl(Box::new(parser.parse_declaration()?))
             } else {
                 let expr = parser.parse_expr()?;
@@ -2861,6 +2998,8 @@ impl Parser<'_> {
         self.expect_punct(Punct::RParen, " after type name")?;
         if self.at_punct(Punct::LBrace) {
             // `(T){ ... }` is a compound literal, i.e. a postfix expression.
+            let at = self.span_to_here(start);
+            self.require_standard(Standard::C99, "a compound literal", at);
             let items = self.parse_initializer_list()?;
             let expr = Expr {
                 kind: ExprKind::CompoundLiteral {
@@ -2937,6 +3076,8 @@ impl Parser<'_> {
                 self.expect_punct(Punct::RParen, " after type name")?;
                 if self.at_punct(Punct::LBrace) {
                     // `sizeof (T){ ... }` measures a compound literal.
+                    let at = self.span_to_here(start);
+                    self.require_standard(Standard::C99, "a compound literal", at);
                     let items = self.parse_initializer_list()?;
                     let literal = Expr {
                         kind: ExprKind::CompoundLiteral {

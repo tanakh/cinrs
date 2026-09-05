@@ -23,8 +23,10 @@ typedef unsigned long uint64_t;
 #define INT64_C(value) value##L
 #define UINT64_C(value) value##UL
 #else
-typedef long long int64_t;
-typedef unsigned long long uint64_t;
+/* `__extension__`: `long long` is C99's, and a header may use it whatever
+ * the entry point is. */
+__extension__ typedef long long int64_t;
+__extension__ typedef unsigned long long uint64_t;
 #define INT64_MAX 9223372036854775807LL
 #define UINT64_MAX 18446744073709551615ULL
 #define INT64_C(value) value##LL
@@ -62,8 +64,8 @@ typedef uint64_t uint_fast64_t;
 typedef long intptr_t;
 typedef unsigned long uintptr_t;
 #elif __SIZEOF_POINTER__ == __SIZEOF_LONG_LONG__
-typedef long long intptr_t;
-typedef unsigned long long uintptr_t;
+__extension__ typedef long long intptr_t;
+__extension__ typedef unsigned long long uintptr_t;
 #else
 typedef int intptr_t;
 typedef unsigned int uintptr_t;

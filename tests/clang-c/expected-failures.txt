@@ -38,6 +38,7 @@ C11/n1285.c:1          see `C11/n1285.c:0`
 C11/n1285_1.c:0        see `C11/n1285.c:0`
 C11/n1285_1.c:1        see `C11/n1285.c:0`
 C11/n1285_1.c:2        see `C11/n1285.c:0`
+!C11/n1310.c:0         a `//` comment in a `c89!` block; C99 took them from C++ (N644) and Clang has them everywhere as an extension
 !C11/n1310.c:1         `_Static_assert` in a `c99!` block; write `c11!`
 !C11/n1310.c:2         `__builtin_bit_cast`, a Clang-only builtin; the diagnostic is a plain syntax error rather than a named refusal
 !C11/n1310.c:3         `__builtin_bit_cast`; see `C11/n1310.c:2`
@@ -50,6 +51,7 @@ C11/n1518.c:1          see `C11/n1518.c:0`
 C23/n2322.c            the line number of a macro invocation spanning spliced lines: cinrs and Clang disagree about which physical line it is, and the paper leaves it unspecified — Clang's own comment calls its answer a FIXME
 C23/n2350.c:0          `offsetof(T, a.b)` — a nested member designator — is not supported
 C23/n2350.c:2          `offsetof` with a nested member designator; see `C23/n2350.c:0`
+!C23/n2350.c:3         a `//` comment in a `c89!` block; see `C11/n1310.c:0`. Behind it is the `offsetof` gap of `C23/n2350.c:0`
 C23/n2350.c:4          `offsetof` with a nested member designator; see `C23/n2350.c:0`
 C23/n2350.c:5          `offsetof` with a nested member designator; see `C23/n2350.c:0`
 C23/n2350.c:6          `offsetof` with a nested member designator; see `C23/n2350.c:0`
@@ -70,6 +72,8 @@ C23/n2940.c:1          trigraphs; see `C23/n2940.c:0`
 C23/n2940.c:2          trigraphs; see `C23/n2940.c:0`
 C23/n2940.c:3          trigraphs; see `C23/n2940.c:0`
 C23/n2940.c:4          trigraphs; see `C23/n2940.c:0`
+C23/n2940.c:5          trigraphs; see `C23/n2940.c:0`
+C23/n2940.c:9          trigraphs; see `C23/n2940.c:0`
 C23/n3006.c            wrong line: `auto x = (enum E { }){ }` — an empty enumeration in a compound literal — is not the error reported
 C23/n3007.c            wrong line: `static auto c = 1UL;` is refused before the incompatible-pointer initialisation the test asks about
 C23/n3018.c:0          wrong line: a `constexpr` object whose initialiser overflows is not diagnosed; a `constexpr char[]` from a string is
@@ -80,6 +84,7 @@ C23/n3030.c            wrong line: an enumeration redeclared with a different fi
 C23/n3033.c            C23's `void f(...)` — an ellipsis with no named parameter before it — is not parsed
 C23/n3033_2.c          invalid code accepted: C23 requires at least one parameter before `...` in a definition that uses `va_start`, and cinrs does not check it
 C23/n3037_1.c          C23 tag compatibility (N3037): a second, compatible definition of `struct S` in the same scope is refused as a redefinition
+!C99/block-scopes.c:0  a `//` comment in a `c89!` block; see `C11/n1310.c:0`
 !C99/block-scopes.c:1  `_Static_assert` in a `c99!` block: cinrs gates a later revision's feature on the entry point, where Clang takes it as an extension (`-Wc11-extensions`, which this RUN line silences)
 C99/n448.c:0           wrong line: `restrict` on a non-pointer (`int restrict ir;`) is not diagnosed, and `_Static_assert` in a `c99!` block is
 C99/n448.c:1           wrong line: `restrict` on a non-pointer is not diagnosed, and `constexpr int *restrict` is
@@ -89,43 +94,60 @@ C99/n717.c:1           see `C99/n717.c:0`
 C99/n809.c             wrong line: `_Imaginary` is diagnosed where `_Complex` already was, so the error lands on line 19 rather than 29
 !C99/n809_2.c          `_Complex`: C11 6.10.8.3 makes complex arithmetic optional and cinrs predefines `__STDC_NO_COMPLEX__`, so refusing it is conforming
 !C99/n809_3.c          `_Complex`; see `C99/n809_2.c`
+drs/dr011.c:0          an incomplete array type; see `drs/dr011.c:1`
 drs/dr011.c:1          `int j[];` at file scope is a tentative definition that C completes to `int j[1]`; cinrs has no incomplete array type and refuses it — the same gap refuses `extern int j[];`
 drs/dr011.c:2          an incomplete array type; see `drs/dr011.c:1`
 drs/dr011.c:3          an incomplete array type; see `drs/dr011.c:1`
 drs/dr011.c:4          an incomplete array type; see `drs/dr011.c:1`
+!drs/dr094.c:0         a `//` comment in a `c89!` block; see `C11/n1310.c:0`
+drs/dr0xx.c:0          see `drs/dr0xx.c:2`
 drs/dr0xx.c:2          wrong line: `sizeof` applied to an incomplete array type is accepted, and an aggregate initialiser is refused instead
 drs/dr0xx.c:3          see `drs/dr0xx.c:2`
 drs/dr0xx.c:4          see `drs/dr0xx.c:2`
 drs/dr0xx.c:5          wrong line: C23 requires a type specifier on every declaration; cinrs reports the missing one on the declarator's line rather than the declaration's
+drs/dr157.c:0          see `drs/dr157.c:1`
 drs/dr157.c:1          wrong line: a function declarator whose parameter is a parenthesised typedef name is misparsed, so the error is one declaration early
 drs/dr157.c:2          see `drs/dr157.c:1`
 drs/dr157.c:3          see `drs/dr157.c:1`
 drs/dr157.c:4          see `drs/dr157.c:1`
+drs/dr1xx.c:0          see `drs/dr1xx.c:1`
 drs/dr1xx.c:1          wrong line: a redefinition of an enumerator is not diagnosed, and a `struct` declared in a parameter list is
 drs/dr1xx.c:2          see `drs/dr1xx.c:1`
 drs/dr1xx.c:3          see `drs/dr1xx.c:1`
 drs/dr1xx.c:4          wrong line: in C23 a compatible redefinition of `struct S` is legal (N3037) and cinrs refuses it
+!drs/dr206.c:0         `_Complex` in a `c89!` block, and `_Complex` at all; see `C99/n809_2.c`
 !drs/dr206.c:1         `_Complex`; see `C99/n809_2.c`
 !drs/dr206.c:2         `_Complex`; see `C99/n809_2.c`
 !drs/dr206.c:3         `_Complex`; see `C99/n809_2.c`
+!drs/dr253.c:0         a designated initializer in a `c89!` block; C99 added them (N494). Behind it is the nested-designator gap of `drs/dr253.c:1`
 drs/dr253.c:1          a designator naming a nested member, `.a.b = 1`, is not supported; write nested braces
 drs/dr253.c:2          a nested designator; see `drs/dr253.c:1`
 drs/dr253.c:3          a nested designator; see `drs/dr253.c:1`
 drs/dr253.c:4          a nested designator; see `drs/dr253.c:1`
+drs/dr2xx.c:0          see `drs/dr2xx.c:1`
 drs/dr2xx.c:1          wrong line: `#nondirective` — an unknown directive — is accepted, and the file's own `#error` fires first
 drs/dr2xx.c:3          see `drs/dr2xx.c:1`
 drs/dr2xx.c:4          see `drs/dr2xx.c:1`
 drs/dr2xx.c:5          see `drs/dr2xx.c:1`
+!drs/dr335.c:0         `_Bool` in a `c89!` block; C99 added it and Clang takes it as an extension in `-std=c89`
+!drs/dr335.c:1         `_Bool` in a `c89!` block; see `drs/dr335.c:0`
+drs/dr3xx.c:0          see `drs/dr3xx.c:1`
 drs/dr3xx.c:1          wrong line: the test includes a sibling header the harness does not put on the search path, so the first error is the `#include` rather than the file-scope VLA
 drs/dr3xx.c:2          see `drs/dr3xx.c:1`
 drs/dr3xx.c:3          see `drs/dr3xx.c:1`
 drs/dr3xx.c:4          see `drs/dr3xx.c:1`
 !drs/dr411.c:1         `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr464.c:0         `_Static_assert` in a `c89!` block; write `c11!`
 !drs/dr464.c:1         `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr466.c:0         a declaration in a `for` clause in a `c89!` block; C99 added it (N740)
+!drs/dr483.c:0         `_Static_assert` in a `c89!` block; write `c11!`
 !drs/dr483.c:1         `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr494.c:0         `_Alignof` in a `c89!` block; write `c11!`
 !drs/dr494.c:1         `_Alignof` in a `c99!` block; write `c11!`
+drs/dr4xx.c:0          see `drs/dr4xx.c:1`
 drs/dr4xx.c:1          wrong line: a compound literal as the operand of `_Static_assert` is refused, before the `const`-qualified `typeof` assignment the test asks about
 drs/dr4xx.c:2          see `drs/dr4xx.c:1`
 drs/dr4xx.c:3          see `drs/dr4xx.c:1`
 drs/dr4xx.c:4          see `drs/dr4xx.c:1`
+!drs/dr5xx.c:0         an anonymous struct member in a `c89!` block; write `c11!`
 !drs/dr5xx.c:1         an anonymous struct member in a `c99!` block; write `c11!`

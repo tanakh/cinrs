@@ -285,6 +285,15 @@ pub struct FunctionType {
     pub has_prototype: bool,
     /// The identifier list of an old-style (K&R) declarator, e.g. `f(a, b)`.
     pub kr_names: Vec<Ident>,
+    /// Whether [`FunctionType::params`] came from an identifier list and the
+    /// declaration list of an old-style definition rather than from a
+    /// prototype.
+    ///
+    /// Sema builds that list — see `Sema::old_style_params` — so the rest of
+    /// the front end sees ordinary parameters; the flag is what remembers that
+    /// the *type* still has no prototype and that the generated item takes the
+    /// promoted types (C99 6.9.1p7).
+    pub old_style: bool,
 }
 
 /// One parameter of a function prototype.

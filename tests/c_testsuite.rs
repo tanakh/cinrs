@@ -96,8 +96,9 @@
 //!
 //! * `CINRS_CTESTSUITE_REQUIRED=1` — fail rather than skip when the corpus is
 //!   missing.
-//! * `CINRS_CTESTSUITE_STANDARD=c99|c11|c23` — which entry point to translate
-//!   with, and which cases are eligible. Default `c99`.
+//! * `CINRS_CTESTSUITE_STANDARD=c89|c99|c11|c23|gnu89|gnu99|gnu11|gnu23` —
+//!   which entry point to translate with, and which cases are eligible.
+//!   Default `c99`.
 //! * `CINRS_CTESTSUITE_FILTER=<substring>` — only cases whose id contains it.
 //! * `CINRS_CTESTSUITE_REPORT=1` — report mode.
 //! * `CINRS_CTESTSUITE_STRICT=1` — a stale expected-failure entry, one that
@@ -169,9 +170,14 @@ const DEFAULT_TIMEOUT: u64 = 20;
 /// case may ask for.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Standard {
+    C89,
     C99,
     C11,
     C23,
+    /// `gnu89!`, and below it the three strict revisions it does *not* sort
+    /// above: a GNU dialect accepts what every later revision added, which is
+    /// what [`Standard::accepts`] says instead of the ordering.
+    Gnu89,
     /// `gnu99!`, which is `c99!` with the GNU extensions switched on. It sorts
     /// above every strict revision because it accepts what all of them do.
     Gnu99,
@@ -184,6 +190,8 @@ impl Standard {
     /// the directory component, which are all the same string.
     fn name(self) -> &'static str {
         match self {
+            Standard::C89 => "c89",
+            Standard::Gnu89 => "gnu89",
             Standard::C99 => "c99",
             Standard::C11 => "c11",
             Standard::C23 => "c23",
@@ -195,6 +203,8 @@ impl Standard {
 
     fn parse(s: &str) -> Result<Self> {
         match s {
+            "c89" | "c90" => Ok(Standard::C89),
+            "gnu89" => Ok(Standard::Gnu89),
             "c99" => Ok(Standard::C99),
             "c11" => Ok(Standard::C11),
             "c23" => Ok(Standard::C23),
@@ -202,8 +212,8 @@ impl Standard {
             "gnu11" => Ok(Standard::Gnu11),
             "gnu23" => Ok(Standard::Gnu23),
             other => Err(eyre!(
-                "CINRS_CTESTSUITE_STANDARD={other}: expected c99, c11, c23, gnu99, gnu11 \
-                 or gnu23"
+                "CINRS_CTESTSUITE_STANDARD={other}: expected c89, c99, c11, c23, gnu89, \
+                 gnu99, gnu11 or gnu23"
             )),
         }
     }
@@ -212,11 +222,13 @@ impl Standard {
     ///
     /// The corpus documents `c89` as implying `c99` and `c99` as implying
     /// `c11`: a tag names the *oldest* revision the program is valid in, so a
-    /// C89 program runs everywhere. `c89` and `c99` therefore both come out as
-    /// "C99 is enough".
+    /// C89 program runs under every later entry point as well as under
+    /// `c89!` — which is what makes the `c89`-tagged cases, the majority of
+    /// the corpus, the ones that measure the oldest entry point.
     fn of_tag(tag: &str) -> Option<Self> {
         match tag {
-            "c89" | "c99" => Some(Standard::C99),
+            "c89" => Some(Standard::C89),
+            "c99" => Some(Standard::C99),
             "c11" | "c17" => Some(Standard::C11),
             "c23" => Some(Standard::C23),
             _ => None,
@@ -229,7 +241,10 @@ impl Standard {
     /// A GNU dialect accepts everything a later revision added, so every case
     /// is eligible for one however it is tagged.
     fn accepts(self, needs: Standard) -> bool {
-        matches!(self, Standard::Gnu99 | Standard::Gnu11 | Standard::Gnu23) || self >= needs
+        matches!(
+            self,
+            Standard::Gnu89 | Standard::Gnu99 | Standard::Gnu11 | Standard::Gnu23
+        ) || self >= needs
     }
 }
 

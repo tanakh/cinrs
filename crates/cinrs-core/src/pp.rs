@@ -109,7 +109,7 @@
 //! | --- | --- |
 //! | `__STDC__` | `1` |
 //! | `__STDC_HOSTED__` | `1` |
-//! | `__STDC_VERSION__` | the revision: `199901L`, `201112L`, `201710L` or `202311L` |
+//! | `__STDC_VERSION__` | the revision: `199901L`, `201112L`, `201710L` or `202311L`; undefined in `c89!` and `gnu89!` |
 //! | `__cinrs__` | `1` |
 //! | `__FILE__` | the invoking `.rs` file's path, or `"<c99!>"` |
 //! | `__LINE__` | the line of the invoking `.rs` file |
@@ -1117,6 +1117,7 @@ impl<'a> Pp<'a> {
         if !self.peek(true).is_some_and(|t| t.is_punct(Punct::LParen)) {
             return false;
         }
+        self.require_standard(Standard::C99, "'_Pragma'", tok.range);
         self.bump(true);
         let literal = self.bump(true);
         let Some(text) = literal.as_ref().and_then(|t| match &t.kind {
@@ -1260,11 +1261,11 @@ impl<'a> Pp<'a> {
 /// dialect, and `typeof` is already a keyword of its own in `c23!`.
 fn gnu_keyword(name: &str, dialect: Dialect) -> Option<Keyword> {
     let keyword = match name {
-        "__inline" | "__inline__" => Keyword::Inline,
+        "__inline" | "__inline__" => Keyword::InlineGnu,
         "__const" | "__const__" => Keyword::Const,
         "__signed" | "__signed__" => Keyword::Signed,
         "__volatile" | "__volatile__" => Keyword::Volatile,
-        "__restrict" | "__restrict__" => Keyword::Restrict,
+        "__restrict" | "__restrict__" => Keyword::RestrictGnu,
         "__complex__" | "__complex" => Keyword::Complex,
         "__attribute" | "__attribute__" => Keyword::Attribute,
         "__extension__" => Keyword::Extension,
@@ -2881,6 +2882,7 @@ impl Pp<'_> {
                 return None;
             };
             if tok.is_punct(Punct::Ellipsis) {
+                self.require_standard(Standard::C99, "a variadic macro", tok.range);
                 variadic = true;
                 i += 1;
                 break;
@@ -2910,6 +2912,7 @@ impl Pp<'_> {
             // GNU's named variable arguments: `args...` makes `args` another
             // spelling of `__VA_ARGS__` rather than one more parameter.
             if rest.get(i + 1).is_some_and(|t| t.is_punct(Punct::Ellipsis)) {
+                self.require_standard(Standard::C99, "a variadic macro", tok.range);
                 variadic = true;
                 va_name = Some(name.to_owned());
                 i += 2;
@@ -3780,14 +3783,21 @@ fn binary_op(kind: &TokenKind) -> Option<(BinOp, u8)> {
 // ---------------------------------------------------------------------------
 
 impl Standard {
-    /// The value of `__STDC_VERSION__` for this revision.
-    pub fn stdc_version(self) -> &'static str {
-        match self {
+    /// The value of `__STDC_VERSION__` for this revision, or `None` where the
+    /// revision has none.
+    ///
+    /// C89 as published had no `__STDC_VERSION__` at all — Amendment 1 added
+    /// it in 1995 — so `c89!` and `gnu89!` leave the macro undefined, which is
+    /// what `gcc -std=c89` does and what a program testing
+    /// `#ifdef __STDC_VERSION__` is looking for. `__STDC__` is still `1`.
+    pub fn stdc_version(self) -> Option<&'static str> {
+        Some(match self {
+            Standard::C89 => return None,
             Standard::C99 => "199901L",
             Standard::C11 => "201112L",
             Standard::C17 => "201710L",
             Standard::C23 => "202311L",
-        }
+        })
     }
 }
 
@@ -3795,7 +3805,9 @@ impl Pp<'_> {
     fn define_predefined(&mut self, options: &Options) {
         self.define_object("__STDC__", "1");
         self.define_object("__STDC_HOSTED__", "1");
-        self.define_object("__STDC_VERSION__", options.standard.stdc_version());
+        if let Some(version) = options.standard.stdc_version() {
+            self.define_object("__STDC_VERSION__", version);
+        }
         self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
         // implementation a macro to say it left each one out. `cinrs` has left

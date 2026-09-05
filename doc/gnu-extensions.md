@@ -1,7 +1,8 @@
 # GNU C extensions: what exists, how common they are, and what cinrs does with them
 
-`cinrs` implements the C standards (`c99!`, `c11!`, `c17!`, `c23!`) and, on top
-of them, the GNU extensions (`gnu99!`, `gnu11!`, `gnu17!`, `gnu23!`). Real-world
+`cinrs` implements the C standards (`c89!`/`c90!`, `c99!`, `c11!`, `c17!`,
+`c23!`) and, on top of them, the GNU extensions (`gnu89!`, `gnu99!`, `gnu11!`,
+`gnu17!`, `gnu23!`). Real-world
 C leans on those extensions heavily, so this document lists them, estimates how
 often each shows up in *user* code (not in system headers, which cinrs never
 reads — its bundled headers are plain C), and tracks what cinrs supports. It is
@@ -43,8 +44,8 @@ exactly the same place.
 2. **The plain spellings need a GNU entry point.** `typeof` and `asm` are
    ordinary identifiers in ISO C — a C99 program may have a variable called
    `typeof`, and one of the c-testsuite cases has a variable called `asm` — so
-   they are keywords only in `gnu99!`, `gnu11!`, `gnu17!` and `gnu23!`
-   (`typeof` is also C23's own keyword, so `c23!` has it as well). The
+   they are keywords only in `gnu89!`, `gnu99!`, `gnu11!`, `gnu17!` and
+   `gnu23!` (`typeof` is also C23's own keyword, so `c23!` has it as well). The
    diagnostic in a strict block names both ways out:
 
    ```text
@@ -57,9 +58,33 @@ exactly the same place.
    separators, `__VA_OPT__`, `#elifdef`, the empty initialiser `{}` — every
    construct the strict entry points gate. The gate is simply switched off; the
    strict entry points keep it, and keep saying which macro to write instead.
+   `gnu89!` is where that matters most: `gcc -std=gnu89` takes `//` comments,
+   `long long`, mixed declarations and code, designated initializers and the
+   rest as extensions, and so does this.
 
-4. **The predefined macros say which entry point it is.** `__STRICT_ANSI__` is
-   defined in the strict entry points only. `__GNUC__` is `4`,
+   The three rules that are *not* extensions, because a later revision
+   **deleted** them, go the other way — a GNU dialect cannot switch a deleted
+   rule back on, so they belong to the revision:
+
+   | rule | where it lives | removed by |
+   | --- | --- | --- |
+   | implicit `int` (`static x;`, `f() { … }`) | `c89!`, `gnu89!` | C99 (N635) |
+   | implicit function declarations (calling an undeclared `f`) | `c89!`, `gnu89!` | C99 (N636) |
+   | old-style (K&R) definitions, `int f(a) int a; { … }` | every entry point below `c23!` | C23 (N2432) |
+
+   That is GCC 14's own behaviour: it errors on the first two in `-std=gnu99`
+   and later, and on the third in `-std=c23`.
+
+4. **`__extension__` switches the gate off** for the declaration it is written
+   on, which is what it means in GCC — "this is an extension and I know it".
+   The bundled headers put it in front of their `long long` declarations, so
+   that `#include <stdlib.h>` in a `c89!` block declares `llabs` rather than
+   reporting the header, exactly as glibc's own headers do; a program that
+   wants the same bargain may write it too.
+
+5. **The predefined macros say which entry point it is.** `__STRICT_ANSI__` is
+   defined in the strict entry points only, and `__STDC_VERSION__` is not
+   defined at all in `c89!` and `gnu89!` — C89 as published had no such macro. `__GNUC__` is `4`,
    `__GNUC_MINOR__` `2` and `__GNUC_PATCHLEVEL__` `1` in *all* of them —
    Clang's own precedent, and for the same reason: a program guards
    `__attribute__` and `__builtin_expect` with
@@ -83,7 +108,7 @@ variably modified types do not; a program that tests the macro takes its
 | `typeof` / `__typeof__` | `typeof(x) y = x;` | very common (macros) | supported | `__typeof__` and `__typeof` everywhere; `typeof` in a GNU dialect and in `c23!`. `__typeof_unqual__` is the same thing here, since the type model carries no top-level qualifiers. |
 | `?:` with omitted middle operand | `p ?: default` | common | supported | The operand is evaluated exactly once, into a temporary. |
 | `__attribute__((…))` on functions, variables, types | see the attribute table below | very common | supported | Parsed in every position GCC accepts it — declaration specifiers, after a declarator, inside one (`int (__attribute__((x)) *)(void)`), on records, members, parameters, labels and statements — in both the `name` and `__name__` spellings. A subset is honoured, the rest is ignored as C23 allows, and the handful that would change the program's meaning is refused. |
-| Alternate keywords | `__inline__`, `__asm__`, `__const__`, `__signed__`, `__volatile__`, `__restrict`, `__restrict__`, `__alignof__`, `__extension__` | very common (portability macros) | supported | The [preprocessor](../crates/cinrs-core/src/pp.rs) turns them into keywords on the way to the parser — *after* macro replacement, so `#define __attribute__(x)` still defines and expands a macro of that name, which is what portability headers write. |
+| Alternate keywords | `__inline__`, `__asm__`, `__const__`, `__signed__`, `__volatile__`, `__restrict`, `__restrict__`, `__alignof__`, `__extension__` | very common (portability macros) | supported | The [preprocessor](../crates/cinrs-core/src/pp.rs) turns them into keywords on the way to the parser — *after* macro replacement, so `#define __attribute__(x)` still defines and expands a macro of that name, which is what portability headers write. `__inline__` and `__restrict__` are keywords of their own rather than the plain spellings, because `c89!` gates `inline` and `restrict` and must not gate these. `__extension__` also switches that gate off for the declaration it is written on; see [above](#strict-and-gnu-entry-points). |
 | `__builtin_expect`, `__builtin_expect_with_probability` | `if (__builtin_expect(x, 0))` | very common (`likely`/`unlikely`) | supported | The value is the first argument, typed `long` as GCC types it; `core::hint::likely` is unstable, so the hint has nowhere to go. |
 | `__builtin_unreachable`, `__builtin_trap` | | common | supported | `core::hint::unreachable_unchecked()`, and a call to the C library's `abort` — `core::intrinsics::abort` is unstable and `std` is not available to a `no_std` crate. |
 | Bit-manipulation builtins | `__builtin_popcount(l,ll)`, `__builtin_clz`, `__builtin_ctz`, `__builtin_ffs`, `__builtin_parity`, `__builtin_bswap16/32/64`, `__builtin_clrsb` | common (codecs, hashing) | supported | Rust's integer methods on the unsigned type of the operand's width. `clz(0)` and `ctz(0)` are undefined in C and answer the width here, which is what Rust does. |

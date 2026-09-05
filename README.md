@@ -26,9 +26,12 @@ Run it with `cargo run --example fact`.
 
 ## What works
 
-* **Four standards, twice over.** `c99!`, `c11!`, `c17!` and `c23!` are the
-  same macro for four revisions of the language, and `__STDC_VERSION__`
-  follows; `gnu99!`, `gnu11!`, `gnu17!` and `gnu23!` are the same four with the
+* **Five standards, twice over.** `c89!` (also spelled `c90!`), `c99!`, `c11!`,
+  `c17!` and `c23!` are the
+  same macro for five revisions of the language, and `__STDC_VERSION__`
+  follows — except in `c89!`, which leaves it undefined, because C89 as
+  published had no such macro; `gnu89!`, `gnu99!`, `gnu11!`, `gnu17!` and
+  `gnu23!` are the same five with the
   GNU extensions switched on. `c11!` adds
   `_Static_assert`, `_Generic`, `_Alignof`, `_Alignas` (on the members of a
   `struct` or `union`), `_Noreturn` and anonymous `struct`/`union` members;
@@ -38,11 +41,25 @@ Run it with `cargo run --example fact`.
   `__VA_OPT__`, `#elifdef`/`#elifndef`, binary constants, digit separators,
   empty initialisers, `auto` type inference, enumerations with a fixed
   underlying type and `unreachable()`. A feature from a later revision used in
-  an earlier block is a diagnostic that says which macro to write instead. The
+  an earlier block is a diagnostic that says which macro to write instead — and
+  `c89!` is that rule pointed the other way, refusing everything C99 added
+  (`//` comments, mixed declarations and code, `long long`, designated
+  initializers, variable length arrays, `_Bool`, `restrict`, `inline`, …) with
+  the same message. The
   revision also decides what `int f();` means: the parameters are *unspecified*
   before C23, so a call may pass any number of arguments and each gets the
   default argument promotions, while `c23!` and `gnu23!` read the empty list as
   `(void)` — which is exactly where the standard moved it.
+* **The C of the 1980s.** Old-style (K&R) function definitions —
+  `int f(a, b) int a; char *b; { … }` — work in every entry point below
+  `c23!`, which is the revision that removed them. Their type has no
+  prototype, so a caller applies the default argument promotions, and the
+  generated item takes the promoted types and converts to the declared ones on
+  entry. `c89!` and `gnu89!` add the two rules C99 deleted: **implicit `int`**
+  (`static x;`, `f() { … }`) and **implicit function declarations**, where
+  calling an undeclared `abs` declares `extern int abs();` and the linker
+  resolves it. `gnu89!` is otherwise `gnu99!`: `gcc -std=gnu89` takes every
+  later feature as an extension, and so does this.
 * **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
   `union`, `enum`, bit-fields, `typedef`, string literals, function pointers,
   `sizeof` with
@@ -117,8 +134,7 @@ Run it with `cargo run --example fact`.
 
 * Not supported, each as a located error rather than a silent mistranslation:
   the variably modified types other than a one-dimensional array
-  (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`, old-style
-  (K&R) function definitions,
+  (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`,
   `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`, and
   C11's `u8"…"`/`u"…"`/`U"…"` literals with their `char16_t`/`char32_t`. On the
   GNU side: inline assembly, computed `goto`, `cleanup`, `__int128`, the vector
@@ -190,24 +206,30 @@ to be given**, which are not optional.
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
   suite, **213 of the 218 that `c99!` is eligible for pass (97.7 %)**, and 216
-  of 220 under `c11!`, `gnu99!` and `gnu11!`. What is left is one construct
+  of 220 under `c11!`, `gnu89!`, `gnu99!` and `gnu11!`. What is left is one
+  construct
   listed as unsupported above — `va_arg` with a struct — plus two corners GCC
   has and this does not: a `goto` out of a statement expression, and
   initialising a flexible array member. One needs a newer Rust than 1.97, and
   the two C23 entry points give up one more case that C23 itself made invalid.
+  Strict `c89!` is the outlier at 152 of the 175 it selects, because
+  twenty-one cases the corpus tags `c89` use something C99 added.
   The corpus is a git submodule, so a fresh checkout skips the suite until
   `git submodule update --init third_party/c-testsuite` fetches it.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,243 pass (70.3 %)** under `gnu11!`. Half of what is
-  left is old-style (K&R) definitions and implicit declarations — C89 rules
-  these C89-era programs lean on — and two are programs that built and then
-  did the wrong thing, which the document names one by one.
+  exit status zero. **1,363 pass (77.0 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,273 (72.0 %) under
+  `gnu11!`. What is left is inline assembly, the vector extensions, the
+  `__builtin_*` forms this crate does not implement, `_Complex`, nested
+  functions, and the variadic definitions that need Rust 1.99 — plus two
+  programs that built and then did the wrong thing, which the document names
+  one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **79 of the 175 revisions run come out as
-  required (45.1 %)**, and this is the only suite that measures what `cinrs`
+  which lines must be diagnosed. **85 of the 203 revisions run come out as
+  required (41.9 %)**, and this is the only suite that measures what `cinrs`
   *refuses*, which is half of what a front end is for.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and

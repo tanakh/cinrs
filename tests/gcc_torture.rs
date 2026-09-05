@@ -34,8 +34,10 @@
 //! # The prelude
 //!
 //! These are C89-era programs, and a great many of them call `abort()` and
-//! `exit()` with no declaration in sight, because C89 let them. Two lines go in
-//! front of every case:
+//! `exit()` with no declaration in sight, because C89 let them — which is
+//! exactly what `c89!` and `gnu89!` implement, so under those two entry points
+//! the declarations are left out and the implicit ones do the work. Under
+//! every other entry point two lines go in front of every case:
 //!
 //! ```c
 //! #pragma cinrs include_path "…/gcc.c-torture/execute"
@@ -65,11 +67,16 @@
 //!
 //! * `CINRS_TESTSUITES_REQUIRED=1` — fail rather than skip when the corpus is
 //!   missing.
-//! * `CINRS_GCC_TORTURE_STANDARD=gnu11|gnu99|gnu17|gnu23|c99|c11|c17|c23` —
-//!   which entry point to translate with. Default `gnu11`, which is closest to
-//!   the `-std=gnu17 -w` GCC compiles these with.
+//! * `CINRS_GCC_TORTURE_STANDARD=gnu89|gnu99|gnu11|gnu17|gnu23|c89|c99|c11|c17|c23`
+//!   — which entry point to translate with. Default `gnu11`, which is closest
+//!   to the `-std=gnu17 -w` GCC compiles these with; `gnu89!` is the one these
+//!   C89-era programs were really written for, and the document records both
+//!   baselines.
 //! * `CINRS_GCC_TORTURE_FILTER=<substring>` — only cases whose id contains it.
-//! * `CINRS_GCC_TORTURE_PRELUDE=0` — leave out the `abort`/`exit` declarations.
+//! * `CINRS_GCC_TORTURE_PRELUDE=0|1` — leave out the `abort`/`exit`
+//!   declarations, or put them in. They go in by default for every entry point
+//!   except `c89!` and `gnu89!`, which declare an undeclared `abort` for
+//!   themselves.
 //! * `CINRS_GCC_TORTURE_REPORT=1` — report mode.
 //! * `CINRS_GCC_TORTURE_STRICT=1` — a stale expected-failure entry is a
 //!   failure and not a warning.
@@ -155,9 +162,15 @@ impl Standard {
         self.0
     }
 
+    /// Whether a call to an undeclared function declares it here (C89
+    /// 6.3.2.2), which is what decides whether the prelude is needed.
+    fn has_implicit_declarations(self) -> bool {
+        matches!(self.0, "c89" | "gnu89")
+    }
+
     fn parse(s: &str) -> Result<Self> {
         const KNOWN: &[&str] = &[
-            "c99", "c11", "c17", "c23", "gnu99", "gnu11", "gnu17", "gnu23",
+            "c89", "c99", "c11", "c17", "c23", "gnu89", "gnu99", "gnu11", "gnu17", "gnu23",
         ];
         KNOWN
             .iter()
@@ -178,7 +191,10 @@ impl Standard {
 /// seventy-odd of them ask for `-std=gnu89 -fpermissive` on top. `gnu11!` is
 /// the closest thing here: the GNU extensions on, and a revision old enough
 /// that the C23 keywords a 1990s test may use as identifiers are still
-/// identifiers.
+/// identifiers. `CINRS_GCC_TORTURE_STANDARD=gnu89` runs the suite as the
+/// language these programs were written in — implicit `int` and implicit
+/// function declarations included — and `doc/gcc-torture.md` records that
+/// baseline beside this one.
 const DEFAULT_STANDARD: Standard = Standard("gnu11");
 
 // ---------------------------------------------------------------------------
@@ -213,9 +229,10 @@ const DEFAULT_STANDARD: Standard = Standard("gnu11");
 ///
 /// `dg-options`, `dg-additional-options` and `dg-add-options` are recorded in
 /// [`Directives::options`] and counted in the report — `-std=gnu89`,
-/// `-fpermissive` and `-fwrapv` between them explain a large slice of the
-/// failures — but nothing acts on them: there is no `gnu89!` entry point, no
-/// permissive mode, and wrapping is what `cinrs` generates anyway.
+/// `-fpermissive` and `-fwrapv` between them explain a slice of the failures —
+/// but nothing acts on them: there is no permissive mode, wrapping is what
+/// `cinrs` generates anyway, and the `-std=gnu89` cases are answered by
+/// running the whole suite under `gnu89!` rather than case by case.
 /// `dg-xfail-if`, `dg-xfail-run-if`, `dg-require-stack-size`,
 /// `dg-timeout-factor` and `dg-prune-output` are recorded and ignored.
 #[derive(Clone, Debug, Default)]
@@ -1194,7 +1211,16 @@ fn main() -> Result<()> {
     };
     let timeout = conformance::timeout_var("CINRS_GCC_TORTURE_TIMEOUT", DEFAULT_TIMEOUT)?;
     let filter = std::env::var("CINRS_GCC_TORTURE_FILTER").unwrap_or_default();
-    let with_prelude = !std::env::var("CINRS_GCC_TORTURE_PRELUDE").is_ok_and(|v| v == "0");
+    // The two declarations go in unless the entry point has C89's implicit
+    // function declarations of its own — `c89!` and `gnu89!`, where a call to
+    // an undeclared `abort` *is* a declaration of it and the linker resolves
+    // it exactly as the prelude's would. Everywhere else they are what keeps a
+    // third of the corpus from failing on the call rather than on what it is
+    // testing.
+    let with_prelude = match std::env::var("CINRS_GCC_TORTURE_PRELUDE") {
+        Ok(value) => value != "0",
+        Err(_) => !standard.has_implicit_declarations(),
+    };
 
     let all = load_cases(&corpus)?;
     let selected: Vec<&Case> = all
