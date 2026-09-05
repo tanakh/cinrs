@@ -365,10 +365,63 @@ fn what_c11_added_and_this_crate_does_not_do() {
         "_BitInt(7) narrow;",
         &["'_BitInt' is not supported yet"],
     );
+}
+
+/// The C11 and C23 literal prefixes, and the revision each one needs.
+///
+/// The prefix is recognised in every entry point so that the diagnostic names
+/// the macro to write instead of complaining that `u` is undeclared.
+#[test]
+fn the_unicode_literal_prefixes_are_gated() {
+    accepted(Standard::C11, "const char *s = u8\"utf8\";");
+    accepted(Standard::C11, "const unsigned short *s = u\"utf16\";");
+    accepted(Standard::C11, "const unsigned int *s = U\"utf32\";");
+    accepted(Standard::C11, "int c = u'x'; int d = U'x';");
+    accepted(Standard::C23, "int c = u8'x';");
+    // `const void *`, because C23 changed the element type from `char` to
+    // `char8_t` and this is about the gate rather than about that.
+    since(
+        Standard::C11,
+        "const void *s = u8\"utf8\";",
+        "a 'u8' literal",
+    );
+    since(
+        Standard::C11,
+        "const void *s = u\"utf16\";",
+        "a 'u' literal",
+    );
+    since(
+        Standard::C11,
+        "const void *s = U\"utf32\";",
+        "a 'U' literal",
+    );
+    since(Standard::C11, "int c = u'x';", "a 'u' literal");
+    // `u8'x'` is C23's, though `u8"…"` has been there since C11.
+    since(Standard::C23, "int c = u8'x';", "a 'u8' literal");
     rejected(
         Standard::C11,
-        "const char *s = u8\"utf8\";",
-        &["'u8' literals are not supported; use a narrow literal"],
+        "int c = u'ab';",
+        &["a 'u' character constant holds exactly one character"],
+    );
+    rejected(
+        Standard::C23,
+        "int c = u8'\\u00e9';",
+        &["the character in a 'u8' character constant must fit in a single code unit"],
+    );
+    rejected(
+        Standard::C11,
+        "int c = u'\\U0001F600';",
+        &["the character in a 'u' character constant must fit in a single code unit"],
+    );
+    rejected(
+        Standard::C11,
+        "const void *s = u\"a\" U\"b\";",
+        &["cannot concatenate a 'u' string literal with a 'U' one"],
+    );
+    rejected(
+        Standard::C11,
+        "const void *s = u\"\\U00110000\";",
+        &["'\\u110000' is not a valid universal character name"],
     );
 }
 

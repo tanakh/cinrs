@@ -63,13 +63,24 @@ Run it with `cargo run --example fact`.
 * **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
   `union`, `enum`, bit-fields, `typedef`, string literals, function pointers,
   `sizeof` with
-  the real layout, casts, aggregate and designated initialisers, compound
+  the real layout, casts, aggregate and designated initialisers — designator
+  *lists* included, so `{ .a.b = 1 }`, `{ .arr[2].x = 3 }` and the elements
+  that carry on from where one of them landed all work — compound
   literals — `&(struct S){ 1, 2 }`, whose object lives as long as the block it
   is written in — variable length arrays, file-scope,
   `static` and `extern` objects, every operator, every control structure —
   `if`, `while`, `do`/`while`, `for`, `switch` with fallthrough, `break`,
   `continue`, `return`, and `goto`, which is lowered to a state machine over
   basic blocks.
+* **Every character set C has.** Digraphs, the bundled `<iso646.h>`, and the
+  nine **trigraphs**, replaced in translation phase 1 wherever the revision
+  still has them — every strict entry point below `c23!`, which is where C
+  removed them, and no GNU dialect, which is the line GCC draws.
+  **Extended identifiers**: `int café(void)` and `int café(void)` are
+  one function, in Unicode Annex #31's character set, refused when the name is
+  not in Normalization Form C. And the **Unicode literals** — `u8"…"`, `u"…"`
+  and `U"…"` with their `char8_t`, `char16_t` and `char32_t`, `u'x'`, `U'x'`
+  and C23's `u8'x'`, surrogate pairs and all — with `<uchar.h>` bundled.
 * **Variable length arrays and `alloca`.** `int a[n];` with a bound that is not
   a constant does what C99 says: the bound is evaluated once, at the
   declaration; the object lives to the end of the block and is made afresh on
@@ -88,11 +99,14 @@ Run it with `cargo run --example fact`.
   directive, `#error`, `#warning`, `#pragma`, and `#line` — which redirects
   `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
   the C token that was really written.
-* **`#include`.** Standard headers (`<stdio.h>`, `<string.h>`, `<math.h>`,
-  `<wchar.h>` and the rest) are bundled with the crate, written in plain C99
+* **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
+  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>` and the
+  rest) are bundled with the crate, written in plain C99
   rather than read from the platform, and the calls link against the real C
   library. Your own headers are found next to the `.rs` file that includes
-  them, and editing one rebuilds the crate.
+  them, and editing one rebuilds the crate. `#embed "logo.png"` puts the bytes
+  of a file into the program — with `limit`, `prefix`, `suffix`, `if_empty`
+  and `__has_embed` — and editing *that* rebuilds the crate too.
 * **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
   `__attribute__((packed))` and `aligned` with the layout GCC gives them,
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
@@ -115,8 +129,11 @@ Run it with `cargo run --example fact`.
   `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
   needs from `alloc` rather than from `std`;
   `#pragma cinrs module "…"` names the module the expansion goes into.
-* **Two input forms.** C the Rust lexer accepts is written as raw tokens; C it
-  refuses (hexadecimal floating constants, `'ab'`, `L"…"`, `\` line
+* **Two input forms.** C the Rust lexer accepts is written as raw tokens —
+  `int café(void)` included, since Rust's identifiers are UAX #31's too; C it
+  refuses (hexadecimal floating constants, `'ab'`, the prefixed literals
+  `L"…"`, `u8"…"`, `u"…"`, `U"…"` and `u8'x'`, a universal character name,
+  `\` line
   continuations, C23's digit separators such as `1'000'000`) goes in a string
   literal instead. `##` cannot be written in
   raw-token form either, so a replacement list spells the pasting operator
@@ -135,8 +152,8 @@ Run it with `cargo run --example fact`.
 * Not supported, each as a located error rather than a silent mistranslation:
   the variably modified types other than a one-dimensional array
   (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`,
-  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, `#embed`, and
-  C11's `u8"…"`/`u"…"`/`U"…"` literals with their `char16_t`/`char32_t`. On the
+  `setjmp`/`longjmp`, `_Thread_local`, `_Atomic`, `_BitInt`, and C23's *named*
+  universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the
   GNU side: inline assembly, computed `goto`, `cleanup`, `__int128`, the vector
   extensions and the `__sync_*`/`__atomic_*` builtins. C11's four
   `__STDC_NO_*` macros are predefined, which is the standard's own way of
@@ -219,8 +236,8 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,363 pass (77.0 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,273 (72.0 %) under
+  exit status zero. **1,367 pass (77.3 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,277 (72.2 %) under
   `gnu11!`. What is left is inline assembly, the vector extensions, the
   `__builtin_*` forms this crate does not implement, `_Complex`, nested
   functions, and the variadic definitions that need Rust 1.99 — plus two
@@ -228,8 +245,8 @@ to be given**, which are not optional.
   one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **85 of the 203 revisions run come out as
-  required (41.9 %)**, and this is the only suite that measures what `cinrs`
+  which lines must be diagnosed. **96 of the 203 revisions run come out as
+  required (47.3 %)**, and this is the only suite that measures what `cinrs`
   *refuses*, which is half of what a front end is for.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and

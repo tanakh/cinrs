@@ -371,6 +371,110 @@ fn labels_may_stand_before_a_declaration_and_at_the_end_of_a_block() {
     }
 }
 
+/// C23's `#embed` (N3017), with all four of its standard parameters.
+///
+/// Every expected value here was checked against `gcc -std=c23` reading the
+/// same two files. The resource is a real binary — a PNG signature, a NUL and
+/// a `0xff` — so that nothing about the test would work if the bytes went
+/// through text.
+#[test]
+fn embed_puts_the_bytes_of_a_file_into_the_program() {
+    c23! { r##"
+        /* The quoted form looks next to the file the directive is written in,
+           which for the macro's own text is the directory of the `.rs`. The
+           angled form takes the include path, and nothing else. */
+        #pragma cinrs include_path "tests/include"
+
+        static const unsigned char logo[] = {
+        #embed "include/data.bin"
+        };
+        static const unsigned char angled[] = {
+        #embed <data.bin>
+        };
+        static const unsigned char capped[] = {
+        #embed <data.bin> limit(4) prefix(0xAA,) suffix(, 0xBB)
+        };
+        /* An empty resource is `if_empty`'s tokens and nothing else: the
+           prefix and the suffix are not emitted at all. */
+        static const unsigned char nothing[] = {
+        #embed <empty.bin> if_empty(1, 2) prefix(7,) suffix(, 9)
+        };
+
+        #if __has_embed(<data.bin>) == __STDC_EMBED_FOUND__
+        #define FOUND 1
+        #endif
+        #if __has_embed(<empty.bin>) == __STDC_EMBED_EMPTY__
+        #define EMPTY 1
+        #endif
+        #if __has_embed(<nowhere.bin>) == __STDC_EMBED_NOT_FOUND__
+        #define MISSING 1
+        #endif
+        /* `limit(0)` makes even a resource with bytes in it an empty one. */
+        #if __has_embed(<data.bin> limit(0)) == __STDC_EMBED_EMPTY__
+        #define LIMITED 1
+        #endif
+
+        int logo_size(void) { return (int) sizeof logo; }
+        int logo_at(int i) { return logo[i]; }
+        int angled_size(void) { return (int) sizeof angled; }
+        int capped_size(void) { return (int) sizeof capped; }
+        int capped_at(int i) { return capped[i]; }
+        int nothing_size(void) { return (int) sizeof nothing; }
+        int nothing_at(int i) { return nothing[i]; }
+        int answers(void) { return FOUND + EMPTY * 10 + MISSING * 100 + LIMITED * 1000; }
+    "## }
+
+    unsafe {
+        assert_eq!(logo_size(), 10);
+        assert_eq!(
+            (logo_at(0), logo_at(1), logo_at(8), logo_at(9)),
+            (0x89, 0x50, 0x00, 0xff)
+        );
+        assert_eq!(angled_size(), 10);
+        // 0xAA, the first four bytes, 0xBB.
+        assert_eq!(capped_size(), 6);
+        assert_eq!(
+            (capped_at(0), capped_at(1), capped_at(4), capped_at(5)),
+            (0xaa, 0x89, 0x47, 0xbb)
+        );
+        assert_eq!(nothing_size(), 2);
+        assert_eq!((nothing_at(0), nothing_at(1)), (1, 2));
+        assert_eq!(answers(), 1111);
+    }
+}
+
+/// C23's `u8` character prefix (N2418) and `char8_t` (N2653).
+///
+/// The revision also changed the element type of a `u8"…"` string from `char`
+/// to `char8_t`, which is an `unsigned char` — the one part of the Unicode
+/// literals that is not the same in `c11!`.
+#[test]
+fn the_u8_character_prefix_and_char8_t() {
+    c23! { r##"
+        #include <uchar.h>
+
+        static const char8_t utf8[] = u8"héllo";
+
+        int u8_char(void) { return u8'x'; }
+        unsigned long u8_char_size(void) { return sizeof u8'x'; }
+        int u8_char_is_unsigned_char(void) {
+            return _Generic(u8'x', unsigned char: 1, default: 0);
+        }
+        int u8_string_is_char8_t(void) {
+            return _Generic(u8"x", unsigned char *: 1, default: 0);
+        }
+        unsigned long u8_at(int i) { return utf8[i]; }
+    "## }
+
+    unsafe {
+        assert_eq!(u8_char(), 0x78);
+        assert_eq!(u8_char_size(), 1);
+        assert_eq!(u8_char_is_unsigned_char(), 1);
+        assert_eq!(u8_string_is_char8_t(), 1);
+        assert_eq!((u8_at(0), u8_at(1), u8_at(2)), (0x68, 0xc3, 0xa9));
+    }
+}
+
 #[test]
 fn the_headers_follow_the_revision() {
     c23! {
@@ -378,6 +482,7 @@ fn the_headers_follow_the_revision() {
         #include <stdalign.h>
         #include <stdbool.h>
         #include <stddef.h>
+        #include <uchar.h>
 
         /* In C23 `bool`, `true`, `alignas` and `static_assert` are keywords,
            so the headers define nothing for them — and everything below still

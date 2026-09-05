@@ -1156,6 +1156,18 @@ impl Ty {
     pub fn wchar_ty() -> Ty {
         Ty::Int
     }
+
+    /// `char16_t` (C11 7.28), which is `uint_least16_t` — `unsigned short` on
+    /// every target this models, and what the bundled `<uchar.h>` typedefs it
+    /// to.
+    pub fn char16_ty() -> Ty {
+        Ty::UShort
+    }
+
+    /// `char32_t` (C11 7.28), which is `uint_least32_t` — `unsigned int`.
+    pub fn char32_ty() -> Ty {
+        Ty::UInt
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1379,11 +1391,13 @@ pub struct TypedefItem {
 /// A string literal's decoded contents.
 #[derive(Clone, Debug)]
 pub struct StrData {
-    /// The elements, without the terminating NUL: bytes for a narrow literal,
-    /// `wchar_t` values for a wide one.
+    /// The elements, without the terminating NUL: bytes for a narrow or
+    /// `u8"…"` literal, UTF-16 code units for `u"…"`, and character values for
+    /// `U"…"` and `L"…"`.
     pub values: Vec<u32>,
-    /// Whether the literal was written `L"…"`.
-    pub wide: bool,
+    /// The type of one element: `char`, `char8_t`, `char16_t`, `char32_t` or
+    /// `wchar_t`, whichever prefix the literal was written with.
+    pub elem: Ty,
 }
 
 impl StrData {

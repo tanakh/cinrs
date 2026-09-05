@@ -280,7 +280,9 @@ impl Revision {
     ///   1 and the bundled headers are the hosted ones, so a test written
     ///   against a freestanding implementation would be measured against the
     ///   wrong thing;
-    /// * `-ftrigraphs`, which `cinrs` does not implement in any mode;
+    /// * `-ftrigraphs`, which asks for trigraphs in a mode that does not have
+    ///   them; `cinrs` has them exactly where the standard puts them — every
+    ///   strict entry point below `c23!` — and no switch that moves the line;
     /// * any other `-f…` or `-m…` flag the list above does not name — Clang
     ///   language extensions (`-fms-extensions`, `-fblocks`,
     ///   `-fexperimental-…`) and anything new upstream adds. The flag is named
@@ -373,7 +375,11 @@ impl Revision {
                     fail("`-ffreestanding`: cinrs has no freestanding mode".to_owned());
                 }
                 "-ftrigraphs" | "-trigraphs" => {
-                    fail("`-ftrigraphs`: cinrs has no trigraphs in any mode".to_owned());
+                    fail(
+                        "`-ftrigraphs`: cinrs has trigraphs in every strict entry point below \
+                         c23! and no switch that moves the line"
+                            .to_owned(),
+                    );
                 }
                 // Diagnostics knobs, output knobs and optimisation knobs, none
                 // of which changes what is *accepted*.
@@ -521,11 +527,14 @@ fn annotations(source: &str) -> Vec<Annotation> {
         let Some(kind) = KINDS.iter().find(|kind| source[at..].starts_with(**kind)) else {
             continue;
         };
-        // The prefix is the identifier immediately before the dash.
+        // The prefix is the identifier immediately before the dash — and a
+        // `-verify=` prefix may itself hold a dash, which `C23/n2940.c`'s
+        // `no-trigraphs-error` does: stopping at the first one would read that
+        // as the `trigraphs` prefix and answer the wrong revision's question.
         let prefix_start = source[..dash]
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
             .map_or(0, |at| at + 1);
-        let prefix = &source[prefix_start..dash];
+        let prefix = source[prefix_start..dash].trim_start_matches('-');
         if prefix.is_empty() {
             continue;
         }

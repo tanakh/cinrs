@@ -54,7 +54,7 @@ types do.
 
 | Feature | Paper | cinrs | Notes |
 | --- | --- | --- | --- |
-| Restricted character set support via digraphs and `<iso646.h>` | | Partial | Digraphs are lexed; `<iso646.h>` is not bundled yet. Trigraphs are not supported in any mode (removed in C23). |
+| Restricted character set support via digraphs and `<iso646.h>` | | Yes | Digraphs are lexed, `<iso646.h>` is bundled, and the nine **trigraphs** are replaced in translation phase 1 — before line splicing, so `??/` at the end of a line splices it, and inside string literals, so `"??!"` is `"|"`. A punctuator may be spelled with them, one or both halves: `??!??!` is `||` and `??'=` is `^=`. They are on in `c89!`, `c99!`, `c11!` and `c17!` and off in `c23!` (N2940 removed them) and in every GNU dialect, which is the line `gcc -std=c99` and `clang` both draw. |
 | More precise aliasing rules via effective type | | N/A | |
 | Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits. |
 | Variable length arrays | N683 | Partial | A *one-dimensional* array at block scope whose element type is complete and not itself variably modified: `T a[n];`, with `T` a scalar, a pointer, a record or a fixed-size array (`int a[n][3]` is one, `int a[3][n]` is not). The bound is evaluated once at the declaration, `sizeof` is a run-time value, the object's lifetime is the block, and a declaration inside a loop allocates afresh on every pass. Emulated on the heap — the elements live in a `Vec` — so the storage is not the stack; that and the `alloc` dependency are the only differences a program can observe. A jump into the scope of one is diagnosed (6.8.6.1p1, 6.8.4.2p2). Not there: every other variably modified type — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA — and `[*]` outside a prototype, each a located error. `__STDC_NO_VLA__` stays predefined for exactly that reason: see the [N1460 row](#c11). |
@@ -67,11 +67,11 @@ types do.
 | Additional floating-point characteristics in `<float.h>` | | Partial | The common `FLT_*`/`DBL_*` macros; `FLT_EVAL_METHOD`, `DECIMAL_DIG` unverified. |
 | Remove implicit `int` | N635, N692, N722 | Yes | Error from `c99!` up, GNU dialects included, as in GCC 14. `c89!` and `gnu89!` have the rule this paper removed: a declaration with no type specifier — `static x;`, `f() { … }`, `const limit = 10;`, a K&R parameter no declaration list entry names — declares an `int`. |
 | Reliable integer division | N617 | Yes | Truncation toward zero (Rust `/`, `%`). |
-| Universal character names (`\u` and `\U`) | | Partial | In character and string constants; not in identifiers. |
-| Extended identifiers | N717 | No | Identifiers are ASCII (plus `$` as an opt-in extension). |
+| Universal character names (`\u` and `\U`) | | Yes | In character constants, string literals and identifiers. In a literal the name is encoded the way the literal's own prefix stores its elements — UTF-8 bytes for a narrow or `u8` one, a surrogate pair in `u"…"` where the character needs one — and in an identifier it simply *is* the character, so `café` and `café` are one name. `\N{…}`, C23's *named* universal character, is not implemented. |
+| Extended identifiers | N717 | Yes | An identifier may hold any character Unicode Annex #31 calls `XID_Start`/`XID_Continue`, written either as a universal character name (C99's own spelling, and a `c89!` diagnostic) or as the character itself, which GCC and Clang have taken since GCC 10 and which every entry point here takes. The character set is C23's (N2836) in every revision: C99's Annex D and C11's are approximations of the same intent, and refusing a character a later annex added would be refusing it for no reason a user could act on. An identifier that is **not in Normalization Form C** is refused: `rustc` silently normalises the identifiers a procedural macro hands it, so two C names that differ only by normalization would otherwise become one Rust item. `$` is still opt-in. |
 | Hexadecimal floating-point constants | N308 | Yes | Raw-token input cannot carry them (Rust's lexer rejects them); use string-literal input. |
 | Compound literals | N716 | Yes | Block-scope and file-scope storage. |
-| Designated initializers | N494 | Partial | Nested member designators (`.a.b = 1`) are rejected; nested braces work. |
+| Designated initializers | N494 | Yes | Designator *lists* included: `.a.b = 1`, `.arr[2].x = 3`, `[1].y = 2`, one that reaches into a `union` member or through a C11 anonymous member, and GNU's `[low ... high]` at any position in the list. 6.7.8p17's "next subobject" is followed exactly — `{ .i[0].p[1] = 5, 6, 7, 8 }` carries on into `i[1].p[0]`, `i[1].p[1]` and then out of `i` — and so is the elided-brace rule below a designator (`{ .arr = 1, 2, 3 }`). Two designators into the same member merge rather than replace. |
 | `//` comments | N644 | Yes | |
 | Extended integer types and library functions in `<inttypes.h>` and `<stdint.h>` | | Yes | Bundled headers. |
 | Remove implicit function declaration | N636 | Yes | Error from `c99!` up, GNU dialects included. In `c89!` and `gnu89!` a call to an undeclared `f` declares `extern int f();` at file scope from that point on — no prototype, so the arguments get the default argument promotions — and it becomes an `extern` declaration like any other, so `abs(-3)` in a program that includes nothing links against the C library. A later declaration must be compatible with it or it is the ordinary "conflicting types". A `__builtin_` name is never declared this way: it belongs to the implementation, and a diagnostic beats a link error. |
@@ -86,7 +86,7 @@ types do.
 | Boolean type in `<stdbool.h>` | N815 | Yes | |
 | Idempotent type qualifiers | N505 | Unverified | |
 | Empty macro arguments | N570 | Yes | |
-| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, and the four `__STDC_NO_*` subsetting macros; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). Absent on purpose: `__SIZEOF_INT128__` (there is no `__int128`), `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
+| Additional predefined macro names | | Partial | `__STDC_VERSION__`, `__STDC_HOSTED__`, the four `__STDC_NO_*` subsetting macros, `__STDC_UTF_16__` and `__STDC_UTF_32__` (C11 7.28p2: `char16_t` and `char32_t` really are UTF-16 and UTF-32), and the three `__STDC_EMBED_*` answers `__has_embed` gives; `__STDC_ISO_10646__` and `__STDC_IEC_559__` are absent. Beyond the standard's own, the GCC family a great deal of portable C is written against is defined from the target model: the limits (`__SCHAR_MAX__` … `__LONG_LONG_MAX__`, `__SIZE_MAX__`, `__INTMAX_MAX__`, `__WCHAR_MAX__`), the widths (`__INT_WIDTH__` and the rest), the types (`__SIZE_TYPE__`, `__PTRDIFF_TYPE__`, `__INTPTR_TYPE__`, `__WCHAR_TYPE__`, the `__INTn_TYPE__` and `__INT_LEASTn_*` families) and the floating characteristics (`__FLT_MAX__`, `__DBL_EPSILON__`, …). Absent on purpose: `__SIZEOF_INT128__` (there is no `__int128`), `__OPTIMIZE__`, and the `__INT8_C`-style function-like macros. |
 | `_Pragma` preprocessing operator | N634 | Yes | Destringized and executed as the directive it spells, so a macro can produce one. |
 | Standard pragmas (`STDC FP_CONTRACT`, …) | N631, N696 | Accepted | Ignored. |
 | `__func__` predefined identifier | N611 | Yes | A `const char[]` in every function body, so `sizeof(__func__)` is the name's length; GCC's `__FUNCTION__` and `__PRETTY_FUNCTION__` are the same thing. |
@@ -108,6 +108,7 @@ Also standard C99 but absent from Clang's list:
 | Translation phase 2 (line splicing, 5.1.1.2p1) | Yes | A backslash-newline is deleted *before* the source is split into tokens, so one may sit in the middle of an identifier: `__LI\<newline>NE__` is the one identifier `__LINE__`, which is what Clang's `drs/dr464.c` and `C99/n590.c` require. A splice needs string-literal input (see the README), because Rust's own lexer will not hand a line continuation over in raw-token form. A splice inside a *number* or a *punctuator* — `1\<newline>2`, `+\<newline>=` — is still a token boundary, which no real program depends on. |
 | `#include` of a computed header name, `#include __FILE__` | Yes | The name a header is known by is written relative to the working directory, so a header that includes itself by `__FILE__` asks for `some/dir/thing.h` from a directive written inside `some/dir`. A quoted include whose name *is* a path — it holds a directory separator — is therefore also looked for from the working directory, after the including file's own directory and the search path and before the bundled headers. A bare name never is, so nothing lying about can shadow the bundled `<stdio.h>`. |
 | `<wchar.h>` and `<wctype.h>` | Yes | Bundled. `wchar_t` is `int` (from `<stddef.h>`) on every target, which is what the front end gives `L'x'` and `L"…"`; `mbstate_t` is spelled the way each platform's library lays it out. `wcstold` is left out with `long double`. |
+| `<iso646.h>` | Yes | Bundled: the eleven macros (`and`, `and_eq`, `bitand`, `bitor`, `compl`, `not`, `not_eq`, `or`, `or_eq`, `xor`, `xor_eq`) and nothing else, since nothing in the language knows about them. |
 | `setjmp`/`longjmp` | No | `<setjmp.h>` is bundled only to `#error`. |
 | `long double` | Partial | Mapped to `double`; the ABI of `long double` arguments is therefore wrong. |
 | `va_list` as a struct member or file-scope object | No | `core::ffi::VaList` carries a lifetime. |
@@ -123,7 +124,7 @@ Also standard C99 but absent from Clang's list:
 | Requiring `signed char` to have no padding bits | N1310 | Yes | |
 | Initializing static or external variables | N1311 | Yes | |
 | Conversion between pointers and floating types | N1316 | Unverified | Should be rejected. |
-| Adding TR 19769 (`<uchar.h>`, `char16_t`, `char32_t`) | N1326 | No | |
+| Adding TR 19769 (`<uchar.h>`, `char16_t`, `char32_t`) | N1326 | Yes | `<uchar.h>` is bundled: `char16_t` and `char32_t` are `uint_least16_t` and `uint_least32_t` — `unsigned short` and `unsigned int` on every target modelled here — and `mbrtoc16`, `c16rtomb`, `mbrtoc32` and `c32rtomb` are declared and link. Neither name is a keyword in C, so both are ordinary typedefs, exactly as they are in a real library's header. Being typedefs, they are indistinguishable from their underlying types to `_Generic` and to `__builtin_types_compatible_p`, which is the same limitation `wchar_t` has. |
 | Static assertions | N1330 | Yes | File, block and struct scope. |
 | Parallel memory sequencing model | N1349 | N/A | |
 | `_Bool` bit-fields | N1356 | Yes | Width 1, read as `bool`, promoted to `int`. |
@@ -145,11 +146,11 @@ Also standard C99 but absent from Clang's list:
 | Updates to the memory model | N1480 | N/A | |
 | Explicit initializers for atomics | N1482 | No | |
 | Atomics (`_Atomic`, `<stdatomic.h>`) | N1485, N1526 | No | `_Atomic` is rejected. |
-| UTF-8 string literals (`u8"…"`) | N1488 | No | |
+| UTF-8 string literals (`u8"…"`) | N1488 | Yes | The elements are the UTF-8 bytes of the source, of type `char` here and `char8_t` from C23 on (see [N2653](#c23)). Rust's own lexer reserves the prefix, so a `u8"…"` has to be written in the string-literal input form; the same is true of `u"…"` and `U"…"`. |
 | Optimizing away infinite loops | N1509 | N/A | |
 | Conditional normative status for Annex G | N1514 | N/A | |
 | Creation of complex value (`CMPLX`) | N1464 | No | |
-| Extended identifier characters | N1518 | No | |
+| Extended identifier characters | N1518 | Yes | See the [N717 row](#c99): one character set — C23's — serves every entry point. |
 | Atomic bit-fields implementation defined | N1530 | N/A | |
 | Alignment and struct/union type compatibility | N1532 | N/A | |
 | Clarification for wide evaluation | N1531 | N/A | |
@@ -174,7 +175,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Defining new types in `offsetof` | N2350 | Unverified | |
 | `fallthrough` attribute | N2408 | Yes | |
 | Two's complement sign representation | N2412 | Yes | |
-| Adding the `u8` character prefix | N2418 | No | |
+| Adding the `u8` character prefix | N2418 | Yes | `u8'x'` has type `char8_t` and holds one UTF-8 code unit; a character that needs more than one is a diagnostic, as is more than one character. `u'x'` and `U'x'` are C11's and work from `c11!` up. |
 | Remove support for function definitions with identifier lists | N2432 | Yes | `c23!` and `gnu23!` refuse one with `old-style function definitions were removed in C23`; every earlier entry point accepts it, as the revision it implements does. |
 | Annex F.8 update | N2384 | N/A | |
 | Allowing unnamed parameters in function definitions | N2480 | Unverified | |
@@ -197,7 +198,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Adding fundamental type for N-bit integers (`_BitInt`) | N2763, N2775, N2969, N3035 | No | |
 | `#warning` directive | N2686 | Yes | Accepted; no output (a proc macro cannot warn). |
 | Sterile characters / Numerically equal | N2688, N2716, N2847 | N/A | |
-| `char16_t`/`char32_t` string literals are UTF-16/UTF-32 | N2728 | No | |
+| `char16_t`/`char32_t` string literals are UTF-16/UTF-32 | N2728 | Yes | `u"…"` holds UTF-16 code units, surrogate pairs and all — `sizeof(u"\U0001F600")` is 6 — and `U"…"` holds UTF-32 ones. `__STDC_UTF_16__` and `__STDC_UTF_32__` are predefined to say so. A *numeric* escape is a code unit rather than a character and is not re-encoded, so `u"\xd83d"` is that one unit. |
 | IEC 60559 binding | N2749 | N/A | |
 | Annex F overflow and underflow | N2747 | N/A | |
 | Remove UB from incomplete types in function parameters | N2770 | N/A | |
@@ -216,9 +217,9 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Disambiguate the storage class of some compound literals | N2819 | Yes | |
 | `unreachable()` | N2826 | Yes | `core::hint::unreachable_unchecked()`. |
 | Unicode sequences more than 21 bits are a constraint violation | N2828 | Unverified | |
-| Identifier syntax using Unicode Standard Annex 31 | N2836, N2939 | No | ASCII identifiers only. |
+| Identifier syntax using Unicode Standard Annex 31 | N2836, N2939 | Yes | `XID_Start`/`XID_Continue`, and NFC required; see the [N717 row](#c99). `\N{NAME}`, the *named* universal character C23 also added, is not implemented. |
 | No function declarators without prototypes (`f()` means `f(void)`) | N2841 | Yes | In `c23!` and `gnu23!` only, which is where the change belongs: an empty parameter list is `(void)`, and a call with an argument is "too many arguments", exactly as `gcc -std=c23` says. Every earlier entry point keeps C99 6.7.5.3p14 — see the [C99 table](#c99). |
-| `char8_t` | N2653 | No | |
+| `char8_t` | N2653 | Yes | A typedef of `unsigned char` in `<uchar.h>`, and — in `c23!` and `gnu23!` only — the element type of a `u8"…"` string and the type of a `u8'x'` constant; before C23 a `u8"…"` is still a `char[]`. `mbrtoc8` and `c8rtomb` are declared there too. |
 | Consistent, warningless and intuitive initialization with `{}` | N2900, N3011 | Yes | |
 | Not-so-magic: `typeof`, `typeof_unqual` | N2927, N2930 | Yes | `typeof_unqual` equals `typeof` (no top-level qualifiers in the type model). |
 | Revise spelling of keywords (`bool`, `static_assert`, `alignof`, `alignas`, `thread_local`) | N2934 | Partial | All are keywords; `thread_local` objects are rejected. |
@@ -227,7 +228,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Annex H (interchange and extended types) | N2601, N2844 | No | |
 | Indeterminate values and trap representations | N2861 | N/A | |
 | Remove `ATOMIC_VAR_INIT` | N2886 | N/A | |
-| Remove trigraphs | N2940 | Yes | Never supported in any mode. |
+| Remove trigraphs | N2940 | Yes | `c23!` and `gnu23!` have no trigraphs, so `??=` there is two question marks and an `=`; every strict entry point below C23 replaces them, which is what the revision removed. See the [C99 row](#c99). |
 | Improved normal enumerations (values wider than `int`) | N3029 | Unverified | |
 | Relax requirements for `va_start` (single-argument form) | N2975 | No | `va_start(ap)` is rejected; planned for `c23!`. |
 | Enhanced enumerations (fixed underlying type) | N3030 | Yes | |
@@ -242,7 +243,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Introduce the `nullptr` constant | N3042 | Partial | `nullptr` is a null `void *`; `nullptr_t` is a typedef of it. |
 | Memory layout of unions | N2929 | N/A | |
 | Improved tag compatibility | N3037 | Unverified | |
-| `#embed` | N3017 | No | |
+| `#embed` | N3017 | Yes | The bytes of a file become a comma-separated list of `unsigned char` values, with all four standard parameters: `limit(N)`, `prefix(…)`, `suffix(…)` (both left out of an *empty* expansion) and `if_empty(…)`. `__has_embed` answers `__STDC_EMBED_NOT_FOUND__`, `__STDC_EMBED_FOUND__` or `__STDC_EMBED_EMPTY__`, and a parameter this implementation does not have makes it "not found", as 6.10.1p5 asks. The search is `#include`'s with the two steps that are about *headers* left out: there are no bundled resources, and the quoted form looks next to the including file and then along the include path, where the angled form takes the include path alone — GCC's separate `--embed-dir` has no counterpart here. A resource that is read is mentioned in the expansion with `include_bytes!`, so editing it rebuilds the crate. `gnu*!` accepts the directive as GCC 15 does; a strict entry point below `c23!` refuses it with the usual gate. The bytes become preprocessing tokens like any others, so a resource is bounded by the unit's own expansion budget — two tokens a byte against four million — which puts the ceiling near two megabytes; a larger file belongs in Rust's own `include_bytes!`. |
 | `__has_include` | N2799 | Yes | Resolved exactly as `#include` is. GNU's `__has_include_next` too. |
 
 ## C2y

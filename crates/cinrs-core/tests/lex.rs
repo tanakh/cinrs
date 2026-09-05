@@ -372,8 +372,13 @@ fn floating_errors() {
 // ---------------------------------------------------------------------------
 
 fn ch(src: &str) -> (i64, bool) {
+    let (value, kind) = ch_kind(src);
+    (value, kind == StrKind::Wide)
+}
+
+fn ch_kind(src: &str) -> (i64, StrKind) {
     match one(src) {
-        TokenKind::Char(lit) => (lit.value, lit.wide),
+        TokenKind::Char(lit) => (lit.value, lit.kind),
         other => panic!("{src:?} is not a character constant: {other:?}"),
     }
 }
@@ -450,6 +455,61 @@ fn string_literals() {
         (StrKind::Narrow, vec![0xe3, 0x81, 0x82])
     );
     assert_eq!(string("L\"\u{3042}\""), (StrKind::Wide, vec![0x3042]));
+}
+
+#[test]
+fn the_unicode_string_prefixes() {
+    let c11 = LexOptions::new(Standard::C11);
+    let string11 = |src: &str| match lex_text(src, 0, &c11).swap_remove(0).kind {
+        TokenKind::Str(lit) => (lit.kind, lit.values),
+        other => panic!("{src:?} is not a string literal: {other:?}"),
+    };
+    // `u8"…"` holds the same UTF-8 bytes an unprefixed literal does.
+    assert_eq!(string11(r#"u8"é""#), (StrKind::Utf8, vec![0xc3, 0xa9]));
+    assert_eq!(string11(r#"u"é""#), (StrKind::Utf16, vec![0xe9]));
+    assert_eq!(string11(r#"U"é""#), (StrKind::Utf32, vec![0xe9]));
+    // Outside the basic multilingual plane, UTF-16 needs a surrogate pair and
+    // UTF-32 does not.
+    assert_eq!(
+        string11(r#"u"\U0001F600""#),
+        (StrKind::Utf16, vec![0xd83d, 0xde00])
+    );
+    assert_eq!(
+        string11(r#"U"\U0001F600""#),
+        (StrKind::Utf32, vec![0x1f600])
+    );
+    assert_eq!(
+        string11("u\"\u{1F600}\""),
+        (StrKind::Utf16, vec![0xd83d, 0xde00])
+    );
+    // A numeric escape is a code unit, not a character, so it is not
+    // re-encoded.
+    assert_eq!(string11(r#"u"\xd83d""#), (StrKind::Utf16, vec![0xd83d]));
+    // A prefix is only one when a quote follows it.
+    assert_eq!(
+        lex_text("u8x", 0, &c11)[0].kind,
+        TokenKind::Ident("u8x".to_owned())
+    );
+    assert_eq!(
+        lex_text("unsigned", 0, &c11)[0].kind,
+        TokenKind::Keyword(Keyword::Unsigned)
+    );
+}
+
+#[test]
+fn the_unicode_character_prefixes() {
+    let c23 = LexOptions::new(Standard::C23);
+    let ch23 = |src: &str| match lex_text(src, 0, &c23).swap_remove(0).kind {
+        TokenKind::Char(lit) => (lit.value, lit.kind),
+        other => panic!("{src:?} is not a character constant: {other:?}"),
+    };
+    assert_eq!(ch23("u'x'"), (0x78, StrKind::Utf16));
+    assert_eq!(ch23("U'x'"), (0x78, StrKind::Utf32));
+    assert_eq!(ch23("u8'x'"), (0x78, StrKind::Utf8));
+    assert_eq!(ch23(r"u'é'"), (0xe9, StrKind::Utf16));
+    assert_eq!(ch23(r"U'\U0001F600'"), (0x1f600, StrKind::Utf32));
+    assert_eq!(ch_kind("'x'"), (0x78, StrKind::Narrow));
+    assert_eq!(ch_kind("L'x'"), (0x78, StrKind::Wide));
 }
 
 #[test]
@@ -682,4 +742,110 @@ fn token_ranges_are_byte_ranges() {
     assert_eq!((tokens[0].range.start, tokens[0].range.end), (0, 3));
     assert_eq!((tokens[1].range.start, tokens[1].range.end), (5, 9));
     assert_eq!((tokens[2].range.start, tokens[2].range.end), (9, 10));
+}
+
+// ---------------------------------------------------------------------------
+// trigraphs (translation phase 1)
+// ---------------------------------------------------------------------------
+
+/// The kinds of the tokens `src` lexes to, in the given entry point.
+fn kinds_in(src: &str, options: &LexOptions) -> Vec<TokenKind> {
+    let mut tokens = lex_text(src, 0, options);
+    tokens.pop();
+    tokens.into_iter().map(|t| t.kind).collect()
+}
+
+#[test]
+fn the_nine_trigraphs_are_replaced_before_anything_else() {
+    let puncts = |src: &str| kinds_in(src, &opts());
+    assert_eq!(puncts("??="), vec![TokenKind::Punct(Punct::Hash)]);
+    assert_eq!(puncts("??("), vec![TokenKind::Punct(Punct::LBracket)]);
+    assert_eq!(puncts("??)"), vec![TokenKind::Punct(Punct::RBracket)]);
+    assert_eq!(puncts("??<"), vec![TokenKind::Punct(Punct::LBrace)]);
+    assert_eq!(puncts("??>"), vec![TokenKind::Punct(Punct::RBrace)]);
+    assert_eq!(puncts("??!"), vec![TokenKind::Punct(Punct::Pipe)]);
+    assert_eq!(puncts("??'"), vec![TokenKind::Punct(Punct::Caret)]);
+    assert_eq!(puncts("??-"), vec![TokenKind::Punct(Punct::Tilde)]);
+    // Maximal munch applies to the replaced characters, so a punctuator may be
+    // spelled with two trigraphs, or with one and an ordinary character.
+    assert_eq!(puncts("??!??!"), vec![TokenKind::Punct(Punct::PipePipe)]);
+    assert_eq!(puncts("??=??="), vec![TokenKind::Punct(Punct::HashHash)]);
+    assert_eq!(puncts("??'="), vec![TokenKind::Punct(Punct::CaretAssign)]);
+    assert_eq!(puncts("??!="), vec![TokenKind::Punct(Punct::PipeAssign)]);
+    // `??` followed by anything else is two question marks.
+    assert_eq!(
+        puncts("???"),
+        vec![
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Question),
+        ]
+    );
+}
+
+#[test]
+fn a_trigraph_backslash_splices_the_line() {
+    // Phase 1 runs before phase 2, so `??/` at the end of a line is the
+    // backslash that deletes the newline.
+    assert_eq!(
+        kinds_in("ab??/\ncd", &opts()),
+        vec![TokenKind::Ident("abcd".to_owned())]
+    );
+    assert_eq!(
+        string("\"ab??/\ncd\""),
+        (StrKind::Narrow, b"abcd".iter().map(|b| *b as u32).collect())
+    );
+    // And inside a literal it is the backslash of an escape sequence.
+    assert_eq!(string("\"a??/nb\""), (StrKind::Narrow, vec![97, 10, 98]));
+    assert_eq!(ch("'??/\\'"), (92, false));
+}
+
+#[test]
+fn trigraphs_are_replaced_inside_string_literals() {
+    assert_eq!(
+        string("\"??!??'??-\""),
+        (StrKind::Narrow, vec![124, 94, 126])
+    );
+    // Two question marks that begin nothing are two question marks.
+    assert_eq!(
+        string("\"what??\""),
+        (StrKind::Narrow, vec![119, 104, 97, 116, 63, 63])
+    );
+}
+
+#[test]
+fn no_gnu_dialect_and_no_c23_entry_point_has_trigraphs() {
+    let mut gnu = LexOptions::new(Standard::C99);
+    gnu.trigraphs = cinrs_core::lex::trigraphs_enabled(Standard::C99, cinrs_core::Dialect::Gnu);
+    assert_eq!(
+        kinds_in("??!", &gnu),
+        vec![
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Bang),
+        ]
+    );
+    let c23 = LexOptions::new(Standard::C23);
+    assert_eq!(
+        kinds_in("??!", &c23),
+        vec![
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Question),
+            TokenKind::Punct(Punct::Bang),
+        ]
+    );
+    for standard in [Standard::C89, Standard::C99, Standard::C11, Standard::C17] {
+        assert!(cinrs_core::lex::trigraphs_enabled(
+            standard,
+            cinrs_core::Dialect::Iso
+        ));
+        assert!(!cinrs_core::lex::trigraphs_enabled(
+            standard,
+            cinrs_core::Dialect::Gnu
+        ));
+    }
+    assert!(!cinrs_core::lex::trigraphs_enabled(
+        Standard::C23,
+        cinrs_core::Dialect::Iso
+    ));
 }

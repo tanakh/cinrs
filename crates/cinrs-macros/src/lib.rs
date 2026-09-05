@@ -121,11 +121,12 @@ pub fn c99(input: TokenStream) -> TokenStream {
 ///
 /// Everything [`c99!`](macro@c99) does, plus what C11 added:
 /// `_Static_assert`, `_Alignof`, `_Alignas` (on the members of a `struct` or
-/// `union`), `_Generic`, `_Noreturn` and anonymous `struct`/`union` members.
-/// `__STDC_VERSION__` is `201112L`.
+/// `union`), `_Generic`, `_Noreturn`, anonymous `struct`/`union` members, and
+/// the Unicode literals `u8"…"`, `u"…"`, `U"…"`, `u'x'` and `U'x'` with
+/// `<uchar.h>`'s `char16_t` and `char32_t`. `__STDC_VERSION__` is `201112L`.
 ///
-/// `_Thread_local`, `_Atomic` and the `char16_t`/`char32_t` half of C11 are
-/// each a clear error rather than a silent mistranslation.
+/// `_Thread_local` and `_Atomic` are each a clear error rather than a silent
+/// mistranslation.
 #[proc_macro]
 pub fn c11(input: TokenStream) -> TokenStream {
     expand(input, Standard::C11)
@@ -146,8 +147,12 @@ pub fn c17(input: TokenStream) -> TokenStream {
 /// `false`, `nullptr`, `static_assert`, `alignof`, `alignas`, `constexpr`,
 /// `typeof`), `[[…]]` attributes, `__VA_OPT__`, `#elifdef` / `#elifndef`,
 /// binary constants, digit separators, empty initialisers, `auto` type
-/// inference, enumerations with a fixed underlying type and `unreachable()`.
+/// inference, enumerations with a fixed underlying type, `unreachable()`,
+/// `#embed`, `char8_t` and the `u8'x'` character prefix.
 /// `__STDC_VERSION__` is `202311L`.
+///
+/// It is also the one entry point that has **no trigraphs**, which is what
+/// C23 removed: `??=` here is two question marks and an `=`.
 ///
 /// A digit separator (`1'000'000`) needs string-literal form: Rust's own lexer
 /// reads `1'000` as a literal followed by a lifetime and refuses it.
@@ -168,7 +173,9 @@ pub fn c23(input: TokenStream) -> TokenStream {
 /// available in *every* entry point, exactly as they are in GCC's strict
 /// modes: the names are reserved, so nothing a program may legally call its
 /// own is taken away. `__STRICT_ANSI__` is defined only in the strict entry
-/// points; `__GNUC__` is 4 in all of them.
+/// points; `__GNUC__` is 4 in all of them. A GNU dialect also switches
+/// **trigraphs off**, as `gcc -std=gnu99` does, so `"what??!"` there is an
+/// exclamation rather than a pipe.
 ///
 /// See `doc/gnu-extensions.md` in the repository for the whole catalogue.
 #[proc_macro]

@@ -5,7 +5,7 @@
 //! structure, and span behaviour is covered by its own tests.
 
 use crate::ast::*;
-use crate::lex::{FloatSuffix, LongKind, StrKind};
+use crate::lex::{FloatSuffix, LongKind};
 
 /// Renders a whole translation unit.
 pub fn dump_translation_unit(unit: &TranslationUnit) -> String {
@@ -475,14 +475,17 @@ impl<'a> Dumper<'a> {
                 self.line(s);
             }
             ExprKind::Char(lit) => {
-                let prefix = if lit.wide { "L" } else { "" };
-                self.line(format!("char {}{} = {}", prefix, lit.text, lit.value));
+                self.line(format!(
+                    "char {}{} = {}",
+                    lit.kind.prefix(),
+                    lit.text,
+                    lit.value
+                ));
             }
             ExprKind::Str(lit) => {
-                let prefix = if lit.kind == StrKind::Wide { "L" } else { "" };
                 self.line(format!(
                     "string {}{} ({} elements)",
-                    prefix,
+                    lit.kind.prefix(),
                     lit.text,
                     lit.values.len()
                 ));

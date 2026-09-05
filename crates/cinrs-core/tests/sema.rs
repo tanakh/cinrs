@@ -343,12 +343,23 @@ fn initializers_are_checked() {
         "struct S { int x; }; struct S s = {1, 2};",
         &["excess elements in initializer"],
     );
+    accepted("struct S { struct T { int a; } t; }; struct S s = {.t.a = 1};");
+    accepted("struct S { struct T { int a[2]; } t; }; struct S s = {.t.a[0] = 1, 2};");
     rejected(
-        "struct S { struct T { int a; } t; }; struct S s = {.t.a = 1};",
-        &[
-            "a designator naming a nested member is not supported yet; write nested braces \
-             instead",
-        ],
+        "struct S { struct T { int a; } t; }; struct S s = {.t.z = 1};",
+        &["no member named 'z' in 'struct T'"],
+    );
+    rejected(
+        "struct S { struct T { int a; } t; }; struct S s = {.t.a.b = 1};",
+        &["a field designator cannot initialize a subobject of type 'int'"],
+    );
+    rejected(
+        "struct S { struct T { int a; } t; }; struct S s = {.t[0] = 1};",
+        &["an array designator cannot initialize a subobject of type 'struct T'"],
+    );
+    rejected(
+        "struct S { int a[2]; }; struct S s = {.a[5] = 1};",
+        &["array designator index is out of bounds"],
     );
     rejected(
         "int f(void) { return 0; } int a[2] = {f()};",

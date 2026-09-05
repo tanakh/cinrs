@@ -101,7 +101,10 @@
 //! a [`Standard::C23`] block; an older one is told which macro would have
 //! them. `true` and `false` are keywords there too, so an `#if` reads them as
 //! 1 and 0 rather than turning them into 0 like any other identifier (C23
-//! 6.10.1p6). `#embed` is reported as unsupported rather than ignored.
+//! 6.10.1p6). `#embed` and `__has_embed` are C23's as well: the directive is
+//! replaced by the bytes of a file, written as a comma-separated list of
+//! `unsigned char` values, and the resource is reported in
+//! [`Preprocessed::embedded_files`] so that editing it rebuilds the crate.
 //!
 //! # Predefined macros
 //!
@@ -583,6 +586,15 @@ const MAX_EXPANSION_DEPTH: u32 = 200;
 /// program that never finishes compiling.
 const MAX_INCLUDE_DEPTH: usize = 200;
 
+/// `__STDC_EMBED_NOT_FOUND__`, the answer `__has_embed` gives for a resource
+/// that is not there or that carries a parameter this does not have.
+const EMBED_NOT_FOUND: u128 = 0;
+/// `__STDC_EMBED_FOUND__`: the resource exists and has at least one byte.
+const EMBED_FOUND: u128 = 1;
+/// `__STDC_EMBED_EMPTY__`: the resource exists and `#embed` would produce
+/// nothing from it.
+const EMBED_EMPTY: u128 = 2;
+
 /// How many tokens one translation unit's macro expansion may produce.
 ///
 /// `#define A B B` repeated thirty times is a legal program whose expansion
@@ -663,6 +675,19 @@ pub struct IncludedFile {
     pub directive: SourceRange,
 }
 
+/// What `#embed`'s parameters asked for (C23 6.10.3.2–6.10.3.5).
+#[derive(Clone, Debug, Default)]
+struct EmbedParams {
+    /// `limit(N)`: at most this many bytes of the resource.
+    limit: Option<usize>,
+    /// `prefix(…)`: tokens before the bytes, when there are any.
+    prefix: Vec<PTok>,
+    /// `suffix(…)`: tokens after them, likewise.
+    suffix: Vec<PTok>,
+    /// `if_empty(…)`: the whole expansion when there are none.
+    if_empty: Vec<PTok>,
+}
+
 /// Everything one run of the preprocessor produced.
 #[derive(Debug)]
 pub struct Preprocessed {
@@ -678,6 +703,10 @@ pub struct Preprocessed {
     /// tracking. A bundled header cannot change without the crate changing, so
     /// it is not listed.
     pub user_headers: Vec<std::path::PathBuf>,
+    /// The absolute paths of the resources `#embed` read, for the same reason
+    /// and by the same route — except that they are bytes rather than text, so
+    /// the expansion tracks them with `include_bytes!`.
+    pub embedded_files: Vec<std::path::PathBuf>,
     /// The libraries `#pragma cinrs link` asked for, in the order asked.
     pub link_libraries: Vec<String>,
     /// Whether `#pragma cinrs export` asked for real C symbols.
@@ -737,6 +766,7 @@ pub fn preprocess(
         expansions: pp.expansions,
         included: pp.included,
         user_headers: pp.user_headers,
+        embedded_files: pp.embedded_files,
         link_libraries: pp.link_libraries,
         export: pp.export,
         no_std: pp.no_std,
@@ -925,6 +955,8 @@ struct Pp<'a> {
     guards: HashMap<String, String>,
     /// The absolute paths of the user headers that were read.
     user_headers: Vec<std::path::PathBuf>,
+    /// The absolute paths of the resources `#embed` read.
+    embedded_files: Vec<std::path::PathBuf>,
     /// The libraries `#pragma cinrs link` asked for.
     link_libraries: Vec<String>,
     /// Set by `#pragma cinrs export`.
@@ -990,6 +1022,7 @@ impl<'a> Pp<'a> {
             base_file: ctx.file_name.clone(),
             guards: HashMap::new(),
             user_headers: Vec::new(),
+            embedded_files: Vec::new(),
             link_libraries: Vec::new(),
             export: false,
             no_std: false,
@@ -2049,15 +2082,9 @@ impl Pp<'_> {
                 self.diags.warning(range, format!("#warning {text}"));
             }
             "pragma" => self.pragma(rest, range),
-            // C23's `#embed`, which would put the bytes of a file into the
-            // token stream. Nothing about it is hard, but a header that used
-            // it would need the search path *and* a story about how the bytes
-            // reach the expansion, and neither is here yet.
             "embed" => {
-                self.diags.error(
-                    range,
-                    "#embed is not supported; use `include_bytes!` on the Rust side",
-                );
+                self.require_standard(Standard::C23, "'#embed'", range);
+                self.embed(rest, range);
             }
             "line" => self.line_directive(rest, range, false),
             // `#ident "string"` and `#sccs` put a string into a section of the
@@ -2590,6 +2617,259 @@ impl Pp<'_> {
             self.user_headers.push(path.clone());
         }
         self.open_file(found, range);
+    }
+
+    // -- #embed -------------------------------------------------------------
+
+    /// `#embed "resource"` and `#embed <resource>` (C23 6.10.3, N3017).
+    ///
+    /// The directive is replaced by the bytes of the resource, written as a
+    /// comma-separated list of integer constants in the range of `unsigned
+    /// char` — so that `unsigned char logo[] = {\n#embed "logo.png"\n};` is an
+    /// array of the file. The four standard parameters shape the list:
+    /// `limit(N)` takes only the first N bytes, `prefix(…)` and `suffix(…)`
+    /// bracket a *non-empty* list, and `if_empty(…)` replaces an empty one.
+    ///
+    /// The tokens go through the ordinary pending queue, so they are rescanned
+    /// for macros exactly as any other replacement is — and are charged
+    /// against [`MAX_EXPANDED_TOKENS`] like any others, which puts the ceiling
+    /// on a resource near two megabytes.
+    fn embed(&mut self, rest: &[PTok], range: SourceRange) {
+        let Some((name, form, after)) = self.embed_operand(rest, range) else {
+            return;
+        };
+        let Some(params) = self.embed_parameters(&rest[after..], range, true) else {
+            return;
+        };
+        let origin = self.cur().origin.clone();
+        let found = match include::resolve_embed(&name, form, &origin, &self.search) {
+            Ok(found) => found,
+            Err(include::Error::Unreadable { path, error }) => {
+                self.diags
+                    .error(range, format!("cannot read '{path}': {error}"));
+                return;
+            }
+            Err(include::Error::NotFound { searched }) => {
+                let quoted = match form {
+                    include::Form::Angled => format!("<{name}>"),
+                    include::Form::Quoted => format!("\"{name}\""),
+                };
+                // There are no bundled resources, so unlike `#include` the
+                // list of places looked in really can be empty.
+                let where_ = if searched.is_empty() {
+                    "there is nowhere to look; name a directory with \
+                     `#pragma cinrs include_path`"
+                        .to_owned()
+                } else {
+                    format!("searched: {}", searched.join(", "))
+                };
+                self.diags.error(
+                    range,
+                    format!("{quoted} resource not found for #embed; {where_}"),
+                );
+                return;
+            }
+        };
+        if !self.embedded_files.contains(&found.path) {
+            self.embedded_files.push(found.path.clone());
+        }
+
+        let take = params.limit.unwrap_or(found.bytes.len());
+        let bytes = &found.bytes[..take.min(found.bytes.len())];
+        let mut out: Vec<PTok> = Vec::new();
+        if bytes.is_empty() {
+            // 6.10.3.2: `if_empty` stands for the whole expansion, and the
+            // prefix and suffix are not emitted at all.
+            out.extend(params.if_empty);
+        } else {
+            out.extend(params.prefix);
+            for (i, byte) in bytes.iter().enumerate() {
+                if i > 0 {
+                    out.push(self.embed_token(TokenKind::Punct(Punct::Comma), range));
+                }
+                out.push(self.embed_token(int_token_kind(u128::from(*byte)), range));
+            }
+            out.extend(params.suffix);
+        }
+        self.push_pending(out, true);
+    }
+
+    /// The resource name an `#embed` names, how it was spelled, and how many
+    /// of the directive's tokens it took.
+    fn embed_operand(
+        &mut self,
+        rest: &[PTok],
+        range: SourceRange,
+    ) -> Option<(String, include::Form, usize)> {
+        if let Some(found) = self.embed_name_of(rest) {
+            return Some(found);
+        }
+        // 6.10.3p1 allows the whole operand to come out of a macro, exactly as
+        // `#include`'s does.
+        if !rest.is_empty() {
+            let expanded = self.expand_sequence(rest.to_vec());
+            if let Some((name, form, _)) = self.embed_name_of(&expanded) {
+                // A macro cannot be followed by parameters here: the whole run
+                // was replaced, so there is nothing of the original left to
+                // read them from.
+                return Some((name, form, rest.len()));
+            }
+        }
+        self.diags
+            .error(range, "#embed expects \"RESOURCE\" or <RESOURCE>");
+        None
+    }
+
+    /// Reads a resource name off the front of a token run.
+    fn embed_name_of(&self, toks: &[PTok]) -> Option<(String, include::Form, usize)> {
+        match &toks.first()?.kind {
+            // A quoted name is *not* a string literal's value: no escape
+            // sequence is processed, so the spelling between the quotes is it.
+            TokenKind::Str(lit) if lit.kind == lex::StrKind::Narrow => {
+                let spelling = lit.text.as_str();
+                let name = spelling
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(spelling);
+                (!name.is_empty()).then(|| (name.to_owned(), include::Form::Quoted, 1))
+            }
+            TokenKind::Punct(Punct::Lt) => {
+                let close = toks[1..].iter().position(|t| t.is_punct(Punct::Gt))? + 1;
+                let raw = self
+                    .raw_text(toks[0].range.end, toks[close].range.start)
+                    .trim()
+                    .to_owned();
+                let name = if raw.is_empty() {
+                    // The tokens came out of a macro and have no source text
+                    // of their own; their spellings are the name.
+                    let mut spelled = String::new();
+                    for (i, tok) in toks[1..close].iter().enumerate() {
+                        if i > 0 && tok.space {
+                            spelled.push(' ');
+                        }
+                        spelled.push_str(tok.spelling());
+                    }
+                    spelled
+                } else {
+                    raw
+                };
+                (!name.is_empty()).then(|| (name, include::Form::Angled, close + 1))
+            }
+            _ => None,
+        }
+    }
+
+    /// Reads `#embed`'s parameters, which follow the resource name.
+    ///
+    /// `report` says whether a parameter this implementation does not have is
+    /// a diagnostic. It is for the *directive*, and is not for `__has_embed`:
+    /// 6.10.1p5 answers "not found" for a parameter it cannot honour, which is
+    /// how a program asks whether one is supported before writing it.
+    fn embed_parameters(
+        &mut self,
+        mut rest: &[PTok],
+        range: SourceRange,
+        report: bool,
+    ) -> Option<EmbedParams> {
+        let mut params = EmbedParams::default();
+        while let Some(first) = rest.first() {
+            let Some(name) = first.name() else {
+                if report {
+                    self.diags.error(
+                        first.range,
+                        format!(
+                            "expected an #embed parameter, found {}",
+                            first.kind.describe()
+                        ),
+                    );
+                }
+                return None;
+            };
+            if rest.get(1).is_none_or(|t| !t.is_punct(Punct::LParen)) {
+                if report {
+                    self.diags.error(
+                        first.range,
+                        format!("#embed parameter '{name}' takes an argument list"),
+                    );
+                }
+                return None;
+            }
+            // The matching `)`, counting nested parentheses.
+            let mut depth = 0usize;
+            let mut close = None;
+            for (i, tok) in rest[1..].iter().enumerate() {
+                if tok.is_punct(Punct::LParen) {
+                    depth += 1;
+                } else if tok.is_punct(Punct::RParen) {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i + 1);
+                        break;
+                    }
+                }
+            }
+            let Some(close) = close else {
+                if report {
+                    self.diags.error(
+                        first.range,
+                        format!("unterminated argument list for '{name}'"),
+                    );
+                }
+                return None;
+            };
+            let inner = &rest[2..close];
+            // GCC spells every one of them both ways; the reserved form is
+            // what a header uses so as not to collide with a user's macro.
+            let plain = name
+                .strip_prefix("__")
+                .and_then(|n| n.strip_suffix("__"))
+                .unwrap_or(name);
+            match plain {
+                "limit" => {
+                    if inner.is_empty() {
+                        if report {
+                            self.diags
+                                .error(first.range, "#embed 'limit' takes a constant expression");
+                        }
+                        return None;
+                    }
+                    let value = self.eval_expression(inner, range)?;
+                    if value < 0 {
+                        if report {
+                            self.diags
+                                .error(first.range, "#embed 'limit' cannot be negative");
+                        }
+                        return None;
+                    }
+                    params.limit = Some(usize::try_from(value).unwrap_or(usize::MAX));
+                }
+                "prefix" => params.prefix = inner.to_vec(),
+                "suffix" => params.suffix = inner.to_vec(),
+                "if_empty" => params.if_empty = inner.to_vec(),
+                _ => {
+                    if report {
+                        self.diags
+                            .error(first.range, format!("unknown #embed parameter '{name}'"));
+                    }
+                    return None;
+                }
+            }
+            rest = &rest[close + 1..];
+        }
+        Some(params)
+    }
+
+    /// One token of an `#embed` expansion, standing where the directive was.
+    fn embed_token(&self, kind: TokenKind, range: SourceRange) -> PTok {
+        PTok {
+            kind,
+            range,
+            bol: false,
+            space: true,
+            origin: Origin::Source,
+            hide: HideSet::default(),
+            errors: Vec::new(),
+        }
     }
 
     /// Places a header's text in the offset space and starts reading it.
@@ -3273,9 +3553,16 @@ impl Pp<'_> {
             self.diags.error(range, "#if with no expression");
             return false;
         }
-        let Some(prepared) = self.resolve_defined(line, range) else {
-            return false;
-        };
+        self.eval_expression(line, range)
+            .is_some_and(|value| value != 0)
+    }
+
+    /// Evaluates a constant expression with the preprocessor's own arithmetic.
+    ///
+    /// `None` says something was wrong and has been reported. This is what
+    /// `#if` asks a question of, and what `#embed`'s `limit(…)` parameter is.
+    fn eval_expression(&mut self, line: &[PTok], range: SourceRange) -> Option<i128> {
+        let prepared = self.resolve_defined(line, range)?;
         let expanded = self.expand_sequence(prepared);
         for tok in &expanded {
             let tok = tok.clone();
@@ -3303,7 +3590,7 @@ impl Pp<'_> {
         for diag in eval.errors {
             self.diags.push(diag);
         }
-        !failed && value.is_true()
+        (!failed).then_some(value.v)
     }
 
     /// Replaces every `defined X` and `defined(X)` with `1` or `0`.
@@ -3447,9 +3734,35 @@ impl Pp<'_> {
                     .and_then(PTok::name)
                     .is_some_and(crate::gnu::has_feature),
             ),
-            // `#embed` is not implemented, and 6.10.3p2's "not found" answer
-            // is exactly the honest one.
-            "__has_embed" => 0,
+            // C23 6.10.1p5: not found, found and empty, spelled with the same
+            // three macros `<stdembed.h>` would have. Parameters after the
+            // resource name are read so that an unknown one answers "not
+            // found", which is what the clause asks for.
+            "__has_embed" => {
+                let Some((resource, form, after)) = self.embed_name_of(inner) else {
+                    self.diags.error(
+                        range,
+                        format!("'{name}' expects \"RESOURCE\" or <RESOURCE>"),
+                    );
+                    return None;
+                };
+                let params = self.embed_parameters(&inner[after..], range, false);
+                let origin = self.cur().origin.clone();
+                match (
+                    params,
+                    include::resolve_embed(&resource, form, &origin, &self.search),
+                ) {
+                    (Some(params), Ok(found)) => {
+                        let take = params.limit.unwrap_or(found.bytes.len());
+                        if take == 0 || found.bytes.is_empty() {
+                            EMBED_EMPTY
+                        } else {
+                            EMBED_FOUND
+                        }
+                    }
+                    _ => EMBED_NOT_FOUND,
+                }
+            }
             _ => 0,
         };
         Some((value, end))
@@ -3817,6 +4130,18 @@ impl Pp<'_> {
         self.define_object("__STDC_NO_COMPLEX__", "1");
         self.define_object("__STDC_NO_THREADS__", "1");
         self.define_object("__STDC_NO_VLA__", "1");
+        // C11 7.28p2: these two say that `char16_t` and `char32_t` really are
+        // UTF-16 and UTF-32, which is what the lexer encodes `u"…"` and `U"…"`
+        // as. The value is the standard's own: the ISO/IEC 10646 revision the
+        // encodings come from.
+        self.define_object("__STDC_UTF_16__", "1");
+        self.define_object("__STDC_UTF_32__", "1");
+        // C23 6.10.1p5's three answers for `__has_embed`. GCC predefines them
+        // in every mode it has, because a program that tests `__has_embed`
+        // wants to compare against them whichever `-std=` it is compiled with.
+        self.define_object("__STDC_EMBED_NOT_FOUND__", "0");
+        self.define_object("__STDC_EMBED_FOUND__", "1");
+        self.define_object("__STDC_EMBED_EMPTY__", "2");
         // Only a strict entry point is `-std=c99`; a GNU one is `-std=gnu99`.
         if !options.dialect.is_gnu() {
             self.define_object("__STRICT_ANSI__", "1");

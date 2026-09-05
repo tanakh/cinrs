@@ -51,6 +51,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("errno.h", include_str!("../include/errno.h")),
     ("float.h", include_str!("../include/float.h")),
     ("inttypes.h", include_str!("../include/inttypes.h")),
+    ("iso646.h", include_str!("../include/iso646.h")),
     ("limits.h", include_str!("../include/limits.h")),
     ("math.h", include_str!("../include/math.h")),
     ("setjmp.h", include_str!("../include/setjmp.h")),
@@ -64,6 +65,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("stdnoreturn.h", include_str!("../include/stdnoreturn.h")),
     ("string.h", include_str!("../include/string.h")),
     ("time.h", include_str!("../include/time.h")),
+    ("uchar.h", include_str!("../include/uchar.h")),
     ("wchar.h", include_str!("../include/wchar.h")),
     ("wctype.h", include_str!("../include/wctype.h")),
 ];
@@ -288,6 +290,98 @@ pub fn resolve(
         searched.push(BUNDLED_DIR.to_owned());
     }
     Err(Error::NotFound { searched })
+}
+
+/// A resource `#embed` found.
+#[derive(Clone, Debug)]
+pub struct Embedded {
+    /// The name diagnostics call it.
+    pub name: String,
+    /// Its contents, byte for byte.
+    pub bytes: Vec<u8>,
+    /// Its absolute path, for rebuild tracking.
+    pub path: PathBuf,
+}
+
+/// Looks an `#embed` resource up (C23 6.10.3).
+///
+/// The search is `#include`'s with the two steps that are about *headers* left
+/// out: there are no bundled resources — a picture is not a declaration — and
+/// nothing is read from the working directory by a bare name. What is left is
+/// the directory of the file the directive is written in, for the quoted form,
+/// and then the include path.
+pub fn resolve_embed(
+    name: &str,
+    form: Form,
+    origin: &Origin,
+    paths: &SearchPaths,
+) -> Result<Embedded, Error> {
+    let mut searched: Vec<String> = Vec::new();
+
+    if Path::new(name).is_absolute() {
+        return match read_bytes(Path::new(name))? {
+            Some(found) => Ok(found),
+            None => Err(Error::NotFound {
+                searched: vec![display_path(Path::new(name))],
+            }),
+        };
+    }
+
+    if form == Form::Quoted {
+        match origin {
+            Origin::Dir(dir) => {
+                if let Some(found) = read_bytes(&dir.join(name))? {
+                    return Ok(found);
+                }
+                searched.push(display_dir(dir));
+            }
+            // A bundled header's `#embed` has nowhere of its own to look.
+            Origin::Bundled | Origin::Unknown => {}
+        }
+    }
+
+    for dir in paths.dirs() {
+        if let Some(found) = read_bytes(&dir.join(name))? {
+            return Ok(found);
+        }
+        let shown = display_dir(dir);
+        if !searched.contains(&shown) {
+            searched.push(shown);
+        }
+    }
+
+    // As for a header, a name that is itself a path is looked for from the
+    // working directory, so that a resource named relative to it can be found
+    // from a directive written elsewhere.
+    if form == Form::Quoted && is_path(name) {
+        if let Some(found) = read_bytes(Path::new(name))? {
+            return Ok(found);
+        }
+        let shown = display_dir(Path::new(""));
+        if !searched.contains(&shown) {
+            searched.push(shown);
+        }
+    }
+
+    Err(Error::NotFound { searched })
+}
+
+/// Reads a candidate resource, with [`read_file`]'s convention: `Ok(None)`
+/// means there is no such file and the search goes on.
+fn read_bytes(path: &Path) -> Result<Option<Embedded>, Error> {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => {}
+        _ => return Ok(None),
+    }
+    let bytes = std::fs::read(path).map_err(|error| Error::Unreadable {
+        path: display_path(path),
+        error: error.to_string(),
+    })?;
+    Ok(Some(Embedded {
+        name: display_path(path),
+        bytes,
+        path: std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }))
 }
 
 /// Whether a header name names a directory as well as a file.

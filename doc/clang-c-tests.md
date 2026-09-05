@@ -137,28 +137,31 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 203 run, 85 as required (41.9 %)**,
-73 skipped, in about seven seconds.
+corpus revision: **99 files, 276 RUN lines, 203 run, 96 as required (47.3 %)**,
+73 skipped, in about eight seconds.
 
 | directory | run | as required | rate | revisions | skipped |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `C99` | 30 | 20 | **66.7 %** | 37 | 7 |
 | `C11` | 23 | 8 | 34.8 % | 30 | 7 |
-| `C23` | 45 | 9 | 20.0 % | 69 | 24 |
-| `drs` | 105 | 48 | **45.7 %** | 140 | 35 |
+| `C23` | 45 | 16 | 35.6 % | 69 | 24 |
+| `drs` | 105 | 52 | **49.5 %** | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
 
-The rate went *down* when the C89 revisions started running — 79 of 175
-(45.1 %) became 85 of 203 (41.9 %) — and that is what one should expect: the
-28 revisions that joined are 6 more passes and 22 more mismatches, most of
+The rate went *down* once, when the C89 revisions started running — 79 of 175
+(45.1 %) became 85 of 203 (41.9 %) — and that was what one should expect: the
+28 revisions that joined were 6 more passes and 22 more mismatches, most of
 them a `-std=c89` RUN line using a C99 feature that Clang takes as an
 extension and `c89!` refuses on purpose. Those are `!` entries; see below.
+Trigraphs and designator lists took it back up to 96 of 203 (47.3 %):
+`C23/n2940.c` is a file *about* trigraphs, and it now comes out as required in
+all ten of the revisions the harness runs.
 
 ### The mismatches, by cause
 
-118 revisions do not come out as the test asks. Every one of them is in
+107 revisions do not come out as the test asks. Every one of them is in
 `tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
 
 **Deliberate refusals (34, marked `!`).** These are not gaps. Guard mode
@@ -182,16 +185,14 @@ asserts that the refusal is still there.
 * *`_Atomic`* (1), for the same reason with `__STDC_NO_ATOMICS__`.
 * *Clang-only builtins* (4): `__builtin_bit_cast`, `__builtin_complex`.
 
-**Genuine gaps, false rejections (34).** Valid C that `cinrs` refuses. There
-are 68 false rejections in all; the other 34 are the deliberate ones above.
+**Genuine gaps, false rejections (24).** Valid C that `cinrs` refuses. There
+are 58 false rejections in all; the other 34 are the deliberate ones above.
 
 | cause | revisions |
 | --- | ---: |
-| trigraphs, which `cinrs` has in no mode (`C23/n2940.c` is *about* them) | 6 |
-| `offsetof(T, a.b)` — a nested member designator | 6 |
+| `offsetof(T, a.b)` — a nested member designator, which an *initialiser* now takes but `offsetof` still does not | 6 |
 | a compound literal whose `struct` type is declared in the cast itself, `(struct X){ 0 }` | 5 |
 | `int j[];` — an incomplete array type, which C completes to `[1]` at the end of the unit; the same gap refuses `extern int j[];` | 5 |
-| a designator naming a nested member, `.a.b = 1` | 4 |
 | a label on a declaration at the end of a block | 2 |
 | an enumerator whose value does not fit `int` (C23 widens the enumeration instead) | 2 |
 | `<stdckdint.h>` is not bundled | 1 |
@@ -199,7 +200,7 @@ are 68 false rejections in all; the other 34 are the deliberate ones above.
 | C23's `void f(...)` — an ellipsis with no named parameter | 1 |
 | the line number of a macro invocation spanning spliced lines (unspecified; Clang's own comment calls its answer a FIXME) | 1 |
 
-**Wrong line (49).** The error came out somewhere other than where the test
+**Wrong line (48).** The error came out somewhere other than where the test
 asks. Almost all of these are files carrying *many* annotations — `drs/dr0xx.c`
 has forty — where `cinrs` reports one of them on a different line, or reports
 an unrelated refusal first and never reaches the one asked about. The four
@@ -216,7 +217,7 @@ it.
 
 ### What the results changed in `doc/c-status.md`
 
-Four rows moved as a result of running this suite:
+Five rows moved as a result of running this suite:
 
 * **`__FILE__` in an `#include`** now works. A quoted include whose name is a
   path is looked for from the working directory, which is what a header that
@@ -233,6 +234,12 @@ Four rows moved as a result of running this suite:
 * **Selection and iteration statements are blocks** (C99 6.8.4p3, 6.8.5p5), so
   a tag declared in a controlling expression no longer leaks into the
   enclosing block. `C99/block-scopes.c` is that test.
+* **A `-verify=` prefix may hold a dash of its own.** `C23/n2940.c` writes
+  `no-trigraphs-error@-1`, and the annotation reader stopped at the *last*
+  dash, so it answered the `trigraphs` revisions' question in the
+  `no-trigraphs` ones and vice versa. Reading the whole prefix took the file
+  from 0 of 10 to 10 of 10 and the suite from 41.9 % to 47.3 %; nothing else
+  in the corpus writes a hyphenated prefix.
 
 ## Memory and thread safety
 

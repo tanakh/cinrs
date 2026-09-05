@@ -42,7 +42,7 @@
 00207   needs `c99!`: a variable length array
 00210   needs `c99!`: mixed declarations and code
 00212   needs `c99!`: `long long`
-00213   unsupported: a `goto` out of a statement expression, and `?:` with one `void` operand
+00213   unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
 00214   needs `c99!`: mixed declarations and code
 00216   needs `c99!`: a compound literal; the case then wants a flexible array member initialized
 00217   needs `c99!`: `long long`

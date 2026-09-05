@@ -609,35 +609,91 @@ pub struct CharLit {
     /// interpreted as `-1` is up to sema, which knows the signedness of
     /// `char`. Multi-character constants are packed big-endian, as GCC does.
     pub value: i64,
-    /// Whether the constant had an `L` prefix.
-    pub wide: bool,
+    /// Which prefix the constant was written with, which is what fixes its
+    /// type: `'x'` is an `int`, `L'x'` a `wchar_t`, `u'x'` a `char16_t`,
+    /// `U'x'` a `char32_t` and `u8'x'` a `char8_t`.
+    pub kind: StrKind,
     /// The exact source spelling, including quotes.
     pub text: String,
 }
 
-/// Narrow or wide string literal.
+/// Which prefix a character constant or string literal was written with.
+///
+/// The five of them are the same set for both, which is why one enum serves
+/// both: `'x'`/`"…"`, `u8'x'`/`u8"…"`, `u'x'`/`u"…"`, `U'x'`/`U"…"` and
+/// `L'x'`/`L"…"`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StrKind {
-    /// `"…"`
+    /// `"…"` — bytes of the execution character set, which is UTF-8.
     Narrow,
-    /// `L"…"`
+    /// `u8"…"` (C11) and `u8'x'` (C23) — UTF-8 bytes, of type `char` before
+    /// C23 and `char8_t` (an `unsigned char`) from C23 on.
+    Utf8,
+    /// `u"…"` and `u'x'` (C11) — UTF-16 code units, of type `char16_t`.
+    Utf16,
+    /// `U"…"` and `U'x'` (C11) — UTF-32 code units, of type `char32_t`.
+    Utf32,
+    /// `L"…"` — `wchar_t`.
     Wide,
+}
+
+impl StrKind {
+    /// The prefix a literal of this kind is written with.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            StrKind::Narrow => "",
+            StrKind::Utf8 => "u8",
+            StrKind::Utf16 => "u",
+            StrKind::Utf32 => "U",
+            StrKind::Wide => "L",
+        }
+    }
+
+    /// The revision that introduced the prefix, in the form the constant is
+    /// being used in.
+    ///
+    /// `u8"…"` is C11 (N1488) and `u8'x'` is C23 (N2418); the other three
+    /// prefixes are the same revision either way.
+    pub fn since(self, character: bool) -> Standard {
+        match self {
+            StrKind::Narrow | StrKind::Wide => Standard::C89,
+            StrKind::Utf8 if character => Standard::C23,
+            StrKind::Utf8 | StrKind::Utf16 | StrKind::Utf32 => Standard::C11,
+        }
+    }
+
+    /// Whether the elements are the bytes of the source's UTF-8, rather than
+    /// character values.
+    fn is_bytes(self) -> bool {
+        matches!(self, StrKind::Narrow | StrKind::Utf8)
+    }
+
+    /// The largest value one element of this kind can hold.
+    fn max_element(self) -> u32 {
+        match self {
+            StrKind::Narrow | StrKind::Utf8 => 0xff,
+            StrKind::Utf16 => 0xffff,
+            StrKind::Utf32 | StrKind::Wide => u32::MAX,
+        }
+    }
 }
 
 /// A decoded string literal.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StrLit {
-    /// Narrow or wide.
+    /// Which prefix it was written with.
     pub kind: StrKind,
-    /// The decoded elements: bytes (`0..=255`) for a narrow literal, wide
-    /// character values for a wide one. The terminating NUL is *not* included.
+    /// The decoded elements: bytes (`0..=255`) for a narrow or UTF-8 literal,
+    /// UTF-16 code units (surrogate pairs and all) for a `u"…"` one, and
+    /// character values for `U"…"` and `L"…"`. The terminating NUL is *not*
+    /// included.
     pub values: Vec<u32>,
     /// The exact source spelling, including quotes.
     pub text: String,
 }
 
 impl StrLit {
-    /// The literal's bytes, if it is narrow.
+    /// The literal's bytes, if it is an ordinary narrow one.
     pub fn as_bytes(&self) -> Option<Vec<u8>> {
         (self.kind == StrKind::Narrow).then(|| self.values.iter().map(|v| *v as u8).collect())
     }
@@ -781,6 +837,10 @@ pub struct LexOptions {
     pub gating: crate::Gating,
     /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`.
     pub dollar_in_identifiers: bool,
+    /// Whether translation phase 1 replaces the nine trigraphs.
+    ///
+    /// See [`trigraphs_enabled`] for who has them and why.
+    pub trigraphs: bool,
 }
 
 impl LexOptions {
@@ -793,6 +853,7 @@ impl LexOptions {
                 dialect: crate::Dialect::Iso,
             },
             dollar_in_identifiers: false,
+            trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),
         }
     }
 }
@@ -803,9 +864,34 @@ impl From<&Options> for LexOptions {
             standard: o.standard,
             gating: o.gating(),
             dollar_in_identifiers: o.dollar_in_identifiers,
+            trigraphs: trigraphs_enabled(o.standard, o.dialect),
         }
     }
 }
+
+/// Whether translation phase 1 replaces trigraphs in this entry point.
+///
+/// The nine of them were in C from the beginning and C23 removed them
+/// (N2940), so every strict entry point below `c23!` has them and `c23!` does
+/// not. No *GNU* dialect has them: `gcc -std=gnu99` switches them off, because
+/// `"what??!"` in a string is far more likely to be an exclamation than a
+/// pipe, and that is the line Clang draws too.
+pub fn trigraphs_enabled(standard: Standard, dialect: crate::Dialect) -> bool {
+    standard < Standard::C23 && !dialect.is_gnu()
+}
+
+/// The nine trigraphs of C 5.2.1.1, as `(third character, replacement)`.
+const TRIGRAPHS: &[(u8, u8)] = &[
+    (b'=', b'#'),
+    (b'(', b'['),
+    (b'/', b'\\'),
+    (b')', b']'),
+    (b'\'', b'^'),
+    (b'<', b'{'),
+    (b'!', b'|'),
+    (b'>', b'}'),
+    (b'-', b'~'),
+];
 
 /// Lexes the root file of `source`.
 ///
@@ -920,7 +1006,8 @@ impl<'a> Lexer<'a> {
                 }
                 // Translation phase 2: a backslash immediately followed by a
                 // newline splices the two lines, so it is *not* a line break.
-                Some(b'\\') if self.is_line_splice(self.pos) => {
+                // `??/` is that backslash where trigraphs are on.
+                Some(b'\\' | b'?') if self.is_line_splice(self.pos) => {
                     self.pos += self.line_splice_len(self.pos);
                     space = true;
                 }
@@ -955,7 +1042,7 @@ impl<'a> Lexer<'a> {
                         if c == b'\n' {
                             break;
                         }
-                        if c == b'\\' && self.is_line_splice(self.pos) {
+                        if matches!(c, b'\\' | b'?') && self.is_line_splice(self.pos) {
                             self.pos += self.line_splice_len(self.pos);
                             continue;
                         }
@@ -984,14 +1071,83 @@ impl<'a> Lexer<'a> {
     }
 
     /// Length of a `\`-newline splice starting at `at`, or 0.
+    ///
+    /// Translation phase 1 runs *before* phase 2, so `??/` at the end of a
+    /// line splices it exactly as a written backslash does — which is the one
+    /// trigraph whose replacement is not a character the lexer can simply hand
+    /// on.
     fn line_splice_len(&self, at: usize) -> usize {
-        if self.bytes.get(at) != Some(&b'\\') {
-            return 0;
-        }
-        match (self.bytes.get(at + 1), self.bytes.get(at + 2)) {
-            (Some(b'\n'), _) => 2,
-            (Some(b'\r'), Some(b'\n')) => 3,
+        let lead = match self.trigraph_at(at) {
+            Some(b'\\') => 3,
+            Some(_) => return 0,
+            None if self.bytes.get(at) == Some(&b'\\') => 1,
+            None => return 0,
+        };
+        match (self.bytes.get(at + lead), self.bytes.get(at + lead + 1)) {
+            (Some(b'\n'), _) => lead + 1,
+            (Some(b'\r'), Some(b'\n')) => lead + 2,
             _ => 0,
+        }
+    }
+
+    /// The character a trigraph at `at` stands for, if there is one there.
+    ///
+    /// C 5.2.1.1: the nine three-character sequences beginning `??` are
+    /// replaced in translation phase 1, before line splicing and before the
+    /// source is split into tokens — so this is consulted from everywhere the
+    /// lexer looks at a raw byte, rather than the text being rewritten. Not
+    /// rewriting it is what keeps every [`SourceRange`] a range of the source
+    /// the user really wrote: a diagnostic about `??=` points at all three
+    /// characters.
+    fn trigraph_at(&self, at: usize) -> Option<u8> {
+        if !self.options.trigraphs
+            || self.bytes.get(at) != Some(&b'?')
+            || self.bytes.get(at + 1) != Some(&b'?')
+        {
+            return None;
+        }
+        let third = *self.bytes.get(at + 2)?;
+        TRIGRAPHS
+            .iter()
+            .find(|(c, _)| *c == third)
+            .map(|(_, replacement)| *replacement)
+    }
+
+    /// The length in source bytes of the character at `at`, which is three for
+    /// a trigraph and one otherwise.
+    fn trigraph_len(&self, at: usize) -> usize {
+        if self.trigraph_at(at).is_some() { 3 } else { 1 }
+    }
+
+    /// The character-constant or string-literal prefix starting here, with its
+    /// length in bytes.
+    ///
+    /// A prefix is only one when a quote follows it, which is what keeps
+    /// `unsigned`, `u8x` and a variable called `U` ordinary identifiers.
+    fn literal_prefix(&self, first: u8) -> Option<(StrKind, usize)> {
+        let (kind, len) = match first {
+            b'L' => (StrKind::Wide, 1),
+            b'U' => (StrKind::Utf32, 1),
+            b'u' if self.peek_at(1) == Some(b'8') => (StrKind::Utf8, 2),
+            b'u' => (StrKind::Utf16, 1),
+            _ => return None,
+        };
+        matches!(self.peek_at(len), Some(b'"' | b'\'')).then_some((kind, len))
+    }
+
+    /// Whether an identifier that begins with an extended character starts
+    /// here.
+    fn extended_ident_start(&self) -> bool {
+        match self.peek() {
+            Some(b'\\') if matches!(self.peek_at(1), Some(b'u' | b'U')) => {
+                let want = if self.peek_at(1) == Some(b'u') { 4 } else { 8 };
+                (0..want).all(|i| self.peek_at(2 + i).is_some_and(|c| c.is_ascii_hexdigit()))
+            }
+            Some(c) if c >= 0x80 => self.text[self.pos..]
+                .chars()
+                .next()
+                .is_some_and(|ch| is_extended_ident_char(ch, true)),
+            _ => false,
         }
     }
 
@@ -1002,47 +1158,34 @@ impl<'a> Lexer<'a> {
             return TokenKind::Eof;
         };
         if is_ident_start(c, self.options.dollar_in_identifiers) {
-            // `L'x'` / `L"…"` are wide constants, not an identifier.
-            if c == b'L' {
-                match self.peek_at(1) {
-                    Some(b'\'') => {
-                        self.pos += 1;
-                        return self.scan_char_constant(true);
-                    }
-                    Some(b'"') => {
-                        self.pos += 1;
-                        return self.scan_string_literal(StrKind::Wide);
-                    }
-                    _ => {}
-                }
-            }
-            // `u8"…"`, `u"…"` and `U"…"` are C11's UTF-8 and UTF-16/32
-            // literals, which this crate has no `char16_t`/`char32_t` to
-            // decode into. Recognising the prefix is what turns them into one
-            // clear diagnostic instead of a syntax error about an identifier
-            // followed by a string.
-            if matches!(c, b'u' | b'U') && self.options.standard >= Standard::C11 {
-                let len = if c == b'u' && self.peek_at(1) == Some(b'8') {
-                    2
-                } else {
-                    1
-                };
-                if matches!(self.peek_at(len), Some(b'"') | Some(b'\'')) {
-                    let start = self.pos;
-                    self.pos += len;
-                    let prefix = self.text[start..self.pos].to_owned();
+            // `L'x'`, `u8"…"`, `u'x'` and the rest are constants rather than an
+            // identifier followed by one. The prefix is recognised in every
+            // entry point and *gated* rather than not recognised at all: a
+            // `c99!` block that writes `u"x"` is told which macro has it,
+            // instead of being told that `u` is undeclared.
+            if let Some((kind, len)) = self.literal_prefix(c) {
+                let start = self.pos;
+                self.pos += len;
+                let character = self.peek() == Some(b'\'');
+                if let Some(message) = self.options.gating.requires(
+                    &format!("a '{}' literal", kind.prefix()),
+                    kind.since(character),
+                ) {
                     let range = self.range(start, self.pos);
-                    self.error(
-                        range,
-                        format!("'{prefix}' literals are not supported; use a narrow literal"),
-                    );
-                    return if self.peek() == Some(b'\'') {
-                        self.scan_char_constant(false)
-                    } else {
-                        self.scan_string_literal(StrKind::Narrow)
-                    };
+                    self.error(range, message);
                 }
+                return if character {
+                    self.scan_char_constant(kind)
+                } else {
+                    self.scan_string_literal(kind)
+                };
             }
+            return self.scan_ident();
+        }
+        // An extended identifier, written either as the character itself —
+        // which GCC and Clang have taken since GCC 10 — or as the universal
+        // character name C99 6.4.2.1 introduced for it.
+        if self.extended_ident_start() {
             return self.scan_ident();
         }
         if c.is_ascii_digit() || (c == b'.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit()))
@@ -1050,7 +1193,7 @@ impl<'a> Lexer<'a> {
             return self.scan_number();
         }
         if c == b'\'' {
-            return self.scan_char_constant(false);
+            return self.scan_char_constant(StrKind::Narrow);
         }
         if c == b'"' {
             return self.scan_string_literal(StrKind::Narrow);
@@ -1061,8 +1204,20 @@ impl<'a> Lexer<'a> {
 
         // Anything else is not a C token at all.
         let start = self.pos;
-        let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
-        self.pos += ch.len_utf8();
+        // `??/` that does not splice a line is the stray backslash a written
+        // one would be, and is reported as one rather than as two question
+        // marks.
+        let ch = match self.trigraph_at(start) {
+            Some(c) => {
+                self.pos += 3;
+                c as char
+            }
+            None => {
+                let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
+                self.pos += ch.len_utf8();
+                ch
+            }
+        };
         let range = self.range(start, self.pos);
         self.error(
             range,
@@ -1081,19 +1236,23 @@ impl<'a> Lexer<'a> {
     /// then becomes a `String`.
     fn scan_ident(&mut self) -> TokenKind {
         let start = self.pos;
-        // The text before the current splice, when there has been one.
+        // The text before the current splice or universal character name, when
+        // there has been one.
         let mut spliced: Option<String> = None;
         // Where the run of characters that is still a slice begins.
         let mut segment = start;
+        // Whether anything outside the basic character set was written, which
+        // is the only case that has to be checked for normalization.
+        let mut extended = false;
         loop {
             match self.peek() {
-                Some(c) if is_ident_continue(c, self.options.dollar_in_identifiers) => {
+                Some(c) if c < 0x80 && is_ident_continue(c, self.options.dollar_in_identifiers) => {
                     self.pos += 1;
                 }
                 // Only a splice that the identifier *continues* over: one at
                 // the end of it is whitespace, and belongs to whatever comes
                 // next.
-                Some(b'\\')
+                Some(b'\\' | b'?')
                     if self.line_splice_len(self.pos) > 0
                         && self
                             .bytes
@@ -1107,31 +1266,167 @@ impl<'a> Lexer<'a> {
                     self.pos += self.line_splice_len(self.pos);
                     segment = self.pos;
                 }
+                // A universal character name spells one extended character:
+                // `café` and `café` are the same identifier, which is
+                // exactly what C99 6.4.2.1 says.
+                Some(b'\\') if matches!(self.peek_at(1), Some(b'u' | b'U')) => {
+                    let at = self.pos;
+                    let Some(ch) = self.scan_ident_ucn(at == start) else {
+                        break;
+                    };
+                    let text = spliced.get_or_insert_with(String::new);
+                    text.push_str(&self.text[segment..at]);
+                    text.push(ch);
+                    segment = self.pos;
+                    extended = true;
+                }
+                Some(c) if c >= 0x80 => {
+                    let ch = self.text[self.pos..].chars().next().unwrap_or('\u{fffd}');
+                    if !is_extended_ident_char(ch, self.pos == start) {
+                        break;
+                    }
+                    self.pos += ch.len_utf8();
+                    extended = true;
+                }
                 _ => break,
             }
         }
-        let joined;
         let text = match spliced {
             Some(mut text) => {
                 text.push_str(&self.text[segment..self.pos]);
-                joined = text;
-                joined.as_str()
+                text
             }
-            None => &self.text[start..self.pos],
+            None => self.text[start..self.pos].to_owned(),
         };
-        match Keyword::from_str(text, self.options.standard) {
+        // Nothing was an identifier character after all — the whole of it was
+        // one bad universal character name, which has been reported. Something
+        // has to be consumed, or the scanner would sit here forever.
+        if text.is_empty() {
+            if self.pos == start {
+                let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
+                self.pos += ch.len_utf8();
+            }
+            return TokenKind::Error(self.text[start..self.pos].to_owned());
+        }
+        // Rust identifiers have to be in Normalization Form C, and `rustc`
+        // *normalises* the ones a procedural macro hands it rather than
+        // refusing them — so two C identifiers that differ only by
+        // normalization would silently become one Rust item. C23 (N2836) asks
+        // for NFC as well, so refusing is both the safe answer and the
+        // conforming one.
+        if extended && !unicode_normalization::is_nfc(&text) {
+            let range = self.range(start, self.pos);
+            self.error(
+                range,
+                format!(
+                    "identifier '{text}' is not in Unicode Normalization Form C; \
+                     write the composed form"
+                ),
+            );
+        }
+        match Keyword::from_str(&text, self.options.standard) {
             Some(k) => TokenKind::Keyword(k),
-            None => TokenKind::Ident(text.to_owned()),
+            None => TokenKind::Ident(text),
         }
     }
 
+    /// Reads a `\uXXXX` or `\UXXXXXXXX` written inside an identifier.
+    ///
+    /// A name that is too short to be one leaves the position where it was, so
+    /// that the identifier simply ends there and the backslash is reported by
+    /// [`Lexer::scan_token`] as the stray character it is. One that is the
+    /// right shape but names something an identifier may not hold is *always*
+    /// consumed, and reported: leaving it would be a second diagnostic about
+    /// the same text, and — where it is the first character of the identifier
+    /// — a token that consumed nothing at all.
+    fn scan_ident_ucn(&mut self, start: bool) -> Option<char> {
+        let at = self.pos;
+        let want = if self.peek_at(1) == Some(b'u') { 4 } else { 8 };
+        let mut value: u32 = 0;
+        for i in 0..want {
+            let digit = self.peek_at(2 + i).and_then(|c| (c as char).to_digit(16))?;
+            value = value * 16 + digit;
+        }
+        let spelling = if want == 4 { 'u' } else { 'U' };
+        let ch = char::from_u32(value);
+        if !ch.is_some_and(|ch| is_extended_ident_char(ch, start)) {
+            self.pos += 2 + want;
+            let range = self.range(at, self.pos);
+            let digits = if want == 4 {
+                format!("{value:04X}")
+            } else {
+                format!("{value:08X}")
+            };
+            self.error(
+                range,
+                format!("'\\{spelling}{digits}' is not a valid character in an identifier"),
+            );
+            return None;
+        }
+        if let Some(message) = self
+            .options
+            .gating
+            .requires("a universal character name", Standard::C99)
+        {
+            let range = self.range(at, at + 2 + want);
+            self.error(range, message);
+        }
+        self.pos += 2 + want;
+        ch
+    }
+
     fn scan_punctuator(&mut self) -> Option<Punct> {
+        if self.trigraph_at(self.pos).is_some() {
+            return self.scan_trigraph_punctuator();
+        }
         let rest = &self.text[self.pos..];
         for (spelling, punct) in PUNCTUATORS {
             if rest.starts_with(spelling) {
                 // `<:` is a digraph for `[`, but `1<::x` must not be mangled;
                 // C99 has no `::`, so a plain greedy match is correct here.
                 self.pos += spelling.len();
+                return Some(*punct);
+            }
+        }
+        None
+    }
+
+    /// A punctuator that begins with a trigraph.
+    ///
+    /// Phase 1 happens before tokens exist, so a punctuator may be spelled
+    /// partly or wholly with trigraphs — `??!??!` is `||`, `??'=` is `^=`,
+    /// `??=??=` is `##` — and maximal munch applies to the *replaced*
+    /// characters. Up to the length of the longest punctuator is replaced into
+    /// a small buffer, matched there, and the source position advanced by what
+    /// the matched characters really cost.
+    fn scan_trigraph_punctuator(&mut self) -> Option<Punct> {
+        const LONGEST: usize = 4;
+        let mut logical = [0u8; LONGEST];
+        let mut widths = [0usize; LONGEST];
+        let mut count = 0;
+        let mut at = self.pos;
+        while count < LONGEST {
+            let (c, width) = match self.trigraph_at(at) {
+                Some(c) => (c, 3),
+                None => match self.bytes.get(at) {
+                    Some(c) => (*c, 1),
+                    None => break,
+                },
+            };
+            // A backslash is not part of any punctuator, and neither is
+            // anything outside the basic character set.
+            if c == b'\\' || !c.is_ascii() {
+                break;
+            }
+            logical[count] = c;
+            widths[count] = width;
+            count += 1;
+            at += width;
+        }
+        let text = std::str::from_utf8(&logical[..count]).ok()?;
+        for (spelling, punct) in PUNCTUATORS {
+            if text.starts_with(spelling) {
+                self.pos += widths[..spelling.len()].iter().sum::<usize>();
                 return Some(*punct);
             }
         }
@@ -1371,12 +1666,16 @@ impl<'a> Lexer<'a> {
 
     // -- character and string constants -------------------------------------
 
-    fn scan_char_constant(&mut self, wide: bool) -> TokenKind {
+    fn scan_char_constant(&mut self, kind: StrKind) -> TokenKind {
         let start = self.pos;
         debug_assert_eq!(self.peek(), Some(b'\''));
         self.pos += 1;
         let mut values: Vec<u32> = Vec::new();
         let mut terminated = false;
+        // How many *characters* were written, which is not how many elements
+        // they came to: one `\U0001F600` is one character and two UTF-16 code
+        // units, and the two say different things about what is wrong.
+        let mut characters = 0usize;
         while let Some(c) = self.peek() {
             if c == b'\'' {
                 self.pos += 1;
@@ -1386,7 +1685,11 @@ impl<'a> Lexer<'a> {
             if c == b'\n' {
                 break;
             }
-            self.read_char_element(wide, &mut values);
+            let before = values.len();
+            self.read_char_element(kind, &mut values);
+            if values.len() > before {
+                characters += 1;
+            }
         }
         let range = self.range(start, self.pos);
         if !terminated {
@@ -1395,11 +1698,39 @@ impl<'a> Lexer<'a> {
         if values.is_empty() {
             self.error(range, "empty character constant");
         }
+        // Only `'ab'` and `L'ab'` have an implementation-defined meaning; C11
+        // 6.4.4.4p2 makes more than one character in a `u8`, `u` or `U`
+        // constant a constraint violation, because there is no room for a
+        // second one in the type — and so is one character that needs more
+        // than one code unit, which is what `u8'é'` and `u'😀'` are.
         if values.len() > 1 {
-            self.warning(range, "multi-character character constant");
+            match kind {
+                StrKind::Narrow | StrKind::Wide => {
+                    self.warning(range, "multi-character character constant");
+                }
+                _ if characters > 1 => {
+                    self.error(
+                        range,
+                        format!(
+                            "a '{}' character constant holds exactly one character",
+                            kind.prefix()
+                        ),
+                    );
+                }
+                _ => {
+                    self.error(
+                        range,
+                        format!(
+                            "the character in a '{}' character constant must fit in a \
+                             single code unit",
+                            kind.prefix()
+                        ),
+                    );
+                }
+            }
         }
 
-        let value = if wide {
+        let value = if kind != StrKind::Narrow {
             values.last().copied().unwrap_or(0) as i64
         } else if values.len() <= 1 {
             values.first().copied().unwrap_or(0) as i64
@@ -1414,7 +1745,7 @@ impl<'a> Lexer<'a> {
 
         TokenKind::Char(CharLit {
             value,
-            wide,
+            kind,
             text: self.text[start..self.pos].to_owned(),
         })
     }
@@ -1423,7 +1754,6 @@ impl<'a> Lexer<'a> {
         let start = self.pos;
         debug_assert_eq!(self.peek(), Some(b'"'));
         self.pos += 1;
-        let wide = kind == StrKind::Wide;
         let mut values: Vec<u32> = Vec::new();
         let mut terminated = false;
         while let Some(c) = self.peek() {
@@ -1435,7 +1765,7 @@ impl<'a> Lexer<'a> {
             if c == b'\n' {
                 break;
             }
-            self.read_char_element(wide, &mut values);
+            self.read_char_element(kind, &mut values);
         }
         let range = self.range(start, self.pos);
         if !terminated {
@@ -1450,33 +1780,50 @@ impl<'a> Lexer<'a> {
 
     /// Reads one element of a character constant or string literal, appending
     /// its decoded value(s) to `out`.
-    fn read_char_element(&mut self, wide: bool, out: &mut Vec<u32>) {
+    fn read_char_element(&mut self, kind: StrKind, out: &mut Vec<u32>) {
         if self.is_line_splice(self.pos) {
             self.pos += self.line_splice_len(self.pos);
             return;
         }
         let start = self.pos;
-        if self.peek() != Some(b'\\') {
-            if wide {
-                let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
-                self.pos += ch.len_utf8();
-                out.push(ch as u32);
-            } else {
-                // Narrow literals keep the raw execution-charset bytes, so
-                // UTF-8 text in a literal survives byte for byte.
-                self.pos += 1;
-                out.push(self.bytes[start] as u32);
+        // Phase 1 replaces trigraphs inside literals too: `"??!"` is `"|"`,
+        // and `"??/n"` is `"\n"`.
+        let trigraph = self.trigraph_at(self.pos);
+        if trigraph != Some(b'\\') && self.peek() != Some(b'\\') {
+            match trigraph {
+                Some(c) => {
+                    self.pos += 3;
+                    out.push(u32::from(c));
+                }
+                None if kind.is_bytes() => {
+                    // A narrow or UTF-8 literal keeps the raw
+                    // execution-charset bytes, so UTF-8 text in one survives
+                    // byte for byte.
+                    self.pos += 1;
+                    out.push(self.bytes[start] as u32);
+                }
+                None => {
+                    let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
+                    self.pos += ch.len_utf8();
+                    push_character(ch as u32, kind, out);
+                }
             }
             return;
         }
 
-        self.pos += 1;
-        let Some(e) = self.peek() else {
-            let range = self.range(start, self.pos);
-            self.error(range, "incomplete escape sequence");
-            return;
+        self.pos += self.trigraph_len(self.pos);
+        let e = match self.trigraph_at(self.pos) {
+            Some(c) => c,
+            None => match self.peek() {
+                Some(c) => c,
+                None => {
+                    let range = self.range(start, self.pos);
+                    self.error(range, "incomplete escape sequence");
+                    return;
+                }
+            },
         };
-        self.pos += 1;
+        self.pos += self.trigraph_len(self.pos);
         let simple = match e {
             b'\'' => Some(0x27),
             b'"' => Some(0x22),
@@ -1512,7 +1859,7 @@ impl<'a> Lexer<'a> {
                         _ => break,
                     }
                 }
-                self.push_escape_value(v, wide, start, out);
+                self.push_escape_value(v, kind, start, out);
             }
             b'x' => {
                 let mut v: u32 = 0;
@@ -1535,7 +1882,7 @@ impl<'a> Lexer<'a> {
                 } else if overflow {
                     self.error(range, "hex escape sequence out of range");
                 }
-                self.push_escape_value(v, wide, start, out);
+                self.push_escape_value(v, kind, start, out);
             }
             b'u' | b'U' => {
                 if let Some(message) = self
@@ -1568,14 +1915,14 @@ impl<'a> Lexer<'a> {
                     return;
                 }
                 match char::from_u32(v) {
-                    Some(ch) if wide => out.push(ch as u32),
-                    Some(ch) => {
+                    Some(ch) if kind.is_bytes() => {
                         // The execution character set is UTF-8.
                         let mut buf = [0u8; 4];
                         for b in ch.encode_utf8(&mut buf).as_bytes() {
                             out.push(*b as u32);
                         }
                     }
+                    Some(ch) => push_character(ch as u32, kind, out),
                     None => {
                         self.error(
                             range,
@@ -1595,15 +1942,43 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn push_escape_value(&mut self, v: u32, wide: bool, start: usize, out: &mut Vec<u32>) {
-        if !wide && v > 0xff {
+    /// Pushes the value of a numeric escape sequence, which unlike a character
+    /// is *not* re-encoded: `u"\xd83d"` is that one code unit.
+    fn push_escape_value(&mut self, v: u32, kind: StrKind, start: usize, out: &mut Vec<u32>) {
+        let max = kind.max_element();
+        if v > max {
             let range = self.range(start, self.pos);
-            self.error(range, "escape sequence out of range for type 'char'");
-            out.push(v & 0xff);
+            let ty = match kind {
+                StrKind::Narrow => "char",
+                StrKind::Utf8 => "char8_t",
+                StrKind::Utf16 => "char16_t",
+                StrKind::Utf32 => "char32_t",
+                StrKind::Wide => "wchar_t",
+            };
+            self.error(
+                range,
+                format!("escape sequence out of range for type '{ty}'"),
+            );
+            out.push(v & max);
         } else {
             out.push(v);
         }
     }
+}
+
+/// Appends one character, encoded the way `kind` stores its elements.
+///
+/// A `u"…"` literal holds UTF-16 code units, so a character outside the basic
+/// multilingual plane becomes the two halves of a surrogate pair — which is
+/// what makes `sizeof(u"\U0001F600")` six rather than four.
+fn push_character(value: u32, kind: StrKind, out: &mut Vec<u32>) {
+    if kind != StrKind::Utf16 || value <= 0xffff {
+        out.push(value);
+        return;
+    }
+    let v = value - 0x1_0000;
+    out.push(0xd800 + (v >> 10));
+    out.push(0xdc00 + (v & 0x3ff));
 }
 
 fn is_ident_start(c: u8, dollar: bool) -> bool {
@@ -1612,6 +1987,30 @@ fn is_ident_start(c: u8, dollar: bool) -> bool {
 
 fn is_ident_continue(c: u8, dollar: bool) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || (dollar && c == b'$')
+}
+
+/// Whether an extended character may appear in an identifier.
+///
+/// C99 Annex D listed the ranges by hand, C11 revised the list, and C23 (N2836,
+/// N2939) replaced all of it with Unicode Annex #31's `XID_Start` and
+/// `XID_Continue` — which is also what Rust's own identifiers are, and what
+/// makes a C name usable as a Rust one. The one list is used in every entry
+/// point: the earlier annexes are approximations of the same intent, and a
+/// program that uses a character C11 left out is one this would otherwise
+/// refuse for no reason a user could act on.
+///
+/// A character of the basic character set is never one of these: the ASCII
+/// path has already decided about it, and a universal character name is not
+/// allowed to spell one (6.4.3p2).
+fn is_extended_ident_char(ch: char, start: bool) -> bool {
+    if ch.is_ascii() {
+        return false;
+    }
+    if start {
+        unicode_ident::is_xid_start(ch)
+    } else {
+        unicode_ident::is_xid_continue(ch)
+    }
 }
 
 /// Validates an integer suffix, returning `(unsigned, long_kind)`.

@@ -348,7 +348,7 @@ the same shape).
 | case | what it needs |
 | --- | --- |
 | `00204` | `va_arg` with a struct type |
-| `00213` | a `goto` out of a statement expression, and a `?:` one of whose operands is `void`. The `goto` is the hard half: whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. |
+| `00213` | a `goto` out of a statement expression. Whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. The other thing this case writes — a `?:` one of whose operands is `void` — now works; see [`doc/gnu-extensions.md`](gnu-extensions.md). |
 | `00216` | initialising a flexible array member, which GCC allows with a warning by over-allocating the object — the Rust item would have to have a different type from the one `sizeof` reports. Under `c99!` the case also needs the C23 empty initialiser `{}`, which `gnu99!` and `c23!` accept. |
 
 **Wanted a newer toolchain (1).** `00140` defines a variadic function, which

@@ -1443,11 +1443,165 @@ fn the_has_family_answers_from_this_implementations_tables() {
     assert_eq!(pp("#if __has_c_attribute(packed)\n1\n#endif"), "");
 }
 
+// ---------------------------------------------------------------------------
+// #embed (C23 6.10.3)
+// ---------------------------------------------------------------------------
+
+/// Preprocesses `src` in `standard`, with `HEADERS` as the origin *and* the
+/// include path, so that both `#embed "x"` and `#embed <x>` find the fixtures.
+fn run_embedding(standard: Standard, src: &str) -> (Vec<String>, Vec<String>, Preprocessed) {
+    let mut options = Options::new(standard);
+    options.include_paths = vec![PathBuf::from(HEADERS)];
+    let ctx = Context {
+        dir: Some(PathBuf::from(HEADERS)),
+        ..Context::new(src, 0)
+    };
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &LexOptions::new(standard));
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    let spellings = out
+        .tokens
+        .iter()
+        .filter(|t| !t.is_eof())
+        .map(|t| t.kind.spelling().to_owned())
+        .collect();
+    let errors = diags
+        .items()
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    (spellings, errors, out)
+}
+
+/// The token spellings `src` preprocesses to in a `c23!` block that can embed.
+#[track_caller]
+fn pp_embedding(src: &str) -> String {
+    let (tokens, errors, _) = run_embedding(Standard::C23, src);
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    tokens.join(" ")
+}
+
 #[test]
-fn embed_is_reported_rather_than_ignored() {
-    let (_, errors) = run_c23("#embed \"data.bin\"");
+fn embed_expands_to_the_bytes_of_the_resource() {
+    // `data.bin` is a PNG signature followed by a NUL and a `0xff`.
+    assert_eq!(
+        pp_embedding("#embed \"data.bin\""),
+        "137 , 80 , 78 , 71 , 13 , 10 , 26 , 10 , 0 , 255"
+    );
+    // The angled form takes the include path.
+    assert_eq!(pp_embedding("#embed <data.bin> limit(2)"), "137 , 80");
+    // A prefix and a suffix bracket a non-empty list...
+    assert_eq!(
+        pp_embedding("#embed <data.bin> limit(1) prefix(A ,) suffix(, B)"),
+        "A , 137 , B"
+    );
+    // ... and are left out of an empty one, which `if_empty` replaces whole.
+    assert_eq!(
+        pp_embedding("#embed <empty.bin> prefix(A ,) suffix(, B) if_empty(Z)"),
+        "Z"
+    );
+    assert_eq!(pp_embedding("#embed <empty.bin>"), "");
+    // `limit(0)` makes any resource an empty one.
+    assert_eq!(pp_embedding("#embed <data.bin> limit(0) if_empty(Z)"), "Z");
+    // The reserved spellings GCC gives the parameters work too.
+    assert_eq!(pp_embedding("#embed <data.bin> __limit__(1)"), "137");
+    // The bytes are rescanned like any other replacement, so a macro in the
+    // prefix is expanded.
+    assert_eq!(
+        pp_embedding("#define TAG 42\n#embed <data.bin> limit(1) prefix(TAG ,)"),
+        "42 , 137"
+    );
+}
+
+#[test]
+fn embed_records_the_resource_for_rebuild_tracking() {
+    let (_, errors, out) = run_embedding(Standard::C23, "#embed \"data.bin\"");
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(out.embedded_files.len(), 1);
+    assert!(
+        out.embedded_files[0].ends_with("data.bin"),
+        "{:?}",
+        out.embedded_files
+    );
+}
+
+#[test]
+fn has_embed_answers_found_empty_or_not_found() {
+    // Like `defined` and `__has_include`, it is only an operator inside the
+    // controlling expression of a conditional.
+    let answer = |operand: &str| {
+        pp_embedding(&format!(
+            "#if __has_embed({operand}) == 0\nnone\n#elif __has_embed({operand}) == 1\nfound\
+             \n#elif __has_embed({operand}) == 2\nempty\n#endif"
+        ))
+    };
+    assert_eq!(answer("<data.bin>"), "found");
+    assert_eq!(answer("<empty.bin>"), "empty");
+    assert_eq!(answer("<nowhere.bin>"), "none");
+    assert_eq!(answer("<data.bin> limit(0)"), "empty");
+    // An unknown parameter is 6.10.1p5's "not found".
+    assert_eq!(answer("<data.bin> nonsense(1)"), "none");
+    // The three macros a program compares against are predefined.
+    assert_eq!(
+        pp_embedding(
+            "#if __STDC_EMBED_NOT_FOUND__ == 0 && __STDC_EMBED_FOUND__ == 1 \
+             && __STDC_EMBED_EMPTY__ == 2\nok\n#endif"
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn embed_reports_what_it_cannot_do() {
+    let (_, errors, _) = run_embedding(Standard::C23, "#embed <nowhere.bin>");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].starts_with("<nowhere.bin> resource not found for #embed; searched: "),
+        "{:?}",
+        errors[0]
+    );
+
+    let (_, errors, _) = run_embedding(Standard::C23, "#embed");
+    assert_eq!(errors, ["#embed expects \"RESOURCE\" or <RESOURCE>"]);
+
+    let (_, errors, _) = run_embedding(Standard::C23, "#embed <data.bin> nonsense(1)");
+    assert_eq!(errors, ["unknown #embed parameter 'nonsense'"]);
+
+    let (_, errors, _) = run_embedding(Standard::C23, "#embed <data.bin> limit");
+    assert_eq!(errors, ["#embed parameter 'limit' takes an argument list"]);
+}
+
+/// `#embed` is C23's; a strict entry point older than that says so, and a GNU
+/// one takes it as GCC 15 does.
+#[test]
+fn embed_is_gated_before_c23() {
+    let (_, errors, _) = run_embedding(Standard::C17, "#embed \"data.bin\"");
     assert_eq!(
         errors,
-        ["#embed is not supported; use `include_bytes!` on the Rust side"]
+        ["'#embed' requires C23 or later (this block is c17!)"]
     );
+
+    let mut options = Options::with_dialect(Standard::C17, cinrs_core::Dialect::Gnu);
+    options.include_paths = vec![PathBuf::from(HEADERS)];
+    let src = "#embed \"data.bin\" limit(1)";
+    let ctx = Context {
+        dir: Some(PathBuf::from(HEADERS)),
+        ..Context::new(src, 0)
+    };
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &LexOptions::new(Standard::C17));
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    assert!(
+        !diags.items().iter().any(|d| d.level == Level::Error),
+        "gnu17! refused #embed: {:#?}",
+        diags.items()
+    );
+    let spellings: Vec<String> = out
+        .tokens
+        .iter()
+        .filter(|t| !t.is_eof())
+        .map(|t| t.kind.spelling().to_owned())
+        .collect();
+    assert_eq!(spellings, ["137"]);
 }

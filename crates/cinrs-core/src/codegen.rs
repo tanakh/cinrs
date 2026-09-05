@@ -2061,8 +2061,12 @@ impl<'a> Codegen<'a> {
                     return bare_float_literal(*value, span);
                 }
                 // The arms of a conditional may stay bare here, because
-                // whatever fixes this expression's type fixes theirs.
-                ExprKind::Cond { .. } => return self.cond_chain_at(expr, expected),
+                // whatever fixes this expression's type fixes theirs — unless
+                // the type is `void`, where the arms have no common type and
+                // [`Codegen::expr`] emits each of them as a statement.
+                ExprKind::Cond { .. } if !expected.is_void() => {
+                    return self.cond_chain_at(expr, expected);
+                }
                 _ => {}
             }
         }
@@ -2241,6 +2245,20 @@ impl<'a> Codegen<'a> {
                 let ty = self.ty(Ty::Int, span);
                 let parens = parenthesize(condition, span);
                 Value::new(quote_spanned! {span=> #parens as #ty }, prec::CAST).type_end(true)
+            }
+            // `(void)x` and a `void`-typed conditional have no value at all:
+            // Rust's `()` is not something `as` produces, so each of them is
+            // emitted as the statement it is, wrapped in a block whose own
+            // value is `()`. A conditional gets here when it is written where
+            // a value is expected — the left operand of a comma is a
+            // statement, but the right one is not.
+            ExprKind::Cast(inner) if expr.ty.is_void() => {
+                let tokens = self.expr_stmt(inner);
+                Value::new(quote_spanned! {span=> { #tokens } }, prec::BLOCK)
+            }
+            ExprKind::Cond { .. } if expr.ty.is_void() => {
+                let tokens = self.expr_stmt(expr);
+                Value::new(quote_spanned! {span=> { #tokens } }, prec::BLOCK)
             }
             ExprKind::Cast(inner) => {
                 let from = inner.ty;
@@ -3893,13 +3911,16 @@ impl<'a> Codegen<'a> {
     /// The pointer a string literal decays to.
     fn string_pointer(&mut self, id: ir::StrId, konst: bool, span: Span) -> TokenStream {
         let data = self.program.string(id);
-        if data.wide {
-            // A wide literal needs real storage of `wchar_t`; a `static` in the
-            // enclosing block is the only thing with a long enough lifetime.
-            let elem = self.ty(Ty::wchar_ty(), span);
+        let element = data.elem;
+        if element.size_bytes(&self.options.target) > 1 {
+            // A `wchar_t`, `char16_t` or `char32_t` literal needs real storage
+            // of that type; a `static` in the enclosing block is the only
+            // thing with a long enough lifetime.
+            let elem = self.ty(element, span);
             let mut items = TokenStream::new();
             for value in data.values.iter().chain(std::iter::once(&0)) {
-                let literal = int_literal_token(i128::from(*value), span);
+                let literal =
+                    int_literal_token(element.wrap(i128::from(*value), &self.options.target), span);
                 items.extend(quote_spanned! {span=> #literal, });
             }
             let len = usize_literal(data.len_with_nul(), span);
@@ -3915,9 +3936,11 @@ impl<'a> Codegen<'a> {
                 { static #name: #ty = #array; #pointer }
             };
         }
+        // A narrow or `u8"…"` literal is a Rust byte string, whose elements
+        // are the same bytes whether C calls them `char` or `char8_t`.
         let mut literal = Literal::byte_string(&nul_terminated(&data.values));
         literal.set_span(span);
-        let elem = self.ty(Ty::Char, span);
+        let elem = self.ty(element, span);
         if konst {
             quote_spanned! {span=> #literal.as_ptr().cast::<#elem>() }
         } else {

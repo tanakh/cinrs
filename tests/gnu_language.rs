@@ -173,6 +173,47 @@ fn the_middle_operand_may_be_left_out() {
 }
 
 // ---------------------------------------------------------------------------
+// `?:` with one `void` operand
+// ---------------------------------------------------------------------------
+
+c99! {
+    static int void_calls;
+    static int void_side(int n) { void_calls++; return n; }
+
+    /* Both operands `void` is ISO C; one of each is GCC's, in every mode it
+     * has, and the other operand's value is simply discarded. */
+    int void_both(int c) {
+        void_calls = 0;
+        c ? (void) void_side(1) : (void) void_side(2);
+        return void_calls;
+    }
+
+    int void_one(int c) {
+        void_calls = 0;
+        c ? (void) 0 : (void) void_side(1);
+        return void_calls;
+    }
+
+    /* Written where a value is expected: the left operand of a comma, and
+     * inside one. */
+    int void_in_comma(int c) {
+        void_calls = 0;
+        int v = (c ? (void) 0 : void_side(1), 7);
+        return v * 10 + void_calls;
+    }
+}
+
+#[test]
+fn a_conditional_may_have_one_void_operand() {
+    assert_eq!(unsafe { void_both(1) }, 1);
+    assert_eq!(unsafe { void_both(0) }, 1);
+    assert_eq!(unsafe { void_one(1) }, 0);
+    assert_eq!(unsafe { void_one(0) }, 1);
+    assert_eq!(unsafe { void_in_comma(1) }, 70);
+    assert_eq!(unsafe { void_in_comma(0) }, 71);
+}
+
+// ---------------------------------------------------------------------------
 // `__func__` and its GNU spellings
 // ---------------------------------------------------------------------------
 

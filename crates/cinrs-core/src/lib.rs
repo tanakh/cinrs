@@ -64,7 +64,9 @@
 //! in the order they were opened. The [`include`](mod@include) module is where
 //! a header name is resolved and what is bundled; the user headers that were
 //! read come back as [`Analysis::user_headers`], which [`expand`] turns into
-//! the `include_str!` items that make Cargo rebuild when one changes.
+//! the `include_str!` items that make Cargo rebuild when one changes. C23's
+//! `#embed` takes the same route with [`Analysis::embedded_files`] and
+//! `include_bytes!`, since a resource is bytes rather than text.
 //!
 //! # Example
 //!
@@ -407,6 +409,9 @@ pub struct Analysis {
     /// The absolute paths of the user headers that were read, which the
     /// expansion mentions so that Cargo rebuilds when one changes.
     pub user_headers: Vec<PathBuf>,
+    /// The absolute paths of the resources `#embed` read, mentioned in the
+    /// expansion for the same reason.
+    pub embedded_files: Vec<PathBuf>,
     /// The libraries `#pragma cinrs link` asked the `extern` block to be
     /// linked against.
     pub link_libraries: Vec<String>,
@@ -492,6 +497,7 @@ struct FrontEndOutput {
     expansions: pp::Expansions,
     included: Vec<pp::IncludedFile>,
     user_headers: Vec<PathBuf>,
+    embedded_files: Vec<PathBuf>,
     link_libraries: Vec<String>,
     export: bool,
     no_std: bool,
@@ -512,6 +518,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         expansions,
         included,
         user_headers,
+        embedded_files,
         link_libraries,
         export,
         no_std,
@@ -530,6 +537,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         expansions,
         included,
         user_headers,
+        embedded_files,
         link_libraries,
         export,
         no_std,
@@ -594,6 +602,7 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
         diagnostics,
         expansions: out.expansions,
         user_headers: out.user_headers,
+        embedded_files: out.embedded_files,
         link_libraries: out.link_libraries,
         export: out.export,
         no_std: out.no_std,
@@ -659,6 +668,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         mut diagnostics,
         expansions,
         user_headers,
+        embedded_files,
         link_libraries,
         export,
         no_std,
@@ -679,7 +689,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
 
     // Emitted whether or not the unit compiled: a header that is being fixed
     // is exactly the one whose next edit has to trigger a rebuild.
-    let mut out = rebuild_tracking(&user_headers);
+    let mut out = rebuild_tracking(&user_headers, &embedded_files);
     if diagnostics.has_errors() {
         out.extend(diagnostics.to_token_stream(&source.map));
         out.extend(codegen::generate_stubs(&program, &source.map, options));
@@ -735,7 +745,8 @@ fn in_module(items: TokenStream, name: Option<&str>, unit_id: u64) -> TokenStrea
     }
 }
 
-/// `const _: &str = ::core::include_str!("…");` for every user header read.
+/// `const _: &str = ::core::include_str!("…");` for every user header read,
+/// and `include_bytes!` for every resource `#embed` read.
 ///
 /// A procedural macro that reads a file has to tell the build system so, or
 /// editing that file will not rebuild anything that included it. `include_str!`
@@ -743,11 +754,12 @@ fn in_module(items: TokenStream, name: Option<&str>, unit_id: u64) -> TokenStrea
 /// the crate, and Cargo re-runs the compilation when its timestamp moves. The
 /// path is absolute so that it resolves the same from whichever module the
 /// invocation is written in, and the item is anonymous (`const _`) so that any
-/// number of them can coexist.
+/// number of them can coexist. An embedded resource is not text, so it takes
+/// the byte-string form of the same trick.
 ///
 /// Bundled headers are left out: they cannot change without the crate that
 /// carries them changing, which Cargo already knows about.
-fn rebuild_tracking(headers: &[PathBuf]) -> TokenStream {
+fn rebuild_tracking(headers: &[PathBuf], embedded: &[PathBuf]) -> TokenStream {
     let span = Span::call_site();
     let mut out = TokenStream::new();
     for header in headers {
@@ -755,6 +767,12 @@ fn rebuild_tracking(headers: &[PathBuf]) -> TokenStream {
         literal.set_span(span);
         let literal = TokenTree::Literal(literal);
         out.extend(quote! { const _: &str = ::core::include_str!(#literal); });
+    }
+    for resource in embedded {
+        let mut literal = Literal::string(&resource.to_string_lossy());
+        literal.set_span(span);
+        let literal = TokenTree::Literal(literal);
+        out.extend(quote! { const _: &[u8] = ::core::include_bytes!(#literal); });
     }
     out
 }

@@ -207,8 +207,8 @@
 //! ## What the later revisions add and this crate does not do
 //!
 //! `_Thread_local`/`thread_local` (Rust's `#[thread_local]` is unstable),
-//! `_Atomic`, `_BitInt`, `#embed`, and C11's `u8"…"`, `u"…"` and `U"…"`
-//! literals with their `char16_t`/`char32_t`: each is a located error rather
+//! `_Atomic`, `_BitInt` and C23's *named* universal character
+//! `\N{LATIN SMALL LETTER E WITH ACUTE}`: each is a located error rather
 //! than a silent mistranslation. C11's four subsetting macros —
 //! `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 //! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
@@ -808,9 +808,11 @@
 //! ## The bundled standard headers
 //!
 //! `cinrs` ships its own `<assert.h>`, `<ctype.h>`, `<errno.h>`, `<float.h>`,
-//! `<inttypes.h>`, `<limits.h>`, `<math.h>`, `<stdalign.h>`, `<stdarg.h>`,
+//! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<stdalign.h>`,
+//! `<stdarg.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
-//! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<wchar.h>` and `<wctype.h>`,
+//! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>` and
+//! `<wctype.h>`,
 //! and never reads the
 //! platform's. A real `<stdio.h>` is not C — glibc's is built out of GNU
 //! extensions, compiler builtins and `__asm__` renaming — so a front end that
@@ -838,6 +840,14 @@
 //! a program declares one and passes its address to `mbrtowc`. Writing `L"…"`
 //! needs [string-literal input](#input-forms), which is where every prefixed
 //! literal lives.
+//!
+//! `<uchar.h>` is the Unicode half of the same story: `char16_t` and
+//! `char32_t` are `unsigned short` and `unsigned int` — the types the front
+//! end gives `u"…"` and `U"…"` — `char8_t` joins them in C23, and
+//! `mbrtoc16`/`c16rtomb`/`mbrtoc32`/`c32rtomb` are declared and link. None of
+//! the three names is a keyword in C, so all of them are ordinary typedefs and
+//! `_Generic` cannot tell one from its underlying type, exactly as it cannot
+//! for `wchar_t`.
 //!
 //! ```
 //! cinrs::c99! { r#"
@@ -930,9 +940,13 @@
 //!
 //! # Input forms
 //!
-//! C that the Rust lexer accepts can be written as raw tokens. C that it does
+//! C that the Rust lexer accepts can be written as raw tokens — including an
+//! [extended identifier](#standards) written as the character itself, since
+//! Rust's identifiers are Unicode Annex #31's too. C that it does
 //! not accept (hexadecimal floating constants such as `0x1.8p3`,
 //! multi-character character constants, prefixed literals like `L"…"`,
+//! `u8"…"`, `u"…"`, `U"…"` and `u8'x'` — Rust reserves those prefixes —
+//! a universal character name (`é`),
 //! backslash line continuations, `##` — for which see
 //! [the `# #` rule](#writing--in-raw-token-mode)) can be passed as a single
 //! string literal — ideally a raw one:
@@ -984,7 +998,8 @@
 //! types, pointers, arrays, `struct`, `union`, `enum`, bit-fields, `typedef`,
 //! string
 //! literals, function pointers, `sizeof` with real layout, casts, aggregate
-//! and designated initialisers, compound literals, file-scope, `static` and
+//! and designated initialisers — designator *lists* (`{ .a.b = 1 }`) and all
+//! — compound literals, file-scope, `static` and
 //! `extern` objects,
 //! functions (including `static`, `inline` and variadic ones), every operator,
 //! every control structure — `if`, `while`, `do`/`while`, `for`, `switch` with
@@ -1005,8 +1020,8 @@
 //!
 //! Deliberately never: `_Complex`,
 //! `setjmp`/`longjmp`, `_Thread_local`,
-//! `_Atomic`, `_BitInt`, `#embed`, C11's `u8`/`u`/`U`
-//! literals, inline assembly, and
+//! `_Atomic`, `_BitInt`, C23's *named* universal character
+//! `\N{…}`, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
 //! implies). Each of them is a clear, located error rather than a silent
 //! mistranslation.

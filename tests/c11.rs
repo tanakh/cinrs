@@ -307,6 +307,103 @@ fn the_version_macro_says_c11() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// <uchar.h>, and the u8/u/U literals
+// ---------------------------------------------------------------------------
+
+/// C11's Unicode literals (N1326, N1488) and the types they have.
+///
+/// Rust's own lexer reserves `u8"…"`, `u"…"` and `U"…"` as prefixes of its
+/// own, so these cannot be written as raw tokens — the string-literal form of
+/// the macro is the one that carries them, which is what every test here uses.
+#[test]
+fn unicode_string_literals_and_their_types() {
+    c11! { r##"
+        #include <uchar.h>
+        #include <string.h>
+
+        static const char utf8[] = u8"héllo";
+        static const char16_t utf16[] = u"hé\U0001F600";
+        static const char32_t utf32[] = U"hé\U0001F600";
+
+        /* `sizeof` counts the elements, terminating NUL and all: the smiley
+           needs a surrogate pair in UTF-16 and one code unit in UTF-32. */
+        unsigned long utf8_size(void) { return sizeof u8"héllo"; }
+        unsigned long utf16_size(void) { return sizeof u"hé\U0001F600"; }
+        unsigned long utf32_size(void) { return sizeof U"hé\U0001F600"; }
+        unsigned long char16_size(void) { return sizeof(char16_t); }
+        unsigned long char32_size(void) { return sizeof(char32_t); }
+
+        int utf8_at(int i) { return (unsigned char) utf8[i]; }
+        unsigned long utf16_at(int i) { return utf16[i]; }
+        unsigned long utf32_at(int i) { return utf32[i]; }
+
+        /* An unprefixed literal takes the prefix of the one next to it, and
+           its own bytes are re-decoded when it does (6.4.5p5). */
+        static const char32_t joined[] = U"a" "é" U"b";
+        unsigned long joined_at(int i) { return joined[i]; }
+        unsigned long joined_size(void) { return sizeof joined; }
+
+        /* The character constants, each with the type of one element of the
+           string literal that shares its prefix. */
+        int narrow_char(void) { return 'x'; }
+        unsigned long u16_char_size(void) { return sizeof u'x'; }
+        unsigned long u32_char_size(void) { return sizeof U'x'; }
+        int u16_char(void) { return u'é'; }
+        int u32_char(void) { return U'\U0001F600'; }
+
+        /* `_Generic` sees the underlying integer types, which is what
+           `char16_t` and `char32_t` are typedefs of. */
+        int kind_of_u(void) { return _Generic(u'x', unsigned short: 16, unsigned int: 32, default: 0); }
+        int kind_of_U(void) { return _Generic(U'x', unsigned short: 16, unsigned int: 32, default: 0); }
+
+        /* The library declarations are there and link. */
+        int converts(void) {
+            char buffer[8];
+            mbstate_t state;
+            memset(&state, 0, sizeof state);
+            return (int) c32rtomb(buffer, U'A', &state) == 1 && buffer[0] == 'A';
+        }
+    "## }
+
+    unsafe {
+        // "héllo" is six bytes in UTF-8, seven with the NUL.
+        assert_eq!(utf8_size(), 7);
+        assert_eq!(utf8_at(0), 0x68);
+        assert_eq!((utf8_at(1), utf8_at(2)), (0xc3, 0xa9));
+        assert_eq!((char16_size(), char32_size()), (2, 4));
+        // 'h', 'é', a surrogate pair and the NUL: five units of two bytes.
+        assert_eq!(utf16_size(), 10);
+        assert_eq!(
+            (
+                utf16_at(0),
+                utf16_at(1),
+                utf16_at(2),
+                utf16_at(3),
+                utf16_at(4)
+            ),
+            (0x68, 0xe9, 0xd83d, 0xde00, 0)
+        );
+        // The same three characters and the NUL, four units of four bytes.
+        assert_eq!(utf32_size(), 16);
+        assert_eq!(
+            (utf32_at(0), utf32_at(1), utf32_at(2), utf32_at(3)),
+            (0x68, 0xe9, 0x1_f600, 0)
+        );
+        assert_eq!(joined_size(), 16);
+        assert_eq!(
+            (joined_at(0), joined_at(1), joined_at(2), joined_at(3)),
+            (0x61, 0xe9, 0x62, 0)
+        );
+        assert_eq!(narrow_char(), 0x78);
+        assert_eq!((u16_char_size(), u32_char_size()), (2, 4));
+        assert_eq!(u16_char(), 0xe9);
+        assert_eq!(u32_char(), 0x1_f600);
+        assert_eq!((kind_of_u(), kind_of_U()), (16, 32));
+        assert_eq!(converts(), 1);
+    }
+}
+
 #[test]
 fn the_c11_headers_are_bundled() {
     c11! {
@@ -314,6 +411,7 @@ fn the_c11_headers_are_bundled() {
         #include <stdalign.h>
         #include <stdbool.h>
         #include <stdnoreturn.h>
+        #include <uchar.h>
 
         /* `static_assert` is <assert.h>'s spelling of `_Static_assert`, and
            `alignof` is <stdalign.h>'s of `_Alignof`. */

@@ -67,13 +67,6 @@ C23/n2836_n2939.c:0    wrong line: `\N{...}` named universal character escapes a
 C23/n2838.c            wrong line: a `_BitInt` array bound is refused before the "array is too large" the test asks for
 C23/n2900_n3011.c:0    wrong line: an empty initialiser for a variable length array is refused, where the test asks about the compound-literal form on a later line
 C23/n2900_n3011.c:1    see `C23/n2900_n3011.c:0`
-C23/n2940.c:0          the file is about trigraphs, which cinrs does not implement in any mode: `??=` survives to the parser and is a syntax error rather than a `#`
-C23/n2940.c:1          trigraphs; see `C23/n2940.c:0`
-C23/n2940.c:2          trigraphs; see `C23/n2940.c:0`
-C23/n2940.c:3          trigraphs; see `C23/n2940.c:0`
-C23/n2940.c:4          trigraphs; see `C23/n2940.c:0`
-C23/n2940.c:5          trigraphs; see `C23/n2940.c:0`
-C23/n2940.c:9          trigraphs; see `C23/n2940.c:0`
 C23/n3006.c            wrong line: `auto x = (enum E { }){ }` — an empty enumeration in a compound literal — is not the error reported
 C23/n3007.c            wrong line: `static auto c = 1UL;` is refused before the incompatible-pointer initialisation the test asks about
 C23/n3018.c:0          wrong line: a `constexpr` object whose initialiser overflows is not diagnosed; a `constexpr char[]` from a string is
@@ -89,7 +82,7 @@ C23/n3037_1.c          C23 tag compatibility (N3037): a second, compatible defin
 C99/n448.c:0           wrong line: `restrict` on a non-pointer (`int restrict ir;`) is not diagnosed, and `_Static_assert` in a `c99!` block is
 C99/n448.c:1           wrong line: `restrict` on a non-pointer is not diagnosed, and `constexpr int *restrict` is
 !C99/n570.c:0          `_Static_assert` in a `c99!` block; write `c11!`
-C99/n717.c:0           wrong line: a universal character name that names a basic-character member (`\u0024`) is accepted, and `\U00110000` is rejected on a line the test does not ask about
+C99/n717.c:0           wrong line: every universal character name in the file is written as the argument of a macro that expands to nothing, so the diagnostic for one that names a basic-character member never reaches the output; the first error the file does produce is the out-of-range one on a later line
 C99/n717.c:1           see `C99/n717.c:0`
 C99/n809.c             wrong line: `_Imaginary` is diagnosed where `_Complex` already was, so the error lands on line 19 rather than 29
 !C99/n809_2.c          `_Complex`: C11 6.10.8.3 makes complex arithmetic optional and cinrs predefines `__STDC_NO_COMPLEX__`, so refusing it is conforming
@@ -119,11 +112,7 @@ drs/dr1xx.c:4          wrong line: in C23 a compatible redefinition of `struct S
 !drs/dr206.c:1         `_Complex`; see `C99/n809_2.c`
 !drs/dr206.c:2         `_Complex`; see `C99/n809_2.c`
 !drs/dr206.c:3         `_Complex`; see `C99/n809_2.c`
-!drs/dr253.c:0         a designated initializer in a `c89!` block; C99 added them (N494). Behind it is the nested-designator gap of `drs/dr253.c:1`
-drs/dr253.c:1          a designator naming a nested member, `.a.b = 1`, is not supported; write nested braces
-drs/dr253.c:2          a nested designator; see `drs/dr253.c:1`
-drs/dr253.c:3          a nested designator; see `drs/dr253.c:1`
-drs/dr253.c:4          a nested designator; see `drs/dr253.c:1`
+!drs/dr253.c:0         a designated initializer in a `c89!` block; C99 added them (N494), and the other four revisions of this file — which are about designator lists — now come out as required
 drs/dr2xx.c:0          see `drs/dr2xx.c:1`
 drs/dr2xx.c:1          wrong line: `#nondirective` — an unknown directive — is accepted, and the file's own `#error` fires first
 drs/dr2xx.c:3          see `drs/dr2xx.c:1`

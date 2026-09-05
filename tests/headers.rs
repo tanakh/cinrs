@@ -227,6 +227,39 @@ fn character_classes_and_booleans() {
 }
 
 // ---------------------------------------------------------------------------
+// <iso646.h>
+// ---------------------------------------------------------------------------
+
+/// The eleven alternative spellings, each used as the operator it stands for.
+#[test]
+fn the_iso646_spellings_are_the_operators() {
+    c99! {
+        #include <iso646.h>
+
+        int logic(int a, int b) { return a and b or not a; }
+        int comparison(int a, int b) { return a not_eq b; }
+
+        int bits(int a, int b) {
+            int v = a bitand b;
+            v = v bitor (a xor b);
+            v and_eq compl 0;
+            v or_eq 0;
+            v xor_eq 0;
+            return v;
+        }
+    }
+
+    unsafe {
+        assert_eq!(logic(1, 1), 1);
+        assert_eq!(logic(1, 0), 0);
+        assert_eq!(logic(0, 0), 1);
+        assert_eq!(comparison(1, 2), 1);
+        assert_eq!(comparison(2, 2), 0);
+        assert_eq!(bits(0b1100, 0b1010), 0b1110);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // <stdint.h>, <limits.h>, <float.h>
 // ---------------------------------------------------------------------------
 

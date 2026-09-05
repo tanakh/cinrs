@@ -128,7 +128,10 @@ impl Sema<'_> {
                 let (value, ty) = float_literal(lit);
                 Some(Expr::new(ExprKind::Float(value), ty, range))
             }
-            ast::ExprKind::Char(lit) => Some(Expr::int(self.char_literal(lit), Ty::Int, range)),
+            ast::ExprKind::Char(lit) => {
+                let (value, ty) = self.char_literal(lit);
+                Some(Expr::int(value, ty, range))
+            }
             ast::ExprKind::Str(lit) => {
                 let place = self.string_place(lit, range);
                 Some(self.load_or_decay(place, range))
@@ -871,16 +874,30 @@ impl Sema<'_> {
     }
 
     fn string_place(&mut self, lit: &StrLit, range: SourceRange) -> Place {
-        let wide = lit.kind == StrKind::Wide;
+        let elem = self.string_elem(lit.kind);
         let id = StrId(self.program.strings.len() as u32);
         self.program.strings.push(StrData {
             values: lit.values.clone(),
-            wide,
+            elem,
         });
-        let elem = if wide { Ty::wchar_ty() } else { Ty::Char };
         let len = lit.values.len() as u64 + 1;
         let ty = self.program.types.array(elem, len, false);
         place_of(PlaceKind::Str(id), ty, false, range)
+    }
+
+    /// The element type of a string literal of this kind (C11 6.4.5p6).
+    ///
+    /// `u8"…"` is the one that moved: its elements were `char` in C11 and C17,
+    /// and C23 gave it `char8_t`, which is an `unsigned char`.
+    pub(super) fn string_elem(&self, kind: StrKind) -> Ty {
+        match kind {
+            StrKind::Narrow => Ty::Char,
+            StrKind::Utf8 if self.gating.standard >= crate::Standard::C23 => Ty::UChar,
+            StrKind::Utf8 => Ty::Char,
+            StrKind::Utf16 => Ty::char16_ty(),
+            StrKind::Utf32 => Ty::char32_ty(),
+            StrKind::Wide => Ty::wchar_ty(),
+        }
     }
 
     // -- unary operators ----------------------------------------------------
@@ -1456,7 +1473,13 @@ impl Sema<'_> {
             let else_value = self.convert(else_value, common);
             return Some(build(cond, then_value, else_value, common));
         }
-        if then_value.ty.is_void() && else_value.ty.is_void() {
+        // C requires both operands to be `void` or neither; GCC accepts one of
+        // each in every mode it has — `-std=c99` included, where it is only a
+        // pedantic warning — and the value of the other operand is discarded.
+        // `x ? (void)0 : f()` is how a macro writes "call `f` only sometimes"
+        // in an expression, and refusing it would be refusing an extension
+        // that the strict modes of the compiler this crate follows still have.
+        if then_value.ty.is_void() || else_value.ty.is_void() {
             return Some(build(cond, then_value, else_value, Ty::Void));
         }
         self.error(
@@ -2332,15 +2355,27 @@ impl Sema<'_> {
         (ty.wrap(value, &self.target), ty)
     }
 
-    /// The value of a character constant, which has type `int` in C.
-    fn char_literal(&self, lit: &CharLit) -> i128 {
+    /// The value and type of a character constant.
+    ///
+    /// `'x'` is an `int` — that much is C, not a choice — and each prefix
+    /// names the type of one element of the corresponding string literal:
+    /// `L'x'` is a `wchar_t`, `u'x'` a `char16_t`, `U'x'` a `char32_t`, and
+    /// C23's `u8'x'` a `char8_t`, which is an `unsigned char`.
+    fn char_literal(&self, lit: &CharLit) -> (i128, Ty) {
         let value = i128::from(lit.value);
+        let ty = match lit.kind {
+            StrKind::Narrow => Ty::Int,
+            StrKind::Utf8 => Ty::UChar,
+            StrKind::Utf16 => Ty::char16_ty(),
+            StrKind::Utf32 => Ty::char32_ty(),
+            StrKind::Wide => Ty::wchar_ty(),
+        };
         // The lexer hands over the raw execution-character value; whether the
         // top bit means "negative" is up to the target's plain `char`.
-        if !lit.wide && self.target.char_signed && (128..=255).contains(&value) {
-            value - 256
+        if lit.kind == StrKind::Narrow && self.target.char_signed && (128..=255).contains(&value) {
+            (value - 256, ty)
         } else {
-            value
+            (value, ty)
         }
     }
 }

@@ -310,3 +310,81 @@ fn extension_switches_the_gate_off() {
         Some("'long long' requires C99 or later (this block is c89!)"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// trigraphs
+// ---------------------------------------------------------------------------
+
+c99! { r##"
+??=include <string.h>
+??=define JOIN(a, b) a ??=??= b
+
+int trigraph_brackets(void) { int a??(3??) = ??<1, 2, 3??>; return a??(1??); }
+int trigraph_ops(int a, int b) { return ((a ??! b) ??' (a ??!??! b)) + ??-a; }
+int trigraph_assign(int a, int b) { a ??!= b; return a; }
+const char *trigraph_string(void) { return "??!??'??-x"; }
+int trigraph_question_marks(void) { return (int) sizeof("what??") - 1; }
+int trigraph_caret(int a) { a ??'= 3; return a; }
+
+/* `??/` at the end of a line is the backslash that splices it, so this is one
+   identifier and one `return`. */
+int trigraph_splice(void) {
+    int JOIN(xy, z) = 5;
+    return xy??/
+z;
+}
+"## }
+
+/// The nine trigraphs, each doing what `gcc -std=c99` does with the same text.
+///
+/// Every expected value here was checked against that compiler.
+#[test]
+fn a_strict_entry_point_replaces_trigraphs() {
+    unsafe {
+        assert_eq!(trigraph_brackets(), 2);
+        assert_eq!(trigraph_ops(12, 10), 2);
+        assert_eq!(trigraph_assign(12, 10), 14);
+        let s = core::ffi::CStr::from_ptr(trigraph_string())
+            .to_str()
+            .unwrap();
+        assert_eq!(s, "|^~x");
+        assert_eq!(trigraph_question_marks(), 6);
+        assert_eq!(trigraph_caret(12), 15);
+        assert_eq!(trigraph_splice(), 5);
+    }
+}
+
+/// Which entry points have them: every strict one below `c23!`, and no other.
+///
+/// C23 removed trigraphs (N2940) and GCC's `-std=gnu*` never had them on, so
+/// `??!` there is two question marks and a `!` — which is a syntax error in
+/// this expression, and that is exactly how the test tells the two apart.
+#[test]
+fn trigraphs_are_a_strict_pre_c23_feature() {
+    let source = "int f(void) { return 1 ??! 2; }";
+    for standard in [Standard::C89, Standard::C99, Standard::C11, Standard::C17] {
+        let found = errors(&Options::new(standard), source);
+        assert!(
+            found.is_empty(),
+            "{} rejected a trigraph: {found:#?}",
+            standard.macro_name()
+        );
+        let gnu = errors(&Options::with_dialect(standard, Dialect::Gnu), source);
+        assert!(
+            !gnu.is_empty(),
+            "{} replaced a trigraph",
+            standard.macro_name_in(Dialect::Gnu)
+        );
+    }
+    for options in [
+        Options::new(Standard::C23),
+        Options::with_dialect(Standard::C23, Dialect::Gnu),
+    ] {
+        let found = errors(&options, source);
+        assert!(
+            !found.is_empty(),
+            "{} replaced a trigraph",
+            options.macro_name()
+        );
+    }
+}

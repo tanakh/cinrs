@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | total | rate |
 | --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1327/1691 (78.5 %) | 36/78 (46.2 %) | **1363/1769** | **77.0 %** |
-| `gnu11!` | 1237/1691 (73.2 %) | 36/78 (46.2 %) | 1273/1769 | 72.0 % |
+| **`gnu89!`** | 1331/1691 (78.7 %) | 36/78 (46.2 %) | **1367/1769** | **77.3 %** |
+| `gnu11!` | 1241/1691 (73.4 %) | 36/78 (46.2 %) | 1277/1769 | 72.2 % |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -174,7 +174,7 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 404 of the 406 failures are refused at compile time, in 60
+Under `gnu89!`, 400 of the 402 failures are refused at compile time, in 60
 distinct causes. The ones worth a line each, with what the same cause costs
 under `gnu11!` beside it:
 
@@ -192,7 +192,7 @@ under `gnu11!` beside it:
 | 11 | 11 | `expected expression` — assorted parse gaps | `execute/20040302-1` |
 | 9 | 9 | `__attribute__((mode(…)))` | `execute/20020108-1` |
 | 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
-| 7 | 6 | an initialiser whose type does not convert | `execute/20020920-1` |
+| 6 | 5 | an initialiser whose type does not convert | `execute/20020920-1` |
 | 7 | 6 | `expected a declaration` — a stray `;` at file scope, mostly | `execute/20050106-1` |
 | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
 | 5 | 5 | a `#include` of a corpus file the harness does not put on the path | `execute/pr105777` |
@@ -247,7 +247,7 @@ the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 496 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 406.
+`gnu11!`'s, 492 lines, and `expected-failures-gnu89.txt` is `gnu89!`'s, 402.
 One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has

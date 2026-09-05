@@ -15,6 +15,8 @@ cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 quote = "1.0"
 rustversion = "1.0.22"
+unicode-ident = "1.0"
+unicode-normalization = { version = "0.1.24", default-features = false }
 
 [package]
 name = "cinrs"

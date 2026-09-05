@@ -14,6 +14,14 @@ name = "cinrs_core"
 proc-macro2.workspace = true
 quote.workspace = true
 rustversion.workspace = true
+# C99's extended identifiers are UAX #31, and so are Rust's; `unicode-ident` is
+# the table `proc-macro2` itself uses to answer the same question, and
+# `unicode-normalization` is what says whether an identifier is in NFC — which
+# both C23 and Rust require, and which `rustc` silently *applies* to a
+# procedural macro's identifiers, so a front end that did not check would let
+# two different C names become one Rust item.
+unicode-ident.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 insta = "1"

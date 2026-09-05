@@ -6,8 +6,8 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | passing |
 | --- | --- | --- | ---: | ---: |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **97.7 %** (`c99!`) |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **77.0 %** (`gnu89!`), 72.0 % (`gnu11!`) |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **41.9 %** of the 203 run |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **77.3 %** (`gnu89!`), 72.2 % (`gnu11!`) |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **47.3 %** of the 203 run |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
@@ -153,11 +153,13 @@ Against what the three suites already do:
   has a counterpart among c-testsuite's 220 whole programs and, far more
   thoroughly, among the torture suite's 1,769. Forty files against 2,265 is not
   where the next conformance bug is hiding.
-* **What is *not* duplicated is what `cinrs` documents as unsupported.**
-  `atomic.c`, `tls.c`, `asm.c` and `unicode.c` are `_Atomic`, `_Thread_local`,
-  inline assembly and `u8"…"`/`u"…"`/`U"…"` — four things that are a located
-  error on purpose. They would all become `!` entries on day one and teach
-  nothing.
+* **What is *not* duplicated is largely what `cinrs` documents as
+  unsupported.** `atomic.c`, `tls.c` and `asm.c` are `_Atomic`,
+  `_Thread_local` and inline assembly — three things that are a located error
+  on purpose. They would become `!` entries on day one and teach nothing.
+  (`unicode.c` was a fourth until the `u8"…"`/`u"…"`/`U"…"` literals and
+  extended identifiers landed; `tests/c11.rs`, `tests/c23.rs` and
+  `tests/identifiers.rs` cover that ground now.)
 * **It is not nearly free.** Every case has to be *linked against a second
   translation unit* (`common`, which defines `assert`), which none of the three
   harnesses does — each generates one self-contained Rust file. Adding that is

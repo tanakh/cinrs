@@ -93,13 +93,11 @@ execute/20050316-2                    compile error: 'vector_size' is not suppor
 execute/20050316-3                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050604-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050607-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20050613-1                    compile error: a designator naming a nested member is not supported yet; write nested braces instead
 execute/20060420-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20061031-1                    compile error: inline assembly is not supported
 execute/20061220-1                    compile error: expected ';' after declaration, found '{'
 execute/20070614-1                    compile error: complex types are not supported
 execute/20070919-1                    compile error: a member of a struct cannot have a variably modified type
-execute/20071029-1                    compile error: a designator naming a nested member is not supported yet; write nested braces instead
 execute/20071202-1                    compile error: cannot initialize 'compound literal', of type 'int', with an expression of type 'struct T'
 execute/20071210-1                    compile error: expected expression, found '&&'
 execute/20071211-1                    compile error: inline assembly is not supported
@@ -321,7 +319,6 @@ execute/pr24135                       compile error: expected ';' after declarat
 execute/pr28865                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/pr30314                       compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
 execute/pr33382                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
-execute/pr33631                       compile error: cannot initialize 'r', of type 'union pthread_mutex_t', with an expression of type 'int'
 execute/pr34154                       compile error: expected a declaration, found ';'
 execute/pr35456                       compile error: '__builtin_signbit' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr37573                       compile error: expected a declaration, found ';'
@@ -412,7 +409,6 @@ execute/pr85169                       compile error: 'vector_size' is not suppor
 execute/pr85331                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr85756                       compile error: inline assembly is not supported
 execute/pr86714                       compile error: initializer-string for char array is too long
-execute/pr88739                       compile error: a designator naming a nested member is not supported yet; write nested braces instead
 execute/pr88904                       compile error: inline assembly is not supported
 execute/pr92618                       compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr92904                       compile error: va_arg with a struct type is not supported yet

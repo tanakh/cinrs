@@ -420,6 +420,125 @@ fn designated_and_partial_initializers() {
     }
 }
 
+/// C99 6.7.8's designator *lists*, and the "next subobject" rule that follows
+/// one.
+///
+/// Every expected value here was taken from `gcc -std=c99` compiling the same
+/// declarations, member by member — which is the only oracle worth having for
+/// a corner of C this fiddly.
+#[test]
+fn nested_designators_reach_subobjects() {
+    c99! {
+        struct Pair { int x; int y; };
+        struct Boxed { struct Pair p; int tag; };
+        struct Row { int cells[3]; int tag; };
+        struct Grid { struct Pair pairs[2]; int tag; };
+        struct Inner { int p[2]; };
+        struct Outer { struct Inner inner[2]; int tag; };
+
+        /* `.p.x` names a member two levels down, and the elements after it
+           carry on from there: `p.y`, then `tag`. */
+        struct Boxed boxed = {.p.x = 1, 2, 3};
+        /* A designator that names an array leaves its braces out. */
+        struct Row row = {.cells = 1, 2, 3};
+        /* `[1].y` inside an array of structs; the `8` lands on `tag`. */
+        struct Grid grid = {.pairs[1].y = 7, 8};
+        /* Two designators into the same member merge rather than replace. */
+        struct Boxed merged = {.p = {1}, .p.y = 2};
+        struct Boxed reversed = {.p.y = 2, .p.x = 1};
+        /* Out of the innermost array, into the next one, then out again. */
+        struct Outer outer = {.inner[0].p[1] = 5, 6, 7, 8};
+        /* A designator after an element whose braces were elided names a
+           member of the *outer* object (6.7.8p17). */
+        struct Boxed elided = {1, .tag = 5};
+        int matrix[2][2] = {1, [1] = {3, 4}};
+        int matrix2[2][2] = {1, 2, [1][1] = 9};
+
+        int boxed_at(int i) { return i == 0 ? boxed.p.x : i == 1 ? boxed.p.y : boxed.tag; }
+        int row_at(int i) { return i < 3 ? row.cells[i] : row.tag; }
+        int grid_at(int i) {
+            return i == 0 ? grid.pairs[0].x : i == 1 ? grid.pairs[0].y
+                 : i == 2 ? grid.pairs[1].x : i == 3 ? grid.pairs[1].y : grid.tag;
+        }
+        int merged_at(int i) { return i == 0 ? merged.p.x : i == 1 ? merged.p.y : merged.tag; }
+        int reversed_at(int i) {
+            return i == 0 ? reversed.p.x : i == 1 ? reversed.p.y : reversed.tag;
+        }
+        int outer_at(int i) {
+            return i < 4 ? outer.inner[i / 2].p[i % 2] : outer.tag;
+        }
+        int elided_at(int i) { return i == 0 ? elided.p.x : i == 1 ? elided.p.y : elided.tag; }
+        int matrix_at(int i) { return matrix[i / 2][i % 2]; }
+        int matrix2_at(int i) { return matrix2[i / 2][i % 2]; }
+
+        /* The same rules at block scope, where the initialiser is code. */
+        int local_sum(int base) {
+            struct Boxed b = {.p.x = base, base + 1, base + 2};
+            struct Outer o = {.inner[1].p[0] = base, base + 1, base + 2};
+            return b.p.x + b.p.y * 10 + b.tag * 100
+                 + o.inner[1].p[0] * 1000 + o.inner[1].p[1] * 10000 + o.tag * 100000;
+        }
+    }
+
+    unsafe {
+        let read =
+            |f: unsafe extern "C" fn(i32) -> i32, n| (0..n).map(|i| f(i)).collect::<Vec<_>>();
+        assert_eq!(read(boxed_at, 3), [1, 2, 3]);
+        assert_eq!(read(row_at, 4), [1, 2, 3, 0]);
+        assert_eq!(read(grid_at, 5), [0, 0, 0, 7, 8]);
+        assert_eq!(read(merged_at, 3), [1, 2, 0]);
+        assert_eq!(read(reversed_at, 3), [1, 2, 0]);
+        assert_eq!(read(outer_at, 5), [0, 5, 6, 7, 8]);
+        assert_eq!(read(elided_at, 3), [1, 0, 5]);
+        assert_eq!(read(matrix_at, 4), [1, 0, 3, 4]);
+        assert_eq!(read(matrix2_at, 4), [1, 2, 0, 9]);
+        // b = {1, 2, 3}; o.inner[1] = {1, 2}, o.tag = 3.
+        assert_eq!(local_sum(1), 1 + 20 + 300 + 1000 + 20000 + 300000);
+    }
+}
+
+/// A designator into a `union` member, and one that crosses an anonymous
+/// member, plus GNU's range designator in a nested position.
+#[test]
+fn nested_designators_into_unions_and_ranges() {
+    cinrs::gnu99! {
+        struct Pair { int x; int y; };
+        union Holder { int i; double f; struct Pair p; };
+        struct Wrapper { union Holder h; int tag; };
+        struct Anon { union { int a; int b; }; int tag; };
+
+        struct Wrapper into_union = {.h.p.y = 5, 9};
+        union Holder floating = {.f = 1.5};
+        /* A union takes one member, and an element after a nested designator
+           continues *inside* it. */
+        union Holder carried = {.p.x = 1, 2};
+        struct Anon anon = {.a = 7, .tag = 8};
+        struct Pair spread[3] = {[0 ... 1].x = 3, [2].y = 4};
+        struct Row2 { int cells[3]; int tag; };
+        struct Row2 ranged = {.cells[0 ... 1] = 3, 9};
+
+        int into_union_at(int i) {
+            return i == 0 ? into_union.h.p.x : i == 1 ? into_union.h.p.y : into_union.tag;
+        }
+        double floating_value(void) { return floating.f; }
+        int carried_at(int i) { return i == 0 ? carried.p.x : carried.p.y; }
+        int anon_at(int i) { return i == 0 ? anon.a : anon.tag; }
+        int spread_at(int i) { return i % 2 == 0 ? spread[i / 2].x : spread[i / 2].y; }
+        int ranged_at(int i) { return i < 3 ? ranged.cells[i] : ranged.tag; }
+    }
+
+    unsafe {
+        let read =
+            |f: unsafe extern "C" fn(i32) -> i32, n| (0..n).map(|i| f(i)).collect::<Vec<_>>();
+        assert_eq!(read(into_union_at, 3), [0, 5, 9]);
+        assert_eq!(floating_value(), 1.5);
+        assert_eq!(read(carried_at, 2), [1, 2]);
+        assert_eq!(read(anon_at, 2), [7, 8]);
+        assert_eq!(read(spread_at, 6), [3, 0, 3, 0, 0, 4]);
+        assert_eq!(read(ranged_at, 4), [3, 3, 9, 0]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // layout
 // ---------------------------------------------------------------------------

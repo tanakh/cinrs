@@ -3506,6 +3506,12 @@ impl Parser<'_> {
     }
 
     /// Concatenates adjacent string literals, as translation phase 6 does.
+    ///
+    /// C11 6.4.5p5 gives the result the prefix of whichever half has one; two
+    /// *different* prefixes have no meaning (and C23's N2594 deleted the last
+    /// of the wording that gave them one), so that is a diagnostic. An
+    /// unprefixed half being absorbed is re-encoded, because its elements are
+    /// the UTF-8 bytes of the source and the result's are code units.
     fn parse_string_literal(&mut self, first: StrLit, first_range: SourceRange) -> Expr {
         self.advance();
         let mut kind = first.kind;
@@ -3513,13 +3519,30 @@ impl Parser<'_> {
         let mut text = first.text;
         let mut range = first_range;
         while let TokenKind::Str(next) = self.peek().kind.clone() {
-            if next.kind == StrKind::Wide {
-                kind = StrKind::Wide;
+            let piece_range = self.cur_range();
+            if next.kind != kind {
+                if kind == StrKind::Narrow {
+                    values = recode_from_narrow(&values, next.kind);
+                    kind = next.kind;
+                } else if next.kind != StrKind::Narrow {
+                    self.error(
+                        piece_range,
+                        format!(
+                            "cannot concatenate a '{}' string literal with a '{}' one",
+                            kind.prefix(),
+                            next.kind.prefix()
+                        ),
+                    );
+                }
             }
-            values.extend_from_slice(&next.values);
+            if next.kind == kind || next.kind != StrKind::Narrow {
+                values.extend_from_slice(&next.values);
+            } else {
+                values.extend(recode_from_narrow(&next.values, kind));
+            }
             text.push(' ');
             text.push_str(&next.text);
-            range = range.join(self.cur_range());
+            range = range.join(piece_range);
             self.advance();
         }
         Expr {
@@ -3527,4 +3550,28 @@ impl Parser<'_> {
             range,
         }
     }
+}
+
+/// Re-encodes the UTF-8 bytes of an unprefixed literal as elements of `kind`.
+///
+/// `"é" L"x"` is one wide literal of two characters, not of the two bytes the
+/// `é` was written as.
+fn recode_from_narrow(values: &[u32], kind: StrKind) -> Vec<u32> {
+    if kind == StrKind::Narrow || kind == StrKind::Utf8 {
+        return values.to_vec();
+    }
+    let bytes: Vec<u8> = values.iter().map(|v| *v as u8).collect();
+    let text = String::from_utf8_lossy(&bytes);
+    let mut out = Vec::with_capacity(values.len());
+    for ch in text.chars() {
+        let value = ch as u32;
+        if kind == StrKind::Utf16 && value > 0xffff {
+            let v = value - 0x1_0000;
+            out.push(0xd800 + (v >> 10));
+            out.push(0xdc00 + (v & 0x3ff));
+        } else {
+            out.push(value);
+        }
+    }
+    out
 }
