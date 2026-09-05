@@ -484,14 +484,83 @@ fn anchors(source: &str) -> BTreeMap<String, usize> {
 
 /// The line a directive on `line` is really about.
 ///
-/// A directive split over several lines with a trailing `\` belongs to the
-/// first of them, which is what Clang's own `-verify` does.
-fn base_line(lines: &[&str], line: usize) -> usize {
-    let mut at = line;
+/// Two rules, both Clang's own `-verify`:
+///
+/// * a directive split over several lines with a trailing `\` belongs to the
+///   first of them;
+/// * a directive written on a *continuation* line of a `/* … */` comment
+///   belongs to the line the **comment** started on. That is how a run of
+///   directives under one diagnostic all point at it, and `drs/dr1xx.c`,
+///   `drs/dr0xx.c` and half of `drs/` are written that way:
+///
+///   ```c
+///   void f(struct S s) {} /* expected-warning {{…}}
+///                            expected-error {{…}} */
+///   ```
+///
+///   both of which Clang expects on the line of the definition. Reading the
+///   second as its own line answered these files' questions on the wrong
+///   lines, which showed up as "wrong line" against `cinrs`.
+fn base_line(lines: &[&str], comment_starts: &[usize], line: usize) -> usize {
+    let mut at = comment_starts.get(line).copied().unwrap_or(line);
     while at > 1 && lines[at - 2].trim_end().ends_with('\\') {
         at -= 1;
     }
     at
+}
+
+/// For every line, the line on which the block comment it is inside began.
+///
+/// A line that is not inside one — or on which the comment itself opens — is
+/// its own answer. Index 0 is unused, so that the vector is indexed by line
+/// number. See [`base_line`].
+fn comment_starts(source: &str) -> Vec<usize> {
+    let mut out = vec![0usize];
+    let mut open: Option<usize> = None;
+    for (index, text) in source.lines().enumerate() {
+        let line = index + 1;
+        out.push(open.unwrap_or(line));
+        let bytes = text.as_bytes();
+        let mut at = 0usize;
+        let mut quote: Option<u8> = None;
+        while at < bytes.len() {
+            if open.is_some() {
+                if bytes[at] == b'*' && bytes.get(at + 1) == Some(&b'/') {
+                    open = None;
+                    at += 2;
+                } else {
+                    at += 1;
+                }
+                continue;
+            }
+            // A `/*` inside a string literal opens nothing, and a `"` inside a
+            // comment closes nothing; tracking both keeps the two apart.
+            if let Some(delimiter) = quote {
+                if bytes[at] == b'\\' {
+                    at += 2;
+                    continue;
+                }
+                if bytes[at] == delimiter {
+                    quote = None;
+                }
+                at += 1;
+                continue;
+            }
+            match (bytes[at], bytes.get(at + 1)) {
+                (b'/', Some(b'*')) => {
+                    open = Some(line);
+                    at += 2;
+                }
+                (b'/', Some(b'/')) => break,
+                (b'"' | b'\'', _) => {
+                    quote = Some(bytes[at]);
+                    at += 1;
+                }
+                _ => at += 1,
+            }
+        }
+    }
+    out
 }
 
 /// Reads every `-verify` directive out of the file.
@@ -515,6 +584,7 @@ fn annotations(source: &str) -> Vec<Annotation> {
         }
     }
     line_of.push(number);
+    let comment_start_of = comment_starts(source);
 
     let mut out = Vec::new();
     let mut at = 0usize;
@@ -539,7 +609,7 @@ fn annotations(source: &str) -> Vec<Annotation> {
             continue;
         }
         let mut rest = &source[at + kind.len()..];
-        let directive_line = base_line(&lines, line_of[dash]);
+        let directive_line = base_line(&lines, &comment_start_of, line_of[dash]);
         if *kind == "no-diagnostics" {
             out.push(Annotation {
                 prefix: prefix.to_owned(),

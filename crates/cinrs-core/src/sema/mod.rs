@@ -337,6 +337,17 @@ struct Sema<'a> {
     /// declaration *without* one — through `typeof`, say — is refused, so the
     /// pair can never come apart.
     vla_bound: Option<Expr>,
+    /// Whether the type being resolved is a *parameter's*.
+    ///
+    /// A parameter's array bound is not part of its type at all (C99
+    /// 6.7.5.3p7): `void f(int n, int a[n])` declares an `int *`, and the
+    /// bound may be anything even in a prototype at file scope, where an
+    /// object's could not be. What the bound *can* still run into is the
+    /// variably modified machinery this release leaves out — `int a[2][n]` is
+    /// a pointer to a variable length array — and this is what makes that the
+    /// diagnostic rather than "array size is not an integer constant
+    /// expression", which would be simply untrue.
+    in_param_type: bool,
     /// The variable length arrays whose scope encloses the statement being
     /// checked, innermost last.
     ///
@@ -418,6 +429,7 @@ impl<'a> Sema<'a> {
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
             vla_bound: None,
+            in_param_type: false,
             vla_scopes: Vec::new(),
             label_vla_scopes: HashMap::new(),
             goto_scopes: Vec::new(),
@@ -479,6 +491,28 @@ impl<'a> Sema<'a> {
                 ast::ExternalDecl::StaticAssert(assert) => self.static_assert(assert),
             }
         }
+        self.complete_tentative_arrays();
+    }
+
+    /// C99 6.9.2p5: a tentative definition whose type is still an incomplete
+    /// array type at the end of the translation unit becomes a definition of
+    /// an array of *one* element.
+    ///
+    /// `int j[];` on its own is that; `int j[]; int j[3];` is not, because the
+    /// second declaration completed the type long before here. An `extern`
+    /// declaration is not a tentative definition and keeps its incomplete
+    /// type: the object is somebody else's, and only its address is ever used.
+    fn complete_tentative_arrays(&mut self) {
+        for index in 0..self.program.statics.len() {
+            let id = self.program.statics[index].object;
+            let ty = self.program.object(id).ty;
+            let Some(completed) = self.program.types.complete_tentative_array(ty) else {
+                continue;
+            };
+            self.program.objects[id.0 as usize].ty = completed;
+            let range = self.program.object(id).range;
+            self.program.statics[index].init = self.zero(completed, range);
+        }
     }
 
     // -- diagnostics --------------------------------------------------------
@@ -496,6 +530,30 @@ impl<'a> Sema<'a> {
         if let Some(message) = self.gating.requires(what, needed) {
             self.error(range, message);
         }
+    }
+
+    /// Whether this block has the GNU leniencies.
+    ///
+    /// These are the handful of places where GCC takes a constraint violation
+    /// as a warning and carries on, and where refusing valid-in-practice C
+    /// would be worse than following it: `return expr;` in a `void` function,
+    /// a comparison of two incompatible function pointers, `sizeof (void)`, a
+    /// stray `;` at file scope, an undeclared `alloca`, an enumerator too wide
+    /// for `int` before C23. Each of them is a
+    /// [`Standard`](crate::Standard)-independent *dialect* question, which is
+    /// why it is not [`Sema::require_standard`]; `doc/gnu-extensions.md` has
+    /// the list.
+    fn gnu_leniency(&self) -> bool {
+        self.gating.dialect.is_gnu()
+    }
+
+    /// The note that names the entry point which would have accepted what
+    /// [`Sema::gnu_leniency`] just refused.
+    fn gnu_note(&self) -> String {
+        format!(
+            "GCC accepts this with a warning; write {} for the same leniency",
+            self.gating.standard.macro_name_in(crate::Dialect::Gnu)
+        )
     }
 
     /// Records that the program needs a toolchain this one is not.
@@ -692,6 +750,17 @@ impl<'a> Sema<'a> {
             (Ty::Pointer(x), Ty::Pointer(y)) => {
                 let (x, y) = (self.types().pointer_type(x), self.types().pointer_type(y));
                 x.konst == y.konst && self.compatible(x.pointee, y.pointee)
+            }
+            // C99 6.7.5.2p6: compatible element types, and equal sizes only
+            // when *both* have one. `extern int j[]; int j[3];` declares one
+            // object, and `__builtin_types_compatible_p(int[5], int[])` is
+            // one of GCC's own torture cases.
+            (Ty::Array(x), Ty::Array(y)) => {
+                let (x, y) = (self.types().array_type(x), self.types().array_type(y));
+                x.elem_const == y.elem_const
+                    && x.vla == y.vla
+                    && self.compatible(x.elem, y.elem)
+                    && (x.incomplete || y.incomplete || x.len == y.len)
             }
             _ => false,
         }

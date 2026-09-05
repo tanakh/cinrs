@@ -1364,7 +1364,13 @@ LOG("n=%d", 7);
         pp23("#define F(a, ...) [a __VA_OPT__(: __VA_ARGS__)]\nF(1) F(1, 2, 3)"),
         "[ 1 ] [ 1 : 2 , 3 ]"
     );
-    assert_eq!(pp23("#define G(...) x __VA_OPT__(# # 1)\nG() G(y)"), "x x1");
+    // `##` *inside* the contents pastes as it would anywhere else in a
+    // replacement list; only one at the very start or the very end of them is
+    // a constraint violation (C23 6.10.5.2p1).
+    assert_eq!(
+        pp23("#define G(a, ...) x __VA_OPT__(a ## 1)\nG(p) G(p, q)"),
+        "x x p1"
+    );
 }
 
 #[test]
@@ -1378,6 +1384,20 @@ fn va_opt_is_checked_and_gated() {
     assert_eq!(errors, ["'__VA_OPT__' must be followed by '('"]);
     let (_, errors) = run_c23("#define F(...) __VA_OPT__(__VA_OPT__(x))\nF(1)");
     assert_eq!(errors, ["'__VA_OPT__' cannot be nested inside another"]);
+    // C23 6.10.5.2p1: the token sequence of the argument may neither begin nor
+    // end with `##`, for the same reason a replacement list may not — there is
+    // nothing on that side of it to paste to. Clang's `C23/n3033_2.c` is the
+    // first of these.
+    let (_, errors) = run_c23("#define F(X, ...) X __VA_OPT__(##) __VA_ARGS__\nF(1, 2)");
+    assert_eq!(
+        errors,
+        ["'##' cannot appear at the start of a '__VA_OPT__' argument"]
+    );
+    let (_, errors) = run_c23("#define F(X, ...) X __VA_OPT__(X ##) __VA_ARGS__\nF(1, 2)");
+    assert_eq!(
+        errors,
+        ["'##' cannot appear at the end of a '__VA_OPT__' argument"]
+    );
     // Before C23 it is not there at all.
     one_error(
         "#define F(...) f(__VA_OPT__(x))\nF(1)",

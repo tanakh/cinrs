@@ -227,6 +227,17 @@ pub struct ArrayType {
     /// *object*, which is why `sizeof` of one is a run-time value read out of a
     /// hidden local rather than a constant. See [`Stmt::Vla`].
     pub vla: bool,
+    /// Whether the bound was left out — `int j[]`, C99 6.2.5p22's *incomplete*
+    /// array type.
+    ///
+    /// It is what `extern int j[];` declares, and what a file-scope `int j[];`
+    /// with no initialiser is until the end of the translation unit completes
+    /// it to one element (6.9.2p5). `sizeof` of one is an error, but it may be
+    /// pointed at, subscripted and decayed like any other array, and it is
+    /// *compatible* with every completed array of the same element type
+    /// (6.2.7p1), which is what lets `extern int j[]; int j[3];` declare one
+    /// object.
+    pub incomplete: bool,
 }
 
 /// A function type.
@@ -511,6 +522,7 @@ impl Types {
             len,
             elem_const,
             vla: false,
+            incomplete: false,
         })
     }
 
@@ -522,6 +534,18 @@ impl Types {
             len: 0,
             elem_const,
             vla: true,
+            incomplete: false,
+        })
+    }
+
+    /// The type `elem[]` — an array whose bound was left out (6.2.5p22).
+    pub fn incomplete_array(&mut self, elem: Ty, elem_const: bool) -> Ty {
+        self.array_type_of(ArrayType {
+            elem,
+            len: 0,
+            elem_const,
+            vla: false,
+            incomplete: true,
         })
     }
 
@@ -689,6 +713,22 @@ impl Types {
         matches!(ty, Ty::Array(id) if self.array_type(id).vla)
     }
 
+    /// Whether `ty` is an array whose bound was left out — `int j[]`.
+    pub fn is_incomplete_array(&self, ty: Ty) -> bool {
+        matches!(ty, Ty::Array(id) if self.array_type(id).incomplete)
+    }
+
+    /// `elem[1]`, for an incomplete array type: what C99 6.9.2p5 completes a
+    /// tentative definition with one to at the end of the translation unit.
+    pub fn complete_tentative_array(&mut self, ty: Ty) -> Option<Ty> {
+        let Ty::Array(id) = ty else { return None };
+        let array = self.array_type(id);
+        if !array.incomplete {
+            return None;
+        }
+        Some(self.array(array.elem, 1, array.elem_const))
+    }
+
     /// Whether `ty` is a pointer to a function.
     pub fn is_func_pointer(&self, ty: Ty) -> bool {
         matches!(self.pointee(ty), Some(Ty::Func(_)))
@@ -726,7 +766,10 @@ impl Types {
         match ty {
             Ty::Void | Ty::Func(_) | Ty::Error => false,
             Ty::Record(id) => self.record(id).complete,
-            Ty::Array(id) => self.is_complete(self.array_type(id).elem),
+            Ty::Array(id) => {
+                let array = self.array_type(id);
+                !array.incomplete && self.is_complete(array.elem)
+            }
             _ => true,
         }
     }
@@ -749,7 +792,10 @@ impl Types {
                 // object's own hidden length. Answering `None` here is what
                 // keeps a path that forgot about that loud rather than silently
                 // wrong.
-                if array.vla {
+                // An incomplete array has no size either, and `sizeof` of one
+                // is a constraint violation until a later declaration in the
+                // same unit completes it.
+                if array.vla || array.incomplete {
                     return None;
                 }
                 Layout {
@@ -807,6 +853,9 @@ impl Types {
                     // constant expression; the bound belongs to the object, so
                     // there is nothing else honest to print.
                     return format!("{prefix}{}[*]", self.name(a.elem));
+                }
+                if a.incomplete {
+                    return format!("{prefix}{}[]", self.name(a.elem));
                 }
                 format!("{prefix}{}[{}]", self.name(a.elem), a.len)
             }
@@ -2051,17 +2100,6 @@ pub enum ExprKind {
         /// The list to read from and advance.
         ap: Place,
     },
-    /// `offsetof(T, member)`, whose type is `size_t`.
-    ///
-    /// Left unevaluated so that code generation can ask Rust for the offset of
-    /// the field in the item it generated; see [`crate::sema`].
-    OffsetOf {
-        /// The `struct` or `union`.
-        record: RecordId,
-        /// The field indices to follow, one per level: more than one when the
-        /// member is reached through an anonymous member.
-        path: Vec<usize>,
-    },
     /// C23's `unreachable()`, which promises control never gets here.
     Unreachable,
     /// `va_end(ap)`, whose type is `void`.
@@ -2403,7 +2441,6 @@ pub fn calls_a_function(expr: &Expr) -> bool {
         | ExprKind::Zeroed
         | ExprKind::FuncAddr(_)
         | ExprKind::VaListPristine
-        | ExprKind::OffsetOf { .. }
         | ExprKind::Unreachable
         | ExprKind::VaEnd => false,
         ExprKind::Load(place) | ExprKind::AddrOf(place) => place_calls_a_function(place),
@@ -2446,6 +2483,91 @@ fn place_calls_a_function(place: &Place) -> bool {
         PlaceKind::Field { base, .. } => place_calls_a_function(base),
         PlaceKind::Temporary(expr) => calls_a_function(expr),
         PlaceKind::CompoundLiteral { init, .. } => calls_a_function(init),
+    }
+}
+
+/// Whether `expr` reads or takes the address of `object`.
+///
+/// C99 6.2.1p7 puts an identifier in scope from the end of its declarator, so
+/// an initialiser may name the object it initialises: `struct list head = {
+/// &head, &head }` is the idiom, and `T *p = malloc(sizeof *p)` is the one
+/// everybody writes. A Rust binding cannot be named in its own initialiser, so
+/// an *automatic* object whose initialiser does this is defined with a zero
+/// and assigned afterwards; this is what tells the two apart. An object with
+/// static storage duration needs nothing: the generated item takes its own
+/// address with `&raw mut`, which reads nothing and is a constant.
+pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
+    let any = |list: &[Expr]| list.iter().any(|e| mentions_object(e, object));
+    match &expr.kind {
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Zeroed
+        | ExprKind::FuncAddr(_)
+        | ExprKind::VaListPristine
+        | ExprKind::Unreachable
+        | ExprKind::VaEnd => false,
+        ExprKind::Load(place) | ExprKind::AddrOf(place) => place_mentions_object(place, object),
+        ExprKind::VaArg { ap } => place_mentions_object(ap, object),
+        ExprKind::Assign { place, value } | ExprKind::CompoundAssign { place, value, .. } => {
+            place_mentions_object(place, object) || mentions_object(value, object)
+        }
+        ExprKind::IncDec { place, .. } => place_mentions_object(place, object),
+        ExprKind::Neg(inner) | ExprKind::BitNot(inner) | ExprKind::Cast(inner) => {
+            mentions_object(inner, object)
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Compare { lhs, rhs, .. }
+        | ExprKind::Logical { lhs, rhs, .. }
+        | ExprKind::PtrDiff { lhs, rhs }
+        | ExprKind::Comma { lhs, rhs } => {
+            mentions_object(lhs, object) || mentions_object(rhs, object)
+        }
+        ExprKind::PtrOffset { ptr, index, .. } => {
+            mentions_object(ptr, object) || mentions_object(index, object)
+        }
+        ExprKind::Cond {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            mentions_object(cond, object)
+                || mentions_object(then_expr, object)
+                || mentions_object(else_expr, object)
+        }
+        ExprKind::CondDefault { value, else_expr } => {
+            mentions_object(value, object) || mentions_object(else_expr, object)
+        }
+        ExprKind::Call { callee, args } => {
+            let callee = match callee {
+                Callee::Direct(_) => false,
+                Callee::Indirect(target) => mentions_object(target, object),
+            };
+            callee || any(args)
+        }
+        ExprKind::Builtin { args, .. } => any(args),
+        ExprKind::RecordLit { fields, .. } => any(fields),
+        ExprKind::UnionLit { value, .. } => mentions_object(value, object),
+        ExprKind::ArrayLit(items) => any(items),
+        ExprKind::ArrayRepeat { value, .. } => mentions_object(value, object),
+        // A statement expression is a block of its own; whatever it names, it
+        // names through a scope this cannot walk, so it is taken to reach the
+        // object rather than risk a binding read before it exists.
+        ExprKind::StmtExpr { .. } => true,
+    }
+}
+
+/// [`mentions_object`], for the expressions inside a place.
+fn place_mentions_object(place: &Place, object: ObjectId) -> bool {
+    match &place.kind {
+        PlaceKind::Object(id) => *id == object,
+        PlaceKind::Str(_) => false,
+        PlaceKind::Deref(ptr) => mentions_object(ptr, object),
+        PlaceKind::Index { base, index } => {
+            mentions_object(base, object) || mentions_object(index, object)
+        }
+        PlaceKind::Field { base, .. } => place_mentions_object(base, object),
+        PlaceKind::Temporary(expr) => mentions_object(expr, object),
+        PlaceKind::CompoundLiteral { init, .. } => mentions_object(init, object),
     }
 }
 

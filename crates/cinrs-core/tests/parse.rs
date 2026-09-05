@@ -320,15 +320,14 @@ fn offsetof_is_a_special_form() {
 }
 
 #[test]
-fn a_nested_member_designator_is_refused() {
-    let diagnostics = parse_diagnostics(
-        "struct S { int a; };
-         unsigned long f(void) { return __builtin_offsetof(struct S, a.b); }",
+fn a_nested_member_designator_parses() {
+    // C99 7.17p3's member designator: an identifier and then any number of
+    // `.member` and `[expr]` steps.
+    let dump = parse_dump(
+        "struct T { int b[4]; }; struct S { struct T a; };
+         unsigned long f(void) { return __builtin_offsetof(struct S, a.b[2]); }",
     );
-    assert!(
-        diagnostics.contains("a nested member designator is not supported in 'offsetof'"),
-        "{diagnostics}"
-    );
+    assert!(dump.contains("offsetof struct S .a .b [2]"), "{dump}");
 }
 
 // ---------------------------------------------------------------------------

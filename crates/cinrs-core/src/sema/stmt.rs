@@ -361,20 +361,52 @@ impl Sema<'_> {
             }
             Some(expr) => match self.expr(expr) {
                 None => (!ret.is_void()).then(|| self.zero(ret, range)),
-                Some(_) if ret.is_void() => {
-                    self.error(
-                        expr.range,
-                        format!(
-                            "void function '{}' should not return a value",
-                            self.func_name
-                        ),
-                    );
-                    None
+                Some(value) if ret.is_void() => {
+                    return self.void_return(value, expr.range, range);
                 }
                 Some(value) => Some(self.convert_for(value, ret, ConvContext::Return)),
             },
         };
         Stmt::Return { value, range }
+    }
+
+    /// `return expr;` in a function whose return type is `void`.
+    ///
+    /// C99 and C11 6.8.6.4p1 forbid it outright. **C23 lets the expression
+    /// stand when it has type `void`** — `return f();` where `f` returns
+    /// nothing is how a wrapper forwards a call, and there is no value to
+    /// return — and GCC has accepted that, and a non-`void` expression with
+    /// it, in every mode it has, with only a pedantic warning ("ISO C forbids
+    /// 'return' with expression, in function returning void"). The GNU
+    /// dialects follow GCC; the strict ones below C23 keep the constraint
+    /// violation.
+    ///
+    /// Where it is accepted the expression is still *evaluated* — it is where
+    /// the call was written — and only its value is dropped.
+    fn void_return(&mut self, value: Expr, expr_range: SourceRange, range: SourceRange) -> Stmt {
+        let allowed = if value.ty.is_void() {
+            self.gnu_leniency() || self.gating.standard >= crate::Standard::C23
+        } else {
+            self.gnu_leniency()
+        };
+        if !allowed {
+            let message = format!(
+                "void function '{}' should not return a value",
+                self.func_name
+            );
+            let note = if value.ty.is_void() {
+                format!(
+                    "the expression has type 'void', which C23 allows here (6.8.6.4p1); {}",
+                    self.gnu_note()
+                )
+            } else {
+                self.gnu_note()
+            };
+            self.diags
+                .push(crate::diag::Diagnostic::error(expr_range, message).with_note(note));
+            return Stmt::Return { value: None, range };
+        }
+        Stmt::Block(vec![Stmt::Expr(value), Stmt::Return { value: None, range }])
     }
 
     fn new_loop(&mut self) -> LoopId {

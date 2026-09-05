@@ -97,6 +97,24 @@ warnings into errors, and the ones that do not spell the errors out anyway.
 `expected-warning` is where the extensions live, and that is exactly what is
 ignored.
 
+**Which line a directive is about** is Clang's rule and not the obvious one. A
+directive written on a *continuation line* of a `/* … */` comment belongs to
+the line the **comment started on**, so that a run of them under one
+diagnostic all point at it:
+
+```c
+void f(struct S s) {} /* expected-warning {{…}}
+                         expected-error {{…}} */
+```
+
+Both of those are about the definition, and half of `drs/` is written that way
+— `drs/dr0xx.c` and `drs/dr1xx.c` most of all. Reading the second as its own
+line answered those files' questions on the wrong lines and showed up as
+"wrong line" against `cinrs` when nothing was wrong with `cinrs`; fixing it in
+[`base_line`](../tests/clang_c.rs) took the suite from 96 of 203 to 109. A
+backslash continuation follows the same rule, and `@±N`, `@LINE` and `@#name`
+override both.
+
 ### The outcome classes
 
 | class | meaning |
@@ -137,15 +155,15 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 203 run, 96 as required (47.3 %)**,
-73 skipped, in about eight seconds.
+corpus revision: **99 files, 276 RUN lines, 203 run, 123 as required (60.6 %)**,
+73 skipped, in about ten seconds.
 
 | directory | run | as required | rate | revisions | skipped |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `C99` | 30 | 20 | **66.7 %** | 37 | 7 |
-| `C11` | 23 | 8 | 34.8 % | 30 | 7 |
-| `C23` | 45 | 16 | 35.6 % | 69 | 24 |
-| `drs` | 105 | 52 | **49.5 %** | 140 | 35 |
+| `C99` | 30 | 21 | **70.0 %** | 37 | 7 |
+| `C11` | 23 | 13 | 56.5 % | 30 | 7 |
+| `C23` | 45 | 27 | 60.0 % | 69 | 24 |
+| `drs` | 105 | 62 | 59.0 % | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
@@ -155,28 +173,30 @@ The rate went *down* once, when the C89 revisions started running — 79 of 175
 28 revisions that joined were 6 more passes and 22 more mismatches, most of
 them a `-std=c89` RUN line using a C99 feature that Clang takes as an
 extension and `c89!` refuses on purpose. Those are `!` entries; see below.
-Trigraphs and designator lists took it back up to 96 of 203 (47.3 %):
-`C23/n2940.c` is a file *about* trigraphs, and it now comes out as required in
-all ten of the revisions the harness runs.
+Trigraphs and designator lists took it back up to 96 of 203 (47.3 %), and the
+last round took it to 123: 13 of those are the directive-line rule above,
+which was the harness reading Clang's annotations wrongly rather than anything
+`cinrs` did, and the other 14 are the fixes listed at the end of this
+document.
 
 ### The mismatches, by cause
 
-107 revisions do not come out as the test asks. Every one of them is in
+80 revisions do not come out as the test asks. Every one of them is in
 `tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
 
-**Deliberate refusals (34, marked `!`).** These are not gaps. Guard mode
+**Deliberate refusals (38, marked `!`).** These are not gaps. Guard mode
 asserts that the refusal is still there.
 
-* *A later revision's feature in an earlier block* (22): `_Static_assert` and
+* *A later revision's feature in an earlier block* (25): `_Static_assert` and
   `_Alignof` in a `c99!` block, an anonymous `struct` member in `c99!`, a
   binary constant in `c17!`, a label at the end of a compound statement in
-  `c11!` — and, since the C89 revisions started running, a `//` comment,
-  `_Bool`, a declaration in a `for` clause, a designated initializer and
-  `_Static_assert` in a `c89!` block. Clang takes each as an *extension* and
-  warns (`-Wc99-extensions`, `-Wc11-extensions`, `-Wc23-extensions`), which
-  these RUN lines silence or do not promote — an error only under
-  `-pedantic-errors`. `cinrs` gates them on the entry point instead, and says
-  which macro to write.
+  `c11!`, an enumerator too wide for `int` in `c17!` — and, since the C89
+  revisions started running, a `//` comment, `_Bool`, a declaration in a `for`
+  clause, a designated initializer and `_Static_assert` in a `c89!` block.
+  Clang takes each as an *extension* and warns (`-Wc99-extensions`,
+  `-Wc11-extensions`, `-Wc23-extensions`), which these RUN lines silence or do
+  not promote — an error only under `-pedantic-errors`. `cinrs` gates them on
+  the entry point instead, and says which macro to write.
 * *`_Complex` and `_Imaginary`* (7). C11 6.10.8.3 makes complex arithmetic
   optional and `cinrs` predefines `__STDC_NO_COMPLEX__`, so refusing them is
   conforming behaviour rather than a gap. `C11/n1460.c` is the same thing seen
@@ -185,39 +205,53 @@ asserts that the refusal is still there.
 * *`_Atomic`* (1), for the same reason with `__STDC_NO_ATOMICS__`.
 * *Clang-only builtins* (4): `__builtin_bit_cast`, `__builtin_complex`.
 
-**Genuine gaps, false rejections (24).** Valid C that `cinrs` refuses. There
-are 58 false rejections in all; the other 34 are the deliberate ones above.
+**Genuine gaps, false rejections (4).** Valid C that `cinrs` refuses. There
+are 42 false rejections in all; the other 38 are the deliberate ones above.
 
 | cause | revisions |
 | --- | ---: |
-| `offsetof(T, a.b)` — a nested member designator, which an *initialiser* now takes but `offsetof` still does not | 6 |
-| a compound literal whose `struct` type is declared in the cast itself, `(struct X){ 0 }` | 5 |
-| `int j[];` — an incomplete array type, which C completes to `[1]` at the end of the unit; the same gap refuses `extern int j[];` | 5 |
-| a label on a declaration at the end of a block | 2 |
-| an enumerator whose value does not fit `int` (C23 widens the enumeration instead) | 2 |
-| `<stdckdint.h>` is not bundled | 1 |
 | C23 tag compatibility (N3037): a compatible redefinition of `struct S` | 1 |
-| C23's `void f(...)` — an ellipsis with no named parameter | 1 |
 | the line number of a macro invocation spanning spliced lines (unspecified; Clang's own comment calls its answer a FIXME) | 1 |
+| `C23/n3033.c` is a `-E … \| FileCheck` test whose *expansions* are not a translation unit; the harness compiles a FileCheck-only file, which is right for every other one of them | 1 |
+| `C99/n448.c:0`'s last `expected-error` is inside `#if __STDC_VERSION__ >= 202311L`, which the `c99!` revision does not compile — Clang's `-verify` never sees a directive in a skipped conditional and this harness, which reads them out of the raw text, does | 1 |
 
-**Wrong line (48).** The error came out somewhere other than where the test
+**Wrong line (38).** The error came out somewhere other than where the test
 asks. Almost all of these are files carrying *many* annotations — `drs/dr0xx.c`
 has forty — where `cinrs` reports one of them on a different line, or reports
-an unrelated refusal first and never reaches the one asked about. The four
-worth naming as their own bug are: `restrict` on a non-pointer is not
-diagnosed (`C99/n448.c`); `sizeof` applied to an incomplete array type is
-accepted (`drs/dr0xx.c`); a redefinition of an enumerator is not diagnosed
-(`drs/dr1xx.c`); and a function declarator whose parameter is a parenthesised
-typedef name is misparsed (`drs/dr157.c`). The rest are cascades from the gaps
-above.
+an unrelated refusal first and never reaches the one asked about. The two
+worth naming as their own bug are both about *scope*: a tag declared in a
+parameter list has the scope of that list (DR103, `drs/dr1xx.c`), and the
+composite type a block-scope `extern int i[10];` gives an object is scoped to
+that block (DR011, `drs/dr0xx.c`); `cinrs` puts both in the enclosing scope.
+The rest are cascades from what is above.
 
-**Missed rejection (1).** `C23/n3033_2.c`: C23 requires at least one parameter
-before `...` in a definition that uses `va_start`, and `cinrs` does not check
-it.
+**Missed rejection (0).**
 
 ### What the results changed in `doc/c-status.md`
 
-Five rows moved as a result of running this suite:
+Thirteen rows have moved as a result of running this suite. The eight from the
+latest round, each with the revision that asked for it:
+
+* **`restrict` is checked** against C99 6.7.3p2 — it may only qualify a
+  pointer to an object type (`C99/n448.c`).
+* **`offsetof` takes a nested member designator** and folds to an integer
+  constant (`C23/n2350.c`, seven revisions).
+* **An incomplete array type** is a type: `extern int j[];`, a tentative
+  `int j[];` completed to one element at the end of the unit, and `sizeof` of
+  one refused until it is (`drs/dr011.c`, five revisions).
+* **A cast to the type the operand already has** is a no-op for a `struct` or
+  `union` too, as GCC and Clang both have it (`C11/n1285.c`, five revisions).
+* **Every label** may stand at the end of a compound statement and before a
+  declaration, `case` and `default` included (`C23/n2508.c`).
+* **An enumerator too wide for `int`** widens the enumeration (`C23/n3029.c`).
+* **`<stdckdint.h>`** is bundled (`C23/n2683_2.c`).
+* **A `__VA_OPT__` argument may not begin or end with `##`** (C23 6.10.5.2p1),
+  which was the one *missed rejection* in the suite (`C23/n3033_2.c`).
+* **A parameter of a declaration that is not a definition may have an
+  incomplete type**, and a `typedef` of `void` as the only parameter is an
+  empty prototype (DR157, `drs/dr157.c`, five revisions).
+
+and the five from before:
 
 * **`__FILE__` in an `#include`** now works. A quoted include whose name is a
   path is looked for from the working directory, which is what a header that
@@ -241,6 +275,11 @@ Five rows moved as a result of running this suite:
   from 0 of 10 to 10 of 10 and the suite from 41.9 % to 47.3 %; nothing else
   in the corpus writes a hyphenated prefix.
 
+The second of those two harness bugs was
+[the directive-line rule](#the-oracle): a directive on a continuation line of
+a `/* … */` comment belongs to the line the comment opened on, and reading it
+as its own line was answering half of `drs/` on the wrong lines.
+
 ## Memory and thread safety
 
 The same four ceilings the other two suites have, keyed to
@@ -257,7 +296,7 @@ same way:
       cargo test -q --test clang_c -- --test-threads=2 )
 ```
 
-Measured that way, a full guard run takes **7.8 s** and peaks at **351 MiB**
+Measured that way, a full guard run takes **10 s** and peaks at **351 MiB**
 of resident set — most of which is `cargo` checking that the `cinrs`
 dependency is up to date rather than anything the suite does.
 

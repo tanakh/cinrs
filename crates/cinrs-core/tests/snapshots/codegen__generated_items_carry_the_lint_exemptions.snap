@@ -4,6 +4,7 @@ expression: attribute
 ---
 #[allow(
     unknown_lints,
+    arithmetic_overflow,
     clashing_extern_declarations,
     dead_code,
     improper_ctypes,
@@ -15,6 +16,7 @@ expression: attribute
     overflowing_literals,
     static_mut_refs,
     suspicious_runtime_symbol_definitions,
+    unconditional_panic,
     unpredictable_function_pointer_comparisons,
     unreachable_code,
     unreachable_patterns,

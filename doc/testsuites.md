@@ -6,12 +6,12 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | passing |
 | --- | --- | --- | ---: | ---: |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **97.7 %** (`c99!`) |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **77.4 %** (`gnu89!`), 72.4 % (`gnu11!`) |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **47.3 %** of the 203 run |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **79.0 %** (`gnu89!`), 73.7 % (`gnu11!`) |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **60.6 %** of the 203 run |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
-they are about 2,265 cases and about four and a half minutes.
+they are about 2,265 cases and about five minutes.
 
 Each suite has a document of its own with its baseline, its failures by cause
 and how to reproduce the numbers. What follows is what they have in common.

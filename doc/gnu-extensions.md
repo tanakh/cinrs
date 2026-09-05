@@ -117,7 +117,7 @@ variably modified types do not; a program that tests the macro takes its
 | `__builtin_constant_p` | `__builtin_constant_p(x)` | common (kernel macros) | supported | 1 when the operand folds, 0 otherwise — and 1 for the address of a string literal and for a character read out of one at a constant index, both of which GCC calls constant. The address of an *object* is not: the linker decides it. |
 | `__builtin_types_compatible_p`, `__builtin_choose_expr` | generic macros | occasional | supported | Both are constants; only the operand `choose_expr` picks is type checked. |
 | Library builtins | `__builtin_memcpy`, `__builtin_memset`, `__builtin_strlen`, `__builtin_abs`, `__builtin_sqrt`, `__builtin_huge_val`, `__builtin_inf`, `__builtin_nan`, … | common (via headers, sometimes direct) | supported | A call to the library function of that name, declared into the unit if the header that would have declared it was not included. `crate::gnu::LIBRARY_BUILTINS` is the list; a name outside it says which header to include. |
-| `__builtin_offsetof` | | common (via `offsetof`) | supported | The implementation of `<stddef.h>`'s `offsetof`. |
+| `__builtin_offsetof` | `offsetof(struct S, a[2].b)` | common (via `offsetof`) | supported | The implementation of `<stddef.h>`'s `offsetof`, folded to an integer constant out of the layout sema computed — so it may be an array bound or a `case` label, and the member designator takes `.member` and `[expr]` steps and reaches through anonymous members. |
 | `__builtin_va_list`, `__builtin_va_start/arg/end/copy` | | common (via `<stdarg.h>`) | supported | The implementation of `<stdarg.h>`. |
 | `__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__` | logging macros | common | supported | `__func__` is standard C99. All three are the function's name as a `const char[]`, so `sizeof(__func__)` is its length, and the byte string is emitted only where one is used. |
 | `__COUNTER__` | unique identifiers in macros | common | supported | A fresh integer at every use. |
@@ -128,12 +128,14 @@ variably modified types do not; a program that tests the macro takes its
 | Flexible array members (standard C99) | `int data[];` | common | supported | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is the pointer arithmetic it always was. Must be the last member of a `struct`; *initialising* one — which GCC allows with a warning — is refused, because the object would have to be larger than its type. |
 | Empty structures | `struct e {};` | occasional | supported | A zero-sized `#[repr(C)]` item, size 0 as GCC gives it. An empty `union` is generated as an item with one `[u8; 0]` field, since Rust has no fieldless `union`. |
 | Bit-fields of a type other than `_Bool`/`int`/`unsigned int` | `char flags : 3;`, `enum e kind : 8;`, `long long wide : 40;` | very common (protocols, kernels, compilers) | supported | Standard C leaves any other type implementation defined. `cinrs` follows GCC and Clang: the allocation unit is `8 * sizeof(T)`, a named field raises the record's alignment to `alignof(T)`, and the integer promotions are the standard width-restricted ones applied to the wider types too — so `unsigned long x : 31` is an `int` and `unsigned long x : 33` keeps its declared type. A field the promotions do not reach also keeps its declared *width*: `unsigned long long b : 40` multiplies, adds, negates, complements and shifts in forty bits (6.7.2.1p10), and two such fields of different widths meet in the wider of the two. `tests/bitfield_layout.rs` probes that against the host compiler for every such field of its corpus. Signed overflow inside such a field wraps in the field's width, where GCC — for which the overflow is undefined — computes in the whole declared type. An `enum` bit-field follows the enumeration's underlying type, which is unsigned when no enumerator is negative; `cinrs` reads such a field back through `int`, so an `enum` field exactly as wide as `int` and holding a value with the top bit set differs from GCC (every narrower width agrees). |
-| Incomplete `enum` types | `enum e; enum e *p;` | common | supported | `int` until the enumerator list is seen, and `int` afterwards too — so the two mentions never disagree. A tag declared that way therefore gets no named Rust alias of its own. |
-| Arithmetic on `void *` and function pointers | `p + 1` with `void *p` | common | supported (`void *`) / not planned (function pointers) | `void *` arithmetic is byte-wise. |
+| Incomplete `enum` types | `enum e; enum e *p;` | common | supported | `int` until the enumerator list is seen, and `int` afterwards too — so the two mentions never disagree. A tag declared that way therefore gets no named Rust alias of its own, and is the one enumeration C23's widening (N3029) leaves alone. |
+| Incomplete array types | `extern int j[];`, `int j[];` | common | supported | C's own (6.2.5p22, 6.9.2p5) rather than an extension, and listed here because the two spellings turn up in every header pair: an `extern` declaration keeps the incomplete type, a file-scope tentative definition is completed to one element at the end of the unit, and a later `int j[3];` completes it sooner. `sizeof` of one is an error until it is completed, which is what GCC says too. |
+| Arithmetic on `void *` and function pointers | `p + 1` with `void *p` | common | supported (`void *`) / not planned (function pointers) | `void *` arithmetic is byte-wise, which is `sizeof (void) == 1`; the GNU dialects answer that to `sizeof` and `__alignof__` as well. |
 | Conversion between function pointers and `void *` | `void *p = f;` | common (dlsym users, callbacks) | supported | ISO C forbids it and POSIX requires it; the two have the same size on every target here, and code generation makes the reinterpretation explicit. |
 | Non-constant initializers for aggregates (standard C99) | `int a[2] = { x, y };` | — | supported | Standard since C99. |
 | Subscripting non-lvalue arrays | `f().a[0]` | rare | supported | Falls out of the place lowering with a temporary. |
 | Cast to a union type | `(union u) x` | rare | planned | |
+| Cast to the type the operand already has | `((struct X) x).a` | rare | supported | 6.5.4p2's "scalar type" is about a *conversion*, and a cast to a compatible `struct` or `union` type has none to make; GCC and Clang both accept it silently. The result is a value with C11 6.2.4p8's temporary lifetime, which is what taking `.a` of it needs. |
 | Mixed declarations and code, `//` comments, `long long`, `inline`, hex floats, variadic macros, compound literals, designated initializers | | — | supported | Standard C99. |
 | Named variadic macro parameters | `#define log(fmt, args…) …` | occasional (older code) | supported | `args` is another spelling of `__VA_ARGS__`. |
 | `, ## __VA_ARGS__` comma elision | `#define log(fmt, ...) printf(fmt, ## __VA_ARGS__)` | very common | supported | The comma goes when the invocation passed no variable arguments, and the arguments are macro-replaced as usual when it did. `__VA_OPT__` (C23) is the standard way. |
@@ -186,6 +188,7 @@ spellings work, and so does C23's `[[gnu::name]]`.
 | `weak`, `alias("…")`, `weakref`, `ifunc` | occasional | refused | `#[linkage]` is unstable, so weak linkage cannot be asked for at all. |
 | `cleanup(f)` | occasional (glib, systemd) | refused | A Drop guard calling `f(&var)` at scope exit; CFG mode needs care. Phase 2. |
 | `mode(…)` | rare | refused | Write the type the mode names instead. |
+| `scalar_storage_order("…")` | rare (file formats, network structs) | refused | It reverses the byte order of *every scalar* in the record, and nothing in the generated Rust could carry that. Ignoring it would silently change what the program reads, which is why it is named here rather than dropped as an unknown attribute; `execute/20230630-2` and its four relatives are the cases that noticed. |
 | `vector_size(N)` | occasional | refused | See vector extensions. |
 | `nonnull`, `returns_nonnull`, `malloc`, `pure`, `const`, `leaf`, `nothrow`, `access(…)`, `alloc_size`, `alloc_align`, `sentinel`, `returns_twice`, `no_sanitize`, `noclone`, `noipa`, `optimize(…)`, `target(…)`, `error(…)`, `warning(…)`, `designated_init`, `artificial`, `gnu_inline`, `externally_visible` | common in library headers, rare in bodies | accepted | Optimisation and diagnostic hints only. |
 | `transparent_union`, `may_alias`, `nonstring` | rare | accepted | Ignored. |
@@ -230,10 +233,33 @@ strict modes.
 | `typeof`, `__typeof__` | `__typeof__` accepted; `typeof` only in `gnu*` | `__typeof__` accepted; `typeof` is C23 | both accepted |
 | `0b` literals, digit separators, `__VA_OPT__`, `#elifdef`, `{}`, `[[…]]` (C23) | accepted (pedantic warning) | error "requires C23" | accepted |
 
+## The leniencies: constraint violations GCC only warns about
+
+The rows above are *features* a newer revision added. These are the other
+half — places where ISO C says the program is ill-formed and no compiler
+anybody uses has ever refused it. A GNU entry point follows GCC; a strict one
+keeps the error and adds a note naming the macro that would take it:
+
+```text
+error: void function 'f' should not return a value
+       note: GCC accepts this with a warning; write gnu11! for the same leniency
+```
+
+| Leniency | Example | ISO C | cinrs |
+| --- | --- | --- | --- |
+| **Pointer targets that differ only in signedness** | `strlen((unsigned char *) s)`, `long *p = ulp;`, `unsigned char *p = charp;` | 6.5.16.1p1 constraint violation; GCC and Clang warn (`-Wpointer-sign`) and only `-pedantic-errors` promotes it | **accepted in every entry point**, silently. Plain `char` counts as differing in sign from both `signed char` and `unsigned char`, which is the rule both compilers use. There is too much real C behind this one for a dialect switch to be the honest answer |
+| `return expr;` in a `void` function | `void f(void) { return g(); }` | 6.8.6.4p1 constraint violation, *except* in C23 when the expression has type `void` | accepted in `c23!` (void expression) and in every GNU dialect (any expression); the expression is evaluated and its value dropped |
+| Comparing two function pointers of incompatible types | `int (*a)(int); long (*b)(void); a == b` | 6.5.9p2; GCC warns (`-Wcompare-distinct-pointer-types`) and compares the addresses | GNU dialects. A *compatible* pair needs no leniency: `double (*)()` and `double (*)(double)` are compatible (6.7.6.3p15) and compare everywhere, and `void *` against a function pointer follows the conversion rule above it in the table |
+| `sizeof (void)`, `__alignof__ (void)` | `p + 1` with `void *p` | `void` is an incomplete type that can never be completed (6.2.5p19) | GNU dialects, both 1 — which is what makes the `void *` arithmetic above mean anything |
+| A stray `;` at file scope | `int f(void) { … };` | 6.9p1 has no empty external declaration, and C23 did not add one | GNU dialects |
+| An enumerator that will not fit `int` | `enum e { big = ULLONG_MAX };` | 6.7.2.2p2 constraint violation until C23 (N3029), which widens the enumeration instead | `c23!` and the GNU dialects widen; the strict pre-C23 entry points keep the error. The widened type is the narrowest of `int`, `unsigned int`, `long`, … that holds every value, and every enumerator of the enumeration has it |
+| A parameter of a *definition* with no name | `int f(int, int b) { … }` | C23 (N2480) allows it; before that 6.9.1p5 required a name | `c23!` and the GNU dialects |
+| An undeclared `alloca` | `void *p = alloca(n);` | no ISO header declares it | GNU dialects, where the call is `__builtin_alloca` and so returns `void *`, exactly as GCC's `gnu` modes do. A strict entry point leaves it to the C89 implicit-declaration rule, which types it `int()` |
+
 ## Known differences from GCC
 
-Three of them, all deliberate, all visible only where the C program could not
-observe them anyway:
+Five of them, all deliberate, all but the last two visible only where the C
+program could not observe them anyway:
 
 * **A record with one packed member has a Rust item that is one byte aligned.**
   Rust refuses `#[repr(C, packed, align(N))]` outright (`E0587`), so an item
@@ -249,13 +275,25 @@ observe them anyway:
   no Rust integer has one portably.
 * **A forward-declared `enum` is `int` even after it is completed**, so that the
   two mentions of the tag agree; the tag then has no named Rust alias.
+* **`long double` *is* `double`**, so `__builtin_types_compatible_p(long
+  double, double)` answers yes where GCC answers no. No portable Rust type has
+  the layout of an x87 extended double, and pretending otherwise would be
+  worse than saying so.
+* **An untagged `enum` *is* `int`**, so two of them are compatible where GCC
+  makes them two distinct types. A tagged one at file scope gets a Rust alias
+  of its own and is a type of its own; an anonymous one has no name to give
+  such an item. `execute/builtin-types-compatible-p` is the case that asks
+  both of these questions and the only one in the corpus that does.
 
 ## Status summary
 
 Everything in the tables above marked *supported* is implemented and tested;
 `tests/gnu_language.rs`, `tests/gnu_attributes.rs`, `tests/gnu_builtins.rs`,
 `tests/gnu_preprocessor.rs`, `tests/int128.rs`, `tests/threads.rs` and
-`tests/dialects.rs` are where. What is left is the *planned* rows — computed
+`tests/dialects.rs` are where, and the leniencies have
+`tests/ui/gnu_leniencies_in_a_strict_block.rs` for the other half of each
+row — that a strict entry point still refuses it. What is left is the
+*planned* rows — computed
 `goto`, `cleanup`, the `__sync_*` and
 `__atomic_*` builtins, casts to a union type — plus the rows that say
 `not planned` or `impossible`, and the c-testsuite report

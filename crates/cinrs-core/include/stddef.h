@@ -25,15 +25,13 @@ typedef __WCHAR_TYPE__ wchar_t;
 
 #define NULL ((void *)0)
 
-/* `offsetof` is a compiler builtin here: cinrs turns it into Rust's own
- * `core::mem::offset_of!`, so the answer is the offset the generated `struct`
- * really has rather than one worked out separately.
- *
- * Two things follow. A nested member designator (`a.b`, `a[0]`) is not
- * supported, and neither is using `offsetof` where C99 wants an integer
- * constant expression — as an array bound, a `case` label or the initialiser
- * of a file-scope object — because the value is Rust's to compute. Writing it
- * inside a function works everywhere. */
+/* `offsetof` is a compiler builtin here, and the front end folds it to an
+ * integer constant out of the layout it computed for the record — so it is an
+ * integer constant expression and may be an array bound, a `case` label or the
+ * initialiser of a file-scope object, and a nested member designator
+ * (`a.b`, `a[2].b`, a member of an anonymous member) works as C99 7.17p3
+ * describes. That the value agrees with the offset the generated `#[repr(C)]`
+ * item really has is checked against Rust's `core::mem::offset_of!`. */
 #define offsetof(type, member) __builtin_offsetof(type, member)
 
 #if __STDC_VERSION__ >= 202311L

@@ -40,7 +40,9 @@ Run it with `cargo run --example fact`.
   `alignas`, `thread_local`, `constexpr`, `typeof`), `[[…]]` attributes,
   `__VA_OPT__`, `#elifdef`/`#elifndef`, binary constants, digit separators,
   empty initialisers, `auto` type inference, enumerations with a fixed
-  underlying type and `unreachable()`. A feature from a later revision used in
+  underlying type or a value too wide for `int`, unnamed parameters in a
+  definition, a label anywhere in a compound statement, `<stdckdint.h>` and
+  `unreachable()`. A feature from a later revision used in
   an earlier block is a diagnostic that says which macro to write instead — and
   `c89!` is that rule pointed the other way, refusing everything C99 added
   (`//` comments, mixed declarations and code, `long long`, designated
@@ -100,8 +102,8 @@ Run it with `cargo run --example fact`.
   `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
   the C token that was really written.
 * **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
-  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>` and the
-  rest) are bundled with the crate, written in plain C99
+  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>`, C23's
+  `<stdckdint.h>` and the rest) are bundled with the crate, written in plain C99
   rather than read from the platform, and the calls link against the real C
   library. Your own headers are found next to the `.rs` file that includes
   them, and editing one rebuilds the crate. `#embed "logo.png"` puts the bytes
@@ -359,17 +361,17 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,369 pass (77.4 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,279 (72.3 %) under
+  exit status zero. **1,398 pass (79.0 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,304 (73.7 %) under
   `gnu11!`. What is left is inline assembly, the vector extensions, the
   `__builtin_*` forms this crate does not implement, `_Complex`, nested
-  functions, and the variadic definitions that need Rust 1.99 — plus two
+  functions, and the variadic definitions that need Rust 1.99 — plus three
   programs that built and then did the wrong thing, which the document names
   one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **96 of the 203 revisions run come out as
-  required (47.3 %)**, and this is the only suite that measures what `cinrs`
+  which lines must be diagnosed. **123 of the 203 revisions run come out as
+  required (60.6 %)**, and this is the only suite that measures what `cinrs`
   *refuses*, which is half of what a front end is for.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and

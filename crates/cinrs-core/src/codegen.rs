@@ -395,10 +395,23 @@ fn c_ident(name: &str, span: Span) -> Ident {
 /// *defined*: the symbol is the C library's either way, and a call through a
 /// type with no prototype is transmuted to the signature its arguments make
 /// before it is made, which is the contract C's own ABI runs on.
+///
+/// Two more are the deny-by-default `arithmetic_overflow` and
+/// `unconditional_panic`, which fire when `rustc` can see that an operation
+/// would trap: a division whose divisor it has const-propagated to zero, a
+/// shift past the width of the type, an overflowing constant. Each of those is
+/// *undefined behaviour* in C, so the C program is valid whatever it does and
+/// the operation is very often in a branch that cannot be taken —
+/// `execute/pr97888-1` is `if (h > -173) e = d / i;` with `i` a zero the
+/// program never reaches. Refusing to compile valid C is not an option;
+/// panicking at run time if it is ever reached is a perfectly good answer to
+/// undefined behaviour, and is what the same code already does when the
+/// divisor is only zero at run time.
 fn allow_attr(span: Span) -> TokenStream {
     quote_spanned! {span=>
         #[allow(
             unknown_lints,
+            arithmetic_overflow,
             clashing_extern_declarations,
             dead_code,
             improper_ctypes,
@@ -410,6 +423,7 @@ fn allow_attr(span: Span) -> TokenStream {
             overflowing_literals,
             static_mut_refs,
             suspicious_runtime_symbol_definitions,
+            unconditional_panic,
             unpredictable_function_pointer_comparisons,
             unreachable_code,
             unreachable_patterns,
@@ -2651,7 +2665,6 @@ impl<'a> Codegen<'a> {
             ExprKind::VaArg { ap } => self.va_arg(ap, expr.ty, span),
             // `va_end` is nothing: the list ends when its value is dropped.
             ExprKind::VaEnd => Value::atom(quote_spanned! {span=> () }),
-            ExprKind::OffsetOf { record, path } => self.offset_of(*record, path, expr.ty, span),
             // C23's `unreachable()`. C says reaching it is undefined, and
             // saying so to Rust is what lets the optimiser use the promise —
             // this is the one place the expansion trusts the C program with
@@ -2791,37 +2804,6 @@ impl<'a> Codegen<'a> {
             },
             prec::BLOCK,
         )
-    }
-
-    /// `offsetof(T, member)`, asked of Rust rather than worked out here.
-    ///
-    /// `core::mem::offset_of!` gives the offset the generated `#[repr(C)]`
-    /// item really has, which is the number the C program is asking for. The
-    /// `as` puts it back into `size_t`, since the macro's own type is `usize`.
-    /// A member reached through an anonymous member is a path — `offset_of!`
-    /// takes one — which is what makes `offsetof(struct S, x)` work when `x`
-    /// lives in an anonymous union inside `S`.
-    fn offset_of(&mut self, record: ir::RecordId, path: &[usize], ty: Ty, span: Span) -> Value {
-        let mut current = record;
-        let mut fields = TokenStream::new();
-        for (step, index) in path.iter().enumerate() {
-            let field = self.program.types.record(current).fields[*index].clone();
-            let name = c_ident(&field.name, span);
-            if step > 0 {
-                fields.extend(quote_spanned! {span=> . });
-            }
-            fields.extend(quote_spanned! {span=> #name });
-            if let Ty::Record(inner) = field.ty {
-                current = inner;
-            }
-        }
-        let name = c_ident(&self.program.types.record(record).rust_name, span);
-        let target = self.ty(ty, span);
-        Value::new(
-            quote_spanned! {span=> ::core::mem::offset_of!(#name, #fields) as #target },
-            prec::CAST,
-        )
-        .type_end(true)
     }
 
     /// One of the builtins that becomes a fixed piece of Rust.

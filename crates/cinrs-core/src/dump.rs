@@ -574,8 +574,14 @@ impl<'a> Dumper<'a> {
             ExprKind::VaArg { ap, ty } => {
                 self.under(&format!("va_arg {}", self.ty(&ty.ty)), |d| d.expr(ap));
             }
-            ExprKind::OffsetOf { ty, member } => {
-                self.line(format!("offsetof {} .{}", self.ty(&ty.ty), member.name));
+            ExprKind::OffsetOf { ty, member, path } => {
+                let rest = element_label(path);
+                let rest = rest.strip_prefix("element").unwrap_or(&rest);
+                self.line(format!(
+                    "offsetof {} .{}{rest}",
+                    self.ty(&ty.ty),
+                    member.name
+                ));
             }
             ExprKind::CompoundLiteral { ty, init } => {
                 self.under(&format!("compound-literal {}", self.ty(&ty.ty)), |d| {

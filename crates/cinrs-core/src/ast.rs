@@ -1039,8 +1039,13 @@ pub enum ExprKind {
     OffsetOf {
         /// The `struct` or `union` type.
         ty: Box<TypeName>,
-        /// The member whose offset is wanted.
+        /// The first step of the member designator, which C requires to be a
+        /// member name.
         member: Ident,
+        /// The steps after it — `offsetof(struct S, a.b)` and
+        /// `offsetof(struct S, a[2].b)` are both member designators
+        /// (C99 7.17p3). A [`Designator::Range`] never appears here.
+        path: Vec<Designator>,
     },
     /// `(T){ … }` — a C99 compound literal.
     CompoundLiteral {

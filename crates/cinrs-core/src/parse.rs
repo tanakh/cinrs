@@ -42,7 +42,7 @@ use std::collections::HashMap;
 
 use crate::ast::*;
 use crate::capture::SourceRange;
-use crate::diag::Diagnostics;
+use crate::diag::{Diagnostic, Diagnostics};
 use crate::gnu;
 use crate::ir::{INT128_TYPEDEF_NAMES, VA_LIST_NAMES};
 use crate::lex::{Keyword, Punct, StrKind, StrLit, TokenKind};
@@ -203,8 +203,8 @@ const MAX_LABEL_CHAIN: usize = 4096;
 
 /// One label of a chain, held while the statement it labels is parsed.
 enum PendingLabel {
-    /// `name:`, with the range of its `:`.
-    Ident { label: Ident, colon: SourceRange },
+    /// `name:`
+    Ident { label: Ident },
     /// `case value:`, and GNU's `case low ... high:`.
     Case { value: Expr, upper: Option<Expr> },
     /// `default:`
@@ -382,6 +382,28 @@ impl Parser<'_> {
     /// newer revision would have made it a keyword.
     fn newer_keyword_here(&self) -> Option<String> {
         self.gating.newer_keyword(self.peek().ident()?)
+    }
+
+    /// Whether this block has the GNU leniencies; see
+    /// [`Sema::gnu_leniency`](crate::sema).
+    fn gnu_leniency(&self) -> bool {
+        self.gating.dialect.is_gnu()
+    }
+
+    /// The note that names the entry point which would have accepted what
+    /// [`Parser::gnu_leniency`] just refused.
+    fn gnu_note(&self) -> String {
+        format!(
+            "GCC accepts this with a warning; write {} for the same leniency",
+            self.gating.standard.macro_name_in(crate::Dialect::Gnu)
+        )
+    }
+
+    /// Reports a GNU-only leniency the strict entry points refuse.
+    fn error_gnu(&mut self, range: SourceRange, message: impl Into<String>) {
+        let note = self.gnu_note();
+        self.diags
+            .push(Diagnostic::error(range, message).with_note(note));
     }
 }
 
@@ -703,6 +725,21 @@ impl Parser<'_> {
         while !self.at_eof() {
             let before = self.pos;
             self.depth = 0;
+            // A stray `;` at file scope. C's grammar has no empty external
+            // declaration — 6.9p1 is a *declaration* or a function definition,
+            // and C23 6.7p1 did not add one — but GCC accepts it with only a
+            // pedantic warning ("ISO C does not allow extra ';' outside of a
+            // function"), and a macro whose expansion already ends in `;`
+            // being written with one after it is common enough that seven of
+            // the torture suite's cases do it. The GNU dialects accept it; the
+            // strict ones keep the error.
+            if self.at_punct(Punct::Semi) {
+                let range = self.bump_range();
+                if !self.gnu_leniency() {
+                    self.error_gnu(range, "expected a declaration, found ';'");
+                }
+                continue;
+            }
             match self.parse_external_decl() {
                 Ok(item) => items.push(item),
                 Err(Bail) => self.recover_top_level(before),
@@ -2484,8 +2521,8 @@ impl Parser<'_> {
             // `label:`
             let label = if self.peek().ident().is_some() && self.nth(1).is_punct(Punct::Colon) {
                 let label = self.eat_ident().expect("checked above");
-                let colon = self.bump_range();
-                PendingLabel::Ident { label, colon }
+                self.advance(); // `:`
+                PendingLabel::Ident { label }
             } else if self.at_keyword(Keyword::Case) {
                 self.advance();
                 let value = self.parse_conditional_expr()?;
@@ -2653,19 +2690,19 @@ impl Parser<'_> {
         // compound statement; before that it had to label a statement. Either
         // way the label itself labels nothing, so it takes a null statement and
         // whatever follows is parsed on its own.
-        let trailing = match labels.last().expect("a label chain is never empty") {
-            (PendingLabel::Ident { label, colon }, _) => {
-                let what = if self.at_punct(Punct::RBrace) {
-                    Some("a label at the end of a compound statement")
-                } else if self.starts_declaration() || self.at_static_assert() {
-                    Some("a label before a declaration")
-                } else {
-                    None
-                };
-                what.map(|what| (what, label.range.join(*colon), *colon))
-            }
-            _ => None,
+        // N2508 is about *every* label, `case` and `default` included: `switch
+        // (x) { case 1: }` and `case 1: _Static_assert(1, "");` are both what
+        // it made legal, and `C23/n2508.c` writes both.
+        let colon = self.last_range;
+        let (_, label_start) = labels.last().expect("a label chain is never empty");
+        let what = if self.at_punct(Punct::RBrace) {
+            Some("a label at the end of a compound statement")
+        } else if self.starts_declaration() || self.at_static_assert() {
+            Some("a label before a declaration")
+        } else {
+            None
         };
+        let trailing = what.map(|what| (what, label_start.join(colon), colon));
         let mut stmt = match trailing {
             Some((what, at, colon)) => {
                 self.require_standard(Standard::C23, what, at);
@@ -3280,12 +3317,13 @@ impl Parser<'_> {
         self.at_builtin("__builtin_va_arg")
     }
 
-    /// `__builtin_offsetof(T, member)`, the special form `offsetof` is.
+    /// `__builtin_offsetof(T, member-designator)`, the special form
+    /// `offsetof` is.
     ///
-    /// A nested member designator — `offsetof(struct S, a.b)`, or one with a
-    /// subscript — is refused rather than mistranslated: Rust's
-    /// `offset_of!` does accept a path, but a `[…]` in one has no meaning
-    /// there, and half of the syntax is worse than none.
+    /// C99 7.17p3's member designator is an identifier followed by any number
+    /// of `.member` and `[expr]` steps, so that `offsetof(struct S, a[2].b)`
+    /// names the offset of a member of an element of a member. Sema folds the
+    /// whole path to one constant.
     fn parse_offsetof(&mut self) -> PResult<Expr> {
         let start = self.cur_range();
         self.advance(); // `__builtin_offsetof`
@@ -3293,18 +3331,30 @@ impl Parser<'_> {
         let ty = self.parse_type_name()?;
         self.expect_punct(Punct::Comma, " after the type of 'offsetof'")?;
         let member = self.expect_ident(" as the member of 'offsetof'")?;
-        if self.at_punct(Punct::Dot) || self.at_punct(Punct::LBracket) {
-            let range = self.cur_range();
-            return Err(self.error_bail(
-                range,
-                "a nested member designator is not supported in 'offsetof'",
-            ));
+        let mut path = Vec::new();
+        loop {
+            if self.eat_punct(Punct::Dot).is_some() {
+                path.push(Designator::Field(self.expect_ident(
+                    " after '.' in the member designator of 'offsetof'",
+                )?));
+                continue;
+            }
+            if self.eat_punct(Punct::LBracket).is_some() {
+                path.push(Designator::Index(self.parse_expr()?));
+                self.expect_punct(
+                    Punct::RBracket,
+                    " after the subscript in the member designator of 'offsetof'",
+                )?;
+                continue;
+            }
+            break;
         }
         self.expect_punct(Punct::RParen, " after the member of 'offsetof'")?;
         let expr = Expr {
             kind: ExprKind::OffsetOf {
                 ty: Box::new(ty),
                 member,
+                path,
             },
             range: self.span_to_here(start),
         };

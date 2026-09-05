@@ -570,3 +570,46 @@ fn wide_string_literals_and_pointers_to_arrays() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// pointers that differ only in the signedness of the pointee
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_pointee_that_differs_only_in_signedness_needs_no_cast() {
+    // GCC's and Clang's `-Wpointer-sign`: ISO C makes this a constraint
+    // violation (6.5.16.1p1, the unqualified pointee types are not
+    // compatible), no compiler anybody uses refuses it, and the amount of real
+    // C that leans on it — `strlen` over an `unsigned char *` is the classic —
+    // is not small. `doc/gnu-extensions.md` has the rule.
+    c99! {
+        #include <string.h>
+
+        unsigned long length(unsigned char *s) { return strlen(s); }
+
+        int first_signed(unsigned char *s) { char *p = s; return *p; }
+        int first_unsigned(char *s) { unsigned char *p = s; return *p; }
+
+        long widest(unsigned long *p) { long *q = p; return *q; }
+        int as_int(unsigned int *p) { int *q = p; return *q; }
+
+        int through_a_parameter(const char *s);
+        int call_with_unsigned(unsigned char *s) { return through_a_parameter(s); }
+        int through_a_parameter(const char *s) { return s[0]; }
+    }
+
+    unsafe {
+        let mut text = *b"hi\0";
+        assert_eq!(length(text.as_mut_ptr()), 2);
+        assert_eq!(first_signed(text.as_mut_ptr()), i32::from(b'h'));
+        assert_eq!(call_with_unsigned(text.as_mut_ptr()), i32::from(b'h'));
+
+        let mut signed_text = b"hi\0".map(|b| b as core::ffi::c_char);
+        assert_eq!(first_unsigned(signed_text.as_mut_ptr()), i32::from(b'h'));
+
+        let mut wide: core::ffi::c_ulong = 7;
+        assert_eq!(widest(&raw mut wide), 7);
+        let mut narrow: core::ffi::c_uint = 9;
+        assert_eq!(as_int(&raw mut narrow), 9);
+    }
+}

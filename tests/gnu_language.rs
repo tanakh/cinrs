@@ -483,3 +483,126 @@ fn a_gnu_dialect_takes_the_plain_spellings_and_the_later_revisions() {
     assert_eq!(unsafe { binary_literal() }, 11);
     assert_eq!(unsafe { typeof_is_a_name() }, 5);
 }
+
+// ---------------------------------------------------------------------------
+// the leniencies GCC has where ISO C has a constraint violation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_void_function_may_return_an_expression() {
+    // C99 and C11 6.8.6.4p1 forbid `return expr;` in a `void` function
+    // outright. C23 lets the expression stand when it has type `void` —
+    // `return f();` is how a wrapper forwards a call — and GCC accepts that
+    // and a non-`void` expression with it in every mode. The expression is
+    // still evaluated; only its value is dropped.
+    gnu99! {
+        static int calls;
+        static void bump(void) { calls++; }
+        static int answer(void) { calls += 10; return 3; }
+
+        void forward(void) { return bump(); }
+        void discard(void) { return answer(); }
+        int how_many(void) { return calls; }
+    }
+
+    unsafe {
+        forward();
+        assert_eq!(how_many(), 1);
+        discard();
+        assert_eq!(how_many(), 11);
+    }
+}
+
+#[test]
+fn function_pointers_of_unrelated_types_compare_by_address() {
+    // Two *compatible* function pointer types need no leniency at all: a
+    // prototyped type and one with an empty parameter list are compatible when
+    // no parameter is changed by the default argument promotions (6.7.6.3p15),
+    // which `double (*)()` against `double (*)(double)` is. `void *` against a
+    // function pointer, and two genuinely unrelated function pointers, are the
+    // GNU ones.
+    gnu99! {
+        double takes_double(double a) { return a; }
+        int takes_int(int a) { return a; }
+
+        int unprototyped_matches(void) {
+            double (*loose)() = &takes_double;
+            double (*tight)(double) = &takes_double;
+            return loose == tight;
+        }
+
+        int against_void_pointer(void) {
+            void *p = (void *)&takes_double;
+            double (*f)(double) = &takes_double;
+            return p == f;
+        }
+
+        int unrelated(void) {
+            double (*a)(double) = &takes_double;
+            int (*b)(int) = &takes_int;
+            return a == b;
+        }
+    }
+
+    unsafe {
+        assert_eq!(unprototyped_matches(), 1);
+        assert_eq!(against_void_pointer(), 1);
+        assert_eq!(unrelated(), 0);
+    }
+}
+
+#[test]
+fn void_has_a_size_of_one() {
+    // GNU gives `void` a size and an alignment of one, which is what makes the
+    // `void *` arithmetic this crate already accepts mean anything.
+    gnu99! {
+        unsigned long size_of_void(void) { return sizeof(void); }
+        unsigned long align_of_void(void) { return __alignof__(void); }
+        long step(void *p) { void *q = p; q = q + 3; return (char *)q - (char *)p; }
+    }
+
+    unsafe {
+        assert_eq!(size_of_void(), 1);
+        assert_eq!(align_of_void(), 1);
+        let mut buffer = [0u8; 8];
+        assert_eq!(step(buffer.as_mut_ptr().cast()), 3);
+    }
+}
+
+#[test]
+fn a_stray_semicolon_at_file_scope_is_an_empty_declaration() {
+    // C's grammar has no empty external declaration — 6.9p1 is a declaration
+    // or a function definition — but GCC accepts one with a pedantic warning,
+    // and a macro whose expansion already ends in `;` written with one after
+    // it is common enough that seven cases of the torture suite do it.
+    gnu99! {
+        int leading(void) { return 1; };
+        ;
+        int trailing(void) { return 2; };;
+    }
+
+    unsafe {
+        assert_eq!(leading(), 1);
+        assert_eq!(trailing(), 2);
+    }
+}
+
+#[test]
+fn an_undeclared_alloca_is_the_builtin() {
+    // No ISO header declares `alloca`, and GCC answers a call to an undeclared
+    // one with `__builtin_alloca` in its `gnu` modes. Without that the C89
+    // implicit declaration would type it `int()` and `void *p = alloca(n)`
+    // would be a constraint violation.
+    gnu99! {
+        int fill(int n) {
+            char *p = alloca(n);
+            int i;
+            int total = 0;
+            for (i = 0; i < n; i++) { p[i] = (char)i; }
+            for (i = 0; i < n; i++) { total += p[i]; }
+            return total;
+        }
+    }
+
+    assert_eq!(unsafe { fill(5) }, 1 + 2 + 3 + 4);
+}

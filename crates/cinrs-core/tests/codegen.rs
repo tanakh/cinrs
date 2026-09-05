@@ -570,16 +570,23 @@ fn a_name_that_would_shadow_a_file_scope_item_is_renamed() {
 }
 
 #[test]
-fn offsetof_asks_rust_for_the_layout() {
+fn offsetof_is_folded_to_a_constant() {
+    // Sema knows the layout — `ir::Field::offset` is where it put every member
+    // — so `offsetof` is an integer constant in the expansion rather than a
+    // `core::mem::offset_of!`, which is what C99 6.6 needs it to be. The two
+    // agree, and `tests/aggregates.rs` is where that is checked.
     insta::assert_snapshot!(generate(
         r"
         #include <stddef.h>
 
         struct Mixed { char tag; int count; double weight; };
+        struct Nested { int head; struct Mixed rows[4]; };
 
         size_t weight_offset(void) {
             return offsetof(struct Mixed, weight);
         }
+
+        char probe[offsetof(struct Nested, rows[2].count)];
         "
     ));
 }

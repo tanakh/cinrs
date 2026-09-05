@@ -33,11 +33,6 @@
 #
 # which keeps every `?` and `!` line as it stands.
 
-C11/n1285.c:0          a compound literal whose `struct` type is declared in the cast itself — `(struct X){ 0 }` — is read as a cast to a non-scalar type
-C11/n1285.c:1          see `C11/n1285.c:0`
-C11/n1285_1.c:0        see `C11/n1285.c:0`
-C11/n1285_1.c:1        see `C11/n1285.c:0`
-C11/n1285_1.c:2        see `C11/n1285.c:0`
 !C11/n1310.c:0         a `//` comment in a `c89!` block; C99 took them from C++ (N644) and Clang has them everywhere as an extension
 !C11/n1310.c:1         `_Static_assert` in a `c99!` block; write `c11!`
 !C11/n1310.c:2         `__builtin_bit_cast`, a Clang-only builtin; the diagnostic is a plain syntax error rather than a named refusal
@@ -49,20 +44,11 @@ C11/n1330.c            wrong line: the `_Static_assert(0, ...)` the test asks fo
 C11/n1518.c:0          wrong line: cinrs takes a non-ASCII identifier character by the same rule in every revision, so the C11-only and C23-only errors land on each other's lines
 C11/n1518.c:1          see `C11/n1518.c:0`
 C23/n2322.c            the line number of a macro invocation spanning spliced lines: cinrs and Clang disagree about which physical line it is, and the paper leaves it unspecified — Clang's own comment calls its answer a FIXME
-C23/n2350.c:0          `offsetof(T, a.b)` — a nested member designator — is not supported
-C23/n2350.c:2          `offsetof` with a nested member designator; see `C23/n2350.c:0`
-!C23/n2350.c:3         a `//` comment in a `c89!` block; see `C11/n1310.c:0`. Behind it is the `offsetof` gap of `C23/n2350.c:0`
-C23/n2350.c:4          `offsetof` with a nested member designator; see `C23/n2350.c:0`
-C23/n2350.c:5          `offsetof` with a nested member designator; see `C23/n2350.c:0`
-C23/n2350.c:6          `offsetof` with a nested member designator; see `C23/n2350.c:0`
-C23/n2350.c:7          `offsetof` with a nested member designator; see `C23/n2350.c:0`
-C23/n2508.c:0          a label on a declaration at the end of a block, `l: int x;`, is refused with `expected expression, found '}'`
+!C23/n2350.c:3         a `//` comment in a `c89!` block; see `C11/n1310.c:0`. The other seven revisions of this file — which are about `offsetof` with a nested member designator — now come out as required
 !C23/n2508.c:1         a label at the end of a compound statement in a `c11!` block; C23 made it legal and `c23!` accepts it
-C23/n2508.c:2          see `C23/n2508.c:0`
 !C23/n2549.c:1         a binary integer constant in a `c17!` block; C23 added them and `c23!` accepts them (Clang takes them as an extension everywhere)
 C23/n2607.c:0          wrong line: `_Atomic` applied to an array is not the error reported; a `[N][N]` parameter (a variably modified type) is refused first
 C23/n2607.c:1          see `C23/n2607.c:0`
-C23/n2683_2.c          `<stdckdint.h>` (C23 checked integer arithmetic) is not one of the bundled headers
 C23/n2836_n2939.c:0    wrong line: `\N{...}` named universal character escapes are not implemented, so the wrong one of them is diagnosed
 C23/n2838.c            wrong line: a `_BitInt` array bound is refused before the "array is too large" the test asks for
 C23/n2900_n3011.c:0    wrong line: an empty initialiser for a variable length array is refused, where the test asks about the compound-literal form on a later line
@@ -70,41 +56,28 @@ C23/n2900_n3011.c:1    see `C23/n2900_n3011.c:0`
 C23/n3006.c            wrong line: `auto x = (enum E { }){ }` — an empty enumeration in a compound literal — is not the error reported
 C23/n3007.c            wrong line: `static auto c = 1UL;` is refused before the incompatible-pointer initialisation the test asks about
 C23/n3018.c:0          wrong line: a `constexpr` object whose initialiser overflows is not diagnosed; a `constexpr char[]` from a string is
-C23/n3029.c:0          C23 lets an enumerator whose value does not fit `int` widen the enumeration's type; cinrs still requires every enumerator to fit `int`
-C23/n3029.c:1          see `C23/n3029.c:0`
+!C23/n3029.c:1         an enumerator too wide for `int` in a `c17!` block: C23 widens the enumeration (N3029) and `c23!` does too, where 6.7.2.2p2 makes it a constraint violation in every earlier revision. Clang warns instead, which this RUN line does not promote
 C23/n3030.c            wrong line: an enumeration redeclared with a different fixed underlying type is not diagnosed; `enum c : long{x}` in a parameter list is
 !C23/n3030_1.c         `_Atomic`: C11 6.10.8.3 makes atomics optional and cinrs predefines `__STDC_NO_ATOMICS__`
-C23/n3033.c            C23's `void f(...)` — an ellipsis with no named parameter before it — is not parsed
-C23/n3033_2.c          invalid code accepted: C23 requires at least one parameter before `...` in a definition that uses `va_start`, and cinrs does not check it
+C23/n3033.c            not a compilable translation unit: the RUN line is `-E … | FileCheck`, so the file is a *preprocessor output* test and its expansions (`f(0, a, b, c)` at file scope) are not valid C. The harness takes a FileCheck-only file as an accept case, which is right for every other one of them
 C23/n3037_1.c          C23 tag compatibility (N3037): a second, compatible definition of `struct S` in the same scope is refused as a redefinition
 !C99/block-scopes.c:0  a `//` comment in a `c89!` block; see `C11/n1310.c:0`
 !C99/block-scopes.c:1  `_Static_assert` in a `c99!` block: cinrs gates a later revision's feature on the entry point, where Clang takes it as an extension (`-Wc11-extensions`, which this RUN line silences)
-C99/n448.c:0           wrong line: `restrict` on a non-pointer (`int restrict ir;`) is not diagnosed, and `_Static_assert` in a `c99!` block is
-C99/n448.c:1           wrong line: `restrict` on a non-pointer is not diagnosed, and `constexpr int *restrict` is
+C99/n448.c:0           wrong line: `_Static_assert` in a `c99!` block is refused, and the file's last `expected-error` is inside `#if __STDC_VERSION__ >= 202311L`, which this revision does not compile — Clang's `-verify` never sees a directive in a skipped conditional and the harness, which reads them out of the raw text, does. The `c23!` revision of this file passes
 !C99/n570.c:0          `_Static_assert` in a `c99!` block; write `c11!`
 C99/n717.c:0           wrong line: every universal character name in the file is written as the argument of a macro that expands to nothing, so the diagnostic for one that names a basic-character member never reaches the output; the first error the file does produce is the out-of-range one on a later line
 C99/n717.c:1           see `C99/n717.c:0`
 C99/n809.c             wrong line: `_Imaginary` is diagnosed where `_Complex` already was, so the error lands on line 19 rather than 29
 !C99/n809_2.c          `_Complex`: C11 6.10.8.3 makes complex arithmetic optional and cinrs predefines `__STDC_NO_COMPLEX__`, so refusing it is conforming
 !C99/n809_3.c          `_Complex`; see `C99/n809_2.c`
-drs/dr011.c:0          an incomplete array type; see `drs/dr011.c:1`
-drs/dr011.c:1          `int j[];` at file scope is a tentative definition that C completes to `int j[1]`; cinrs has no incomplete array type and refuses it — the same gap refuses `extern int j[];`
-drs/dr011.c:2          an incomplete array type; see `drs/dr011.c:1`
-drs/dr011.c:3          an incomplete array type; see `drs/dr011.c:1`
-drs/dr011.c:4          an incomplete array type; see `drs/dr011.c:1`
 !drs/dr094.c:0         a `//` comment in a `c89!` block; see `C11/n1310.c:0`
 drs/dr0xx.c:0          see `drs/dr0xx.c:2`
-drs/dr0xx.c:2          wrong line: `sizeof` applied to an incomplete array type is accepted, and an aggregate initialiser is refused instead
+drs/dr0xx.c:2          wrong line: a block-scope `extern int i[10];` gives the object it redeclares the composite type for the whole function, where C scopes that to the inner block — so `sizeof i` after it is accepted where DR011 asks for the incomplete type's error
 drs/dr0xx.c:3          see `drs/dr0xx.c:2`
 drs/dr0xx.c:4          see `drs/dr0xx.c:2`
 drs/dr0xx.c:5          wrong line: C23 requires a type specifier on every declaration; cinrs reports the missing one on the declarator's line rather than the declaration's
-drs/dr157.c:0          see `drs/dr157.c:1`
-drs/dr157.c:1          wrong line: a function declarator whose parameter is a parenthesised typedef name is misparsed, so the error is one declaration early
-drs/dr157.c:2          see `drs/dr157.c:1`
-drs/dr157.c:3          see `drs/dr157.c:1`
-drs/dr157.c:4          see `drs/dr157.c:1`
 drs/dr1xx.c:0          see `drs/dr1xx.c:1`
-drs/dr1xx.c:1          wrong line: a redefinition of an enumerator is not diagnosed, and a `struct` declared in a parameter list is
+drs/dr1xx.c:1          wrong line: a tag declared in a *parameter list* has the scope of that list (DR103), so two such `struct S` are two types and the declarations conflict; cinrs puts the tag in the enclosing scope, which makes them one and leaves the conflict undiagnosed on one line and reported on another
 drs/dr1xx.c:2          see `drs/dr1xx.c:1`
 drs/dr1xx.c:3          see `drs/dr1xx.c:1`
 drs/dr1xx.c:4          wrong line: in C23 a compatible redefinition of `struct S` is legal (N3037) and cinrs refuses it

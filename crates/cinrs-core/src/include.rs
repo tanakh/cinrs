@@ -58,6 +58,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("stdalign.h", include_str!("../include/stdalign.h")),
     ("stdarg.h", include_str!("../include/stdarg.h")),
     ("stdbool.h", include_str!("../include/stdbool.h")),
+    ("stdckdint.h", include_str!("../include/stdckdint.h")),
     ("stddef.h", include_str!("../include/stddef.h")),
     ("stdint.h", include_str!("../include/stdint.h")),
     ("stdio.h", include_str!("../include/stdio.h")),

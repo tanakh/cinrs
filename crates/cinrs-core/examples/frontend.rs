@@ -50,6 +50,7 @@ fn main() {
         None => (Dialect::Iso, standard.clone()),
     };
     let standard = match std_name.as_str() {
+        "c89" | "c90" => Standard::C89,
         "c99" => Standard::C99,
         "c11" => Standard::C11,
         "c17" => Standard::C17,

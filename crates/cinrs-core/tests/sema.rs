@@ -316,9 +316,18 @@ fn arrays_are_checked() {
         "void f(void) { int a[3]; int b[3]; a = b; }",
         &["array type 'int[3]' is not assignable"],
     );
+    // An incomplete array type is a *type* (6.2.5p22) and only an error where
+    // an object needs a size, which a block-scope one does.
+    accepted("extern int j[]; int f(void) { return j[0]; }");
+    accepted("int j[]; int f(void) { return j[0]; }");
+    accepted("int j[]; int j[3]; int f(void) { return sizeof j; }");
     rejected(
         "int f(void) { int a[]; return 0; }",
-        &["definition of variable 'a' with array type needs an explicit size or an initializer"],
+        &["variable 'a' has incomplete type 'int[]'"],
+    );
+    rejected(
+        "int j[]; int f(void) { return sizeof j; }",
+        &["invalid application of 'sizeof' to an incomplete type 'int[]'"],
     );
     rejected(
         "int n; int a[n];",
@@ -919,12 +928,40 @@ fn offsetof_is_checked_against_the_layout() {
          size_t where(void) { return offsetof(struct S, nope); }",
         &["no member named 'nope' in 'struct S'"],
     );
-    // The value is Rust's to compute, so it is not a constant expression here.
-    rejected(
+    // Sema knows the layout, so the value is an integer constant expression
+    // and may go everywhere C99 6.6 allows one.
+    accepted(
         "#include <stddef.h>
          struct S { char a; int b; };
-         static size_t where = offsetof(struct S, b);",
-        &["initializer is not a compile-time constant expression"],
+         static size_t where = offsetof(struct S, b);
+         char probe[offsetof(struct S, b)];",
+    );
+    // C99 7.17p3's member designator reaches through members, elements and
+    // anonymous members.
+    accepted(
+        "#include <stddef.h>
+         struct Inner { char c; int i; };
+         struct Outer { int head; struct Inner rows[3]; };
+         size_t where(void) { return offsetof(struct Outer, rows[2].i); }",
+    );
+    rejected(
+        "#include <stddef.h>
+         struct Inner { int i; };
+         struct Outer { struct Inner in; };
+         size_t where(void) { return offsetof(struct Outer, in.nope); }",
+        &["no member named 'nope' in 'struct Inner'"],
+    );
+    rejected(
+        "#include <stddef.h>
+         struct S { int a; };
+         size_t where(void) { return offsetof(struct S, a[1]); }",
+        &["a subscript in a member designator needs an array, not 'int'"],
+    );
+    rejected(
+        "#include <stddef.h>
+         struct S { unsigned bits : 3; };
+         size_t where(void) { return offsetof(struct S, bits); }",
+        &["'offsetof' applied to the bit-field 'bits', which has no address"],
     );
 }
 

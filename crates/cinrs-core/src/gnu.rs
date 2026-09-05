@@ -79,6 +79,11 @@ pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
         "cleanup",
         "is not supported yet: it needs a drop guard around the object's scope",
     ),
+    (
+        "scalar_storage_order",
+        "is not supported: it reverses the byte order of every scalar in the record, and \
+         nothing in the generated Rust could carry that",
+    ),
 ];
 
 /// The attribute a name spells, accepting both the `name` and the `__name__`

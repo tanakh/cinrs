@@ -89,6 +89,8 @@ enum ArrayLen {
     /// Anything else: a variable length array, whose bound has been left in
     /// [`Sema::vla_bound`].
     Variable,
+    /// No bound at all — `int j[]`, an incomplete array type (6.2.5p22).
+    Unspecified,
 }
 
 /// Where a member ends up.
@@ -123,6 +125,47 @@ struct LaidOut {
 impl Sema<'_> {
     /// Resolves an AST type into a [`Ty`], or explains why it cannot.
     pub(super) fn resolve_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
+        let resolved = self.resolve_unqualified_ty(ty)?;
+        self.check_restrict(ty, resolved)?;
+        Ok(resolved)
+    }
+
+    /// C99 6.7.3p2 for `restrict`.
+    ///
+    /// "shall only qualify a pointer to an object type" — so `int restrict i`
+    /// and `void (*restrict fp)(void)` are constraint violations, while
+    /// `int *restrict p`, `int_ptr restrict q` (a `typedef` of a pointer) and
+    /// `void f(int a[restrict])` are all fine, the last because the parameter
+    /// *is* a pointer. `restrict` says nothing to the generated Rust either
+    /// way — Rust's own aliasing rules are stricter than the promise — so this
+    /// is a diagnostic and nothing else.
+    fn check_restrict(&mut self, ty: &ast::Type, resolved: Ty) -> Result<(), TypeError> {
+        if !ty.qualifiers.is_restrict || resolved.is_error() {
+            return Ok(());
+        }
+        if self.types().is_func_pointer(resolved) {
+            return Err(TypeError::at(
+                ty.range,
+                format!(
+                    "'restrict' qualifies a pointer to an object type, and '{}' points to a \
+                     function",
+                    self.tyname(resolved)
+                ),
+            ));
+        }
+        if !resolved.is_pointer() {
+            return Err(TypeError::at(
+                ty.range,
+                format!(
+                    "'restrict' requires a pointer to an object type ('{}' is invalid)",
+                    self.tyname(resolved)
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve_unqualified_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         let range = ty.range;
         match &ty.kind {
             ast::TypeKind::Void => Ok(Ty::Void),
@@ -199,6 +242,7 @@ impl Sema<'_> {
                 Ok(match self.array_len(size, range)? {
                     ArrayLen::Fixed(len) => self.program.types.array(element, len, konst),
                     ArrayLen::Variable => self.program.types.vla_array(element, konst),
+                    ArrayLen::Unspecified => self.program.types.incomplete_array(element, konst),
                 })
             }
             ast::TypeKind::Function(func) => {
@@ -278,6 +322,13 @@ impl Sema<'_> {
     /// one: an array parameter is a pointer, and a function parameter is a
     /// pointer to a function.
     pub(super) fn resolve_param_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
+        let outer = std::mem::replace(&mut self.in_param_type, true);
+        let resolved = self.resolve_param_ty_inner(ty);
+        self.in_param_type = outer;
+        resolved
+    }
+
+    fn resolve_param_ty_inner(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         if let ast::TypeKind::Array { elem, .. } = &ty.kind {
             // The bound of an array parameter is not part of its type at all:
             // `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all
@@ -323,12 +374,14 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Result<ArrayLen, TypeError> {
         let expr = match size {
-            ast::ArraySize::Unspecified => {
-                return Err(TypeError::at(
-                    range,
-                    "an array of unspecified size must have an initializer",
-                ));
-            }
+            // `int j[]` is an *incomplete* array type (6.2.5p22), not an
+            // error: `extern int j[];` declares one, a file-scope `int j[];`
+            // is a tentative definition the end of the translation unit
+            // completes to one element (6.9.2p5), and `int (*p)[]` and
+            // `__builtin_types_compatible_p(int[5], int[])` are ordinary uses
+            // of the type. What may *not* have one is an object with a size —
+            // `object_ty_of` is where that is said.
+            ast::ArraySize::Unspecified => return Ok(ArrayLen::Unspecified),
             // `int a[*]` says "variably modified, bound unspecified", and is
             // only allowed in a declaration that is not a definition — where
             // the parameter is a pointer and the bound never mattered. Reaching
@@ -354,6 +407,15 @@ impl Sema<'_> {
             ));
         }
         let Some(ir::ConstValue::Int(len)) = self.const_eval(&value) else {
+            // Inside a parameter's type the bound is allowed to be anything,
+            // prototype at file scope or not (6.7.5.3p7) — but it is the
+            // *element* type here, so the parameter is a pointer to a variable
+            // length array, which is the part of C99's variably modified
+            // machinery this release leaves out. `execute/pr22061-1`'s
+            // `char a[2][N]` is that.
+            if self.in_param_type {
+                return Err(TypeError::at(expr.range, super::VM_UNSUPPORTED));
+            }
             // A bound that is not constant is a variable length array inside a
             // function, and simply invalid at file scope, where there is no
             // moment at which the bound could be evaluated.
@@ -416,8 +478,20 @@ impl Sema<'_> {
         }
     }
 
-    /// Resolves a type that must name a complete object type.
-    pub(super) fn object_ty_of(&mut self, ty: &ast::Type, name: &str) -> Option<Ty> {
+    /// Resolves a type that must name an object type, with
+    /// `incomplete_array` saying whether `T x[]` is allowed here.
+    ///
+    /// It is in exactly two places (C99 6.9.2p3, 6.2.5p22): an `extern`
+    /// declaration, whose object is defined in another unit and whose size is
+    /// therefore none of this one's business, and a file-scope *tentative*
+    /// definition, which the end of the translation unit completes to one
+    /// element. Everywhere else an object needs a complete type.
+    pub(super) fn declared_object_ty_of(
+        &mut self,
+        ty: &ast::Type,
+        name: &str,
+        incomplete_array: bool,
+    ) -> Option<Ty> {
         let resolved = self.ty_of(ty)?;
         if resolved.is_void() {
             self.error(
@@ -425,6 +499,9 @@ impl Sema<'_> {
                 format!("variable '{name}' has incomplete type 'void'"),
             );
             return None;
+        }
+        if incomplete_array && self.types().is_incomplete_array(resolved) {
+            return Some(resolved);
         }
         if !self.types().is_complete(resolved) {
             self.error(
@@ -1579,7 +1656,9 @@ impl Sema<'_> {
         // its values are anyway.
         let file_scope = self.at_file_scope();
         let tag_name = spec.name.as_ref().map(|n| n.name.clone());
-        let ty = match (file_scope, tag_name, underlying) {
+        // Not `let`: an enumerator too wide for `int` widens the whole
+        // enumeration below (C23 6.7.2.2p13), and the type goes with it.
+        let mut ty = match (file_scope, tag_name, underlying) {
             // The tag was declared incomplete first, so it already has a type
             // and every earlier mention of it used that one.
             _ if declared.is_some() => declared.expect("just checked"),
@@ -1629,8 +1708,9 @@ impl Sema<'_> {
         }
         self.enum_by_spec[spec_id.index()] = Some(ty);
         // With a fixed underlying type the enumerators have the enumeration's
-        // own type; without one they are `int`, as C99 says.
-        let constant_ty = underlying.unwrap_or(Ty::Int);
+        // own type; without one they are `int`, as C99 says — until one of
+        // them will not fit, which is what C23 changed.
+        let mut constant_ty = underlying.unwrap_or(Ty::Int);
 
         // C99 6.7.2.2: an enumerator without a value is one more than the
         // previous one, and the first is zero.
@@ -1640,6 +1720,22 @@ impl Sema<'_> {
         // enumerator is negative, and that choice is visible through a
         // bit-field of the type; see `Sema::bit_field_signed`.
         let mut unsigned = underlying.is_none_or(|fixed| !fixed.is_signed(&self.target));
+        // C23 6.7.2.2p13 (N3029): an enumerator whose value will not fit the
+        // enumeration's type *widens the enumeration*, and every enumerator
+        // then has the widened type. Before C23 it was a constraint violation,
+        // which the strict entry points keep; GCC and Clang have accepted it
+        // for ever with a warning, so the GNU dialects widen as well. A
+        // *fixed* underlying type is not widened — the value has to fit the
+        // type the program wrote — and neither is a tag this scope had already
+        // declared incomplete, whose earlier mentions used the type it had.
+        let may_widen = underlying.is_none()
+            && declared.is_none()
+            && (self.gnu_leniency() || self.gating.standard >= crate::Standard::C23);
+        let (mut lo, mut hi) = (0i128, 0i128);
+        // Every enumerator, so that a widening one can retype the ones already
+        // placed: `enum x { a = INT_MAX, b = ULLONG_MAX }` gives `a` the
+        // enumeration's type too, which is what `_Generic(a)` selects on.
+        let mut placed: Vec<(String, i128, SourceRange, Option<usize>)> = Vec::new();
         for enumerator in enumerators {
             let value = match &enumerator.value {
                 Some(expr) => match self.expr(expr) {
@@ -1662,15 +1758,23 @@ impl Sema<'_> {
                 None => next,
             };
             if !constant_ty.can_represent(value, &self.target) {
-                self.error(
-                    enumerator.range,
-                    format!(
-                        "enumerator value {value} is outside the range of '{}'",
-                        self.tyname(constant_ty)
+                match may_widen
+                    .then(|| widened_enum_ty(lo.min(value), hi.max(value), &self.target))
+                    .flatten()
+                {
+                    Some(wider) => constant_ty = wider,
+                    None => self.error(
+                        enumerator.range,
+                        format!(
+                            "enumerator value {value} is outside the range of '{}'",
+                            self.tyname(constant_ty)
+                        ),
                     ),
-                );
+                }
             }
             let value = constant_ty.wrap(value, &self.target);
+            lo = lo.min(value);
+            hi = hi.max(value);
             unsigned = unsigned && value >= 0;
             next = value.wrapping_add(1);
             self.check_redefinition(&enumerator.name);
@@ -1682,7 +1786,7 @@ impl Sema<'_> {
                     range: enumerator.name.range,
                 },
             );
-            if file_scope {
+            let at = if file_scope {
                 let rust_name = self.reserve_item_name(&enumerator.name.name);
                 self.program.enum_constants.push(ir::Enumerator {
                     name: enumerator.name.name.clone(),
@@ -1691,7 +1795,49 @@ impl Sema<'_> {
                     value,
                     range: enumerator.name.range,
                 });
+                Some(self.program.enum_constants.len() - 1)
+            } else {
+                None
+            };
+            placed.push((
+                enumerator.name.name.clone(),
+                value,
+                enumerator.name.range,
+                at,
+            ));
+        }
+        // The enumeration widened, so every enumerator has the widened type
+        // and so does the enumeration itself. It stops being a `Ty::Enum` at
+        // that point: `Ty::Enum` *is* `int` everywhere in this crate's type
+        // model, and the honest answer for an enumeration whose underlying
+        // type C23 made implementation-defined is the integer type it widened
+        // to. The tag keeps its Rust alias, now an alias for that type.
+        if constant_ty != underlying.unwrap_or(Ty::Int) {
+            for (name, value, range, at) in &placed {
+                self.insert(
+                    name,
+                    Entry::Constant {
+                        value: ir::ConstValue::Int(*value),
+                        ty: constant_ty,
+                        range: *range,
+                    },
+                );
+                if let Some(at) = at {
+                    self.program.enum_constants[*at].ty = constant_ty;
+                }
             }
+            if let Ty::Enum(id) = ty {
+                let def = self.program.types.enum_mut(id);
+                def.emit = false;
+                let rust_name = def.rust_name.clone();
+                self.program.typedefs.push(ir::TypedefItem {
+                    rust_name,
+                    ty: constant_ty,
+                    range: spec.range,
+                });
+            }
+            ty = constant_ty;
+            self.enum_by_spec[spec_id.index()] = Some(ty);
         }
         if let Some(name) = &spec.name {
             self.insert_tag(
@@ -1709,6 +1855,25 @@ impl Sema<'_> {
         self.enum_unsigned[spec_id.index()] = Some(unsigned);
         Ok(ty)
     }
+}
+
+/// The type C23 6.7.2.2p13 widens an enumeration to so that every value from
+/// `lo` to `hi` fits, or `None` when no integer type this crate has does.
+///
+/// The order is the one GCC and Clang pick from: the narrowest type that holds
+/// the whole range, preferring the signed one at each width. C23 leaves the
+/// choice implementation-defined and only asks that it hold every value.
+fn widened_enum_ty(lo: i128, hi: i128, target: &crate::TargetModel) -> Option<Ty> {
+    [
+        Ty::Int,
+        Ty::UInt,
+        Ty::Long,
+        Ty::ULong,
+        Ty::LongLong,
+        Ty::ULongLong,
+    ]
+    .into_iter()
+    .find(|ty| ty.can_represent(lo, target) && ty.can_represent(hi, target))
 }
 
 /// Gives every bit-field of a record the pair of accessor names it is

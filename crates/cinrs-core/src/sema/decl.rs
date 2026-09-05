@@ -151,20 +151,63 @@ impl Sema<'_> {
             return Vec::new();
         }
 
-        // `T x[] = …` has no size of its own; the initialiser gives it one,
-        // which means the type and the initialiser have to be built together.
-        // A declaration that did not check out still declares its name, with a
-        // type that silences every later complaint about it.
+        // C99 6.2.1p7: "the scope of an identifier … begins just after the
+        // completion of its declarator", which puts the object in scope for
+        // its *own* initialiser. `struct list head = { &head, &head }` is the
+        // circular-list idiom, `T *p = malloc(sizeof *p)` is the allocation
+        // one, and `struct E e[2] = { { 0, &e[1] }, … }` is a torture case.
+        // So the type is resolved and the object declared *before* the
+        // initialiser is checked.
+        //
+        // The two forms whose type the initialiser decides — C23's `auto x =
+        // e` and `T x[] = { … }` — cannot do that, because there is no type to
+        // declare the object with yet. Neither of them can name itself either
+        // (an incomplete array has no `sizeof`), so nothing is lost.
         //
         // A bound that is not a constant expression is left in `vla_bound` by
         // the resolution below, and is this declaration's to take.
         self.vla_bound = None;
-        let (ty, init) = self
-            .typed_initializer(declarator, &name.name)
-            .unwrap_or((Ty::Error, None));
+        let mut inferred = type_from_initializer(declarator);
+        let (mut ty, mut init) = if inferred {
+            self.typed_initializer(declarator, &name.name)
+                .unwrap_or((Ty::Error, None))
+        } else {
+            // A file-scope declaration with no initialiser is a tentative
+            // definition, and one of the two places an incomplete array type
+            // may be the type of an object (6.9.2p3); `extern` is the other,
+            // and went through `declare_extern_object` above.
+            let ty = self
+                .declared_object_ty_of(&declarator.ty, &name.name, file_scope)
+                .unwrap_or(Ty::Error);
+            (ty, None)
+        };
+        // `typedef int A[]; A a = { 1, 2 };` — an incomplete array type reached
+        // through a `typedef` takes its length from the initialiser too
+        // (6.7.9p22), exactly as the `int a[] = { … }` spelling does. It is the
+        // only shape of that rule the declarator itself does not show.
+        if !inferred
+            && let Some(list) = &declarator.init
+            && let Ty::Array(id) = ty
+            && self.types().array_type(id).incomplete
+        {
+            let array = self.types().array_type(id);
+            if let Some((completed, value)) =
+                self.init_array_inferred(list, array.elem, array.elem_const, &name.name)
+            {
+                ty = completed;
+                init = Some(value);
+                inferred = true;
+            }
+        }
         let vla_bound = self.vla_bound.take();
 
         if storage == Some(ast::StorageClass::Constexpr) {
+            // A `constexpr` object is a *constant* rather than storage, so
+            // there is no address for its own initialiser to take and nothing
+            // to declare before checking one.
+            if !inferred {
+                init = self.late_initializer(declarator, ty, &name.name);
+            }
             self.declare_constexpr(name, ty, init, declarator);
             return Vec::new();
         }
@@ -173,7 +216,7 @@ impl Sema<'_> {
 
         // A variably modified type is the one type whose object cannot be a
         // plain `let`, and the one C hedges around with rules about where it
-        // may be declared at all.
+        // may be declared at all. It may not have an initialiser at all.
         if self.types().is_vla(ty) {
             return self.declare_vla(name, decl, declarator, ty, vla_bound, file_scope);
         }
@@ -187,7 +230,7 @@ impl Sema<'_> {
             } else {
                 ty
             };
-            self.declare_static_object(
+            let object = self.declare_static_object(
                 name,
                 ty,
                 is_const,
@@ -195,8 +238,13 @@ impl Sema<'_> {
                 file_scope,
                 thread_local == ThreadLocal::Yes,
                 declarator,
-                init,
             );
+            if !inferred {
+                init = self.late_initializer(declarator, ty, &name.name);
+            }
+            if let (Some(id), Some(init)) = (object, init) {
+                self.initialize_static_object(id, declarator, init);
+            }
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 self.apply_object_attributes(id, &attrs, declarator);
             }
@@ -223,6 +271,9 @@ impl Sema<'_> {
         if ty.is_error() {
             return Vec::new();
         }
+        if !inferred {
+            init = self.late_initializer(declarator, ty, &name.name);
+        }
         // A `va_list` has no zero value: it starts out as a copy of the list
         // the function was called with, which is also what `va_start` puts
         // back into it.
@@ -247,6 +298,32 @@ impl Sema<'_> {
             Some(init) => init,
             None => self.zero(ty, declarator.range),
         };
+        // Rust cannot name a binding in its own initialiser, so an automatic
+        // object whose initialiser names *itself* is defined with the zero
+        // C would have left there and assigned afterwards. The assignment
+        // stands where the declaration was written, which is where C evaluates
+        // the initialiser; a hoisted definition keeps the zero, which is what
+        // `explicit: false` asks for.
+        if explicit && ir::mentions_object(&init, id) {
+            let zero = self.zero(ty, declarator.range);
+            let place = super::place_of(PlaceKind::Object(id), ty, false, name.range);
+            let assign = Expr::new(
+                ExprKind::Assign {
+                    place,
+                    value: Box::new(init),
+                },
+                ty,
+                declarator.range,
+            );
+            return vec![
+                Stmt::Let {
+                    object: id,
+                    init: zero,
+                    explicit: false,
+                },
+                Stmt::Expr(assign),
+            ];
+        }
         vec![Stmt::Let {
             object: id,
             init,
@@ -504,10 +581,35 @@ impl Sema<'_> {
         );
     }
 
+    /// Checks the initialiser of a declarator whose type came from the
+    /// declarator alone, after the object has been declared.
+    ///
+    /// See [`Sema::declarator`] for why the two are in that order. The
+    /// [`type_from_initializer`] forms have already had theirs checked by
+    /// [`Sema::typed_initializer`] and never reach here.
+    fn late_initializer(
+        &mut self,
+        declarator: &ast::InitDeclarator,
+        ty: Ty,
+        name: &str,
+    ) -> Option<Expr> {
+        let init = declarator.init.as_ref()?;
+        // A variable length array may not have one at all (C99 6.7.8p3);
+        // `Sema::declare_vla` says so, and checking a list against a length
+        // nobody knows would only add noise on top. A type that did not check
+        // out has already been reported.
+        if ty.is_error() || self.types().is_vla(ty) {
+            return None;
+        }
+        self.initializer(init, ty, name)
+    }
+
     /// Resolves a declarator's type and its initialiser together.
     ///
     /// They cannot be separated: `char s[] = "hi"` takes the array's length
-    /// from the initialiser, and the initialiser needs the element type.
+    /// from the initialiser, and the initialiser needs the element type. Only
+    /// the [`type_from_initializer`] forms come here; everything else resolves
+    /// its type first, so that the object is in scope for its own initialiser.
     fn typed_initializer(
         &mut self,
         declarator: &ast::InitDeclarator,
@@ -558,33 +660,31 @@ impl Sema<'_> {
                 return None;
             }
             let elem_const = elem.qualifiers.is_const;
-            let Some(init) = &declarator.init else {
-                self.error(
-                    declarator.range,
-                    format!(
-                        "definition of variable '{name}' with array type needs an explicit \
-                         size or an initializer"
-                    ),
-                );
-                return None;
-            };
+            // Without one the type is an *incomplete* array type, which is a
+            // type rather than a mistake; `Sema::declarator` never sends such
+            // a declarator here.
+            let init = declarator
+                .init
+                .as_ref()
+                .expect("`type_from_initializer` requires one");
             let (ty, expr) = self.init_array_inferred(init, element, elem_const, name)?;
             return Some((ty, Some(expr)));
         }
 
-        let ty = self.object_ty_of(&declarator.ty, name)?;
-        let init = match &declarator.init {
-            // A variable length array may not have one at all (C99 6.7.8p3);
-            // `Sema::declare_vla` says so, and checking a list against a
-            // length nobody knows would only add noise on top.
-            Some(_) if self.types().is_vla(ty) => None,
-            Some(init) => Some(self.initializer(init, ty, name)?),
-            None => None,
-        };
-        Some((ty, init))
+        unreachable!("only the `type_from_initializer` forms reach here")
     }
 
-    /// Declares a file-scope object or a function-local `static`.
+    /// Declares a file-scope object or a function-local `static`, *without*
+    /// its initialiser.
+    ///
+    /// The object exists before the initialiser is checked, because C99
+    /// 6.2.1p7 puts its name in scope from the end of its declarator and a
+    /// static initialiser is where that matters most: `struct list head = {
+    /// &head, &head }` is an address constant naming the object it
+    /// initialises. It starts out with the zero C gives static storage, and
+    /// [`Sema::initialize_static_object`] replaces that with the value the
+    /// declaration wrote. `None` means there is nothing to give a value to —
+    /// no initialiser, or a declaration that did not check out.
     #[allow(clippy::too_many_arguments)]
     fn declare_static_object(
         &mut self,
@@ -595,15 +695,24 @@ impl Sema<'_> {
         file_scope: bool,
         thread_local: bool,
         declarator: &ast::InitDeclarator,
-        init: Option<Expr>,
-    ) {
+    ) -> Option<ObjectId> {
         // C99 6.9.2: a file-scope declaration without an initialiser is a
         // *tentative* definition, and repeating one — or completing it with an
         // initialiser later — is perfectly ordinary C.
+        // The composite type is what a second declaration leaves behind
+        // (6.2.7p4), which is how `int j[]; int j[3];` ends up with a size.
+        let composite = match self.declared_here(&name.name).cloned() {
+            Some(Entry::Object(existing)) if file_scope => {
+                let declared = self.program.object(existing).ty;
+                self.composite_object_ty(declared, ty)
+            }
+            _ => None,
+        };
         if file_scope
+            && let Some(composite) = composite
             && let Some(Entry::Object(existing)) = self.declared_here(&name.name).cloned()
-            && self.program.object(existing).ty == ty
         {
+            self.retype_object(existing, composite, declarator);
             // C11 6.7.1p3: if `_Thread_local` appears in any declaration of an
             // object it has to appear in every one. Letting the two disagree
             // would silently give the object whichever storage the *first*
@@ -620,10 +729,9 @@ impl Sema<'_> {
                     previous,
                     format!("previous declaration of '{}' is", name.name),
                 );
-                return;
+                return None;
             }
-            self.complete_tentative_definition(name, existing, declarator, init, !is_static);
-            return;
+            return self.complete_tentative_definition(name, existing, declarator, !is_static);
         }
 
         self.check_redefinition(name);
@@ -633,7 +741,7 @@ impl Sema<'_> {
             // nothing to generate an item from.
             let id = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
             self.insert(&name.name, Entry::Object(id));
-            return;
+            return None;
         }
         let base = if file_scope {
             name.name.clone()
@@ -662,31 +770,81 @@ impl Sema<'_> {
         self.insert(&name.name, Entry::Object(id));
 
         // C zero-initialises static storage; an initialiser, if written, must
-        // be a constant expression.
-        let init = match init {
-            Some(init) => self
-                .static_init(init, "initializer")
-                .unwrap_or_else(|| self.zero(ty, declarator.range)),
-            None => self.zero(ty, declarator.range),
-        };
+        // be a constant expression, and replaces the zero once it has been
+        // checked.
+        let init = self.zero(ty, declarator.range);
         if declarator.init.is_some() {
             self.initialized.insert(id);
         }
         self.program.statics.push(StaticVar { object: id, init });
+        declarator.init.is_some().then_some(id)
+    }
+
+    /// The composite of two declarations of one object (C99 6.2.7p4), or
+    /// `None` when the two types are not compatible at all.
+    ///
+    /// The one case where the composite is neither of the two spellings is an
+    /// array: the composite of a completed array type and an incomplete one is
+    /// the *completed* one, which is what makes `extern int j[]; int j[3];`
+    /// declare one object whose size this unit knows.
+    fn composite_object_ty(&mut self, declared: Ty, again: Ty) -> Option<Ty> {
+        if declared == again {
+            return Some(declared);
+        }
+        if !self.compatible(declared, again) {
+            return None;
+        }
+        if self.types().is_incomplete_array(declared) {
+            return Some(again);
+        }
+        Some(declared)
+    }
+
+    /// Gives an already-declared object the composite type a redeclaration
+    /// left it with, and the zero of that type if it is waiting for one.
+    fn retype_object(&mut self, id: ObjectId, ty: Ty, declarator: &ast::InitDeclarator) {
+        if self.program.object(id).ty == ty {
+            return;
+        }
+        self.program.objects[id.0 as usize].ty = ty;
+        let zero = self.zero(ty, declarator.range);
+        if !self.initialized.contains(&id)
+            && let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id)
+        {
+            entry.init = zero;
+        }
+    }
+
+    /// Gives an object with static storage duration the value its initialiser
+    /// says, which C99 6.7.8p4 requires to be a constant expression.
+    fn initialize_static_object(
+        &mut self,
+        id: ObjectId,
+        declarator: &ast::InitDeclarator,
+        init: Expr,
+    ) {
+        let ty = self.program.object(id).ty;
+        let value = self
+            .static_init(init, "initializer")
+            .unwrap_or_else(|| self.zero(ty, declarator.range));
+        if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
+            entry.init = value;
+        }
     }
 
     /// Handles a repeated file-scope declaration of the same object.
     ///
     /// `int n; int n = 1;` declares one object twice and initialises it once,
-    /// which C allows; a second initialiser does not.
+    /// which C allows; a second initialiser does not. The object to give the
+    /// initialiser to comes back, or `None` when this declaration wrote none
+    /// or is the second one that did.
     fn complete_tentative_definition(
         &mut self,
         name: &ast::Ident,
         id: ObjectId,
         declarator: &ast::InitDeclarator,
-        init: Option<Expr>,
         defines: bool,
-    ) {
+    ) -> Option<ObjectId> {
         // C99 6.9.2p2: a file-scope declaration with no storage-class
         // specifier is a definition of the object — a *tentative* one when it
         // has no initialiser, which the end of the translation unit turns into
@@ -699,9 +857,7 @@ impl Sema<'_> {
         if defines {
             self.define_here(id, declarator);
         }
-        let Some(init) = init else {
-            return;
-        };
+        declarator.init.as_ref()?;
         if !self.initialized.insert(id) {
             let previous = self.program.object(id).range;
             self.error_note(
@@ -710,15 +866,9 @@ impl Sema<'_> {
                 previous,
                 format!("previous definition of '{}' is", name.name),
             );
-            return;
+            return None;
         }
-        let ty = self.program.object(id).ty;
-        let value = self
-            .static_init(init, "initializer")
-            .unwrap_or_else(|| self.zero(ty, declarator.range));
-        if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
-            entry.init = value;
-        }
+        Some(id)
     }
 
     /// Turns an object this unit only *declared* into one it defines.
@@ -749,7 +899,10 @@ impl Sema<'_> {
 
     /// Declares an object defined outside the translation unit.
     fn declare_extern_object(&mut self, name: &ast::Ident, declarator: &ast::InitDeclarator) {
-        let Some(ty) = self.object_ty_of(&declarator.ty, &name.name) else {
+        // `extern int j[];` is the canonical incomplete array type: the object
+        // is defined in another unit, so its size is none of this one's
+        // business (6.2.5p22).
+        let Some(ty) = self.declared_object_ty_of(&declarator.ty, &name.name, true) else {
             return;
         };
         if self.types().is_vla(ty) {
@@ -774,7 +927,9 @@ impl Sema<'_> {
         // a block-scope object declared without `extern` has no linkage at
         // all.
         if let Some(Entry::Object(existing)) = self.lookup_linked(&name.name).cloned() {
-            if self.program.object(existing).ty == ty {
+            let declared = self.program.object(existing).ty;
+            if let Some(composite) = self.composite_object_ty(declared, ty) {
+                self.retype_object(existing, composite, declarator);
                 self.insert(&name.name, Entry::Object(existing));
                 return;
             }
@@ -1087,19 +1242,45 @@ impl Sema<'_> {
                 }
             };
             if ty.is_void() {
+                // C99 6.7.5.3p10: a parameter list of one unnamed parameter of
+                // type `void` is a prototype with *no* parameters. The parser
+                // recognises the keyword spelling on its own; reaching `void`
+                // through a `typedef` is DR157 part 1, and only sema can see
+                // it — `typedef void V; int f(V);` is `int f(void)`.
+                if func.params.len() == 1 && !func.variadic && param.name.is_none() {
+                    param_tys.clear();
+                    param_names.clear();
+                    break;
+                }
                 self.error(param.range, "parameter has incomplete type 'void'");
                 return None;
             }
-            if !self.types().is_complete(ty) {
+            // C99 6.9.1p7: it is a *definition* whose parameters must have a
+            // complete type. A declaration that is not one may mention a tag
+            // this unit has not defined — `void f(struct S s);` before
+            // `struct S` — because nothing here has to know its size; `drs`
+            // DR103 is exactly that question, and GCC and Clang both accept
+            // it with only a warning about the tag's scope.
+            if definition.is_some() && !self.types().is_complete(ty) {
                 self.error(
                     param.range,
                     format!("parameter has incomplete type '{}'", self.tyname(ty)),
                 );
                 return None;
             }
+            // C23 N2480 lets a parameter of a *definition* go unnamed, exactly
+            // as C++ always has; GCC and Clang accepted it before that and
+            // warn about it only under `-pedantic`
+            // ("ISO C does not support omitting parameter names in function
+            // definitions before C23"). There is nothing to bind — the body
+            // cannot name the parameter — but the generated item still needs
+            // one in that position; see `Sema::function_def`.
             if definition.is_some() && param.name.is_none() {
-                self.error(param.range, "parameter name omitted");
-                return None;
+                self.require_standard(
+                    crate::Standard::C23,
+                    "omitting a parameter name in a function definition",
+                    param.range,
+                );
             }
             param_tys.push(ty);
             param_names.push(param.name.as_ref().map(|n| n.name.clone()));
@@ -1442,12 +1623,27 @@ impl Sema<'_> {
         // hands over: the item takes the promoted one under a hidden name, and
         // the prologue below binds the C name to the declared type.
         let mut converted: Vec<(ast::Ident, Ty, Ty, ObjectId, bool)> = Vec::new();
-        for (param, ty) in func
+        for (index, (param, ty)) in func
             .params
             .iter()
             .zip(self.program.function(id).sig.params.clone())
+            .enumerate()
         {
-            let Some(name) = &param.name else { continue };
+            let Some(name) = &param.name else {
+                // C23's unnamed parameter (N2480). Nothing in the body can
+                // reach it, but the generated item still takes an argument in
+                // that position, so it gets a name of its own — the parameter
+                // list has to keep the shape the signature has.
+                let object = self.new_object(
+                    &format!("__cinrs_unnamed_param{index}"),
+                    ty,
+                    Storage::Automatic,
+                    param.ty.qualifiers.is_const,
+                    param.range,
+                );
+                params.push(object);
+                continue;
+            };
             if func.old_style {
                 // `resolve_param_ty` already succeeded for this parameter in
                 // `declare_function`, or there would be no `id` to be here
@@ -1651,6 +1847,12 @@ impl Sema<'_> {
                 Some(self.const_to_expr(value, ty, range))
             }
             _ if ty.is_pointer() => {
+                // `(char *) 1 + 2` is a constant, but a Rust `.offset()` on a
+                // pointer with no provenance is not: the arithmetic is done
+                // here instead, and what is left is one integer cast.
+                if let Some(folded) = self.fold_integer_pointer(&expr) {
+                    return Some(folded);
+                }
                 if self.is_address_constant(&expr) {
                     return Some(expr);
                 }
@@ -1670,13 +1872,65 @@ impl Sema<'_> {
         }
     }
 
+    /// Folds a pointer value built entirely out of integer constants into one
+    /// integer cast to the pointer type, or `None` when it is not one.
+    ///
+    /// `(unsigned int *) 0xa000` needs nothing, but `(char *) 1 + 2` would
+    /// become a `.offset(2)` on a pointer with no provenance, which is a
+    /// const-evaluation error in Rust rather than an address. Doing the
+    /// arithmetic here leaves one cast, which is a constant everywhere.
+    fn fold_integer_pointer(&mut self, expr: &Expr) -> Option<Expr> {
+        let ty = expr.ty;
+        if !ty.is_pointer() {
+            return None;
+        }
+        let value = self.integer_pointer_value(expr)?;
+        let size = self.size_ty();
+        let base = Expr::int(value, size, expr.range);
+        Some(Expr::new(ExprKind::Cast(Box::new(base)), ty, expr.range))
+    }
+
+    /// The address an all-integer pointer expression names, in bytes.
+    fn integer_pointer_value(&mut self, expr: &Expr) -> Option<i128> {
+        match &expr.kind {
+            ExprKind::Int(v) => Some(*v),
+            ExprKind::Cast(inner) if inner.ty.is_integer() || inner.ty.is_pointer() => {
+                self.integer_pointer_value(inner)
+            }
+            ExprKind::PtrOffset { ptr, index, sub } => {
+                // The base has to be an integer, or this is an ordinary
+                // address constant and `is_address_constant` will take it.
+                let base = self.integer_pointer_value(ptr)?;
+                let ExprKind::Int(count) = index.kind else {
+                    return None;
+                };
+                let pointee = self.pointee(ptr.ty)?;
+                let size = i128::from(self.size_of(pointee).unwrap_or(1));
+                let delta = count.checked_mul(size)?;
+                if *sub {
+                    base.checked_sub(delta)
+                } else {
+                    base.checked_add(delta)
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Whether a pointer value is one the linker can work out: a null pointer,
     /// the address of something with static storage duration, or a constant
     /// offset from one.
+    ///
+    /// An *integer* constant converted to a pointer is here too. C11 6.6p9's
+    /// list of address constants does not have it, but 6.6p10 lets an
+    /// implementation accept other forms of constant expression and every one
+    /// does: `(unsigned int *) 0xa000` is how a program names a memory-mapped
+    /// register, and Rust's `0xa000 as *mut u32` is a constant expression as
+    /// well. `execute/20021010-2` and `execute/pr23324` are the two in the
+    /// torture suite.
     fn is_address_constant(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Zeroed | ExprKind::FuncAddr(_) => true,
-            ExprKind::Int(v) => *v == 0,
+            ExprKind::Zeroed | ExprKind::FuncAddr(_) | ExprKind::Int(_) => true,
             ExprKind::Cast(inner) => self.is_address_constant(inner),
             ExprKind::AddrOf(place) => self.is_static_place(place),
             ExprKind::PtrOffset { ptr, index, .. } => {
@@ -1706,6 +1960,27 @@ impl Sema<'_> {
             // file scope is an ordinary `Object` with static storage.
             PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => false,
         }
+    }
+}
+
+/// Whether a declarator's type is one only its *initialiser* can complete.
+///
+/// C23's `auto x = e;` (and GNU's `__auto_type`) takes the whole type from the
+/// initialiser, and `T x[] = { … }` takes the array's length from it. Those
+/// two are checked together by [`Sema::typed_initializer`]; every other form
+/// resolves its type from the declarator alone, so that the object can be in
+/// scope for its own initialiser (C99 6.2.1p7). See [`Sema::declarator`].
+fn type_from_initializer(declarator: &ast::InitDeclarator) -> bool {
+    match &declarator.ty.kind {
+        ast::TypeKind::Auto => true,
+        // `T x[] = { … }` takes its length from the list; `T x[];` with no
+        // list at all is an *incomplete* array type, which is a declaration
+        // rather than a mistake in the two places C99 6.9.2 allows it.
+        ast::TypeKind::Array {
+            size: ast::ArraySize::Unspecified,
+            ..
+        } => declarator.init.is_some(),
+        _ => false,
     }
 }
 

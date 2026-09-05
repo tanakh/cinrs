@@ -521,3 +521,140 @@ fn attributes_are_accepted_after_the_declared_name_too() {
 
     assert_eq!(unsafe { read() }, 3);
 }
+
+// ---------------------------------------------------------------------------
+// what C23 added to declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_parameter_of_a_definition_may_go_unnamed() {
+    // N2480. The body cannot reach the parameter, but the caller still passes
+    // one, so the generated item still takes an argument in that position.
+    c23! {
+        int second(int, int b) { return b; }
+        int third(int, int, int c) { return c; }
+    }
+
+    unsafe {
+        assert_eq!(second(1, 2), 2);
+        assert_eq!(third(1, 2, 3), 3);
+    }
+}
+
+#[test]
+fn an_enumerator_too_large_for_int_widens_the_enumeration() {
+    // N3029: the enumeration's underlying type widens so that every value
+    // fits, and *every* enumerator then has that type — which is what
+    // `_Generic` selects on. Before C23 it was a constraint violation.
+    c23! {
+        #include <limits.h>
+
+        enum wide { small = 1, huge = ULLONG_MAX };
+        enum signed_too { low = -1, high = 3000000000 };
+
+        /* The widened type is the narrowest that holds every value, which on
+           an LP64 target makes `ULLONG_MAX` an `unsigned long` — the same
+           choice Clang makes. What the standard fixes is not *which* type it
+           is but that every enumerator has it. */
+        int same_type(void) {
+            return _Generic(small, unsigned long: 1, default: 0)
+                == _Generic(huge, unsigned long: 1, default: 0);
+        }
+        int widened_to_unsigned(void) {
+            return _Generic(huge, unsigned long: 1, default: 0);
+        }
+        int widened_to_signed(void) {
+            return _Generic(high, long: 1, default: 0)
+                && _Generic(low, long: 1, default: 0);
+        }
+        unsigned long long biggest(void) { return huge; }
+        long negative(void) { return low; }
+        int fits_int_stays_int(void) {
+            enum narrow { a = 1, b = 2 };
+            return _Generic(a, int: 1, default: 0);
+        }
+    }
+
+    unsafe {
+        assert_eq!(same_type(), 1);
+        assert_eq!(widened_to_unsigned(), 1);
+        assert_eq!(widened_to_signed(), 1);
+        assert_eq!(biggest(), u64::MAX);
+        assert_eq!(negative(), -1);
+        assert_eq!(fits_int_stays_int(), 1);
+    }
+}
+
+#[test]
+fn stdckdint_reports_overflow() {
+    // C23 7.20 (N2683). The arithmetic is done in infinite precision and the
+    // answer is whether the result fit the type `*r` has — the types of the
+    // operands decide nothing.
+    c23! {
+        #include <stdckdint.h>
+        #include <stdint.h>
+
+        int add_fits(void) {
+            int64_t r = 0;
+            bool overflowed = ckd_add(&r, INT32_MAX, 1);
+            return !overflowed && r == 2147483648LL;
+        }
+        int sub_overflows(void) {
+            int32_t r = 0;
+            bool overflowed = ckd_sub(&r, INT32_MAX, -1);
+            return overflowed;
+        }
+        int mul_fits(void) {
+            int r = 0;
+            int a = 3;
+            bool overflowed = ckd_mul(&r, a, 2);
+            return !overflowed && r == 6;
+        }
+        int version_macro(void) {
+            return __STDC_VERSION_STDCKDINT_H__ >= 202311L;
+        }
+    }
+
+    unsafe {
+        assert_eq!(add_fits(), 1);
+        assert_eq!(sub_overflows(), 1);
+        assert_eq!(mul_fits(), 1);
+        assert_eq!(version_macro(), 1);
+    }
+}
+
+#[test]
+fn a_label_may_stand_before_a_case_group_that_is_empty() {
+    // N2508 again, for the labels the earlier test does not cover: `case` and
+    // `default` at the end of a compound statement, and a declaration
+    // immediately after one.
+    c23! {
+        int trailing_case(int x) {
+            switch (x) {
+            case 1:
+                return 1;
+            case 2:
+            }
+            return 0;
+        }
+
+        int declaration_after_case(int x) {
+            switch (x) {
+            case 1:
+                static_assert(1, "");
+                int y = 7;
+                return y;
+            default:
+                static_assert(1, "");
+                return -1;
+            }
+        }
+    }
+
+    unsafe {
+        assert_eq!(trailing_case(1), 1);
+        assert_eq!(trailing_case(2), 0);
+        assert_eq!(declaration_after_case(1), 7);
+        assert_eq!(declaration_after_case(9), -1);
+    }
+}

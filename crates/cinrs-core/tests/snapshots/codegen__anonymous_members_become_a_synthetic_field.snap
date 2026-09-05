@@ -45,8 +45,7 @@ mod __cinrs_unit_fdfea189 {
     #[allow(…)]
     pub unsafe extern "C" fn r#where() -> ::core::ffi::c_ulong {
         unsafe {
-            return ::core::mem::offset_of!(Value, __cinrs_anon0.as_double)
-                as ::core::ffi::c_ulong;
+            return 8;
         }
     }
 }

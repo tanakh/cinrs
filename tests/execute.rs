@@ -10,7 +10,7 @@
 //! names never collide between tests. Calls are `unsafe` because `c99!`
 //! defines `extern "C"` functions.
 
-use cinrs::c99;
+use cinrs::{c11, c99};
 
 // ---------------------------------------------------------------------------
 // the README example
@@ -1567,5 +1567,247 @@ fn a_tag_declared_in_a_controlling_expression_is_scoped_to_the_statement() {
         // ...while inside the `if`, the one declared in its controlling
         // expression is in scope, and there `a == 1`.
         assert_eq!(inner_inside_if(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// an identifier is in scope for its own initialiser
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_initializer_may_name_the_object_it_initializes() {
+    // C99 6.2.1p7: "the scope of an identifier ... begins just after the
+    // completion of its declarator", so the object being declared is already
+    // visible in its own initialiser. The circular list `{ &head, &head }` is
+    // the idiom this rule exists for; `T *p = malloc(sizeof *p)` is the one
+    // every allocation is written with.
+    c99! {
+        #include <stdlib.h>
+
+        struct node { struct node *next; int v; };
+        struct node head = { &head, 7 };
+
+        struct pair { int v; struct pair *self; };
+        struct pair table[2] = { { 0, &table[1] }, { 1, &table[0] } };
+
+        int file_scope_self(void) { return head.next == &head && head.v == 7; }
+        int file_scope_array(void) {
+            return table[0].self == &table[1] && table[1].self == &table[0];
+        }
+
+        int automatic_self(void) {
+            struct node local = { &local, 3 };
+            return local.next == &local && local.v == 3;
+        }
+
+        int automatic_array(void) {
+            struct pair pairs[2] = { { 4, &pairs[1] }, { 5, &pairs[0] } };
+            return pairs[0].self == &pairs[1] && pairs[1].self[0].v == 4;
+        }
+
+        int block_static_self(void) {
+            static struct node local = { &local, 9 };
+            return local.next == &local && local.v == 9;
+        }
+
+        int sizeof_of_itself(void) {
+            struct node *p = malloc(sizeof *p);
+            int ok;
+            if (!p) { return 0; }
+            p->v = 11;
+            ok = p->v == 11;
+            free(p);
+            return ok;
+        }
+    }
+
+    unsafe {
+        assert_eq!(file_scope_self(), 1);
+        assert_eq!(file_scope_array(), 1);
+        assert_eq!(automatic_self(), 1);
+        assert_eq!(automatic_array(), 1);
+        assert_eq!(block_static_self(), 1);
+        assert_eq!(sizeof_of_itself(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// a subobject of structure type takes a whole value
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_struct_valued_element_initializes_the_whole_subobject() {
+    // C11 6.7.9p13: an object of structure or union type may be initialised by
+    // "a single expression that has compatible structure or union type", and a
+    // *subobject* may too — braces or not. Only when the element is of some
+    // other type do the elided braces of p9 send it to the subobject's first
+    // member instead.
+    c99! {
+        struct inner { int x; int y; };
+        struct outer { int z; struct inner b; };
+        struct wrap { struct inner rows[2]; int tail; };
+
+        int nested_member(void) {
+            struct inner b = { 1, 2 };
+            struct outer a = { 3, b };
+            return a.z == 3 && a.b.x == 1 && a.b.y == 2;
+        }
+
+        int nested_array_element(void) {
+            struct inner p = { 4, 5 };
+            struct inner q = { 6, 7 };
+            struct wrap w = { { p, q }, 8 };
+            return w.rows[0].x == 4 && w.rows[0].y == 5
+                && w.rows[1].x == 6 && w.rows[1].y == 7 && w.tail == 8;
+        }
+
+        int designated_array_of_structs(void) {
+            struct inner p = { 9, 10 };
+            struct wrap w = { .rows = { p }, .tail = 11 };
+            return w.rows[0].x == 9 && w.rows[0].y == 10
+                && w.rows[1].x == 0 && w.tail == 11;
+        }
+
+        int elided_braces_still_work(void) {
+            /* The elements are `int`s, so they fill the members of `b` one by
+               one — the rule p13 replaces only when the type matches. */
+            struct outer a = { 12, 13, 14 };
+            return a.z == 12 && a.b.x == 13 && a.b.y == 14;
+        }
+
+        int compound_literal_element(void) {
+            struct outer a = { 15, (struct inner){ 16, 17 } };
+            return a.z == 15 && a.b.x == 16 && a.b.y == 17;
+        }
+    }
+
+    unsafe {
+        assert_eq!(nested_member(), 1);
+        assert_eq!(nested_array_element(), 1);
+        assert_eq!(designated_array_of_structs(), 1);
+        assert_eq!(elided_braces_still_work(), 1);
+        assert_eq!(compound_literal_element(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// address constants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_integer_constant_cast_to_a_pointer_initializes_static_storage() {
+    // 6.6p9's address constants do not include one, but 6.6p10 lets an
+    // implementation accept other forms of constant expression and every one
+    // does: `(unsigned int *) 0xa000` is how a program names a memory-mapped
+    // register.
+    c99! {
+        unsigned int *reg = (unsigned int *)0xa000;
+        char *offset_from_one = (char *)1 + 2;
+        int *from_unsigned = (int *)358273621U;
+
+        long as_integers(void) {
+            return (long)reg + (long)offset_from_one + (long)from_unsigned;
+        }
+    }
+
+    unsafe {
+        assert_eq!(as_integers(), 0xa000 + 3 + 358_273_621);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// incomplete array types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_incomplete_array_type_is_completed_by_the_unit() {
+    // C99 6.2.5p22 and 6.9.2p5: `int j[];` at file scope is a tentative
+    // definition whose type the *end of the translation unit* completes to one
+    // element, a later declaration with a bound completes it sooner, and
+    // `extern int j[];` never completes at all — its size is another unit's
+    // business. `typedef int A[]; A a = { 1, 2 };` takes its length from the
+    // initialiser, as the `int a[]` spelling does.
+    c99! {
+        int assumed[];
+        int completed[];
+        int completed[4];
+        typedef int Row[];
+        Row through_a_typedef = { 5, 6, 7 };
+
+        unsigned long completed_size(void) { return sizeof completed; }
+        unsigned long typedef_size(void) { return sizeof through_a_typedef; }
+        int compatible(void) { return __builtin_types_compatible_p(int[5], int[]); }
+        int read_them(void) {
+            return assumed[0] + completed[3] + through_a_typedef[2];
+        }
+    }
+
+    // `sizeof assumed` is an error *inside the unit* — the type is still
+    // incomplete where the function is written, which is what GCC says too —
+    // so the one element the end of the unit gave it is checked from here, on
+    // the generated item's own type.
+    let _one_element: *mut [core::ffi::c_int; 1] = &raw mut assumed;
+
+    unsafe {
+        assert_eq!(
+            completed_size() as usize,
+            4 * core::mem::size_of::<core::ffi::c_int>()
+        );
+        assert_eq!(
+            typedef_size() as usize,
+            3 * core::mem::size_of::<core::ffi::c_int>()
+        );
+        assert_eq!(compatible(), 1);
+        assert_eq!(read_them(), 7);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// offsetof
+// ---------------------------------------------------------------------------
+
+#[test]
+fn offsetof_takes_a_member_designator_and_folds_to_a_constant() {
+    // C99 7.17p3: the member designator may reach through members, array
+    // elements and anonymous members, and the result is an integer constant
+    // expression — which is what makes `char b[sizeof (struct A) - offsetof
+    // (struct A, a)];` a member declaration. The values are checked against
+    // Rust's own `offset_of!`, which is the layout the expansion really has.
+    c11! {
+        #include <stddef.h>
+
+        struct Inner { char c; int i; };
+        struct Outer { int head; struct Inner one; struct Inner rows[3]; };
+        struct Anon { int a; struct { int x; int y; }; };
+
+        char probe[offsetof(struct Outer, rows[2].i)];
+
+        size_t nested(void) { return offsetof(struct Outer, one.i); }
+        size_t element(void) { return offsetof(struct Outer, rows[2].c); }
+        size_t through_element(void) { return offsetof(struct Outer, rows[2].i); }
+        size_t anonymous(void) { return offsetof(struct Anon, y); }
+        size_t probe_size(void) { return sizeof probe; }
+    }
+
+    unsafe {
+        assert_eq!(
+            nested() as usize,
+            core::mem::offset_of!(Outer, one) + core::mem::offset_of!(Inner, i)
+        );
+        assert_eq!(
+            element() as usize,
+            core::mem::offset_of!(Outer, rows) + 2 * core::mem::size_of::<Inner>()
+        );
+        assert_eq!(
+            through_element() as usize,
+            core::mem::offset_of!(Outer, rows)
+                + 2 * core::mem::size_of::<Inner>()
+                + core::mem::offset_of!(Inner, i)
+        );
+        assert_eq!(
+            anonymous() as usize,
+            core::mem::offset_of!(Anon, __cinrs_anon0.y)
+        );
+        assert_eq!(probe_size() as usize, through_element() as usize);
     }
 }

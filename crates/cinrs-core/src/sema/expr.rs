@@ -176,11 +176,25 @@ impl Sema<'_> {
                     if let Some(result) = self.builtin_call(&name.name, args, range) {
                         return result;
                     }
+                    // `alloca` is a *builtin* rather than a library function:
+                    // no ISO header declares it, and GCC answers a call to an
+                    // undeclared one with `__builtin_alloca` in its `gnu`
+                    // modes ("incompatible implicit declaration of built-in
+                    // function 'alloca'"). Without that the C89 implicit
+                    // declaration would type it `int()` and `void *p =
+                    // alloca(n)` would be a constraint violation.
+                    if name.name == "alloca"
+                        && self.gnu_leniency()
+                        && self.lookup("alloca").is_none()
+                        && let Some(result) = self.builtin_call("__builtin_alloca", args, range)
+                    {
+                        return result;
+                    }
                 }
                 self.call(callee, args, range)
             }
             ast::ExprKind::VaArg { ap, ty } => self.va_arg(ap, ty, range),
-            ast::ExprKind::OffsetOf { ty, member } => self.offsetof(ty, member, range),
+            ast::ExprKind::OffsetOf { ty, member, path } => self.offsetof(ty, member, path, range),
             ast::ExprKind::Member { .. } | ast::ExprKind::Index { .. } => {
                 let place = self.lvalue(expr)?;
                 Some(self.load_or_decay(place, range))
@@ -362,14 +376,21 @@ impl Sema<'_> {
             Some(elem) if self.types().is_vla(ty) => elem,
             _ => ty,
         };
+        if ty.is_void() && self.gnu_leniency() {
+            return Some(Expr::int(1, self.size_ty(), range));
+        }
         let Some(layout) = self.types().size_align(ty, &self.target) else {
-            self.error(
-                operand_range,
-                format!(
-                    "invalid application of '_Alignof' to an incomplete type '{}'",
-                    self.tyname(ty)
-                ),
+            let message = format!(
+                "invalid application of '_Alignof' to an incomplete type '{}'",
+                self.tyname(ty)
             );
+            if ty.is_void() {
+                let note = self.gnu_note();
+                self.diags
+                    .push(crate::diag::Diagnostic::error(operand_range, message).with_note(note));
+            } else {
+                self.error(operand_range, message);
+            }
             return None;
         };
         Some(Expr::int(layout.align as i128, self.size_ty(), range))
@@ -1302,20 +1323,39 @@ impl Sema<'_> {
                 self.error(range, "function pointers can only be compared for equality");
                 return None;
             }
-            if lhs.ty != rhs.ty
-                && !matches!(lhs.kind, ExprKind::Zeroed)
-                && !matches!(rhs.kind, ExprKind::Zeroed)
-            {
-                self.error(
-                    range,
-                    format!(
-                        "comparison of distinct function pointer types '{}' and '{}'",
-                        self.tyname(lhs.ty),
-                        self.tyname(rhs.ty)
-                    ),
+            // A null pointer constant took the other operand's type above, so
+            // the two agree; `void *` against a function pointer is the
+            // conversion `pointer_assignable` already allows for `dlsym`'s
+            // sake, which ISO C forbids only under `-pedantic`. What is left
+            // is two function pointer types that are not compatible — and note
+            // that `double (*)()` and `double (*)(double)` *are* compatible
+            // (6.7.6.3p15), which is what `compatible` knows and plain type
+            // equality does not.
+            let null = matches!(lhs.kind, ExprKind::Zeroed) || matches!(rhs.kind, ExprKind::Zeroed);
+            let void_pointer =
+                self.types().is_void_pointer(lhs.ty) || self.types().is_void_pointer(rhs.ty);
+            // GCC and Clang only warn here (`-Wcompare-distinct-pointer-
+            // types`) and compare the two addresses; the GNU dialects follow
+            // them, and the strict ones keep the constraint violation.
+            if !null && !void_pointer && !self.compatible(lhs.ty, rhs.ty) && !self.gnu_leniency() {
+                let message = format!(
+                    "comparison of distinct function pointer types '{}' and '{}'",
+                    self.tyname(lhs.ty),
+                    self.tyname(rhs.ty)
                 );
+                let note = self.gnu_note();
+                self.diags
+                    .push(crate::diag::Diagnostic::error(range, message).with_note(note));
                 return None;
             }
+            // Rust compares raw pointers only when they have the same type.
+            let common = if self.types().is_func_pointer(lhs.ty) {
+                lhs.ty
+            } else {
+                rhs.ty
+            };
+            let lhs = self.convert(lhs, common);
+            let rhs = self.convert(rhs, common);
             return Some(Expr::new(
                 ExprKind::Compare {
                     op,
@@ -1555,10 +1595,29 @@ impl Sema<'_> {
                 self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
             return Some(self.ptr_to(pointee, konst));
         }
+        // C11 6.5.15p6: one operand a pointer to `void` and the other a
+        // pointer to an object type gives a pointer to `void`, and this comes
+        // before the composite below so that `void *` wins whichever side it
+        // is on.
         if self.types().is_void_pointer(lhs.ty) || self.types().is_void_pointer(rhs.ty) {
             let konst =
                 self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
             return Some(self.ptr_to(Ty::Void, konst));
+        }
+        // 6.5.15p6 again: two pointers to compatible types give a pointer to
+        // the *composite* type, and either of a compatible pair will do for
+        // one. `pointer_assignable` is what knows the three ways two pointee
+        // types can be interchangeable without being equal — an enumerated
+        // type and the integer type it is compatible with (6.7.2.2p4), a
+        // prototyped function type and one with an empty parameter list
+        // (6.7.6.3p15), and two integer types that differ only in signedness,
+        // which is `-Wpointer-sign` and which GCC accepts here too.
+        // `execute/enum-3` is `1 ? (enum e *)q : (int *)p`.
+        if self.pointer_assignable(lhs.ty, rhs.ty) {
+            let pointee = self.pointee(lhs.ty).expect("a pointer");
+            let konst =
+                self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
+            return Some(self.ptr_to(pointee, konst));
         }
         None
     }
@@ -1917,6 +1976,16 @@ impl Sema<'_> {
             return Some(Expr::new(ExprKind::Cast(Box::new(value)), Ty::Void, range));
         }
         if !target.is_scalar() {
+            // A cast to the type the operand already has does nothing, and
+            // both GCC and Clang accept it silently for a `struct` or `union`
+            // — 6.5.4p2's "scalar type" is about a *conversion*, and there is
+            // none to make here. C11 6.2.4p8 gives the result temporary
+            // lifetime, which is what a `Temporary` place already is;
+            // `C11/n1285.c` is a file about exactly that and writes
+            // `((struct X)x).a` four times.
+            if self.compatible(value.ty, target) {
+                return Some(value);
+            }
             self.error(
                 type_name.range,
                 format!(
@@ -1968,17 +2037,31 @@ impl Sema<'_> {
     /// than one this crate worked out separately. The cost is that `offsetof`
     /// is not an integer constant expression here, so it cannot be an array
     /// bound or a `case` label the way C99 allows.
+    /// `offsetof(T, member-designator)` — C99 7.17, spelled
+    /// `__builtin_offsetof` here because `<stddef.h>` defines the macro in
+    /// terms of it.
+    ///
+    /// The answer is folded to an *integer constant* rather than left as
+    /// Rust's `core::mem::offset_of!`, because sema computes the layout itself
+    /// (`ir::Field::offset` is where every member's offset already is) and
+    /// because C99 6.6 wants a constant here: `struct B { char a[sizeof
+    /// (struct A) - offsetof (struct A, a)]; };` is a member declaration, and
+    /// `case offsetof(…)` and a file-scope initialiser are the other two
+    /// places. That the folded value agrees with the generated Rust item's own
+    /// layout is what `tests/aggregates.rs` and the differential corpus in
+    /// `tests/bitfield_layout.rs` check, both against `offset_of!`.
     fn offsetof(
         &mut self,
         type_name: &ast::TypeName,
         member: &ast::Ident,
+        path: &[ast::Designator],
         range: SourceRange,
     ) -> Option<Expr> {
         let ty = self.ty_of(&type_name.ty)?;
         if ty.is_error() {
             return None;
         }
-        let Ty::Record(record) = ty else {
+        if !matches!(ty, Ty::Record(_)) {
             self.error(
                 type_name.range,
                 format!(
@@ -1987,36 +2070,122 @@ impl Sema<'_> {
                 ),
             );
             return None;
+        }
+        let mut offset = self.member_offset(ty, member, type_name.range)?;
+        let mut current = self.designated_ty(ty, member)?;
+        for step in path {
+            match step {
+                ast::Designator::Field(name) => {
+                    if !matches!(current, Ty::Record(_)) {
+                        self.error(
+                            name.range,
+                            format!(
+                                "'.{}' in a member designator needs a struct or union, not '{}'",
+                                name.name,
+                                self.tyname(current)
+                            ),
+                        );
+                        return None;
+                    }
+                    offset += self.member_offset(current, name, name.range)?;
+                    current = self.designated_ty(current, name)?;
+                }
+                ast::Designator::Index(index) => {
+                    let Some(elem) = self.types().elem(current) else {
+                        self.error(
+                            index.range,
+                            format!(
+                                "a subscript in a member designator needs an array, not '{}'",
+                                self.tyname(current)
+                            ),
+                        );
+                        return None;
+                    };
+                    let value = self.expr(index)?;
+                    let Some(crate::ir::ConstValue::Int(count)) = self.const_eval(&value) else {
+                        self.error(
+                            index.range,
+                            "a subscript in a member designator must be a constant expression",
+                        );
+                        return None;
+                    };
+                    let size = self.size_of(elem).unwrap_or(0);
+                    offset += (count.max(0) as u64).saturating_mul(size);
+                    current = elem;
+                }
+                ast::Designator::Range(low, _) => {
+                    self.error(
+                        low.range,
+                        "a range designator has no meaning in a member designator",
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(Expr::int(i128::from(offset), self.size_ty(), range))
+    }
+
+    /// The byte offset of `name` within the record type `ty`, reporting the
+    /// two things that can be wrong with it.
+    fn member_offset(&mut self, ty: Ty, name: &ast::Ident, at: SourceRange) -> Option<u64> {
+        let Ty::Record(record) = ty else {
+            return None;
         };
         if !self.types().record(record).complete {
             self.error(
-                type_name.range,
+                at,
                 format!("'offsetof' of the incomplete type '{}'", self.tyname(ty)),
             );
             return None;
         }
-        let Some(path) = self.member_path(record, &member.name) else {
+        let Some(path) = self.member_path(record, &name.name) else {
             self.error(
-                member.range,
-                format!("no member named '{}' in '{}'", member.name, self.tyname(ty)),
+                name.range,
+                format!("no member named '{}' in '{}'", name.name, self.tyname(ty)),
             );
             return None;
         };
         if self.member_bits(record, &path) {
             self.error(
-                member.range,
+                name.range,
                 format!(
                     "'offsetof' applied to the bit-field '{}', which has no address",
-                    member.name
+                    name.name
                 ),
             );
             return None;
         }
-        Some(Expr::new(
-            ExprKind::OffsetOf { record, path },
-            self.size_ty(),
-            range,
-        ))
+        // An anonymous member contributes its own offset on the way through,
+        // which is what makes `offsetof(struct S, x)` work for an `x` declared
+        // inside an anonymous `union` (C11 6.7.2.1p13).
+        let mut offset = 0;
+        let mut current = record;
+        for index in &path {
+            let field = &self.types().record(current).fields[*index];
+            offset += field.offset;
+            if let Ty::Record(inner) = field.ty {
+                current = inner;
+            }
+        }
+        Some(offset)
+    }
+
+    /// The type of the member `name` names in the record type `ty`.
+    fn designated_ty(&mut self, ty: Ty, name: &ast::Ident) -> Option<Ty> {
+        let Ty::Record(record) = ty else {
+            return None;
+        };
+        let path = self.member_path(record, &name.name)?;
+        let mut current = record;
+        let mut result = Ty::Error;
+        for index in &path {
+            let field = &self.types().record(current).fields[*index];
+            result = field.ty;
+            if let Ty::Record(inner) = field.ty {
+                current = inner;
+            }
+        }
+        Some(result)
     }
 
     /// What `sizeof` or `_Alignof` is being asked about, rejecting the one
@@ -2138,14 +2307,24 @@ impl Sema<'_> {
             );
             return None;
         }
+        // GNU gives `void` a size of one, which is what makes `void *`
+        // arithmetic — already accepted here — mean anything; ISO C has it as
+        // an incomplete type that can never be completed (6.2.5p19).
+        if ty.is_void() && self.gnu_leniency() {
+            return Some(Expr::int(1, self.size_ty(), range));
+        }
         let Some(size) = self.size_of(ty) else {
-            self.error(
-                operand_range,
-                format!(
-                    "invalid application of 'sizeof' to an incomplete type '{}'",
-                    self.tyname(ty)
-                ),
+            let message = format!(
+                "invalid application of 'sizeof' to an incomplete type '{}'",
+                self.tyname(ty)
             );
+            if ty.is_void() {
+                let note = self.gnu_note();
+                self.diags
+                    .push(crate::diag::Diagnostic::error(operand_range, message).with_note(note));
+            } else {
+                self.error(operand_range, message);
+            }
             return None;
         };
         Some(Expr::int(size as i128, self.size_ty(), range))
@@ -2281,9 +2460,44 @@ impl Sema<'_> {
         let (Some(a), Some(b)) = (self.pointee(to), self.pointee(from)) else {
             return false;
         };
-        matches!((a.is_enum(), b.is_enum()), (true, false) | (false, true))
+        if matches!((a.is_enum(), b.is_enum()), (true, false) | (false, true))
             && matches!(a, Ty::Int | Ty::UInt | Ty::Enum(_))
             && matches!(b, Ty::Int | Ty::UInt | Ty::Enum(_))
+        {
+            return true;
+        }
+        self.differ_only_in_sign(a, b)
+    }
+
+    /// Whether two pointee types are the same integer type but for its
+    /// signedness — GCC's and Clang's `-Wpointer-sign`.
+    ///
+    /// `strlen` over an `unsigned char *`, a `long *` argument where the
+    /// parameter is an `unsigned long *`, a `char *` buffer handed to a
+    /// routine that takes `unsigned char *`: ISO C makes each of these a
+    /// constraint violation (6.5.16.1p1, because the unqualified pointee types
+    /// are not compatible), and no compiler anybody uses has ever refused one.
+    /// GCC 14 and Clang both *warn*, and only `-pedantic-errors` promotes it.
+    /// `cinrs` accepts it silently in every entry point, because the amount of
+    /// real C that leans on it is not small; `doc/gnu-extensions.md` says so.
+    ///
+    /// Plain `char` is a type of its own, distinct from both `signed char` and
+    /// `unsigned char` whatever the target's signedness, so it counts as
+    /// differing in sign from either — which is the wording both compilers use
+    /// ("one is of the unique plain 'char' type and the other is not").
+    fn differ_only_in_sign(&self, a: Ty, b: Ty) -> bool {
+        if a == b || a.is_enum() || b.is_enum() || a.is_bool() || b.is_bool() {
+            return false;
+        }
+        if !(a.is_integer() && b.is_integer()) {
+            return false;
+        }
+        a.bits(&self.target) == b.bits(&self.target)
+            && (a.is_signed(&self.target) != b.is_signed(&self.target)
+                || matches!(
+                    (a, b),
+                    (Ty::Char, Ty::SChar | Ty::UChar) | (Ty::SChar | Ty::UChar, Ty::Char)
+                ))
     }
 
     /// Whether an expression is C's null pointer constant.

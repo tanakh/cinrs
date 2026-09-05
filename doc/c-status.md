@@ -174,9 +174,10 @@ target but the host.
 | --- | --- | --- | --- |
 | Restricted character set support via digraphs and `<iso646.h>` | | Yes | Digraphs are lexed, `<iso646.h>` is bundled, and the nine **trigraphs** are replaced in translation phase 1 — before line splicing, so `??/` at the end of a line splices it, and inside string literals, so `"??!"` is `"|"`. A punctuator may be spelled with them, one or both halves: `??!??!` is `||` and `??'=` is `^=`. They are on in `c89!`, `c99!`, `c11!` and `c17!` and off in `c23!` (N2940 removed them) and in every GNU dialect, which is the line `gcc -std=c99` and `clang` both draw. |
 | More precise aliasing rules via effective type | | N/A | |
-| Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits. |
+| Restricted pointers (`restrict`) | N448 | Accepted | Parsed and ignored, as the standard permits — Rust's own aliasing rules are stricter than the promise, so there is nothing to pass on. The one *constraint* it carries is checked: 6.7.3p2 lets it qualify only a pointer to an object type, so `int restrict i` and `void (*restrict fp)(void)` are diagnosed, while `int *restrict p`, `int_ptr restrict q` through a `typedef` of a pointer, and `void f(int a[restrict])` are not. Clang's `C99/n448.c` is that test. |
 | Variable length arrays | N683 | Partial | A *one-dimensional* array at block scope whose element type is complete and not itself variably modified: `T a[n];`, with `T` a scalar, a pointer, a record or a fixed-size array (`int a[n][3]` is one, `int a[3][n]` is not). The bound is evaluated once at the declaration, `sizeof` is a run-time value, the object's lifetime is the block, and a declaration inside a loop allocates afresh on every pass. Emulated on the heap — the elements live in a `Vec` — so the storage is not the stack; that and the `alloc` dependency are the only differences a program can observe. A jump into the scope of one is diagnosed (6.8.6.1p1, 6.8.4.2p2). Not there: every other variably modified type — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA — and `[*]` outside a prototype, each a located error. `__STDC_NO_VLA__` stays predefined for exactly that reason: see the [N1460 row](#c11). |
 | Flexible array members | | Yes | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is pointer arithmetic. Initialising one — which GCC allows with a warning — is refused. |
+| Incomplete array types (6.2.5p22, 6.9.2p5) | | Yes | `int j[];` is a *type*, not a mistake, in the two places C allows an object to have one: an `extern` declaration, whose object is defined in another unit, and a file-scope tentative definition, which the end of the translation unit completes to **one element**. A later declaration with a bound completes it sooner (`extern int j[]; int j[3];` is one object of three), the composite type is what the object keeps (6.2.7p4), an incomplete array is *compatible* with every completed one of the same element type — so `__builtin_types_compatible_p(int[5], int[])` is 1 — and `sizeof` of one is a constraint violation until it is completed, exactly as GCC has it. `typedef int A[]; A a = { 1, 2 };` takes its length from the initialiser as the `int a[]` spelling does. |
 | `static` and type qualifiers in parameter array declarators | | Accepted | Parsed; no effect on codegen. The *bound* of an array parameter is not part of its type either (6.7.5.3p7), so `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all declare an `int *` — which is what makes `sizeof a` there the size of a pointer. In a *definition* the bound is still evaluated on entry, in declaration order, because C99 6.9.1p10 says so and `void f(int n, int a[n++])` can tell: the value is thrown away, and a bound that plainly has no effect is left out of the generated code. |
 | Complex and imaginary support in `<complex.h>` | N693 | No | `_Complex` is rejected. |
 | Type-generic math macros in `<tgmath.h>` | N693 | No | Would be built on `_Generic`. |
@@ -290,14 +291,15 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Preprocessor line numbers unspecified | N2322 | N/A | |
 | `deprecated` attribute | N2334 | Yes | `#[deprecated]`, with the message it was given, so Rust code that calls the function is warned. |
 | Attributes (`[[…]]` syntax) | N2335, N2554 | Yes | Unknown attributes ignored, as required. |
-| Defining new types in `offsetof` | N2350 | Unverified | |
+| Defining new types in `offsetof` | N2350 | Yes | `offsetof` is `__builtin_offsetof`, and the front end folds it to an **integer constant** out of the layout it computed for the record — so it may be an array bound, a `case` label or the initialiser of a file-scope object, which is what C99 6.6 asks and what `execute/strlen-7` writes. The member designator is 7.17p3's in full: `a`, `a.b`, `a[2].b`, and a member of an anonymous member. That the folded value agrees with the generated `#[repr(C)]` item's own layout is checked against Rust's `core::mem::offset_of!` in `tests/execute.rs` and in the differential corpus of `tests/bitfield_layout.rs`. |
 | `fallthrough` attribute | N2408 | Yes | |
 | Two's complement sign representation | N2412 | Yes | |
 | Adding the `u8` character prefix | N2418 | Yes | `u8'x'` has type `char8_t` and holds one UTF-8 code unit; a character that needs more than one is a diagnostic, as is more than one character. `u'x'` and `U'x'` are C11's and work from `c11!` up. |
 | Remove support for function definitions with identifier lists | N2432 | Yes | `c23!` and `gnu23!` refuse one with `old-style function definitions were removed in C23`; every earlier entry point accepts it, as the revision it implements does. |
 | Annex F.8 update | N2384 | N/A | |
-| Allowing unnamed parameters in function definitions | N2480 | Unverified | |
-| Free positioning of labels inside compound statements | N2508 | Yes | |
+| Allowing unnamed parameters in function definitions | N2480 | Yes | Nothing in the body can reach the parameter, but the caller still passes one, so the generated item takes an argument in that position under a name of its own. A GNU dialect accepts it in every revision, as GCC and Clang do (`-Wmissing-parameter-name`); a strict entry point below `c23!` refuses it. |
+| Free positioning of labels inside compound statements | N2508 | Yes | Every label, not only the named ones: `switch (x) { case 1: }`, `case 1: static_assert(1, "");` and `label: int x;` are all accepted in `c23!` and in the GNU dialects, and the label takes a null statement. |
+| `return` with a `void` expression in a `void` function | N2734 | Yes | `void f(void) { return g(); }` where `g` returns nothing — how a wrapper forwards a call — is accepted in `c23!`; the expression is evaluated and there is no value to return. Every earlier revision makes it a 6.8.6.4p1 constraint violation, which the strict entry points keep and the GNU dialects (which also take a *non*-`void` expression, as GCC does) do not. |
 | Querying attribute support (`__has_c_attribute`) | N2553 | Yes | `202311L` for the attributes this crate honours, 0 otherwise. `__has_include`, `__has_attribute`, `__has_builtin`, `__has_feature` and `__has_extension` are answered from the same tables. |
 | Binary literals | N2549 | Yes | |
 | Allow duplicate attributes | N2557 | Accepted | |
@@ -312,7 +314,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | `#elifdef` and `#elifndef` | N2645 | Yes | |
 | `[[maybe_unused]]` for labels | N2662 | Unverified | |
 | Zeros compare equal / Negative values / 5.2.4.2.2 cleanup | N2670, N2671, N2672, N2806, N2879 | N/A | |
-| Towards integer safety (`<stdckdint.h>`) | N2683 | No | Planned with the `__builtin_*_overflow` builtins. |
+| Towards integer safety (`<stdckdint.h>`) | N2683 | Yes | The header is bundled and defines `ckd_add`, `ckd_sub`, `ckd_mul` and `__STDC_VERSION_STDCKDINT_H__` on top of `__builtin_add_overflow` and its two relatives, which is the spelling the standard settled on. The arithmetic is in infinite precision and the answer is whether the result fit the type `*r` has, so the operands' types decide nothing. |
 | Adding fundamental type for N-bit integers (`_BitInt`) | N2763, N2775, N2969, N3035 | No | |
 | `#warning` directive | N2686 | Yes | Accepted; no output (a proc macro cannot warn). |
 | Sterile characters / Numerically equal | N2688, N2716, N2847 | N/A | |
@@ -347,12 +349,12 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Indeterminate values and trap representations | N2861 | N/A | |
 | Remove `ATOMIC_VAR_INIT` | N2886 | N/A | |
 | Remove trigraphs | N2940 | Yes | `c23!` and `gnu23!` have no trigraphs, so `??=` there is two question marks and an `=`; every strict entry point below C23 replaces them, which is what the revision removed. See the [C99 row](#c99). |
-| Improved normal enumerations (values wider than `int`) | N3029 | Unverified | |
+| Improved normal enumerations (values wider than `int`) | N3029 | Yes | An enumerator whose value will not fit widens the *enumeration*, and every enumerator then has the widened type — which is what `_Generic` selects on. The type is the narrowest of `int`, `unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long` that holds every value, which is Clang's choice too; C23 leaves it implementation-defined. Such an enumeration *is* that integer type here rather than a `Ty::Enum`, and a tagged one at file scope gets a Rust alias for it. `c23!` and the GNU dialects widen; the strict entry points below C23 keep 6.7.2.2p2's constraint violation. |
 | Relax requirements for `va_start` (single-argument form) | N2975 | No | `va_start(ap)` is rejected; planned for `c23!`. |
 | Enhanced enumerations (fixed underlying type) | N3030 | Yes | |
 | Freestanding C and IEC 60559 scope reduction | N2951 | N/A | |
 | Unsequenced functions (`[[unsequenced]]`, `[[reproducible]]`) | N2956 | Accepted | |
-| Comma omission and deletion (`__VA_OPT__`) | N3033 | Yes | |
+| Comma omission and deletion (`__VA_OPT__`) | N3033 | Yes | Including 6.10.5.2p1's constraint: the token sequence inside `__VA_OPT__( … )` may neither begin nor end with `##`, for the same reason a replacement list may not. |
 | Underspecified object definitions | N3006 | Partial | Follows from `auto`/`constexpr` below. |
 | Type inference for object declarations (`auto`) | N3007 | Yes | Several declarators are allowed (the standard requires one). |
 | `constexpr` for object definitions | N3018 | Partial | Arithmetic objects only; they become constants. |

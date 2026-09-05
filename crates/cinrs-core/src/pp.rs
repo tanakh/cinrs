@@ -3529,8 +3529,11 @@ impl Pp<'_> {
     /// Checks one `__VA_OPT__` in a replacement list.
     ///
     /// It has to be in a variadic macro, it has to be followed by a balanced
-    /// `( … )`, and — since the standard says so and since the expansion here
-    /// is a single pass — it may not hold another one.
+    /// `( … )`, its contents may neither begin nor end with `##` (C23
+    /// 6.10.5.2p1, for the same reason a replacement list may not — there is
+    /// nothing on that side to paste to), and — since the standard says so and
+    /// since the expansion here is a single pass — it may not hold another
+    /// one.
     fn check_va_opt(&mut self, def: &MacroDef, body: &[PTok], at: usize) -> bool {
         let tok = &body[at];
         if def.param_index(VA_ARGS).is_none() {
@@ -3547,25 +3550,47 @@ impl Pp<'_> {
             return false;
         }
         let mut depth = 0i32;
+        let mut contents: Vec<&PTok> = Vec::new();
         for tok in &body[at + 1..] {
             if tok.is_punct(Punct::LParen) {
                 depth += 1;
+                // The `(` that opens the argument is not part of it.
+                if depth == 1 {
+                    continue;
+                }
             } else if tok.is_punct(Punct::RParen) {
                 depth -= 1;
                 if depth == 0 {
-                    return true;
+                    return self.check_va_opt_contents(&contents);
                 }
             } else if tok.name() == Some(VA_OPT) {
                 self.diags
                     .error(tok.range, "'__VA_OPT__' cannot be nested inside another");
                 return false;
             }
+            contents.push(tok);
         }
         self.diags.error(
             tok.range,
             "unterminated '__VA_OPT__(' in a macro definition",
         );
         false
+    }
+
+    /// C23 6.10.5.2p1 for the token sequence inside a `__VA_OPT__( … )`.
+    fn check_va_opt_contents(&mut self, contents: &[&PTok]) -> bool {
+        for (end, tok) in [("start", contents.first()), ("end", contents.last())] {
+            if let Some(tok) = tok
+                && tok.is_punct(Punct::HashHash)
+            {
+                self.diags.error(
+                    tok.range,
+                    format!("'##' cannot appear at the {end} of a '__VA_OPT__' argument"),
+                );
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -4728,21 +4753,78 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     push("__SIZEOF_FLOAT__", "4".to_owned());
     push("__SIZEOF_DOUBLE__", "8".to_owned());
     push("__SIZEOF_LONG_DOUBLE__", "8".to_owned());
+    // Everything `<float.h>` says about a floating type, under the names GCC
+    // gives it: a great deal of portable C tests `__DBL_MIN_EXP__` rather than
+    // including the header, and a program that finds one of these undefined
+    // does not fail to compile — it silently takes the wrong branch.
+    // `execute/ieee/pr30704` is exactly that.
+    push("__FLT_RADIX__", "2".to_owned());
+    push("__FLT_EVAL_METHOD__", "0".to_owned());
     push("__FLT_MANT_DIG__", "24".to_owned());
     push("__FLT_DIG__", "6".to_owned());
+    push("__FLT_MIN_EXP__", "(-125)".to_owned());
+    push("__FLT_MIN_10_EXP__", "(-37)".to_owned());
+    push("__FLT_MAX_EXP__", "128".to_owned());
+    push("__FLT_MAX_10_EXP__", "38".to_owned());
+    push("__FLT_DECIMAL_DIG__", "9".to_owned());
     push("__FLT_MAX__", "3.40282346638528859812e+38F".to_owned());
+    push("__FLT_NORM_MAX__", "3.40282346638528859812e+38F".to_owned());
     push("__FLT_MIN__", "1.17549435082228750797e-38F".to_owned());
     push("__FLT_EPSILON__", "1.19209289550781250000e-7F".to_owned());
+    push(
+        "__FLT_DENORM_MIN__",
+        "1.40129846432481707092e-45F".to_owned(),
+    );
+    push("__FLT_HAS_DENORM__", "1".to_owned());
+    push("__FLT_HAS_INFINITY__", "1".to_owned());
+    push("__FLT_HAS_QUIET_NAN__", "1".to_owned());
+    push("__FLT_IS_IEC_60559__", "1".to_owned());
     push("__DBL_MANT_DIG__", "53".to_owned());
     push("__DBL_DIG__", "15".to_owned());
+    push("__DBL_MIN_EXP__", "(-1021)".to_owned());
+    push("__DBL_MIN_10_EXP__", "(-307)".to_owned());
+    push("__DBL_MAX_EXP__", "1024".to_owned());
+    push("__DBL_MAX_10_EXP__", "308".to_owned());
+    push("__DBL_DECIMAL_DIG__", "17".to_owned());
     push("__DBL_MAX__", "1.79769313486231570815e+308".to_owned());
+    push("__DBL_NORM_MAX__", "1.79769313486231570815e+308".to_owned());
     push("__DBL_MIN__", "2.22507385850720138309e-308".to_owned());
     push("__DBL_EPSILON__", "2.22044604925031308085e-16".to_owned());
+    push(
+        "__DBL_DENORM_MIN__",
+        "4.94065645841246544177e-324".to_owned(),
+    );
+    push("__DBL_HAS_DENORM__", "1".to_owned());
+    push("__DBL_HAS_INFINITY__", "1".to_owned());
+    push("__DBL_HAS_QUIET_NAN__", "1".to_owned());
+    push("__DBL_IS_IEC_60559__", "1".to_owned());
+    // `long double` is `double` here — there is no portable Rust type with the
+    // layout of an x87 extended double — so its family repeats `double`'s with
+    // the suffix that gives each constant the type its name says it has, which
+    // is what the bundled `<float.h>` does too.
     push("__LDBL_MANT_DIG__", "53".to_owned());
     push("__LDBL_DIG__", "15".to_owned());
+    push("__LDBL_MIN_EXP__", "(-1021)".to_owned());
+    push("__LDBL_MIN_10_EXP__", "(-307)".to_owned());
+    push("__LDBL_MAX_EXP__", "1024".to_owned());
+    push("__LDBL_MAX_10_EXP__", "308".to_owned());
+    push("__LDBL_DECIMAL_DIG__", "17".to_owned());
+    push("__DECIMAL_DIG__", "17".to_owned());
     push("__LDBL_MAX__", "1.79769313486231570815e+308L".to_owned());
+    push(
+        "__LDBL_NORM_MAX__",
+        "1.79769313486231570815e+308L".to_owned(),
+    );
     push("__LDBL_MIN__", "2.22507385850720138309e-308L".to_owned());
     push("__LDBL_EPSILON__", "2.22044604925031308085e-16L".to_owned());
+    push(
+        "__LDBL_DENORM_MIN__",
+        "4.94065645841246544177e-324L".to_owned(),
+    );
+    push("__LDBL_HAS_DENORM__", "1".to_owned());
+    push("__LDBL_HAS_INFINITY__", "1".to_owned());
+    push("__LDBL_HAS_QUIET_NAN__", "1".to_owned());
+    push("__LDBL_IS_IEC_60559__", "1".to_owned());
 
     // The exact-width types of <stdint.h>, which GCC's own <stdint.h> is
     // written in terms of. `int64_t` follows `long` wherever `long` is 64

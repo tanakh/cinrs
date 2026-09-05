@@ -1,0 +1,37 @@
+error: void function 'forwards' should not return a value
+       note: GCC accepts this with a warning; write gnu11! for the same leniency
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:14:16
+   |
+14 |         return something();
+   |                ^^^^^^^^^
+
+error: comparison of distinct function pointer types 'double (*)(double)' and 'int (*)(int)'
+       note: GCC accepts this with a warning; write gnu11! for the same leniency
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:23:16
+   |
+23 |         return a == b;
+   |                ^
+
+error: invalid application of 'sizeof' to an incomplete type 'void'
+       note: GCC accepts this with a warning; write gnu11! for the same leniency
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:27:23
+   |
+27 |         return sizeof(void);
+   |                       ^^^^
+
+error: invalid application of '_Alignof' to an incomplete type 'void'
+       note: GCC accepts this with a warning; write gnu11! for the same leniency
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:31:28
+   |
+31 |         return __alignof__(void);
+   |                            ^^^^
+
+error: expected a declaration, found ';'
+       note: GCC accepts this with a warning; write gnu99! for the same leniency
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:37:5
+   |
+37 |     ;
+   |     ^
+
+error: aborting due to 5 previous errors
+

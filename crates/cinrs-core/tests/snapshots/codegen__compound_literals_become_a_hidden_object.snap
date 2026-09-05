@@ -12,9 +12,9 @@ mod __cinrs_unit_e8e1058d {
         pub b: ::core::ffi::c_int,
     }
     #[allow(…)]
-    static mut __cinrs_e8e1058d_literal0: S = S { a: 1, b: 2 };
-    #[allow(…)]
     pub static mut global: *mut S = unsafe { (&raw mut __cinrs_e8e1058d_literal0) };
+    #[allow(…)]
+    static mut __cinrs_e8e1058d_literal0: S = S { a: 1, b: 2 };
     #[allow(…)]
     pub unsafe extern "C" fn local(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {

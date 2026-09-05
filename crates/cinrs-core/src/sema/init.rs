@@ -41,11 +41,27 @@ const MAX_INIT_ELEMENTS: u64 = 1 << 20;
 struct Cursor<'a> {
     items: &'a [ast::InitItem],
     pos: usize,
+    /// The value of each plain-expression element that has already been
+    /// checked, by position.
+    ///
+    /// 6.7.9p13 lets an element of structure or union type initialise a
+    /// *subobject* of that type whole, braces or not, so filling a
+    /// subaggregate has to know the element's type before it decides whether
+    /// to descend into it. That means checking the expression, and the same
+    /// expression is then used either for the subobject or for its first
+    /// member — once, not twice, because checking one can create a temporary,
+    /// a static or a diagnostic. The outer `Option` is "not looked at yet";
+    /// the inner one is what the check produced.
+    checked: Vec<Option<Option<Expr>>>,
 }
 
 impl<'a> Cursor<'a> {
     fn new(items: &'a [ast::InitItem]) -> Self {
-        Self { items, pos: 0 }
+        Self {
+            items,
+            pos: 0,
+            checked: Vec::new(),
+        }
     }
 
     fn peek(&self) -> Option<&'a ast::InitItem> {
@@ -325,11 +341,51 @@ impl Sema<'_> {
                     cursor.advance();
                     return None;
                 }
-                let value = self.initializer(&item.init, ty, name);
+                let value = self.checked_initializer(cursor, &item.init, ty, name);
                 cursor.advance();
                 value
             }
         }
+    }
+
+    /// [`Sema::initializer`], with a plain expression going through the
+    /// cursor's cache.
+    ///
+    /// See [`Cursor::checked`]: an expression may be checked once to find out
+    /// whether it initialises a subaggregate whole and then used for one of
+    /// that subaggregate's members, and checking it twice would duplicate
+    /// whatever the check created.
+    fn checked_initializer(
+        &mut self,
+        cursor: &mut Cursor,
+        init: &ast::Initializer,
+        ty: Ty,
+        name: &str,
+    ) -> Option<Expr> {
+        // An array is initialised by a string literal or by a list, never by
+        // an expression whose value could be cached.
+        if ty.is_array() {
+            return self.initializer(init, ty, name);
+        }
+        let ast::InitializerKind::Expr(expr) = &init.kind else {
+            return self.initializer(init, ty, name);
+        };
+        let value = self.check_item(cursor, expr)?;
+        Some(self.convert_for(value, ty, ConvContext::Init(name.to_owned())))
+    }
+
+    /// Checks the plain expression the cursor is on, at most once.
+    fn check_item(&mut self, cursor: &mut Cursor, expr: &ast::Expr) -> Option<Expr> {
+        let pos = cursor.pos;
+        if let Some(Some(cached)) = cursor.checked.get(pos) {
+            return cached.clone();
+        }
+        let value = self.expr(expr);
+        if cursor.checked.len() <= pos {
+            cursor.checked.resize(pos + 1, None);
+        }
+        cursor.checked[pos] = Some(value.clone());
+        value
     }
 
     /// Fills one element of an aggregate, following C's rule that the braces
@@ -366,8 +422,31 @@ impl Sema<'_> {
                     ..
                 })
             );
+        // 6.7.9p13: "The initializer for a structure or union object … shall
+        // be … a single expression that has compatible structure or union
+        // type", and that holds for a *subobject* as much as for the object
+        // itself — `struct A { int z; struct B b; } a = { 2, b }` gives `a.b`
+        // the whole of `b`. Only when the element is not of the subaggregate's
+        // own type do the elided braces of p9 apply and the element go to the
+        // first member instead, so the element's type has to be known first.
+        // `Cursor::checked` is what keeps that from checking it twice.
+        if !braced
+            && !whole
+            && ty.is_record()
+            && let ast::InitializerKind::Expr(expr) = &item.init.kind
+        {
+            let value = self.check_item(cursor, expr);
+            if value
+                .as_ref()
+                .is_some_and(|value| value.ty.is_record() && self.compatible(value.ty, ty))
+            {
+                cursor.advance();
+                let value = value.expect("checked just above");
+                return Some(self.convert_for(value, ty, ConvContext::Init(name.to_owned())));
+            }
+        }
         if braced || string || whole || !(ty.is_array() || ty.is_record()) {
-            let value = self.initializer(&item.init, ty, name);
+            let value = self.checked_initializer(cursor, &item.init, ty, name);
             cursor.advance();
             return value;
         }

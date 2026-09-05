@@ -1,0 +1,32 @@
+error: 'restrict' requires a pointer to an object type ('int' is invalid)
+ --> tests/ui/restrict_and_c23_declarations.rs:6:5
+  |
+6 |     int restrict not_a_pointer;
+  |     ^^^
+
+error: 'restrict' qualifies a pointer to an object type, and 'void (*)(void)' points to a function
+ --> tests/ui/restrict_and_c23_declarations.rs:7:11
+  |
+7 |     void (*restrict to_a_function)(void);
+  |           ^
+
+error: 'restrict' requires a pointer to an object type ('int' is invalid)
+  --> tests/ui/restrict_and_c23_declarations.rs:15:9
+   |
+15 |         int restrict member;
+   |         ^^^
+
+error: omitting a parameter name in a function definition requires C23 or later (this block is c17!)
+  --> tests/ui/restrict_and_c23_declarations.rs:20:16
+   |
+20 |     int second(int, int b) {
+   |                ^^^
+
+error: enumerator value 4294967296 is outside the range of 'int'
+  --> tests/ui/restrict_and_c23_declarations.rs:26:9
+   |
+26 |         does_not = 4294967296
+   |         ^^^^^^^^
+
+error: aborting due to 5 previous errors
+
