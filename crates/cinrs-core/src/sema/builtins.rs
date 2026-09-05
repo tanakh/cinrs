@@ -15,6 +15,12 @@
 //!
 //! Which names exist at all is [`crate::gnu`]'s table, so `__has_builtin`
 //! answers about this implementation rather than about GCC's.
+//!
+//! The atomic families — `__atomic_*`, `__sync_*` and `__c11_atomic_*`, none
+//! of them spelled `__builtin_` — are [`super::atomics`]'s, and are dispatched
+//! from here before the prefix is looked at. Their name tables live there and
+//! `crate::gnu::has_builtin` asks them, so the two answers cannot drift apart
+//! any more than the `__builtin_` ones can.
 
 use crate::ast;
 use crate::capture::SourceRange;
@@ -65,6 +71,11 @@ impl Sema<'_> {
         args: &[ast::Expr],
         range: SourceRange,
     ) -> Option<Option<Expr>> {
+        // The three atomic families are overloaded on the type of the object
+        // rather than named for it; see [`super::atomics`].
+        if let Some(result) = self.atomic_builtin(name, args, range) {
+            return Some(result);
+        }
         let rest = name.strip_prefix("__builtin_")?;
         // The typed overflow builtins are the generic ones with the result
         // type spelled out in the name.

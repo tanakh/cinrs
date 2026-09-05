@@ -1,0 +1,29 @@
+error: returning 'struct atomic_flag' from a function with incompatible result type 'int'
+  --> tests/ui/atomics_flag_misuse.rs:15:38
+   |
+15 |     int flag_as_value(void) { return lock; }
+   |                                      ^^^^
+
+error: the first argument of '__c11_atomic_load' must be a pointer to an '_Atomic' type, and 'struct atomic_flag *' is not
+       note: in expansion of macro 'atomic_load', defined in <cinrs>/stdatomic.h:127
+  --> tests/ui/atomics_flag_misuse.rs:20:46
+   |
+20 |     int flag_load(void) { return atomic_load(&lock); }
+   |                                              ^
+
+error: member reference type 'struct atomic_flag' is not a pointer; did you mean to use '.'?
+       note: in expansion of macro 'atomic_flag_test_and_set', defined in <cinrs>/stdatomic.h:171
+  --> tests/ui/atomics_flag_misuse.rs:24:33
+   |
+24 |     int by_value(void) { return atomic_flag_test_and_set(lock); }
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected expression, found '{'
+       note: in expansion of macro 'ATOMIC_FLAG_INIT', defined in <cinrs>/stdatomic.h:167
+  --> tests/ui/atomics_flag_misuse.rs:28:32
+   |
+28 |     void assign(void) { lock = ATOMIC_FLAG_INIT; }
+   |                                ^^^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

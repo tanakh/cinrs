@@ -40,6 +40,9 @@ pub fn type_to_string(unit: &TranslationUnit, ty: &Type) -> String {
     if ty.qualifiers.is_restrict {
         s.push_str("restrict ");
     }
+    if ty.qualifiers.is_atomic {
+        s.push_str("_Atomic ");
+    }
     match &ty.kind {
         TypeKind::Void => s.push_str("void"),
         TypeKind::Bool => s.push_str("_Bool"),
@@ -159,8 +162,8 @@ pub fn type_to_string(unit: &TranslationUnit, ty: &Type) -> String {
             s.push_str("typedef-name ");
             s.push_str(&id.name);
         }
-        TypeKind::Typeof(id) => {
-            s.push_str("typeof<");
+        TypeKind::Typeof { id, unqual } => {
+            s.push_str(if *unqual { "typeof_unqual<" } else { "typeof<" });
             match unit.typeof_operand(*id) {
                 TypeofOperand::Expr(_) => s.push_str("expr"),
                 TypeofOperand::Type(name) => s.push_str(&type_to_string(unit, &name.ty)),

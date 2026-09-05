@@ -1170,6 +1170,13 @@ impl Parser<'_> {
                 is_restrict: true,
                 ..TypeQualifiers::NONE
             },
+            // `_Atomic` with a parenthesised type name after it is a type
+            // *specifier* — `_Atomic(int) x;` — and is parsed where the
+            // specifiers are; everywhere else the keyword is a qualifier.
+            Keyword::Atomic if !self.at_atomic_specifier(0) => TypeQualifiers {
+                is_atomic: true,
+                ..TypeQualifiers::NONE
+            },
             _ => return None,
         };
         // `restrict` is C99's (N448); `__restrict` is reserved and works in
@@ -1178,8 +1185,24 @@ impl Parser<'_> {
             let range = self.cur_range();
             self.require_standard(Standard::C99, "'restrict'", range);
         }
+        if keyword == Keyword::Atomic {
+            let range = self.cur_range();
+            self.require_keyword(Keyword::Atomic, range);
+        }
         self.advance();
         Some(q)
+    }
+
+    /// Whether the `_Atomic` at offset `n` is the `_Atomic (type-name)` form.
+    ///
+    /// C11 6.7.2.4p4 draws the line exactly here: the keyword is a type
+    /// specifier when it is followed by a parenthesised type name and a type
+    /// qualifier otherwise, which is what makes `int * _Atomic (*p)(void)` a
+    /// qualified pointer to a function rather than a syntax error.
+    fn at_atomic_specifier(&self, n: usize) -> bool {
+        self.nth(n).is_keyword(Keyword::Atomic)
+            && self.nth(n + 1).is_punct(Punct::LParen)
+            && self.starts_decl_specifier(n + 2)
     }
 
     fn parse_type_qualifiers(&mut self) -> TypeQualifiers {
@@ -1332,28 +1355,40 @@ impl Parser<'_> {
                     consumed_any = true;
                     continue;
                 }
-                // `_Atomic` and `_BitInt` are parsed so that the diagnostic is
-                // about them rather than about the tokens that follow.
-                if matches!(k, Keyword::Atomic | Keyword::BitInt) {
+                // `_Atomic ( type-name )`, the type-specifier form (C11
+                // 6.7.2.4). The qualifier form was taken by
+                // `eat_type_qualifier` above, so only this one gets here.
+                if k == Keyword::Atomic {
+                    let range = self.bump_range();
+                    self.require_keyword(k, range);
+                    self.expect_punct(Punct::LParen, " after '_Atomic'")?;
+                    let inner = self.parse_type_name()?;
+                    self.expect_punct(Punct::RParen, " after the type name")?;
+                    if tag.is_some() || has_type {
+                        self.error(range, "two or more data types in declaration specifiers");
+                    } else {
+                        tag = Some(inner.ty);
+                    }
+                    quals = quals.merge(TypeQualifiers {
+                        is_atomic: true,
+                        ..TypeQualifiers::NONE
+                    });
+                    consumed_any = true;
+                    continue;
+                }
+                // `_BitInt` is parsed so that the diagnostic is about it
+                // rather than about the tokens that follow.
+                if k == Keyword::BitInt {
                     let range = self.bump_range();
                     self.error(range, format!("'{}' is not supported yet", k.as_str()));
                     if self.at_punct(Punct::LParen) {
                         self.advance();
-                        if k == Keyword::Atomic {
-                            let inner = self.parse_type_name()?;
-                            if tag.is_none() && !has_type {
-                                tag = Some(inner.ty);
-                            }
-                        } else {
-                            let _ = self.parse_conditional_expr()?;
-                        }
+                        let _ = self.parse_conditional_expr()?;
                         self.expect_punct(Punct::RParen, " after the operand")?;
                     }
-                    if k == Keyword::BitInt {
-                        // Recover as `int`, so that the declaration does not
-                        // also complain about a missing type specifier.
-                        counts.int += 1;
-                    }
+                    // Recover as `int`, so that the declaration does not also
+                    // complain about a missing type specifier.
+                    counts.int += 1;
                     consumed_any = true;
                     continue;
                 }
@@ -1515,9 +1550,11 @@ impl Parser<'_> {
 
     /// `typeof ( expression )` or `typeof ( type-name )`.
     ///
-    /// `typeof_unqual` parses the same way and means the same thing here: the
-    /// only qualifier this crate keeps in a type is the `const` of a pointee,
-    /// which is not a top-level qualifier and which neither form strips.
+    /// `typeof_unqual` parses the same way and differs in one thing: it takes
+    /// the *unqualified* type of the operand. Of the qualifiers, only
+    /// `_Atomic` is part of a resolved type here — `const` on a pointee is not
+    /// a top-level qualifier, and `volatile` and `restrict` say nothing to the
+    /// generated Rust — so `_Atomic` is what the unqualified form drops.
     fn parse_typeof_specifier(&mut self, keyword: Keyword) -> PResult<Type> {
         let start = self.cur_range();
         self.require_keyword(keyword, start);
@@ -1532,7 +1569,8 @@ impl Parser<'_> {
         self.expect_punct(Punct::RParen, &format!(" after the operand of '{name}'"))?;
         let range = self.span_to_here(start);
         let id = self.add_typeof(operand);
-        Ok(Type::plain(TypeKind::Typeof(id), range))
+        let unqual = matches!(keyword, Keyword::TypeofUnqual | Keyword::TypeofUnqualGnu);
+        Ok(Type::plain(TypeKind::Typeof { id, unqual }, range))
     }
 
     fn build_base_type(

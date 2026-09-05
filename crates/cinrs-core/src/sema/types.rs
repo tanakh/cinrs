@@ -127,7 +127,88 @@ impl Sema<'_> {
     pub(super) fn resolve_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         let resolved = self.resolve_unqualified_ty(ty)?;
         self.check_restrict(ty, resolved)?;
+        if ty.qualifiers.is_atomic {
+            return self.make_atomic(resolved, ty.range);
+        }
         Ok(resolved)
+    }
+
+    /// `_Atomic T` (C11 6.7.2.4), with the types C does not allow it on.
+    ///
+    /// The standard forbids an array or a function type outright (6.7.2.4p3);
+    /// everything else it allows, and this crate narrows that to the types
+    /// `core::sync::atomic` has an atomic for. A `struct` is the one that has
+    /// to be turned away rather than being simply invalid C: it is legal, and
+    /// a lock-free representation of one is exactly what Rust does not offer.
+    pub(super) fn make_atomic(&mut self, inner: Ty, range: SourceRange) -> Result<Ty, TypeError> {
+        if inner.is_error() {
+            return Ok(inner);
+        }
+        if inner.is_array() || self.types().is_vla(inner) {
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'_Atomic' may not be applied to the array type '{}' (C11 6.7.2.4p3)",
+                    self.tyname(inner)
+                ),
+            ));
+        }
+        if inner.is_func() {
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'_Atomic' may not be applied to the function type '{}' (C11 6.7.2.4p3)",
+                    self.tyname(inner)
+                ),
+            ));
+        }
+        if inner.is_void() {
+            return Err(TypeError::at(range, "'_Atomic void' is not a type"));
+        }
+        if !self.types().is_complete(inner) {
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'_Atomic' requires a complete type, and '{}' is incomplete",
+                    self.tyname(inner)
+                ),
+            ));
+        }
+        let Some(_) = ir::atomic_class(self.types(), inner, &self.target) else {
+            let reason = if inner.is_int128() {
+                "there is no stable 128-bit atomic in `core::sync::atomic`"
+            } else if self.types().is_func_pointer(inner) {
+                "a function pointer is an `Option<fn>` in Rust, which no atomic holds"
+            } else {
+                "only the scalar types have a lock-free atomic in `core::sync::atomic`, and \
+                 nothing in the generated Rust could stand for a lock"
+            };
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'_Atomic {}' is not supported yet: {reason}",
+                    self.tyname(inner)
+                ),
+            ));
+        };
+        // The alignment of an atomic type is its size, and the *object* is
+        // generated as a plain one of the underlying type; on an ABI that
+        // aligns an eight-byte scalar to four there is no way to give it the
+        // eight bytes `AtomicU64::from_ptr` requires.
+        let size = self.size_of(inner).unwrap_or(1);
+        if size > self.target.max_scalar_align {
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'_Atomic {}' is not supported on this target: the object is {size} bytes \
+                     and this ABI aligns it to {}, which a lock-free atomic of that width \
+                     cannot be built on",
+                    self.tyname(inner),
+                    self.target.max_scalar_align
+                ),
+            ));
+        }
+        Ok(self.program.types.atomic(inner))
     }
 
     /// C99 6.7.3p2 for `restrict`.
@@ -277,17 +358,29 @@ impl Sema<'_> {
             // C23's `typeof`. The operand of the expression form is not
             // evaluated, and it does *not* decay: `typeof(a)` of an array is
             // the array type, which is the whole point of the operator.
-            ast::TypeKind::Typeof(id) => match self.typeof_operand(*id) {
-                ast::TypeofOperand::Expr(expr) => {
-                    let ty = if self.is_lvalue_form(expr) {
-                        self.lvalue(expr).map(|place| place.ty)
-                    } else {
-                        self.expr(expr).map(|value| value.ty)
-                    };
-                    ty.ok_or_else(|| TypeError::silent(range))
-                }
-                ast::TypeofOperand::Type(name) => self.resolve_ty(&name.ty),
-            },
+            //
+            // `typeof_unqual` is the same thing with the qualifiers taken off
+            // (6.7.2.5p3), and `_Atomic` is the only one a resolved type here
+            // carries — so `typeof(x)` of an `_Atomic int` object is an
+            // `_Atomic int` and `typeof_unqual(x)` is an `int`.
+            ast::TypeKind::Typeof { id, unqual } => {
+                let resolved = match self.typeof_operand(*id) {
+                    ast::TypeofOperand::Expr(expr) => {
+                        let ty = if self.is_lvalue_form(expr) {
+                            self.lvalue(expr).map(|place| place.ty)
+                        } else {
+                            self.expr(expr).map(|value| value.ty)
+                        };
+                        ty.ok_or_else(|| TypeError::silent(range))?
+                    }
+                    ast::TypeofOperand::Type(name) => self.resolve_ty(&name.ty)?,
+                };
+                Ok(if *unqual {
+                    self.types().unatomic(resolved)
+                } else {
+                    resolved
+                })
+            }
             // `auto` is resolved against the initialiser, in `decl`; reaching
             // here means it was written somewhere an initialiser cannot be.
             ast::TypeKind::Auto => Err(TypeError::at(
@@ -871,6 +964,7 @@ impl Sema<'_> {
                  no representation for that combination",
             );
         }
+        self.check_atomic_members(&laid_out);
         let record = self.program.types.record_mut(id);
         record.fields = laid_out.fields;
         record.rust_fields = laid_out.rust_fields;
@@ -880,6 +974,35 @@ impl Sema<'_> {
         record.packed = laid_out.packed_attr;
         record.rust_align = laid_out.rust_align;
         record.flexible = flexible;
+    }
+
+    /// Refuses an `_Atomic` member that packing has left under-aligned.
+    ///
+    /// Every atomic operation here is `AtomicX::from_ptr` over the member's
+    /// address, and that pointer has to be aligned for the atomic — which is
+    /// the member's own size. `__attribute__((packed))` and `#pragma pack(N)`
+    /// can put it anywhere; GCC answers such a member with a call into
+    /// `libatomic`, which takes a lock, and there is nothing here that could.
+    fn check_atomic_members(&mut self, laid_out: &LaidOut) {
+        for field in &laid_out.fields {
+            let Ty::Atomic(_) = field.ty else { continue };
+            let Some(want) = self.types().size_align(field.ty, &self.target) else {
+                continue;
+            };
+            if field.offset.is_multiple_of(want.align)
+                && laid_out.layout.align.is_multiple_of(want.align)
+            {
+                continue;
+            }
+            self.error(
+                field.range,
+                format!(
+                    "packing puts the '_Atomic' member '{}' at offset {} in a record aligned \
+                     to {}, and an atomic operation on it needs {}-byte alignment",
+                    field.name, field.offset, laid_out.layout.align, want.align
+                ),
+            );
+        }
     }
 
     /// Honours `typedef struct { … } T __attribute__((aligned(N)));`.
@@ -1559,6 +1682,12 @@ impl Sema<'_> {
         match ty {
             Ty::Record(id) => self.types().record(id).rust_align.max(1),
             Ty::Array(id) => self.rust_align_of(self.types().array_type(id).elem),
+            // An `_Atomic T` member is a plain `T` field: C's alignment for it
+            // is the size, which is stricter than what Rust gives the field
+            // wherever the two differ, and the enclosing item then needs the
+            // `#[repr(C, align(N))]` and the padding this number is what
+            // decides.
+            Ty::Atomic(id) => self.rust_align_of(self.types().atomic_inner(id)),
             other => self
                 .types()
                 .size_align(other, &self.target)
@@ -1579,7 +1708,12 @@ impl Sema<'_> {
         // the tag becomes an alias for it.
         let underlying = match &spec.underlying {
             Some(ty) => {
+                // C23 6.7.2.2p5: the underlying type is the *unqualified,
+                // non-atomic* version of the type written, so
+                // `enum e : _Atomic(int)` is an `int` enumeration and not an
+                // error (Clang's `C23/n3030_1`).
                 let resolved = self.resolve_ty(ty)?;
+                let resolved = self.types().unatomic(resolved);
                 if !resolved.is_integer() || resolved.is_enum() {
                     return Err(TypeError::at(
                         ty.range,

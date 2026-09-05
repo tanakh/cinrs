@@ -8,6 +8,11 @@
 //! construct with `#if __has_attribute(packed)` gets an answer that is true of
 //! this implementation rather than of GCC's.
 //!
+//! The one set of names that is *not* here is the atomic builtins', which
+//! live beside the code that implements them in
+//! [`crate::sema::is_atomic_builtin`] — for the same reason: one table, asked
+//! by both.
+//!
 //! `doc/gnu-extensions.md` is the prose version of the same tables.
 
 /// What an `__attribute__` (or a C23 `[[…]]`) asks for.
@@ -201,7 +206,14 @@ pub fn has_c_attribute(name: &str) -> u64 {
 }
 
 /// Whether `__has_builtin(name)` answers yes.
+///
+/// The atomic families are builtins too, and are not spelled `__builtin_…`:
+/// `__has_builtin(__atomic_load_n)` and `__has_builtin(__sync_synchronize)`
+/// are what a program guards those with, and GCC and Clang answer both.
 pub fn has_builtin(name: &str) -> bool {
+    if crate::sema::is_atomic_builtin(name) {
+        return true;
+    }
     let Some(rest) = name.strip_prefix("__builtin_") else {
         return false;
     };
@@ -210,9 +222,10 @@ pub fn has_builtin(name: &str) -> bool {
 
 /// Whether `__has_feature(name)` / `__has_extension(name)` answers yes.
 ///
-/// Clang's vocabulary, answered for what this crate really has: `c_atomic`,
+/// Clang's vocabulary, answered for what this crate really has:
 /// `c_thread_local` and `blocks` are deliberately absent, because the
-/// constructs behind them are diagnosed rather than translated.
+/// constructs behind them are diagnosed rather than translated. `c_atomic` is
+/// *not* absent any more: `_Atomic` and `<stdatomic.h>` are here.
 pub fn has_feature(name: &str) -> bool {
     SUPPORTED_FEATURES.contains(&name)
 }
@@ -221,6 +234,7 @@ pub fn has_feature(name: &str) -> bool {
 const SUPPORTED_FEATURES: &[&str] = &[
     "c_alignas",
     "c_alignof",
+    "c_atomic",
     "c_attributes",
     "c_generic_selection",
     "c_generic_selections",

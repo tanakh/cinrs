@@ -536,7 +536,12 @@ impl Sema<'_> {
             let ty = self.program.types.decayed(place.ty, konst);
             return Expr::new(ExprKind::AddrOf(place), ty, range);
         }
-        let ty = place.ty;
+        // Lvalue conversion drops the qualifiers, `_Atomic` among them (C11
+        // 6.3.2.1p2): reading an atomic object is an atomic load whose *value*
+        // has the underlying type, which is what keeps every rule downstream
+        // of here — the arithmetic conversions, `_Generic`, a call's arguments
+        // — from having to know about atomics at all.
+        let ty = self.types().unatomic(place.ty);
         Expr::new(ExprKind::Load(place), ty, range)
     }
 
@@ -1854,7 +1859,12 @@ impl Sema<'_> {
     ) -> Option<Expr> {
         let place = self.lvalue_assignable(lhs)?;
         let value = self.expr(rhs)?;
-        let ty = place.ty;
+        // The value of an assignment is the value stored, "with the type the
+        // left operand would have after lvalue conversion" (C99 6.5.16p3) —
+        // which is the unqualified, non-atomic type. Every check below is
+        // about that type too; the *place* keeps the `_Atomic`, and that is
+        // what makes the store, the read-modify-write and the `++` atomic.
+        let ty = self.types().unatomic(place.ty);
 
         let Some(op) = op else {
             let value = self.convert_for(value, ty, ConvContext::Assign);
@@ -1934,9 +1944,10 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         let place = self.lvalue_assignable(operand)?;
-        if place.ty.is_pointer() {
-            self.check_pointee_arithmetic(place.ty, range)?;
-        } else if !place.ty.is_arithmetic() {
+        let ty = self.types().unatomic(place.ty);
+        if ty.is_pointer() {
+            self.check_pointee_arithmetic(ty, range)?;
+        } else if !ty.is_arithmetic() {
             self.error(
                 range,
                 format!(
@@ -1947,7 +1958,6 @@ impl Sema<'_> {
             );
             return None;
         }
-        let ty = place.ty;
         Some(Expr::new(
             ExprKind::IncDec {
                 place,
@@ -1967,7 +1977,12 @@ impl Sema<'_> {
         operand: &ast::Expr,
         range: SourceRange,
     ) -> Option<Expr> {
+        // A cast produces a *value*, and a value never has an atomic type:
+        // `(_Atomic int) x` is a conversion to `int`, which is what C11 makes
+        // it too — the result of a cast is not an lvalue, so there is nothing
+        // for the qualifier to qualify.
         let target = self.ty_of(&type_name.ty)?;
+        let target = self.types().unatomic(target);
         let value = self.expr(operand)?;
         if value.ty.is_error() || target.is_error() {
             return None;
@@ -2335,6 +2350,10 @@ impl Sema<'_> {
     /// Inserts the conversion C performs implicitly, folding it away when the
     /// operand is a constant.
     pub(super) fn convert(&mut self, expr: Expr, to: Ty) -> Expr {
+        // A *value* never has an atomic type: converting to `_Atomic T` — on
+        // assignment, on initialisation, on a `return` — is converting to `T`,
+        // and it is the store that is atomic.
+        let to = self.types().unatomic(to);
         if expr.ty == to {
             return expr;
         }
@@ -2385,6 +2404,7 @@ impl Sema<'_> {
     /// Converts a value for an assignment-like context, reporting the
     /// conversions C does not allow.
     pub(super) fn convert_for(&mut self, expr: Expr, to: Ty, context: ConvContext) -> Expr {
+        let to = self.types().unatomic(to);
         if expr.ty == to || expr.ty.is_error() || to.is_error() {
             return expr;
         }

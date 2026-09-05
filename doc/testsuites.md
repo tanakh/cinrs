@@ -7,7 +7,7 @@ questions, which is why there are three of them and not one:
 | --- | --- | --- | ---: | ---: |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **97.7 %** (`c99!`) |
 | [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **79.0 %** (`gnu89!`), 73.7 % (`gnu11!`) |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **60.6 %** of the 203 run |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **61.1 %** of the 203 run |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
@@ -154,12 +154,13 @@ Against what the three suites already do:
   thoroughly, among the torture suite's 1,769. Forty files against 2,265 is not
   where the next conformance bug is hiding.
 * **What is *not* duplicated is largely what `cinrs` documents as
-  unsupported.** `atomic.c` and `asm.c` are `_Atomic` and inline assembly —
-  two things that are a located error on purpose. They would become `!`
-  entries on day one and teach nothing. (`unicode.c` was a third until the
-  `u8"…"`/`u"…"`/`U"…"` literals and extended identifiers landed, and `tls.c`
-  a fourth until `_Thread_local` did; `tests/c11.rs`, `tests/c23.rs`,
-  `tests/identifiers.rs` and `tests/threads.rs` cover that ground now.)
+  unsupported.** `asm.c` is inline assembly — a located error on purpose. It
+  would become an `!` entry on day one and teach nothing. (`unicode.c` was a
+  second until the `u8"…"`/`u"…"`/`U"…"` literals and extended identifiers
+  landed, `tls.c` a third until `_Thread_local` did, and `atomic.c` a fourth
+  until `_Atomic` did; `tests/c11.rs`, `tests/c23.rs`,
+  `tests/identifiers.rs`, `tests/threads.rs` and `tests/atomics.rs` cover that
+  ground now.)
 * **It is not nearly free.** Every case has to be *linked against a second
   translation unit* (`common`, which defines `assert`), which none of the three
   harnesses does — each generates one self-contained Rust file. Adding that is

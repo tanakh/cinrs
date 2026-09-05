@@ -54,6 +54,7 @@
 //! Rust" error never compete for the same construct, and so that a broken
 //! program is diagnosed identically on every toolchain.
 
+mod atomics;
 mod builtins;
 mod decl;
 mod expr;
@@ -61,6 +62,8 @@ mod init;
 mod stmt;
 mod types;
 mod va;
+
+pub use atomics::is_atomic_builtin;
 
 use std::collections::{HashMap, HashSet};
 
@@ -367,6 +370,14 @@ struct Sema<'a> {
     switch_vla_depths: Vec<usize>,
     /// Whether the function being checked calls `alloca`.
     func_uses_alloca: bool,
+    /// Operands of the atomic builtin being checked whose value is not used
+    /// but which C still evaluates: a memory order that was not a constant
+    /// expression, and a `__sync_*` builtin's trailing arguments.
+    ///
+    /// [`Sema::atomic_builtin`] empties it into the comma operators in front
+    /// of the node it builds, so it is never carried from one call to the
+    /// next.
+    pending_discard: Vec<Expr>,
     /// The hidden objects a variable length array's `sizeof` is read out of,
     /// by the object the C program declared.
     vla_lengths: HashMap<ObjectId, ObjectId>,
@@ -435,6 +446,7 @@ impl<'a> Sema<'a> {
             goto_scopes: Vec::new(),
             switch_vla_depths: Vec::new(),
             func_uses_alloca: false,
+            pending_discard: Vec::new(),
             vla_lengths: HashMap::new(),
             static_literals: HashMap::new(),
             ret_ty: Ty::Void,
@@ -938,7 +950,9 @@ impl<'a> Sema<'a> {
             Some(bits) => place
                 .ty
                 .promote_bit_field(bits.width, bits.signed, &self.target),
-            None => place.ty.promote(&self.target),
+            // Reading the place is what is promoted, and reading an `_Atomic`
+            // object gives the underlying type (C11 6.3.2.1p2).
+            None => self.types().unatomic(place.ty).promote(&self.target),
         }
     }
 
@@ -1032,6 +1046,12 @@ impl<'a> Sema<'a> {
     /// is written.
     fn zero(&mut self, ty: Ty, range: SourceRange) -> Expr {
         match ty {
+            // The zero of an `_Atomic T` is a `T`: a value never has an atomic
+            // type, and initialising the object is a plain write (7.17.2.1).
+            Ty::Atomic(id) => {
+                let inner = self.types().atomic_inner(id);
+                self.zero(inner, range)
+            }
             t if t.is_floating() => Expr::new(ExprKind::Float(0.0), ty, range),
             t if t.is_integer() => Expr::int(0, ty, range),
             Ty::Array(id) => {

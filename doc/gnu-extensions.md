@@ -154,7 +154,9 @@ variably modified types do not; a program that tests the macro takes its
 | Inline assembly | `asm volatile("…" : "=r"(x) : "r"(y) : "memory")` | occasional (kernels, crypto) | refused | Rust has `core::arch::asm!`, but mapping GCC's operand constraints onto its own is a project rather than a feature, and half a translation of assembly is worse than none. The `asm` **label** on a declaration — `int f(void) __asm__("f_impl");` — is a different thing and is supported. |
 | `asm` labels on declarations | `int f(void) __asm__("f_impl");` | common (libc shims) | supported | On a declaration the unit does not define, `#[link_name = "…"]`; on one it defines, `#[unsafe(export_name = "…")]`. |
 | `__thread` | `__thread int counter;` | occasional | supported | GCC's spelling of `_Thread_local`, and — being reserved — available in every entry point. The object becomes a `std::thread_local!` holding an `UnsafeCell<T>`, and every C access goes through the `*mut T` its `with` hands out, which is valid for as long as this thread's copy is. Rust's own `#[thread_local]` is still unstable, so an `extern` thread-local object — one another object file defines — is a located error; so is exporting one under `#pragma cinrs export`. `thread_local!` lives in `std`, which makes this the third construct an expansion cannot have under `#pragma cinrs no_std`, after variable length arrays and `alloca`. See the [N1364 row](c-status.md#c11) and `tests/threads.rs`. |
-| `__sync_*` / `__atomic_*` builtins | lock-free code | occasional | planned (subset) | `core::sync::atomic` intrinsics exist for all sizes; needs `_Atomic`-free spellings only. |
+| `__atomic_*` builtins | `__atomic_fetch_add(&n, 1, __ATOMIC_RELAXED)` | occasional (lock-free code) | supported | The whole memory-order-aware family: `load_n`/`load`, `store_n`/`store`, `exchange_n`/`exchange`, `compare_exchange_n`/`compare_exchange`, `fetch_add` … `fetch_nand`, `add_fetch` … `nand_fetch`, `test_and_set`, `clear`, `thread_fence`, `signal_fence`, `always_lock_free` and `is_lock_free`. Each becomes a `core::sync::atomic` type reached with `AtomicX::from_ptr` over the object's address — `AtomicI8`…`AtomicU64` for the 1-, 2-, 4- and 8-byte integers, `AtomicBool` for a `_Bool`, the integer atomic of the same width plus `to_bits`/`from_bits` for a `float` or `double`, and `AtomicPtr` for an object pointer. Rust has no integer `fetch_nand`, so the two nand forms are the compare-exchange loop it would have been. The order must be an integer constant expression — the `__ATOMIC_*` macros are predefined in every entry point — and a non-constant one falls back to `__ATOMIC_SEQ_CST` as GCC documents; an order the operation may not have (a load that releases, a store that acquires, a failure order stronger than the success one) is a diagnostic rather than the run-time panic Rust would give. Arithmetic on a *pointer* object counts **bytes**, which is GCC's behaviour and the one place this family and `<stdatomic.h>` differ. Refused: a 128-bit object (no stable `AtomicU128`), a function pointer, and arithmetic on a floating object, which GCC also rejects. See `tests/atomics.rs`. |
+| `__sync_*` builtins | `__sync_fetch_and_add(&n, 1)` | occasional (older lock-free code) | supported | The older family, every one of them sequentially consistent: `fetch_and_add`/`add_and_fetch` and their four relatives, `bool_compare_and_swap`, `val_compare_and_swap`, `lock_test_and_set` (an acquire exchange), `lock_release` (a release store of zero) and `synchronize`. The trailing arguments GCC allows — the list of variables the barrier covers — are evaluated and ignored. `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4/8` are predefined. |
+| `__c11_atomic_*` builtins | `__c11_atomic_load(&x, __ATOMIC_SEQ_CST)` | rare in user code | supported | Clang's family, which the bundled `<stdatomic.h>` is written over exactly as Clang's own header is. They require the object to be `_Atomic`, and their arithmetic on a pointer object is **scaled** by the pointee's size, as C11 7.17.7.5 requires — which is the reason both families exist here. |
 | `__auto_type` | `__auto_type x = expr;` | rare | supported | C23's `auto` under another name, and available in every entry point. |
 | Escaped newlines with trailing whitespace | `\ ` + newline | rare | planned | Lexer leniency. |
 | `__builtin_return_address`, `__builtin_frame_address`, `__builtin_apply` | | rare | not planned | |
@@ -289,12 +291,12 @@ program could not observe them anyway:
 
 Everything in the tables above marked *supported* is implemented and tested;
 `tests/gnu_language.rs`, `tests/gnu_attributes.rs`, `tests/gnu_builtins.rs`,
-`tests/gnu_preprocessor.rs`, `tests/int128.rs`, `tests/threads.rs` and
+`tests/gnu_preprocessor.rs`, `tests/int128.rs`, `tests/threads.rs`,
+`tests/atomics.rs` and
 `tests/dialects.rs` are where, and the leniencies have
 `tests/ui/gnu_leniencies_in_a_strict_block.rs` for the other half of each
 row — that a strict entry point still refuses it. What is left is the
 *planned* rows — computed
-`goto`, `cleanup`, the `__sync_*` and
-`__atomic_*` builtins, casts to a union type — plus the rows that say
+`goto`, `cleanup`, casts to a union type — plus the rows that say
 `not planned` or `impossible`, and the c-testsuite report
 ([`doc/c-testsuite.md`](c-testsuite.md)) lists which cases each one would fix.

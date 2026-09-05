@@ -156,8 +156,9 @@ use crate::Options;
 use crate::capture::{SourceMap, SourceRange};
 use crate::cfg::{BasicBlock, BlockId, Cfg, Terminator};
 use crate::ir::{
-    self, BinOp, Body, BreakTarget, Callee, CmpOp, ConstValue, Expr, ExprKind, Function, LogicalOp,
-    LoopId, NEVER_RAW, Place, PlaceKind, Program, RecordKind, Stmt, Storage, Switch, Ty,
+    self, AtomicClass, BinOp, Body, BreakTarget, Callee, CmpOp, ConstValue, Expr, ExprKind,
+    Function, LogicalOp, LoopId, NEVER_RAW, Place, PlaceKind, Program, RecordKind, Stmt, Storage,
+    Switch, Ty,
 };
 
 /// Generates the Rust items for a fully checked program.
@@ -470,6 +471,14 @@ struct LoweredPlace {
     /// place is read and written through `read_unaligned` and
     /// `write_unaligned` instead. See [`Codegen::place_align`].
     unaligned: bool,
+    /// Set when the object is `_Atomic`: reading it is a sequentially
+    /// consistent load and writing it a sequentially consistent store, both
+    /// through `AtomicX::from_ptr` over its address (C11 6.5.2.4, 6.5.16).
+    ///
+    /// The [class](AtomicClass) says which atomic, and the [`Ty`] is the
+    /// object's own type with the `_Atomic` taken off — what the value the
+    /// load produces is converted to.
+    atomic: Option<(AtomicClass, Ty)>,
 }
 
 impl LoweredPlace {
@@ -480,8 +489,51 @@ impl LoweredPlace {
             access,
             bits: None,
             unaligned: false,
+            atomic: None,
         }
     }
+}
+
+/// What a read-modify-write of an `_Atomic` place does to it.
+enum PlaceRmw<'a> {
+    /// `place op= value`, in the type `compute`.
+    Compound {
+        /// The operator.
+        op: BinOp,
+        /// The right operand, already converted for `compute`.
+        value: &'a Expr,
+        /// The type the operation is carried out in.
+        compute: Ty,
+    },
+    /// `++place` or `--place`.
+    Step {
+        /// Whether this decrements.
+        dec: bool,
+    },
+}
+
+/// Which value such a read-modify-write leaves behind.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RmwValue {
+    /// None: it was written as a statement.
+    None,
+    /// The value from before the update, which is what `x++` is.
+    Old,
+    /// The value after it, which is what `++x` and `x += v` are.
+    New,
+}
+
+/// The atomic operation a compound assignment operator performs, where there
+/// is one.
+fn rmw_of_binop(op: BinOp) -> Option<ir::AtomicRmw> {
+    Some(match op {
+        BinOp::Add => ir::AtomicRmw::Add,
+        BinOp::Sub => ir::AtomicRmw::Sub,
+        BinOp::BitAnd => ir::AtomicRmw::And,
+        BinOp::BitOr => ir::AtomicRmw::Or,
+        BinOp::BitXor => ir::AtomicRmw::Xor,
+        _ => return None,
+    })
 }
 
 /// The accessors a bit-field place is read and written through.
@@ -712,6 +764,15 @@ impl<'a> Codegen<'a> {
             Ty::Enum(id) => {
                 let name = c_ident(&self.program.types.enum_def(id).rust_name, span);
                 return quote_spanned! {span=> #name };
+            }
+            // An `_Atomic T` object *is* a `T` in the generated Rust: the
+            // atomicity is in how it is reached — `AtomicX::from_ptr` over its
+            // address — and not in what it holds. Where the two differ is
+            // alignment, which the layout code takes from the atomic type and
+            // the generated item carries as `#[repr(C, align(N))]`.
+            Ty::Atomic(id) => {
+                let inner = self.program.types.atomic_inner(id);
+                return self.ty(inner, span);
             }
         };
         let ident = Ident::new(name, span);
@@ -2269,7 +2330,7 @@ impl<'a> Codegen<'a> {
         match &expr.kind {
             ExprKind::Assign { place, value } => {
                 let lowered = self.place(place, true);
-                let value = self.expr_at(value, place.ty);
+                let value = self.expr_at(value, self.program.types.unatomic(place.ty));
                 let store = self.write(&lowered, value, span);
                 let setup = &lowered.setup;
                 quote_spanned! {span=> #setup #store }
@@ -2281,6 +2342,14 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
+                if lowered.atomic.is_some() {
+                    let kind = PlaceRmw::Compound {
+                        op: *op,
+                        value,
+                        compute: *compute,
+                    };
+                    return self.atomic_place_rmw(&lowered, kind, RmwValue::None, span);
+                }
                 let (hoist, rhs) = self.compound_rhs(value);
                 let current = self.read(&lowered, span);
                 let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
@@ -2291,6 +2360,10 @@ impl<'a> Codegen<'a> {
             }
             ExprKind::IncDec { place, dec, .. } => {
                 let lowered = self.place(place, true);
+                if lowered.atomic.is_some() {
+                    let kind = PlaceRmw::Step { dec: *dec };
+                    return self.atomic_place_rmw(&lowered, kind, RmwValue::None, span);
+                }
                 let current = self.read(&lowered, span);
                 let next = self.step_value(current, place.ty, *dec, span);
                 let store = self.write(&lowered, next, span);
@@ -2315,6 +2388,13 @@ impl<'a> Codegen<'a> {
             }
             ExprKind::Unreachable => {
                 quote_spanned! {span=> ::core::hint::unreachable_unchecked(); }
+            }
+            // A store, a `clear` and a fence have no value at all, in C or in
+            // the Rust they become; the `let _ =` the fallback below would
+            // wrap them in says nothing.
+            ExprKind::Atomic(_) if expr.ty.is_void() => {
+                let tokens = self.expr(expr).at(prec::LOWEST, span);
+                quote_spanned! {span=> #tokens; }
             }
             ExprKind::Comma { .. } => {
                 // A chain of comma operators is a flat sequence of statements
@@ -2489,6 +2569,15 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
+                if lowered.atomic.is_some() {
+                    let kind = PlaceRmw::Compound {
+                        op: *op,
+                        value,
+                        compute: *compute,
+                    };
+                    let tokens = self.atomic_place_rmw(&lowered, kind, RmwValue::New, span);
+                    return Value::new(tokens, prec::BLOCK);
+                }
                 let (hoist, rhs) = self.compound_rhs(value);
                 let current = self.read(&lowered, span);
                 let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
@@ -2507,6 +2596,16 @@ impl<'a> Codegen<'a> {
                 postfix,
             } => {
                 let lowered = self.place(place, true);
+                if lowered.atomic.is_some() {
+                    let want = if *postfix {
+                        RmwValue::Old
+                    } else {
+                        RmwValue::New
+                    };
+                    let tokens =
+                        self.atomic_place_rmw(&lowered, PlaceRmw::Step { dec: *dec }, want, span);
+                    return Value::new(tokens, prec::BLOCK);
+                }
                 let current = self.read(&lowered, span);
                 let next = self.step_value(current, place.ty, *dec, span);
                 let store = self.write(&lowered, next, span);
@@ -2661,6 +2760,7 @@ impl<'a> Codegen<'a> {
                 Value::new(quote_spanned! {span=> { #body #tail } }, prec::BLOCK)
             }
             ExprKind::Builtin { op, args } => self.builtin(*op, args, span),
+            ExprKind::Atomic(atomic) => self.atomic(atomic, span),
             ExprKind::VaListPristine => Value::new(self.va_pristine(span), prec::CALL),
             ExprKind::VaArg { ap } => self.va_arg(ap, expr.ty, span),
             // `va_end` is nothing: the list ends when its value is dropped.
@@ -2936,6 +3036,558 @@ impl<'a> Codegen<'a> {
                 };
                 self.overflow_builtin(bin, args, store, result_ty, span)
             }
+        }
+    }
+
+    // -- atomics ------------------------------------------------------------
+
+    /// `::core::sync::atomic::AtomicU32`, or `AtomicPtr<c_void>`.
+    fn atomic_path(&self, class: AtomicClass, span: Span) -> TokenStream {
+        if class == AtomicClass::Ptr {
+            let void = self.pointee_ty(Ty::Void, span);
+            return quote_spanned! {span=>
+                ::core::sync::atomic::AtomicPtr::<#void>
+            };
+        }
+        let name = Ident::new(class.rust_name(), span);
+        quote_spanned! {span=> ::core::sync::atomic::#name }
+    }
+
+    /// The Rust type the atomic holds, which is what its `from_ptr` points at.
+    ///
+    /// Every pointer goes through one `AtomicPtr<c_void>`: all object pointers
+    /// have the same representation, and the value is cast back to the C type
+    /// it came from as it comes out.
+    fn atomic_repr_ty(&self, class: AtomicClass, span: Span) -> TokenStream {
+        if class == AtomicClass::Ptr {
+            let void = self.pointee_ty(Ty::Void, span);
+            return quote_spanned! {span=> *mut #void };
+        }
+        primitive_ty(class.repr_name(), span)
+    }
+
+    /// `AtomicU32::from_ptr(p as *mut u32)`, the `&AtomicU32` everything else
+    /// is a method call on.
+    ///
+    /// `from_ptr` is safe to build here for the reason C gives: the object is
+    /// properly aligned for its own type, and the atomic's alignment is that
+    /// type's size, which is what [`ir::Types::size_align`] gives an
+    /// `_Atomic` and what sema checks before it accepts a pointer to a plain
+    /// one.
+    fn atomic_ref(&self, class: AtomicClass, ptr: TokenStream, span: Span) -> TokenStream {
+        let path = self.atomic_path(class, span);
+        let repr = self.atomic_repr_ty(class, span);
+        quote_spanned! {span=> #path::from_ptr(#ptr as *mut #repr) }
+    }
+
+    /// `::core::sync::atomic::Ordering::SeqCst`.
+    fn ordering(&self, order: ir::MemOrder, span: Span) -> TokenStream {
+        let name = Ident::new(order.rust_name(), span);
+        quote_spanned! {span=> ::core::sync::atomic::Ordering::#name }
+    }
+
+    /// The value an atomic yields, as the C type the object has.
+    fn repr_to_value(&self, class: AtomicClass, ty: Ty, value: TokenStream, span: Span) -> Value {
+        match class {
+            AtomicClass::Bool => Value::atom(value),
+            AtomicClass::Float { bytes } => {
+                let float = primitive_ty(if bytes == 4 { "f32" } else { "f64" }, span);
+                Value::new(
+                    quote_spanned! {span=> <#float>::from_bits(#value) },
+                    prec::CALL,
+                )
+            }
+            AtomicClass::Int { .. } | AtomicClass::Ptr => {
+                let target = self.ty(ty, span);
+                Value::new(quote_spanned! {span=> #value as #target }, prec::CAST).type_end(true)
+            }
+        }
+    }
+
+    /// A C value, as the Rust primitive the atomic holds.
+    fn value_to_repr(&self, class: AtomicClass, value: Value, span: Span) -> TokenStream {
+        match class {
+            AtomicClass::Bool => value.at(prec::LOWEST, span),
+            AtomicClass::Float { bytes } => {
+                let float = primitive_ty(if bytes == 4 { "f32" } else { "f64" }, span);
+                let value = value.at(prec::LOWEST, span);
+                quote_spanned! {span=> <#float>::to_bits(#value) }
+            }
+            AtomicClass::Int { .. } | AtomicClass::Ptr => {
+                let repr = self.atomic_repr_ty(class, span);
+                let value = value.at(prec::CAST, span);
+                quote_spanned! {span=> #value as #repr }
+            }
+        }
+    }
+
+    /// `match … { Ok(v) | Err(v) => v }`, which is how the old value is taken
+    /// out of a `fetch_update` that never says no.
+    fn either_way(&mut self, result: TokenStream, span: Span) -> TokenStream {
+        let value = self.temporary();
+        quote_spanned! {span=>
+            match #result {
+                ::core::result::Result::Ok(#value) | ::core::result::Result::Err(#value) => #value,
+            }
+        }
+    }
+
+    /// The compare-exchange loop an operation Rust has no method for becomes,
+    /// whose value is the **old** one.
+    ///
+    /// `updated` is the new value written in terms of `current`, and is
+    /// recomputed on every attempt, which is exactly what C's "read, modify,
+    /// write, atomically" comes to when the processor has no single
+    /// instruction for it — a `fetch_nand`, a `*=` on an atomic object, a
+    /// pointer that moves by elements.
+    ///
+    /// Written out rather than left to `Atomic::fetch_update`: that method is
+    /// being renamed to `try_update`, and the old name is deprecated on newer
+    /// toolchains while the new one does not exist on the oldest this crate
+    /// supports. The loop is what it does anyway.
+    fn atomic_cas_loop(
+        &mut self,
+        object: &TokenStream,
+        current: &Ident,
+        updated: TokenStream,
+        order: ir::MemOrder,
+        span: Span,
+    ) -> TokenStream {
+        let success = self.ordering(order, span);
+        let failure = self.ordering(order.failure_order(), span);
+        let slot = self.temporary();
+        let fresh = self.temporary();
+        let seen = self.temporary();
+        quote_spanned! {span=>
+            {
+                let #slot = #object;
+                let mut #current = #slot.load(#failure);
+                loop {
+                    let #fresh = #updated;
+                    match #slot.compare_exchange_weak(#current, #fresh, #success, #failure) {
+                        ::core::result::Result::Ok(_) => break #current,
+                        ::core::result::Result::Err(#seen) => #current = #seen,
+                    }
+                }
+            }
+        }
+    }
+
+    /// One of the atomic builtins; see [`ir::AtomicExpr`].
+    fn atomic(&mut self, atomic: &ir::AtomicExpr, span: Span) -> Value {
+        let class = atomic.class;
+        let success = self.ordering(atomic.success, span);
+        if let ir::AtomicOp::Fence { signal } = atomic.op {
+            // C11 7.17.4p2 makes a relaxed fence a no-op, and Rust's `fence`
+            // panics on one rather than saying so.
+            if atomic.success == ir::MemOrder::Relaxed {
+                return Value::atom(quote_spanned! {span=> () });
+            }
+            let name = Ident::new(if signal { "compiler_fence" } else { "fence" }, span);
+            return Value::new(
+                quote_spanned! {span=> ::core::sync::atomic::#name(#success) },
+                prec::CALL,
+            );
+        }
+        let ptr = match &atomic.ptr {
+            Some(ptr) => self.expr(ptr).at(prec::CAST, span),
+            None => return Value::atom(quote_spanned! {span=> () }),
+        };
+        let object = self.atomic_ref(class, ptr, span);
+        let ty = atomic.value_ty;
+        match atomic.op {
+            ir::AtomicOp::Fence { .. } => unreachable!("handled above"),
+            ir::AtomicOp::Load => self.repr_to_value(
+                class,
+                ty,
+                quote_spanned! {span=> #object.load(#success) },
+                span,
+            ),
+            ir::AtomicOp::Store => {
+                let value = self.atomic_operand(atomic, span);
+                Value::new(
+                    quote_spanned! {span=> #object.store(#value, #success) },
+                    prec::CALL,
+                )
+            }
+            ir::AtomicOp::Exchange => {
+                let value = self.atomic_operand(atomic, span);
+                self.repr_to_value(
+                    class,
+                    ty,
+                    quote_spanned! {span=> #object.swap(#value, #success) },
+                    span,
+                )
+            }
+            ir::AtomicOp::Clear => Value::new(
+                quote_spanned! {span=> #object.store(0, #success) },
+                prec::CALL,
+            ),
+            // GCC sets the byte to `__GCC_ATOMIC_TEST_AND_SET_TRUEVAL`, which
+            // is 1, and answers whether it was already set.
+            ir::AtomicOp::TestAndSet => Value::new(
+                quote_spanned! {span=> #object.swap(1, #success) != 0 },
+                prec::CMP,
+            ),
+            ir::AtomicOp::CompareExchange { weak } => {
+                self.compare_exchange(atomic, object, weak, span)
+            }
+            ir::AtomicOp::SyncCompareSwap { value_is_old } => {
+                self.sync_compare_swap(atomic, object, value_is_old, span)
+            }
+            ir::AtomicOp::Rmw { op, returns_new } => {
+                self.atomic_rmw(atomic, object, op, returns_new, span)
+            }
+        }
+    }
+
+    /// The value operand of an atomic builtin, as the atomic's own type.
+    fn atomic_operand(&mut self, atomic: &ir::AtomicExpr, span: Span) -> TokenStream {
+        let Some(value) = &atomic.value else {
+            return quote_spanned! {span=> () };
+        };
+        let value = self.expr(value);
+        self.value_to_repr(atomic.class, value, span)
+    }
+
+    /// `__atomic_compare_exchange_n`, which writes the value it observed back
+    /// through `expected` when it fails and answers whether it succeeded.
+    fn compare_exchange(
+        &mut self,
+        atomic: &ir::AtomicExpr,
+        object: TokenStream,
+        weak: bool,
+        span: Span,
+    ) -> Value {
+        let class = atomic.class;
+        let ty = atomic.value_ty;
+        let expected = match &atomic.expected {
+            Some(expected) => self.expr(expected).at(prec::CALL, span),
+            None => return Value::atom(quote_spanned! {span=> false }),
+        };
+        let desired = self.atomic_operand(atomic, span);
+        let slot = self.temporary();
+        let seen = self.temporary();
+        let current = self.value_to_repr(class, Value::atom(quote_spanned! {span=> *#slot }), span);
+        let method = Ident::new(
+            if weak {
+                "compare_exchange_weak"
+            } else {
+                "compare_exchange"
+            },
+            span,
+        );
+        let success = self.ordering(atomic.success, span);
+        let failure = self.ordering(atomic.failure, span);
+        let observed = self
+            .repr_to_value(class, ty, quote_spanned! {span=> #seen }, span)
+            .at(prec::LOWEST, span);
+        Value::new(
+            quote_spanned! {span=>
+                {
+                    let #slot = #expected;
+                    match #object.#method(#current, #desired, #success, #failure) {
+                        ::core::result::Result::Ok(_) => true,
+                        ::core::result::Result::Err(#seen) => {
+                            *#slot = #observed;
+                            false
+                        }
+                    }
+                }
+            },
+            prec::BLOCK,
+        )
+    }
+
+    /// `__sync_bool_compare_and_swap` and `__sync_val_compare_and_swap`, whose
+    /// expected value is a value and which write nothing back.
+    fn sync_compare_swap(
+        &mut self,
+        atomic: &ir::AtomicExpr,
+        object: TokenStream,
+        value_is_old: bool,
+        span: Span,
+    ) -> Value {
+        let class = atomic.class;
+        let ty = atomic.value_ty;
+        let expected = match &atomic.expected {
+            Some(expected) => {
+                let value = self.expr(expected);
+                self.value_to_repr(class, value, span)
+            }
+            None => return Value::atom(quote_spanned! {span=> false }),
+        };
+        let desired = self.atomic_operand(atomic, span);
+        let seq = self.ordering(ir::MemOrder::SeqCst, span);
+        let call = quote_spanned! {span=>
+            #object.compare_exchange(#expected, #desired, #seq, #seq)
+        };
+        if !value_is_old {
+            return Value::new(quote_spanned! {span=> #call.is_ok() }, prec::CALL);
+        }
+        let old = self.either_way(call, span);
+        self.repr_to_value(class, ty, parenthesize(old, span), span)
+    }
+
+    /// The `fetch_add` family, and the compare-exchange loops the ones Rust
+    /// has no method for turn into.
+    fn atomic_rmw(
+        &mut self,
+        atomic: &ir::AtomicExpr,
+        object: TokenStream,
+        op: ir::AtomicRmw,
+        returns_new: bool,
+        span: Span,
+    ) -> Value {
+        let class = atomic.class;
+        let ty = atomic.value_ty;
+        let success = self.ordering(atomic.success, span);
+        let operand = self.temporary();
+        let old = self.temporary();
+        // A pointer moves by *bytes*: the scaling C11 wants for
+        // `atomic_fetch_add` is already in the operand, put there by sema.
+        if class == AtomicClass::Ptr {
+            let delta = match &atomic.value {
+                Some(value) => self.expr(value).at(prec::CAST, span),
+                None => quote_spanned! {span=> 0 },
+            };
+            let isize_ty = primitive_ty("isize", span);
+            let signed = if op == ir::AtomicRmw::Sub {
+                quote_spanned! {span=> -(#delta as #isize_ty) }
+            } else {
+                quote_spanned! {span=> #delta as #isize_ty }
+            };
+            let step = self.temporary();
+            let updated = self.atomic_cas_loop(
+                &object,
+                &step,
+                quote_spanned! {span=> #step.wrapping_byte_offset(#operand) },
+                atomic.success,
+                span,
+            );
+            let tail = if returns_new {
+                quote_spanned! {span=> #old.wrapping_byte_offset(#operand) }
+            } else {
+                quote_spanned! {span=> #old }
+            };
+            let tail = self
+                .repr_to_value(class, ty, tail, span)
+                .at(prec::LOWEST, span);
+            return Value::new(
+                quote_spanned! {span=>
+                    {
+                        let #operand: #isize_ty = #signed;
+                        let #old = #updated;
+                        #tail
+                    }
+                },
+                prec::BLOCK,
+            );
+        }
+        let value = self.atomic_operand(atomic, span);
+        let repr = self.atomic_repr_ty(class, span);
+        // `fetch_nand` exists for `AtomicBool` and for nothing else, so an
+        // integer nand is the compare-exchange loop Rust would have written.
+        let update = match op.rust_method() {
+            Some(method) if op != ir::AtomicRmw::Nand || class == AtomicClass::Bool => {
+                let method = Ident::new(method, span);
+                quote_spanned! {span=> #object.#method(#operand, #success) }
+            }
+            _ if class == AtomicClass::Bool => {
+                let method = Ident::new("fetch_nand", span);
+                quote_spanned! {span=> #object.#method(#operand, #success) }
+            }
+            _ => {
+                let current = self.temporary();
+                self.atomic_cas_loop(
+                    &object,
+                    &current,
+                    quote_spanned! {span=> !(#current & #operand) },
+                    atomic.success,
+                    span,
+                )
+            }
+        };
+        let combined = self.atomic_combine(op, &old, &operand, span);
+        let tail = if returns_new {
+            combined
+        } else {
+            quote_spanned! {span=> #old }
+        };
+        let tail = self
+            .repr_to_value(class, ty, tail, span)
+            .at(prec::LOWEST, span);
+        Value::new(
+            quote_spanned! {span=>
+                {
+                    let #operand: #repr = #value;
+                    let #old = #update;
+                    #tail
+                }
+            },
+            prec::BLOCK,
+        )
+    }
+
+    /// The read-modify-write an `x += v`, `x++` or `--x` on an `_Atomic`
+    /// object performs.
+    ///
+    /// C11 6.5.16.2p3 and 6.5.2.4p2 make each of them *one* atomic
+    /// read-modify-write, not a load and a store, so none of them may go
+    /// through [`Codegen::read`] and [`Codegen::write`]. The five operators an
+    /// atomic has a method for become that method; everything else — `*=`,
+    /// `<<=`, a floating object, a pointer that moves by elements — becomes
+    /// the `fetch_update` loop the method would have been.
+    ///
+    /// The right operand is always evaluated into a temporary first: the
+    /// update is written twice when the value of the expression is the new
+    /// one, and C evaluates it once.
+    fn atomic_place_rmw(
+        &mut self,
+        lowered: &LoweredPlace,
+        kind: PlaceRmw<'_>,
+        want: RmwValue,
+        span: Span,
+    ) -> TokenStream {
+        let (class, ty) = lowered.atomic.expect("an atomic place");
+        let object = self.atomic_object_of(lowered, span);
+        let setup = &lowered.setup;
+        let operand = self.temporary();
+        let old = self.temporary();
+        let success = self.ordering(ir::MemOrder::SeqCst, span);
+        // The one shape that is a plain `fetch_*`: an integer object whose
+        // operator is one of the five, computed in the object's own type, so
+        // that no widening happens between the read and the write.
+        let method = match (class, &kind) {
+            (
+                AtomicClass::Int { .. },
+                PlaceRmw::Compound {
+                    op,
+                    compute,
+                    value: _,
+                },
+            ) if *compute == ty => rmw_of_binop(*op),
+            (AtomicClass::Int { .. }, PlaceRmw::Step { dec }) => Some(if *dec {
+                ir::AtomicRmw::Sub
+            } else {
+                ir::AtomicRmw::Add
+            }),
+            _ => None,
+        };
+        if let Some(op) = method.filter(|op| op.rust_method().is_some()) {
+            let repr = self.atomic_repr_ty(class, span);
+            let value = match &kind {
+                PlaceRmw::Compound { value, compute, .. } => {
+                    let tokens = self.expr_at(value, *compute);
+                    self.value_to_repr(class, Value::new(tokens, prec::LOWEST), span)
+                }
+                PlaceRmw::Step { .. } => quote_spanned! {span=> 1 },
+            };
+            let name = Ident::new(op.rust_method().expect("filtered"), span);
+            let tail = self.atomic_rmw_tail((class, ty), op, &old, &operand, want, span);
+            return quote_spanned! {span=>
+                { #setup
+                  let #operand: #repr = #value;
+                  let #old = #object.#name(#operand, #success);
+                  #tail }
+            };
+        }
+        // The general form: a compare-exchange loop over the very expression
+        // an ordinary compound assignment would have stored.
+        let hoisted = match &kind {
+            PlaceRmw::Compound { value, compute, .. } => {
+                let tokens = self.expr_at(value, *compute);
+                let rhs_ty = self.ty(*compute, span);
+                Some(quote_spanned! {span=> let #operand: #rhs_ty = #tokens; })
+            }
+            PlaceRmw::Step { .. } => None,
+        };
+        let param = self.temporary();
+        let current = self.repr_to_value(class, ty, quote_spanned! {span=> #param }, span);
+        let updated = self.apply_place_rmw(&kind, current, ty, &operand, span);
+        let updated = self.value_to_repr(class, updated, span);
+        let loop_result =
+            self.atomic_cas_loop(&object, &param, updated, ir::MemOrder::SeqCst, span);
+        let tail = match want {
+            RmwValue::None => TokenStream::new(),
+            RmwValue::Old => self
+                .repr_to_value(class, ty, quote_spanned! {span=> #old }, span)
+                .at(prec::LOWEST, span),
+            RmwValue::New => {
+                let previous = self.repr_to_value(class, ty, quote_spanned! {span=> #old }, span);
+                let value = self.apply_place_rmw(&kind, previous, ty, &operand, span);
+                value.at(prec::LOWEST, span)
+            }
+        };
+        quote_spanned! {span=>
+            { #setup #hoisted
+              let #old = #loop_result;
+              #tail }
+        }
+    }
+
+    /// The new value of an atomic place, from the old one.
+    fn apply_place_rmw(
+        &mut self,
+        kind: &PlaceRmw<'_>,
+        current: Value,
+        ty: Ty,
+        operand: &Ident,
+        span: Span,
+    ) -> Value {
+        match kind {
+            PlaceRmw::Compound { op, value, compute } => {
+                let rhs = Value::atom(quote_spanned! {span=> #operand });
+                self.compound_value(current, ty, *op, value, Some(rhs), *compute)
+            }
+            PlaceRmw::Step { dec } => {
+                Value::new(self.step_value(current, ty, *dec, span), prec::LOWEST)
+            }
+        }
+    }
+
+    /// The value a `fetch_*` on a place ends with: nothing, the old value or
+    /// the new one.
+    ///
+    /// `atomic` is the place's [class](AtomicClass) and the C type behind it,
+    /// which is what the value the atomic returned is converted back to.
+    fn atomic_rmw_tail(
+        &mut self,
+        atomic: (AtomicClass, Ty),
+        op: ir::AtomicRmw,
+        old: &Ident,
+        operand: &Ident,
+        want: RmwValue,
+        span: Span,
+    ) -> TokenStream {
+        let (class, ty) = atomic;
+        let value = match want {
+            RmwValue::None => return TokenStream::new(),
+            RmwValue::Old => quote_spanned! {span=> #old },
+            RmwValue::New => self.atomic_combine(op, old, operand, span),
+        };
+        self.repr_to_value(class, ty, value, span)
+            .at(prec::LOWEST, span)
+    }
+
+    /// The new value a `…_fetch` form answers with, computed from the old one
+    /// the atomic returned and the operand.
+    fn atomic_combine(
+        &self,
+        op: ir::AtomicRmw,
+        old: &Ident,
+        operand: &Ident,
+        span: Span,
+    ) -> TokenStream {
+        match op {
+            // Wrapping, because C's atomic arithmetic is modular even for the
+            // signed types — the atomic instruction has no other behaviour.
+            ir::AtomicRmw::Add => quote_spanned! {span=> #old.wrapping_add(#operand) },
+            ir::AtomicRmw::Sub => quote_spanned! {span=> #old.wrapping_sub(#operand) },
+            ir::AtomicRmw::And => quote_spanned! {span=> (#old & #operand) },
+            ir::AtomicRmw::Or => quote_spanned! {span=> (#old | #operand) },
+            ir::AtomicRmw::Xor => quote_spanned! {span=> (#old ^ #operand) },
+            ir::AtomicRmw::Nand => quote_spanned! {span=> !(#old & #operand) },
         }
     }
 
@@ -3494,14 +4146,28 @@ impl<'a> Codegen<'a> {
         while let ExprKind::Assign { place, value } = &node.kind {
             let span = self.sp(node.range);
             let lowered = self.place(place, true);
-            spine.push((lowered, place.ty, span));
+            spine.push((lowered, self.program.types.unatomic(place.ty), span));
             node = value;
         }
         let (_, innermost, _) = spine
             .last()
             .expect("assign_chain is only entered on an assignment");
         let mut tokens = self.expr_at(node, *innermost);
-        while let Some((lowered, _, span)) = spine.pop() {
+        while let Some((lowered, ty, span)) = spine.pop() {
+            // The value of an assignment to an *atomic* object is the value
+            // stored and not what the object holds afterwards: another thread
+            // may have changed it already, and reading it back would be a
+            // second atomic operation C never asked for.
+            if lowered.atomic.is_some() {
+                let tmp = self.temporary();
+                let target = self.ty(ty, span);
+                let store = self.write(&lowered, quote_spanned! {span=> #tmp }, span);
+                let setup = &lowered.setup;
+                tokens = quote_spanned! {span=>
+                    { #setup let #tmp: #target = #tokens; #store #tmp }
+                };
+                continue;
+            }
             let store = self.write(&lowered, tokens, span);
             // The value of an assignment is the value stored, which for a
             // place is exactly what reading it back gives — including for a
@@ -3868,9 +4534,26 @@ impl<'a> Codegen<'a> {
     /// has to lose the qualifier: Rust refuses `&raw mut (*p).f` when `p` is a
     /// `*const T`, while reading through one is fine.
     fn place(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
-        let mut lowered = self.place_access(place, mutable);
+        // Even *reading* an atomic object needs a `*mut` to it:
+        // `AtomicX::from_ptr` takes one, and a `const _Atomic int *` would
+        // otherwise reach `&raw mut *p` through a `*const` pointer, which
+        // Rust refuses. What C promises is enough for the cast — every object
+        // this crate generates lives in writable storage.
+        let atomic = matches!(place.ty, Ty::Atomic(_));
+        let mut lowered = self.place_access(place, mutable || atomic);
         if lowered.bits.is_none() && self.place_underaligned(place) {
             lowered.unaligned = true;
+        }
+        if let Ty::Atomic(id) = place.ty {
+            let inner = self.program.types.atomic_inner(id);
+            lowered.atomic = ir::atomic_class(&self.program.types, inner, &self.options.target)
+                .map(|c| (c, inner));
+            // There is no unaligned atomic: the alignment of an `_Atomic` type
+            // is its size, and sema refuses the declarations that could not
+            // have it.
+            if lowered.atomic.is_some() {
+                lowered.unaligned = false;
+            }
         }
         lowered
     }
@@ -4032,6 +4715,7 @@ impl<'a> Codegen<'a> {
                         setter: c_ident(&bits.setter, span),
                     }),
                     unaligned: false,
+                    atomic: None,
                 }
             }
             PlaceKind::Str(id) => {
@@ -4071,6 +4755,16 @@ impl<'a> Codegen<'a> {
     /// Reads a lowered place.
     fn read(&self, place: &LoweredPlace, span: Span) -> Value {
         let access = &place.access;
+        if let Some((class, ty)) = place.atomic {
+            let object = self.atomic_object_of(place, span);
+            let order = self.ordering(ir::MemOrder::SeqCst, span);
+            return self.repr_to_value(
+                class,
+                ty,
+                quote_spanned! {span=> #object.load(#order) },
+                span,
+            );
+        }
         match &place.bits {
             Some(bits) => {
                 let getter = &bits.getter;
@@ -4087,6 +4781,12 @@ impl<'a> Codegen<'a> {
     /// The statement that stores `value` into a lowered place.
     fn write(&self, place: &LoweredPlace, value: TokenStream, span: Span) -> TokenStream {
         let access = &place.access;
+        if let Some((class, _)) = place.atomic {
+            let object = self.atomic_object_of(place, span);
+            let order = self.ordering(ir::MemOrder::SeqCst, span);
+            let value = self.value_to_repr(class, Value::new(value, prec::LOWEST), span);
+            return quote_spanned! {span=> #object.store(#value, #order); };
+        }
         match &place.bits {
             Some(bits) => {
                 let setter = &bits.setter;
@@ -4097,6 +4797,17 @@ impl<'a> Codegen<'a> {
             }
             None => quote_spanned! {span=> #access = #value; },
         }
+    }
+
+    /// The `&AtomicX` an `_Atomic` place is reached through.
+    ///
+    /// A raw pointer to the object rather than a reference to it: the object
+    /// is a plain `static mut` or `let mut` of the underlying type, and its
+    /// address is what `from_ptr` wants.
+    fn atomic_object_of(&self, place: &LoweredPlace, span: Span) -> TokenStream {
+        let access = &place.access;
+        let class = place.atomic.expect("an atomic place").0;
+        self.atomic_ref(class, quote_spanned! {span=> (&raw mut #access) }, span)
     }
 
     /// `*p` as a place.
@@ -4330,6 +5041,9 @@ impl<'a> Codegen<'a> {
     /// The all-bits-zero value of a type.
     fn zero_tokens(&self, ty: Ty, span: Span) -> TokenStream {
         match ty {
+            // The zero of an `_Atomic T` is the zero of `T`: the object is
+            // generated as a plain `T`, and initialising it is a plain write.
+            Ty::Atomic(id) => self.zero_tokens(self.program.types.atomic_inner(id), span),
             _ if ty.is_floating() => bare_float_literal(0.0, span),
             _ if ty.is_integer() => bare_int_literal(0, ty, span),
             // A variable length array is generated as a pointer, and the only

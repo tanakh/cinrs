@@ -1,0 +1,127 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr\"\n        _Atomic int counter;\n        _Atomic(int *) cursor;\n\n        int read(void) { return counter; }\n        void write(int v) { counter = v; }\n        int bump(void) { return ++counter; }\n        int add(int v) { return counter += v; }\n        int scale(int v) { return counter *= v; }\n        int *step(void) { return cursor++; }\n        \")"
+---
+mod __cinrs_unit_0218c48c {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    pub static mut counter: ::core::ffi::c_int = 0 as ::core::ffi::c_int;
+    #[allow(…)]
+    pub static mut cursor: *mut ::core::ffi::c_int = ::core::ptr::null_mut::<
+        ::core::ffi::c_int,
+    >();
+    #[allow(…)]
+    pub unsafe extern "C" fn read() -> ::core::ffi::c_int {
+        unsafe {
+            return ::core::sync::atomic::AtomicI32::from_ptr(
+                    (&raw mut counter) as *mut ::core::primitive::i32,
+                )
+                .load(::core::sync::atomic::Ordering::SeqCst) as ::core::ffi::c_int;
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn write(mut v: ::core::ffi::c_int) {
+        unsafe {
+            ::core::sync::atomic::AtomicI32::from_ptr(
+                    (&raw mut counter) as *mut ::core::primitive::i32,
+                )
+                .store(
+                    (v) as ::core::primitive::i32,
+                    ::core::sync::atomic::Ordering::SeqCst,
+                );
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn bump() -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let __cinrs_tmp0: ::core::primitive::i32 = 1;
+                let __cinrs_tmp1 = ::core::sync::atomic::AtomicI32::from_ptr(
+                        (&raw mut counter) as *mut ::core::primitive::i32,
+                    )
+                    .fetch_add(__cinrs_tmp0, ::core::sync::atomic::Ordering::SeqCst);
+                __cinrs_tmp1.wrapping_add(__cinrs_tmp0) as ::core::ffi::c_int
+            };
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn add(mut v: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let __cinrs_tmp0: ::core::primitive::i32 = (v) as ::core::primitive::i32;
+                let __cinrs_tmp1 = ::core::sync::atomic::AtomicI32::from_ptr(
+                        (&raw mut counter) as *mut ::core::primitive::i32,
+                    )
+                    .fetch_add(__cinrs_tmp0, ::core::sync::atomic::Ordering::SeqCst);
+                __cinrs_tmp1.wrapping_add(__cinrs_tmp0) as ::core::ffi::c_int
+            };
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn scale(mut v: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return {
+                let __cinrs_tmp0: ::core::ffi::c_int = v;
+                let __cinrs_tmp1 = {
+                    let __cinrs_tmp3 = ::core::sync::atomic::AtomicI32::from_ptr(
+                        (&raw mut counter) as *mut ::core::primitive::i32,
+                    );
+                    let mut __cinrs_tmp2 = __cinrs_tmp3
+                        .load(::core::sync::atomic::Ordering::SeqCst);
+                    loop {
+                        let __cinrs_tmp4 = (__cinrs_tmp2 as ::core::ffi::c_int)
+                            .wrapping_mul(__cinrs_tmp0) as ::core::primitive::i32;
+                        match __cinrs_tmp3
+                            .compare_exchange_weak(
+                                __cinrs_tmp2,
+                                __cinrs_tmp4,
+                                ::core::sync::atomic::Ordering::SeqCst,
+                                ::core::sync::atomic::Ordering::SeqCst,
+                            )
+                        {
+                            ::core::result::Result::Ok(_) => break __cinrs_tmp2,
+                            ::core::result::Result::Err(__cinrs_tmp5) => {
+                                __cinrs_tmp2 = __cinrs_tmp5;
+                            }
+                        }
+                    }
+                };
+                (__cinrs_tmp1 as ::core::ffi::c_int).wrapping_mul(__cinrs_tmp0)
+            };
+        }
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn step() -> *mut ::core::ffi::c_int {
+        unsafe {
+            return {
+                let __cinrs_tmp1 = {
+                    let __cinrs_tmp3 = ::core::sync::atomic::AtomicPtr::<
+                        ::core::ffi::c_void,
+                    >::from_ptr((&raw mut cursor) as *mut *mut ::core::ffi::c_void);
+                    let mut __cinrs_tmp2 = __cinrs_tmp3
+                        .load(::core::sync::atomic::Ordering::SeqCst);
+                    loop {
+                        let __cinrs_tmp4 = ((__cinrs_tmp2 as *mut ::core::ffi::c_int)
+                            .offset(1)) as *mut ::core::ffi::c_void;
+                        match __cinrs_tmp3
+                            .compare_exchange_weak(
+                                __cinrs_tmp2,
+                                __cinrs_tmp4,
+                                ::core::sync::atomic::Ordering::SeqCst,
+                                ::core::sync::atomic::Ordering::SeqCst,
+                            )
+                        {
+                            ::core::result::Result::Ok(_) => break __cinrs_tmp2,
+                            ::core::result::Result::Err(__cinrs_tmp5) => {
+                                __cinrs_tmp2 = __cinrs_tmp5;
+                            }
+                        }
+                    }
+                };
+                __cinrs_tmp1 as *mut ::core::ffi::c_int
+            };
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_0218c48c::*;

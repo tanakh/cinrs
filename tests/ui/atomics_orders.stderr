@@ -1,0 +1,57 @@
+error: '__atomic_load_n' may not be performed with 'memory_order_release': it is a load, and a load has nothing to release
+  --> tests/ui/atomics_orders.rs:13:35
+   |
+13 |         return __atomic_load_n(p, __ATOMIC_RELEASE);
+   |                                   ^^^^^^^^^^^^^^^^
+
+error: '__atomic_load_n' may not be performed with 'memory_order_acq_rel': it is a load, and a load has nothing to release
+  --> tests/ui/atomics_orders.rs:18:35
+   |
+18 |         return __atomic_load_n(p, __ATOMIC_ACQ_REL);
+   |                                   ^^^^^^^^^^^^^^^^
+
+error: '__atomic_store_n' may not be performed with 'memory_order_acquire': it is a store, and a store has nothing to acquire
+  --> tests/ui/atomics_orders.rs:23:32
+   |
+23 |         __atomic_store_n(p, 1, __ATOMIC_ACQUIRE);
+   |                                ^^^^^^^^^^^^^^^^
+
+error: '__atomic_store_n' may not be performed with 'memory_order_acq_rel': it is a store, and a store has nothing to acquire
+  --> tests/ui/atomics_orders.rs:28:32
+   |
+28 |         __atomic_store_n(p, 1, __ATOMIC_ACQ_REL);
+   |                                ^^^^^^^^^^^^^^^^
+
+error: '__atomic_clear' may not be performed with 'memory_order_acquire': it is a store, and a store has nothing to acquire
+  --> tests/ui/atomics_orders.rs:33:27
+   |
+33 |         __atomic_clear(p, __ATOMIC_ACQUIRE);
+   |                           ^^^^^^^^^^^^^^^^
+
+error: the failure memory order of '__atomic_compare_exchange_n' may not be 'memory_order_release': it describes a load
+  --> tests/ui/atomics_orders.rs:39:62
+   |
+39 | ...                   __ATOMIC_SEQ_CST, __ATOMIC_RELEASE);
+   |                                         ^^^^^^^^^^^^^^^^
+
+error: the failure memory order of '__atomic_compare_exchange_n' may not be stronger than the success order ('memory_order_seq_cst' against 'memory_order_relaxed')
+  --> tests/ui/atomics_orders.rs:45:62
+   |
+45 | ...                   __ATOMIC_RELAXED, __ATOMIC_SEQ_CST);
+   |                                         ^^^^^^^^^^^^^^^^
+
+error: the failure memory order of '__c11_atomic_compare_exchange_strong' may not be stronger than the success order ('memory_order_seq_cst' against 'memory_order_acquire')
+       note: in expansion of macro 'atomic_compare_exchange_strong_explicit', defined in <cinrs>/stdatomic.h:134
+  --> tests/ui/atomics_orders.rs:52:56
+   |
+52 | ...                   memory_order_seq_cst);
+   |                       ^^^^^^^^^^^^^^^^^^^^
+
+error: '__atomic_load_n' has no memory order 42; write one of the '__ATOMIC_…' macros or a 'memory_order_…' constant
+  --> tests/ui/atomics_orders.rs:57:35
+   |
+57 |         return __atomic_load_n(p, 42);
+   |                                   ^^
+
+error: aborting due to 9 previous errors
+

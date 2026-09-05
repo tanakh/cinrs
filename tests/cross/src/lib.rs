@@ -78,6 +78,27 @@ cinrs::c11! { r#"
     };
     _Static_assert(sizeof(struct with_long) == 2 * sizeof(long), "");
 
+    /* The alignment of an atomic type is its *size*, which is the one place a
+     * type's alignment does not come from the ABI's table — and the reason
+     * `_Atomic long long` needs a target whose eight-byte scalars are
+     * eight-byte aligned. `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8` is where the
+     * model says whether this one is. */
+    _Static_assert(sizeof(_Atomic int) == sizeof(int), "");
+    _Static_assert(_Alignof(_Atomic int) == sizeof(int), "");
+    int atomic_bump(_Atomic int *p) { return ++*p; }
+    void *atomic_swap(void **p, void *v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+
+    #if defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8)
+    struct atomic_probe {
+        char c;
+        _Atomic long long ll;
+    };
+    _Static_assert(_Alignof(_Atomic long long) == 8, "an atomic type is aligned to its size");
+    _Static_assert(_Alignof(struct atomic_probe) == 8, "");
+    _Static_assert(sizeof(struct atomic_probe) == 16, "");
+    long long atomic_add(_Atomic long long *p, long long v) { return *p += v; }
+    #endif
+
     /* Something for the code generator to chew on, so that the model reaches
      * more than the constant folder: a bit-field window, pointer arithmetic
      * and an array sized from `sizeof`. */

@@ -1,0 +1,98 @@
+error: '_Atomic struct pair' is not supported yet: only the scalar types have a lock-free atomic in `core::sync::atomic`, and nothing in the generated Rust could stand for a lock
+  --> tests/ui/atomics_unsupported.rs:14:13
+   |
+14 |     _Atomic struct pair record;
+   |             ^^^^^^
+
+error: '_Atomic' may not be applied to the array type 'int[4]' (C11 6.7.2.4p3)
+  --> tests/ui/atomics_unsupported.rs:17:5
+   |
+17 |     _Atomic array flat;
+   |     ^^^^^^^
+
+error: '_Atomic' may not be applied to the function type 'int (void)' (C11 6.7.2.4p3)
+  --> tests/ui/atomics_unsupported.rs:19:5
+   |
+19 |     _Atomic function fun;
+   |     ^^^^^^^
+
+error: '_Atomic int (*)(void)' is not supported yet: a function pointer is an `Option<fn>` in Rust, which no atomic holds
+  --> tests/ui/atomics_unsupported.rs:21:18
+   |
+21 |     _Atomic(int (*)(void)) callback;
+   |                  ^
+
+error: '_Atomic __int128' is not supported yet: there is no stable 128-bit atomic in `core::sync::atomic`
+  --> tests/ui/atomics_unsupported.rs:24:5
+   |
+24 |     _Atomic __int128 wide;
+   |     ^^^^^^^
+
+error: '_Atomic void' is not a type
+  --> tests/ui/atomics_unsupported.rs:26:5
+   |
+26 |     _Atomic void nothing;
+   |     ^^^^^^^
+
+error: '_Atomic' requires a complete type, and 'struct opaque' is incomplete
+  --> tests/ui/atomics_unsupported.rs:29:13
+   |
+29 |     _Atomic(struct opaque) incomplete;
+   |             ^^^^^^
+
+error: bit-field 'b' has invalid type '_Atomic(int)'; only the integer types may be given a width
+  --> tests/ui/atomics_unsupported.rs:31:36
+   |
+31 |     struct with_bits { _Atomic int b : 3; };
+   |                                    ^
+
+error: packing puts the '_Atomic' member 'b' at offset 1 in a record aligned to 1, and an atomic operation on it needs 4-byte alignment
+  --> tests/ui/atomics_unsupported.rs:37:67
+   |
+37 |     struct __attribute__((packed)) squeezed { char a; _Atomic int b; };
+   |                                                                   ^
+
+error: '__atomic_load_n' cannot operate on '__int128': there is no stable 128-bit atomic in `core::sync::atomic`
+  --> tests/ui/atomics_unsupported.rs:46:38
+   |
+46 |         return (int) __atomic_load_n(&wide_object, __ATOMIC_SEQ_CST);
+   |                                      ^
+
+error: '__atomic_fetch_add' does not work on 'float': the atomic arithmetic builtins take an integer or a pointer object
+  --> tests/ui/atomics_unsupported.rs:52:16
+   |
+52 |         return __atomic_fetch_add(&value, 1.0f, __ATOMIC_SEQ_CST);
+   |                ^^^^^^^^^^^^^^^^^^
+
+error: '__atomic_fetch_or' does not work on a pointer object: only '+' and '-' do
+  --> tests/ui/atomics_unsupported.rs:57:16
+   |
+57 |         return __atomic_fetch_or(p, 1, __ATOMIC_SEQ_CST) != 0;
+   |                ^^^^^^^^^^^^^^^^^
+
+error: '__atomic_fetch_add' does not work on a '_Bool' object: adding to one has no meaning
+  --> tests/ui/atomics_unsupported.rs:62:16
+   |
+62 |         return __atomic_fetch_add(p, 1, __ATOMIC_SEQ_CST);
+   |                ^^^^^^^^^^^^^^^^^^
+
+error: '__atomic_test_and_set' needs a pointer to a one-byte object, and 'int *' points at 'int'
+  --> tests/ui/atomics_unsupported.rs:67:38
+   |
+67 |         return __atomic_test_and_set(p, __ATOMIC_SEQ_CST);
+   |                                      ^
+
+error: the first argument of '__atomic_load_n' must be a pointer, not 'int'
+  --> tests/ui/atomics_unsupported.rs:72:32
+   |
+72 |         return __atomic_load_n(n, __ATOMIC_SEQ_CST);
+   |                                ^
+
+error: '__atomic_load_n' expects 2 arguments, have 1
+  --> tests/ui/atomics_unsupported.rs:77:16
+   |
+77 |         return __atomic_load_n(p);
+   |                ^^^^^^^^^^^^^^^
+
+error: aborting due to 16 previous errors
+

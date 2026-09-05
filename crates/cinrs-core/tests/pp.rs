@@ -700,11 +700,26 @@ fn the_target_is_described_consistently_with_the_target_model() {
         "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
     ));
     assert!(cond("!defined(__clang__)"));
-    // The four parts of C11 this crate leaves out say so, which is what makes
-    // leaving them out conforming.
+    // The three parts of C11 this crate leaves out say so, which is what
+    // makes leaving them out conforming — and atomics, which it does *not*
+    // leave out, deliberately says nothing.
     assert!(cond(
-        "defined(__STDC_NO_ATOMICS__) && defined(__STDC_NO_THREADS__) \
-         && defined(__STDC_NO_VLA__) && defined(__STDC_NO_COMPLEX__)"
+        "defined(__STDC_NO_THREADS__) && defined(__STDC_NO_VLA__) \
+         && defined(__STDC_NO_COMPLEX__)"
+    ));
+    assert!(cond("!defined(__STDC_NO_ATOMICS__)"));
+    // The atomic builtins' own macros, which a program passes to them.
+    assert!(cond(
+        "__ATOMIC_RELAXED == 0 && __ATOMIC_CONSUME == 1 && __ATOMIC_ACQUIRE == 2 \
+         && __ATOMIC_RELEASE == 3 && __ATOMIC_ACQ_REL == 4 && __ATOMIC_SEQ_CST == 5"
+    ));
+    assert!(cond(
+        "__GCC_ATOMIC_INT_LOCK_FREE == 2 && __GCC_ATOMIC_POINTER_LOCK_FREE == 2 \
+         && __GCC_ATOMIC_TEST_AND_SET_TRUEVAL == 1"
+    ));
+    assert!(cond(
+        "defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1) \
+         && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4)"
     ));
     // A strict entry point is `-std=c99`, and says so.
     assert!(cond("defined(__STRICT_ANSI__)"));
@@ -1457,8 +1472,14 @@ fn the_has_family_answers_from_this_implementations_tables() {
     assert_eq!(pp("#if __has_attribute(no_such_thing)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_builtin(__builtin_popcount)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_builtin(__builtin_apply)\n1\n#endif"), "");
+    // The atomic builtins are builtins under names of their own, and
+    // `__has_builtin` answers about all three families.
+    assert_eq!(pp("#if __has_builtin(__atomic_load_n)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_builtin(__sync_synchronize)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_builtin(__c11_atomic_load)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_builtin(__atomic_no_such)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_feature(c_static_assert)\n1\n#endif"), "1");
-    assert_eq!(pp("#if __has_feature(c_atomic)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_feature(c_atomic)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_c_attribute(fallthrough)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_c_attribute(packed)\n1\n#endif"), "");
 }

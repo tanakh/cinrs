@@ -42,15 +42,16 @@ What `gnu89!` keeps of C89 is only what a later revision **deleted**: implicit
 `int`, implicit function declarations, and (with every entry point below
 `c23!`) old-style function definitions.
 
-Two of the rows below are answered by the *entry point* rather than by the
-front end: `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
-`__STDC_NO_COMPLEX__` are all predefined, so the four features they name are
-conforming omissions rather than gaps. Two of the four are now the
+One of the rows below is answered by the *entry point* rather than by the
+front end: `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
+`__STDC_NO_COMPLEX__` are predefined, so the three features they name are
+conforming omissions rather than gaps. Two of the three are now the
 conservative half of a feature that partly works: `__STDC_NO_VLA__` stays
 defined although one-dimensional variable length arrays do, until the rest of
 the variably modified types follow, and `__STDC_NO_THREADS__` stays defined
 although `_Thread_local` does, because `<threads.h>` is what the macro is
-about.
+about. The fourth macro, `__STDC_NO_ATOMICS__`, is *not* defined: atomics are
+implemented.
 
 ## The target model
 
@@ -258,19 +259,19 @@ Also standard C99 but absent from Clang's list:
 | Anonymous member-structures and unions | N1406 | Yes | |
 | Completeness of types | N1439 | N/A | |
 | Generic macro facility (`_Generic`) | N1441 | Yes | |
-| Dependency ordering for C memory model | N1444 | N/A | |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | All four are predefined as `1` in every entry point, which makes the absent features conforming omissions. Two of them are the conservative half of a feature that partly works. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. `__STDC_NO_THREADS__` likewise stays defined although `_Thread_local` works ([N1364](#c11)): the macro is about `<threads.h>` and 7.26, which are not there at all. Each comes off when the rest of its feature lands. |
+| Dependency ordering for C memory model | N1444 | N/A | `memory_order_consume` is accepted and performed as an acquire, which is what every compiler does with it and what 7.17.3 allows; Rust has no `Ordering::Consume` to map it to. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | Yes | Three of the four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_ATOMICS__` is **not** predefined any more: `_Atomic` and `<stdatomic.h>` are implemented ([N1485/N1526](#c11)), so saying they are absent would be false. Two of the remaining three are the conservative half of a feature that partly works. `__STDC_NO_VLA__` stays defined although one-dimensional variable length arrays are now translated: the macro says the *whole* of the feature is absent, and the variably modified types around it still are, so a program that guards on it keeps taking its `malloc` path — which is always correct. `__STDC_NO_THREADS__` likewise stays defined although `_Thread_local` works ([N1364](#c11)): the macro is about `<threads.h>` and 7.26, which are not there at all. Each comes off when the rest of its feature lands. |
 | Assumed types in F.9.2 | N1468 | N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | Yes | |
 | Updates to the memory model | N1480 | N/A | |
-| Explicit initializers for atomics | N1482 | No | |
-| Atomics (`_Atomic`, `<stdatomic.h>`) | N1485, N1526 | No | `_Atomic` is rejected. |
+| Explicit initializers for atomics | N1482 | Yes | `_Atomic int x = 1;` and `atomic_init(&x, 1)` are both plain writes, which is what 7.17.2.1p2 says initialising an atomic object is; `ATOMIC_VAR_INIT` is defined (deprecated by C17, removed by C23) and is the identity. |
+| Atomics (`_Atomic`, `<stdatomic.h>`) | N1485, N1526 | Partial | `_Atomic` as a qualifier and as the `_Atomic(T)` specifier, over the scalar types: `_Bool`, the 1-, 2-, 4- and 8-byte integers and enumerations, `float` and `double`, and object pointers. Every read of such an object is a sequentially consistent load, every write a store, and `+=`, `++` and `--` are each one read-modify-write (6.5.16.2p3); the alignment of an atomic type is its size, so `_Alignof(_Atomic long long)` is 8. `<stdatomic.h>` is bundled — the `atomic_*` typedefs, `atomic_flag`, `memory_order`, the fences, `atomic_is_lock_free`, the `ATOMIC_*_LOCK_FREE` macros (all `2`) and the generic functions, written over Clang's `__c11_atomic_*` builtins, which scale pointer arithmetic as 7.17.7.5 requires. What is refused: an `_Atomic` `struct` or `union`, which is legal C and would need a lock nothing in the generated Rust can be; `_Atomic __int128`, for want of a stable `AtomicU128`; and an atomic function pointer, which Rust models as an `Option<fn>`. GCC's `__atomic_*` and `__sync_*` builtins are here too, in every entry point. |
 | UTF-8 string literals (`u8"…"`) | N1488 | Yes | The elements are the UTF-8 bytes of the source, of type `char` here and `char8_t` from C23 on (see [N2653](#c23)). Rust's own lexer reserves the prefix, so a `u8"…"` has to be written in the string-literal input form; the same is true of `u"…"` and `U"…"`. |
 | Optimizing away infinite loops | N1509 | N/A | |
 | Conditional normative status for Annex G | N1514 | N/A | |
 | Creation of complex value (`CMPLX`) | N1464 | No | |
 | Extended identifier characters | N1518 | Yes | See the [N717 row](#c99): one character set — C23's — serves every entry point. |
-| Atomic bit-fields implementation defined | N1530 | N/A | |
+| Atomic bit-fields implementation defined | N1530 | N/A | An `_Atomic` bit-field is refused: a bit-field has no address, and every atomic operation here is built on one. |
 | Alignment and struct/union type compatibility | N1532 | N/A | |
 | Clarification for wide evaluation | N1531 | N/A | |
 
@@ -347,7 +348,7 @@ C17 contains no new language features; it folds in defect-report resolutions.
 | Properly define blocks as part of the grammar | N2937 | N/A | |
 | Annex H (interchange and extended types) | N2601, N2844 | No | |
 | Indeterminate values and trap representations | N2861 | N/A | |
-| Remove `ATOMIC_VAR_INIT` | N2886 | N/A | |
+| Remove `ATOMIC_VAR_INIT` | N2886 | No | The bundled `<stdatomic.h>` defines it in every revision, C23 included: it is the identity, a great deal of code writes it, and refusing it in `c23!` would break that code for nothing. |
 | Remove trigraphs | N2940 | Yes | `c23!` and `gnu23!` have no trigraphs, so `??=` there is two question marks and an `=`; every strict entry point below C23 replaces them, which is what the revision removed. See the [C99 row](#c99). |
 | Improved normal enumerations (values wider than `int`) | N3029 | Yes | An enumerator whose value will not fit widens the *enumeration*, and every enumerator then has the widened type — which is what `_Generic` selects on. The type is the narrowest of `int`, `unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long` that holds every value, which is Clang's choice too; C23 leaves it implementation-defined. Such an enumeration *is* that integer type here rather than a `Ty::Enum`, and a tagged one at file scope gets a Rust alias for it. `c23!` and the GNU dialects widen; the strict entry points below C23 keep 6.7.2.2p2's constraint violation. |
 | Relax requirements for `va_start` (single-argument form) | N2975 | No | `va_start(ap)` is rejected; planned for `c23!`. |

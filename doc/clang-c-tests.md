@@ -155,14 +155,14 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 203 run, 123 as required (60.6 %)**,
+corpus revision: **99 files, 276 RUN lines, 203 run, 124 as required (61.1 %)**,
 73 skipped, in about ten seconds.
 
 | directory | run | as required | rate | revisions | skipped |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `C99` | 30 | 21 | **70.0 %** | 37 | 7 |
 | `C11` | 23 | 13 | 56.5 % | 30 | 7 |
-| `C23` | 45 | 27 | 60.0 % | 69 | 24 |
+| `C23` | 45 | 28 | 62.2 % | 69 | 24 |
 | `drs` | 105 | 62 | 59.0 % | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
@@ -181,13 +181,13 @@ document.
 
 ### The mismatches, by cause
 
-80 revisions do not come out as the test asks. Every one of them is in
+79 revisions do not come out as the test asks. Every one of them is in
 `tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
 
-**Deliberate refusals (38, marked `!`).** These are not gaps. Guard mode
+**Deliberate refusals (34, marked `!`).** These are not gaps. Guard mode
 asserts that the refusal is still there.
 
-* *A later revision's feature in an earlier block* (25): `_Static_assert` and
+* *A later revision's feature in an earlier block* (23): `_Static_assert` and
   `_Alignof` in a `c99!` block, an anonymous `struct` member in `c99!`, a
   binary constant in `c17!`, a label at the end of a compound statement in
   `c11!`, an enumerator too wide for `int` in `c17!` — and, since the C89
@@ -202,20 +202,18 @@ asserts that the refusal is still there.
   conforming behaviour rather than a gap. `C11/n1460.c` is the same thing seen
   from the other side: the file's own `#error` fires *because* the macro is
   defined.
-* *`_Atomic`* (1), for the same reason with `__STDC_NO_ATOMICS__`.
 * *Clang-only builtins* (4): `__builtin_bit_cast`, `__builtin_complex`.
 
-**Genuine gaps, false rejections (4).** Valid C that `cinrs` refuses. There
-are 42 false rejections in all; the other 38 are the deliberate ones above.
+**Genuine gaps, false rejections (3).** Valid C that `cinrs` refuses. There
+are 37 false rejections in all; the other 34 are the deliberate ones above.
 
 | cause | revisions |
 | --- | ---: |
 | C23 tag compatibility (N3037): a compatible redefinition of `struct S` | 1 |
 | the line number of a macro invocation spanning spliced lines (unspecified; Clang's own comment calls its answer a FIXME) | 1 |
 | `C23/n3033.c` is a `-E … \| FileCheck` test whose *expansions* are not a translation unit; the harness compiles a FileCheck-only file, which is right for every other one of them | 1 |
-| `C99/n448.c:0`'s last `expected-error` is inside `#if __STDC_VERSION__ >= 202311L`, which the `c99!` revision does not compile — Clang's `-verify` never sees a directive in a skipped conditional and this harness, which reads them out of the raw text, does | 1 |
 
-**Wrong line (38).** The error came out somewhere other than where the test
+**Wrong line (42).** The error came out somewhere other than where the test
 asks. Almost all of these are files carrying *many* annotations — `drs/dr0xx.c`
 has forty — where `cinrs` reports one of them on a different line, or reports
 an unrelated refusal first and never reaches the one asked about. The two
@@ -223,14 +221,25 @@ worth naming as their own bug are both about *scope*: a tag declared in a
 parameter list has the scope of that list (DR103, `drs/dr1xx.c`), and the
 composite type a block-scope `extern int i[10];` gives an object is scoped to
 that block (DR011, `drs/dr0xx.c`); `cinrs` puts both in the enclosing scope.
-The rest are cascades from what is above.
+`C99/n448.c:0` is a harness one: its last `expected-error` is inside
+`#if __STDC_VERSION__ >= 202311L`, which the `c99!` revision does not compile —
+Clang's `-verify` never sees a directive in a skipped conditional and this
+harness, which reads them out of the raw text, does. The rest are cascades from
+what is above.
 
 **Missed rejection (0).**
 
 ### What the results changed in `doc/c-status.md`
 
-Thirteen rows have moved as a result of running this suite. The eight from the
-latest round, each with the revision that asked for it:
+Fourteen rows have moved as a result of running this suite. The one from the
+latest round:
+
+* **An enumeration's fixed underlying type may be written `_Atomic`**, and the
+  underlying type is then the unqualified, non-atomic one (C23 6.7.2.2p5,
+  `C23/n3030_1.c`). The file used to be a deliberate refusal, because
+  `_Atomic` was; now that atomics are implemented it comes out as required.
+
+The eight from the round before, each with the revision that asked for it:
 
 * **`restrict` is checked** against C99 6.7.3p2 — it may only qualify a
   pointer to an object type (`C99/n448.c`).

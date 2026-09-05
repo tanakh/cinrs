@@ -4394,12 +4394,15 @@ impl Pp<'_> {
         self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
         // implementation a macro to say it left each one out. `cinrs` has left
-        // all four out, so saying so turns them from gaps into conforming
-        // omissions — and lets a portable program take the other branch.
-        self.define_object("__STDC_NO_ATOMICS__", "1");
+        // three of the four out, so saying so turns them from gaps into
+        // conforming omissions — and lets a portable program take the other
+        // branch. Atomics are *not* among them any more: `_Atomic`,
+        // `<stdatomic.h>` and the `__atomic_*` builtins are all here, so
+        // `__STDC_NO_ATOMICS__` is deliberately not defined.
         self.define_object("__STDC_NO_COMPLEX__", "1");
         self.define_object("__STDC_NO_THREADS__", "1");
         self.define_object("__STDC_NO_VLA__", "1");
+        self.define_atomic_macros(options.target.max_scalar_align.min(8));
         // C11 7.28p2: these two say that `char16_t` and `char32_t` really are
         // UTF-16 and UTF-32, which is what the lexer encodes `u"…"` and `U"…"`
         // as. The value is the standard's own: the ISO/IEC 10646 revision the
@@ -4448,6 +4451,61 @@ impl Pp<'_> {
         self.define_function("__builtin_FUNCTION", "__func__");
         for (name, value) in target_macros(&options.target) {
             self.define_object(name, &value);
+        }
+    }
+
+    /// The macros GCC predefines for the atomic builtins, in every mode.
+    ///
+    /// The six `__ATOMIC_*` values are the argument the `__atomic_*` family
+    /// takes, and their numbering is GCC's own — `<stdatomic.h>`'s
+    /// `memory_order` enumeration has the same values, because a program may
+    /// pass either to either. The `__GCC_ATOMIC_*_LOCK_FREE` family answers
+    /// `2`, "always lock free", for every type there is a Rust atomic of, and
+    /// `<stdatomic.h>`'s `ATOMIC_*_LOCK_FREE` macros are defined from these.
+    fn define_atomic_macros(&mut self, max_atomic: u64) {
+        for (name, value) in [
+            ("__ATOMIC_RELAXED", "0"),
+            ("__ATOMIC_CONSUME", "1"),
+            ("__ATOMIC_ACQUIRE", "2"),
+            ("__ATOMIC_RELEASE", "3"),
+            ("__ATOMIC_ACQ_REL", "4"),
+            ("__ATOMIC_SEQ_CST", "5"),
+        ] {
+            self.define_object(name, value);
+        }
+        for name in [
+            "__GCC_ATOMIC_BOOL_LOCK_FREE",
+            "__GCC_ATOMIC_CHAR_LOCK_FREE",
+            "__GCC_ATOMIC_CHAR8_T_LOCK_FREE",
+            "__GCC_ATOMIC_CHAR16_T_LOCK_FREE",
+            "__GCC_ATOMIC_CHAR32_T_LOCK_FREE",
+            "__GCC_ATOMIC_WCHAR_T_LOCK_FREE",
+            "__GCC_ATOMIC_SHORT_LOCK_FREE",
+            "__GCC_ATOMIC_INT_LOCK_FREE",
+            "__GCC_ATOMIC_LONG_LOCK_FREE",
+            "__GCC_ATOMIC_LLONG_LOCK_FREE",
+            "__GCC_ATOMIC_POINTER_LOCK_FREE",
+        ] {
+            self.define_object(name, "2");
+        }
+        // What `__atomic_test_and_set` writes, which GCC also predefines.
+        self.define_object("__GCC_ATOMIC_TEST_AND_SET_TRUEVAL", "1");
+        // The `__sync_*` family's own advertisement, which a program tests
+        // before writing one of them. Eight bytes only where an eight-byte
+        // object is aligned well enough for a lock-free instruction; see
+        // `TargetModel::max_scalar_align`.
+        for width in [1u64, 2, 4, 8] {
+            if width <= max_atomic {
+                self.define_object(
+                    match width {
+                        1 => "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1",
+                        2 => "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2",
+                        4 => "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4",
+                        _ => "__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8",
+                    },
+                    "1",
+                );
+            }
         }
     }
 

@@ -102,10 +102,10 @@ Run it with `cargo run --example fact`.
   `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
   the C token that was really written.
 * **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
-  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>`, C23's
-  `<stdckdint.h>` and the rest) are bundled with the crate, written in plain C99
-  rather than read from the platform, and the calls link against the real C
-  library. Your own headers are found next to the `.rs` file that includes
+  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>`, C11's
+  `<stdatomic.h>`, C23's `<stdckdint.h>` and the rest) are bundled with the
+  crate, written in plain C99 rather than read from the platform, and the calls
+  link against the real C library. Your own headers are found next to the `.rs` file that includes
   them, and editing one rebuilds the crate. `#embed "logo.png"` puts the bytes
   of a file into the program — with `limit`, `prefix`, `suffix`, `if_empty`
   and `__has_embed` — and editing *that* rebuilds the crate too.
@@ -141,6 +141,24 @@ Run it with `cargo run --example fact`.
   with a constant initialiser. An `extern` thread-local object and exporting
   one under `#pragma cinrs export` are refused — both would need Rust's
   unstable `#[thread_local]`.
+* **Atomics.** C11's `_Atomic` — the qualifier and the `_Atomic(T)` specifier
+  — the bundled `<stdatomic.h>`, GCC's memory-order-aware `__atomic_*`
+  builtins, the older sequentially consistent `__sync_*` ones and Clang's
+  `__c11_atomic_*`, all of them on `core::sync::atomic` reached with
+  `AtomicX::from_ptr` over the object's address (stable since Rust 1.75). An
+  `_Atomic` object is a
+  plain one of the underlying type whose every read is a `SeqCst` load, every
+  write a `SeqCst` store, and every `+=`, `++` and `--` a single
+  read-modify-write, exactly as 6.5.16.2 says; its alignment is its size,
+  which is what makes `_Atomic long long` eight-byte aligned. The scalars are
+  covered — the 1-, 2-, 4- and 8-byte integers, `_Bool`, `float` and `double`
+  (through the integer atomic of the same width and `to_bits`), and object
+  pointers as an `AtomicPtr`. An `_Atomic` `struct` and a 128-bit one are
+  refused: neither has a lock-free counterpart, and there is nothing here to
+  be a lock. The one deliberate difference between the two builtin families
+  is pointer arithmetic: `__atomic_fetch_add` counts **bytes**, as GCC's does,
+  and `atomic_fetch_add` from the header counts **elements**, as C11 7.17.7.5
+  requires.
 * **Pragmas that configure the unit.**
   `#pragma cinrs target "…"` picks the machine the unit is translated for, over
   the `CINRS_TARGET` a build script sets — see
@@ -177,16 +195,17 @@ Run it with `cargo run --example fact`.
 * Not supported, each as a located error rather than a silent mistranslation:
   the variably modified types other than a one-dimensional array
   (`int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA), `_Complex`,
-  `setjmp`/`longjmp`, `_Atomic`, `_BitInt`, and C23's *named* universal
-  character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the GNU side: inline
-  assembly, computed `goto`, `cleanup`, the vector extensions and the
-  `__sync_*`/`__atomic_*` builtins. C11's four
-  `__STDC_NO_*` macros are predefined, which is the standard's own way of
-  saying that atomics, threads, VLAs and complex arithmetic are left out;
-  `__STDC_NO_VLA__` stays defined although one-dimensional VLAs work, so that a
-  program which tests it keeps taking its `malloc` path, and
+  `setjmp`/`longjmp`, `_BitInt`, an `_Atomic` *aggregate* (legal C, and there
+  is nothing in the generated Rust to be the lock it needs), and C23's *named*
+  universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On the GNU side:
+  inline assembly, computed `goto`, `cleanup` and the vector extensions.
+  Three of C11's four `__STDC_NO_*` macros are predefined, which is the
+  standard's own way of saying that threads, VLAs and complex arithmetic are
+  left out; `__STDC_NO_VLA__` stays defined although one-dimensional VLAs work,
+  so that a program which tests it keeps taking its `malloc` path, and
   `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
-  `<threads.h>` does not.
+  `<threads.h>` does not. `__STDC_NO_ATOMICS__` is *not* defined: atomics are
+  here.
 * A bit-field has no address, so it is not a field of the generated Rust
   `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
   named member becomes a pair of inherent methods — `s.level()` reads it and
@@ -312,10 +331,10 @@ and mingw-w64 export; it is compiled for by the test suite and has not been
 
 Everything generated is `core`-only: `core::ffi` types, `#[repr(C)]` items, raw
 pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
-`core::mem::offset_of!` for `offsetof`, and the C library's own `abort` for
-`__builtin_trap` and `assert`. The C library is still *linked*, because the C
-code calls it — that is a link-time dependency of the program rather than a
-Rust one.
+`core::mem::offset_of!` for `offsetof`, `core::sync::atomic` for `_Atomic` and
+the atomic builtins, and the C library's own `abort` for `__builtin_trap` and
+`assert`. The C library is still *linked*, because the C code calls it — that
+is a link-time dependency of the program rather than a Rust one.
 
 Three constructs are the exception. Two of them are variable length arrays and
 `alloca`, whose storage is a `Vec`. Nothing in the C says which kind of crate
@@ -370,8 +389,8 @@ to be given**, which are not optional.
   one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **123 of the 203 revisions run come out as
-  required (60.6 %)**, and this is the only suite that measures what `cinrs`
+  which lines must be diagnosed. **124 of the 203 revisions run come out as
+  required (61.1 %)**, and this is the only suite that measures what `cinrs`
   *refuses*, which is half of what a front end is for.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and

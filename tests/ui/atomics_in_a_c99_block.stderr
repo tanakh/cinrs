@@ -1,0 +1,20 @@
+error: '_Atomic' requires C11 or later (this block is c99!)
+ --> tests/ui/atomics_in_a_c99_block.rs:9:5
+  |
+9 |     _Atomic int counter;
+  |     ^^^^^^^
+
+error: '_Atomic' requires C11 or later (this block is c99!)
+  --> tests/ui/atomics_in_a_c99_block.rs:11:5
+   |
+11 |     _Atomic(long) big;
+   |     ^^^^^^^
+
+error: '_Atomic' requires C11 or later (this block is c99!)
+  --> tests/ui/atomics_in_a_c99_block.rs:13:10
+   |
+13 |     int *_Atomic qualified;
+   |          ^^^^^^^
+
+error: aborting due to 3 previous errors
+

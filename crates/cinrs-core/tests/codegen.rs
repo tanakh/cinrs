@@ -1268,6 +1268,62 @@ fn a_thread_local_whose_initializer_names_an_item_is_not_const() {
     ));
 }
 
+// ---------------------------------------------------------------------------
+// atomics
+// ---------------------------------------------------------------------------
+
+/// The `_Atomic` object model: the object is a plain one of the underlying
+/// type, and every access goes through `AtomicX::from_ptr` over its address.
+#[test]
+fn an_atomic_object_is_reached_through_from_ptr() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        _Atomic int counter;
+        _Atomic(int *) cursor;
+
+        int read(void) { return counter; }
+        void write(int v) { counter = v; }
+        int bump(void) { return ++counter; }
+        int add(int v) { return counter += v; }
+        int scale(int v) { return counter *= v; }
+        int *step(void) { return cursor++; }
+        "
+    ));
+}
+
+/// The three builtin families, and what each becomes.
+#[test]
+fn the_atomic_builtins_become_core_sync_atomic() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        int load(int *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
+        void store(int *p, int v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
+        int fetch_add(int *p, int v) { return __atomic_fetch_add(p, v, __ATOMIC_RELAXED); }
+        int add_fetch(int *p, int v) { return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST); }
+        int nand(int *p, int v) { return __atomic_fetch_nand(p, v, __ATOMIC_SEQ_CST); }
+        int cas(int *p, int *expected, int desired) {
+            return __atomic_compare_exchange_n(p, expected, desired, 1,
+                                               __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        }
+        int test_and_set(char *p) { return __atomic_test_and_set(p, __ATOMIC_ACQUIRE); }
+        void clear(char *p) { __atomic_clear(p, __ATOMIC_RELEASE); }
+        void fences(void) {
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            __atomic_signal_fence(__ATOMIC_ACQUIRE);
+        }
+        double load_double(double *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
+        int *ptr_add(int **p) { return __atomic_fetch_add(p, 8, __ATOMIC_SEQ_CST); }
+        int older(int *p, int v) { return __sync_fetch_and_add(p, v); }
+        int older_cas(int *p, int old, int fresh) {
+            return __sync_val_compare_and_swap(p, old, fresh);
+        }
+        void unlock(int *p) { __sync_lock_release(p); }
+        "
+    ));
+}
+
 #[test]
 fn a_wide_bit_field_reads_through_a_u128_window() {
     insta::assert_snapshot!(generate(

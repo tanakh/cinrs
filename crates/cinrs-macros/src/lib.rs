@@ -121,12 +121,15 @@ pub fn c99(input: TokenStream) -> TokenStream {
 ///
 /// Everything [`c99!`](macro@c99) does, plus what C11 added:
 /// `_Static_assert`, `_Alignof`, `_Alignas` (on the members of a `struct` or
-/// `union`), `_Generic`, `_Noreturn`, anonymous `struct`/`union` members, and
+/// `union`), `_Generic`, `_Noreturn`, `_Thread_local`, `_Atomic` with
+/// `<stdatomic.h>`, anonymous `struct`/`union` members, and
 /// the Unicode literals `u8"…"`, `u"…"`, `U"…"`, `u'x'` and `U'x'` with
 /// `<uchar.h>`'s `char16_t` and `char32_t`. `__STDC_VERSION__` is `201112L`.
 ///
-/// `_Thread_local` and `_Atomic` are each a clear error rather than a silent
-/// mistranslation.
+/// C11's threads are not here: `<threads.h>` is absent and
+/// `__STDC_NO_THREADS__` is predefined. An `_Atomic` `struct` is a clear error
+/// rather than a silent mistranslation — it would need a lock, and there is
+/// nothing in the generated Rust to be one.
 #[proc_macro]
 pub fn c11(input: TokenStream) -> TokenStream {
     expand(input, Standard::C11)

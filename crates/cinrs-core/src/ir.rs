@@ -128,6 +128,10 @@ pub struct RecordId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct EnumId(pub u32);
 
+/// An `_Atomic` type in the [`Types`] arena.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct AtomicId(pub u32);
+
 /// A resolved C type.
 ///
 /// `long double` is mapped onto [`Ty::Double`] when the type is resolved,
@@ -190,6 +194,21 @@ pub enum Ty {
     /// The type is opaque: it has no size, nothing may point at it, and it may
     /// only be a local variable or a parameter — see [`crate::sema`] for why.
     VaList,
+    /// `_Atomic T`, for a scalar `T` (C11 6.7.2.4).
+    ///
+    /// It is the type of an *object*, never of a value: reading an atomic
+    /// lvalue is an atomic load whose result has the underlying type, so
+    /// [`ExprKind::Load`] of an atomic place is typed [`Types::unatomic`] of
+    /// it and nothing downstream of the load ever meets this variant. Where it
+    /// does appear is a declared object, a member, a pointee and `sizeof` —
+    /// which is why it is a type rather than a flag on the declaration:
+    /// `_Atomic int *` and `int *` are different types, and a store through
+    /// the first one is atomic.
+    ///
+    /// The alignment is the size (see [`Types::size_align`]), which is what
+    /// makes `_Atomic long long` eight-byte aligned on a target whose plain
+    /// `long long` is not.
+    Atomic(AtomicId),
     /// The type of something whose declaration was already reported as wrong.
     ///
     /// It exists so that one bad declaration produces one diagnostic: an object
@@ -492,9 +511,11 @@ pub struct Types {
     funcs: Vec<FuncType>,
     records: Vec<RecordDef>,
     enums: Vec<EnumDef>,
+    atomics: Vec<Ty>,
     pointer_index: HashMap<PointerType, PointerId>,
     array_index: HashMap<ArrayType, ArrayId>,
     func_index: HashMap<FuncType, FuncTyId>,
+    atomic_index: HashMap<Ty, AtomicId>,
 }
 
 impl Types {
@@ -513,6 +534,48 @@ impl Types {
         self.pointers.push(key);
         self.pointer_index.insert(key, id);
         Ty::Pointer(id)
+    }
+
+    /// The type `_Atomic inner`, for a scalar `inner`.
+    ///
+    /// Wrapping an atomic type again gives the same type back: C11 6.7.3p5
+    /// makes `_Atomic _Atomic int` the same as `_Atomic int`, exactly as a
+    /// repeated `const` is.
+    pub fn atomic(&mut self, inner: Ty) -> Ty {
+        if matches!(inner, Ty::Atomic(_)) {
+            return inner;
+        }
+        if let Some(id) = self.atomic_index.get(&inner) {
+            return Ty::Atomic(*id);
+        }
+        let id = AtomicId(self.atomics.len() as u32);
+        self.atomics.push(inner);
+        self.atomic_index.insert(inner, id);
+        Ty::Atomic(id)
+    }
+
+    /// The type inside a [`Ty::Atomic`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` did not come from this arena.
+    pub fn atomic_inner(&self, id: AtomicId) -> Ty {
+        self.atomics[id.0 as usize]
+    }
+
+    /// `ty` with an `_Atomic` taken off it, which is what reading an atomic
+    /// lvalue produces (C11 6.3.2.1p2: lvalue conversion drops the
+    /// qualifiers).
+    pub fn unatomic(&self, ty: Ty) -> Ty {
+        match ty {
+            Ty::Atomic(id) => self.atomic_inner(id),
+            other => other,
+        }
+    }
+
+    /// Whether `ty` is an `_Atomic` type.
+    pub fn is_atomic(&self, ty: Ty) -> bool {
+        matches!(ty, Ty::Atomic(_))
     }
 
     /// The type `elem[len]`.
@@ -804,6 +867,19 @@ impl Types {
                 }
             }
             Ty::Record(id) => self.record(id).layout?,
+            // C11 6.2.5p27 lets an atomic type have a different size and
+            // alignment from its underlying one, and every implementation
+            // makes the alignment at least the size: `_Atomic long long` is
+            // eight-byte aligned on i386, where a plain `long long` is
+            // four-byte aligned, because that is what a lock-free 64-bit
+            // instruction needs. Rust's `AtomicU64` says the same thing.
+            Ty::Atomic(id) => {
+                let inner = self.size_align(self.atomic_inner(id), target)?;
+                Layout {
+                    size: inner.size,
+                    align: inner.size.max(inner.align).max(1),
+                }
+            }
             Ty::Enum(_) => {
                 let size = u64::from(target.int_bits).div_ceil(8);
                 Layout { size, align: size }
@@ -874,6 +950,7 @@ impl Types {
                     None => format!("enum {}", def.rust_name),
                 }
             }
+            Ty::Atomic(id) => format!("_Atomic({})", self.name(self.atomic_inner(id))),
             Ty::Error => "<error>".to_owned(),
             scalar => scalar.scalar_name().to_owned(),
         }
@@ -924,6 +1001,7 @@ impl Ty {
             Ty::Record(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::VaList => "va_list",
+            Ty::Atomic(_) => "_Atomic",
             Ty::Error => "<error>",
         }
     }
@@ -1016,8 +1094,18 @@ impl Ty {
     }
 
     /// Whether this is a scalar, i.e. something C can compare against zero.
+    ///
+    /// An [`Ty::Atomic`] is *not* one: it is the type of an object, and a
+    /// value read out of one has the underlying type. Everything that asks
+    /// this question about a declared type therefore has to take the
+    /// `_Atomic` off first, with [`Types::unatomic`].
     pub fn is_scalar(self) -> bool {
         self.is_arithmetic() || self.is_pointer()
+    }
+
+    /// Whether this is `_Atomic T`.
+    pub fn is_atomic(self) -> bool {
+        matches!(self, Ty::Atomic(_))
     }
 
     /// Whether values of this type are signed.
@@ -1046,7 +1134,12 @@ impl Ty {
             Ty::Float => 32,
             Ty::Double => 64,
             Ty::Pointer(_) => target.ptr_bits,
-            Ty::Array(_) | Ty::Func(_) | Ty::Record(_) | Ty::VaList | Ty::Error => 0,
+            // An atomic type's width is its underlying one's, which needs the
+            // arena; nothing asks this about one, because every value has
+            // already had the `_Atomic` taken off it.
+            Ty::Array(_) | Ty::Func(_) | Ty::Record(_) | Ty::VaList | Ty::Atomic(_) | Ty::Error => {
+                0
+            }
         }
     }
 
@@ -1794,6 +1887,316 @@ pub enum BuiltinOp {
     Alloca,
 }
 
+// ---------------------------------------------------------------------------
+// atomics
+// ---------------------------------------------------------------------------
+
+/// A memory order, C11 7.17.3's `memory_order` and Rust's `Ordering`.
+///
+/// `memory_order_consume` is not here: no compiler implements dependency
+/// ordering and Rust has no `Consume`, so it arrives as [`MemOrder::Acquire`]
+/// — which is what GCC and Clang also emit for it, and what C11 7.17.3p1
+/// allows an implementation to do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MemOrder {
+    /// `memory_order_relaxed`
+    Relaxed,
+    /// `memory_order_acquire` (and `memory_order_consume`).
+    Acquire,
+    /// `memory_order_release`
+    Release,
+    /// `memory_order_acq_rel`
+    AcqRel,
+    /// `memory_order_seq_cst`
+    SeqCst,
+}
+
+impl MemOrder {
+    /// The name of the `core::sync::atomic::Ordering` variant.
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            MemOrder::Relaxed => "Relaxed",
+            MemOrder::Acquire => "Acquire",
+            MemOrder::Release => "Release",
+            MemOrder::AcqRel => "AcqRel",
+            MemOrder::SeqCst => "SeqCst",
+        }
+    }
+
+    /// The C spelling, for a diagnostic.
+    pub fn c_name(self) -> &'static str {
+        match self {
+            MemOrder::Relaxed => "memory_order_relaxed",
+            MemOrder::Acquire => "memory_order_acquire",
+            MemOrder::Release => "memory_order_release",
+            MemOrder::AcqRel => "memory_order_acq_rel",
+            MemOrder::SeqCst => "memory_order_seq_cst",
+        }
+    }
+
+    /// Whether a load may be performed with this order (C11 7.17.7.2p3).
+    pub fn valid_for_load(self) -> bool {
+        !matches!(self, MemOrder::Release | MemOrder::AcqRel)
+    }
+
+    /// Whether a store may be performed with this order (C11 7.17.7.1p2).
+    pub fn valid_for_store(self) -> bool {
+        !matches!(self, MemOrder::Acquire | MemOrder::AcqRel)
+    }
+
+    /// How strong the order is, for the rule that a compare-exchange's failure
+    /// order may not be stronger than its success order.
+    pub fn strength(self) -> u8 {
+        match self {
+            MemOrder::Relaxed => 0,
+            MemOrder::Acquire | MemOrder::Release => 1,
+            MemOrder::AcqRel => 2,
+            MemOrder::SeqCst => 3,
+        }
+    }
+
+    /// The strongest order a failed compare-exchange may use beside this one,
+    /// which is what `fetch_update` and a nand loop are given.
+    pub fn failure_order(self) -> MemOrder {
+        match self {
+            MemOrder::Release => MemOrder::Relaxed,
+            MemOrder::AcqRel => MemOrder::Acquire,
+            other => other,
+        }
+    }
+}
+
+/// What kind of Rust atomic an object is reached through.
+///
+/// The width comes from the C type's size, so `long` is an `AtomicI64` on an
+/// LP64 target and an `AtomicI32` on an ILP32 one; the
+/// [data-model check](crate::codegen) is what makes that assumption safe.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AtomicClass {
+    /// `_Bool`, which is `AtomicBool` — a Rust `bool` may only ever hold 0 or
+    /// 1, so it may not be reached through an integer atomic.
+    Bool,
+    /// An integer (or `enum`) of `bytes` bytes: `AtomicI8` … `AtomicU64`.
+    Int {
+        /// The width in bytes: 1, 2, 4 or 8.
+        bytes: u64,
+        /// Whether the C type is signed.
+        signed: bool,
+    },
+    /// `float` or `double`, reached through the integer atomic of the same
+    /// width and `to_bits`/`from_bits`.
+    Float {
+        /// The width in bytes: 4 or 8.
+        bytes: u64,
+    },
+    /// An object pointer, which is `AtomicPtr`.
+    Ptr,
+}
+
+impl AtomicClass {
+    /// The name of the `core::sync::atomic` type.
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            AtomicClass::Bool => "AtomicBool",
+            AtomicClass::Ptr => "AtomicPtr",
+            AtomicClass::Float { bytes } => match bytes {
+                4 => "AtomicU32",
+                _ => "AtomicU64",
+            },
+            AtomicClass::Int { bytes, signed } => match (bytes, signed) {
+                (1, true) => "AtomicI8",
+                (1, false) => "AtomicU8",
+                (2, true) => "AtomicI16",
+                (2, false) => "AtomicU16",
+                (4, true) => "AtomicI32",
+                (4, false) => "AtomicU32",
+                (_, true) => "AtomicI64",
+                (_, false) => "AtomicU64",
+            },
+        }
+    }
+
+    /// The Rust primitive the atomic holds, which is what the pointer handed
+    /// to `from_ptr` points at.
+    pub fn repr_name(self) -> &'static str {
+        match self {
+            AtomicClass::Bool => "bool",
+            AtomicClass::Ptr => "",
+            AtomicClass::Float { bytes } => match bytes {
+                4 => "u32",
+                _ => "u64",
+            },
+            AtomicClass::Int { bytes, signed } => match (bytes, signed) {
+                (1, true) => "i8",
+                (1, false) => "u8",
+                (2, true) => "i16",
+                (2, false) => "u16",
+                (4, true) => "i32",
+                (4, false) => "u32",
+                (_, true) => "i64",
+                (_, false) => "u64",
+            },
+        }
+    }
+}
+
+/// The operation an [`ExprKind::Atomic`] performs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AtomicOp {
+    /// An atomic load, whose value has the object's type.
+    Load,
+    /// An atomic store, whose value is `void`.
+    Store,
+    /// An atomic exchange, whose value is the old one.
+    Exchange,
+    /// A compare-and-exchange whose value is `_Bool`, writing the value it
+    /// observed back through the `expected` pointer when it fails — C11's
+    /// `atomic_compare_exchange_strong` and GCC's
+    /// `__atomic_compare_exchange_n`.
+    CompareExchange {
+        /// Whether a spurious failure is allowed (`compare_exchange_weak`).
+        weak: bool,
+    },
+    /// The older `__sync_bool_compare_and_swap` and
+    /// `__sync_val_compare_and_swap`, whose expected value is a *value* rather
+    /// than a pointer and which write nothing back.
+    SyncCompareSwap {
+        /// Whether the value of the expression is the old one rather than
+        /// whether the swap happened.
+        value_is_old: bool,
+    },
+    /// A read-modify-write, whose value is the old one for `fetch_op` and the
+    /// new one for `op_fetch`.
+    Rmw {
+        /// The operation.
+        op: AtomicRmw,
+        /// Whether the value of the expression is the *new* one.
+        returns_new: bool,
+    },
+    /// `__atomic_test_and_set`: an atomic exchange of "set" into a byte, whose
+    /// value is what was there before, as a `_Bool`.
+    TestAndSet,
+    /// `__atomic_clear`: an atomic store of zero into a byte.
+    Clear,
+    /// A fence, which has no operand at all.
+    Fence {
+        /// Whether this is a `signal_fence`, which is a compiler fence only.
+        signal: bool,
+    },
+}
+
+/// The arithmetic a [`AtomicOp::Rmw`] performs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AtomicRmw {
+    /// `+`
+    Add,
+    /// `-`
+    Sub,
+    /// `&`
+    And,
+    /// `|`
+    Or,
+    /// `^`
+    Xor,
+    /// `~(a & b)`, which Rust has no `fetch_nand` for on the integers and
+    /// which is therefore a `fetch_update`.
+    Nand,
+}
+
+impl AtomicRmw {
+    /// The `core::sync::atomic` method that performs it, where there is one.
+    pub fn rust_method(self) -> Option<&'static str> {
+        Some(match self {
+            AtomicRmw::Add => "fetch_add",
+            AtomicRmw::Sub => "fetch_sub",
+            AtomicRmw::And => "fetch_and",
+            AtomicRmw::Or => "fetch_or",
+            AtomicRmw::Xor => "fetch_xor",
+            AtomicRmw::Nand => return None,
+        })
+    }
+
+    /// The C operator, for a diagnostic.
+    pub fn c_op(self) -> &'static str {
+        match self {
+            AtomicRmw::Add => "+",
+            AtomicRmw::Sub => "-",
+            AtomicRmw::And => "&",
+            AtomicRmw::Or => "|",
+            AtomicRmw::Xor => "^",
+            AtomicRmw::Nand => "~&",
+        }
+    }
+}
+
+/// One of the `__atomic_*`, `__sync_*` or `__c11_atomic_*` builtins, resolved.
+///
+/// The pointer is the object the operation is performed on; sema has already
+/// checked that what it points at is one of the types
+/// [`AtomicClass`] covers, and has resolved the memory orders — which C
+/// requires to be integer constant expressions here, exactly as `<stdatomic.h>`
+/// writes them.
+#[derive(Clone, Debug)]
+pub struct AtomicExpr {
+    /// What to do.
+    pub op: AtomicOp,
+    /// What kind of atomic to do it through.
+    pub class: AtomicClass,
+    /// The C type of the object, with any `_Atomic` already taken off: the
+    /// type of the value the operation produces or stores.
+    pub value_ty: Ty,
+    /// The object's address, absent only for a fence.
+    pub ptr: Option<Expr>,
+    /// The value operand — what is stored, exchanged or added.
+    pub value: Option<Expr>,
+    /// The expected value of a compare-and-exchange: a *pointer* to it for
+    /// [`AtomicOp::CompareExchange`], which writes the observed value back
+    /// through it, and the value itself for [`AtomicOp::SyncCompareSwap`].
+    pub expected: Option<Expr>,
+    /// The order of the operation, and of a successful compare-and-exchange.
+    pub success: MemOrder,
+    /// The order of a *failed* compare-and-exchange.
+    pub failure: MemOrder,
+}
+
+impl AtomicExpr {
+    /// Every expression the node holds, in evaluation order.
+    pub fn operands(&self) -> impl Iterator<Item = &Expr> {
+        self.ptr
+            .iter()
+            .chain(self.expected.iter())
+            .chain(self.value.iter())
+    }
+}
+
+/// Which Rust atomic a C object type is reached through, if any is.
+///
+/// The width comes from the target model, which the [data-model
+/// check](crate::codegen) makes safe to rely on. `None` means there is no
+/// atomic of that width or shape: a 128-bit integer, a function pointer, an
+/// aggregate.
+pub fn atomic_class(types: &Types, ty: Ty, target: &TargetModel) -> Option<AtomicClass> {
+    let ty = types.unatomic(ty);
+    if ty == Ty::Bool {
+        return Some(AtomicClass::Bool);
+    }
+    if ty.is_integer() {
+        let bytes = ty.size_bytes(target);
+        return matches!(bytes, 1 | 2 | 4 | 8).then_some(AtomicClass::Int {
+            bytes,
+            signed: ty.is_signed(target),
+        });
+    }
+    if ty.is_floating() {
+        let bytes = ty.size_bytes(target);
+        return matches!(bytes, 4 | 8).then_some(AtomicClass::Float { bytes });
+    }
+    if ty.is_pointer() && !types.is_func_pointer(ty) {
+        return Some(AtomicClass::Ptr);
+    }
+    None
+}
+
 /// An assignable location.
 #[derive(Clone, Debug)]
 pub struct Place {
@@ -2048,6 +2451,11 @@ pub enum ExprKind {
         /// Its operands, already converted.
         args: Vec<Expr>,
     },
+    /// One of the atomic builtins; see [`AtomicExpr`].
+    ///
+    /// Boxed because it is much the largest thing an expression can hold and
+    /// every other node would grow to its size.
+    Atomic(Box<AtomicExpr>),
     /// `lhs, rhs`: `lhs` is evaluated for its side effects only.
     Comma {
         /// Evaluated and discarded.
@@ -2467,6 +2875,7 @@ pub fn calls_a_function(expr: &Expr) -> bool {
             calls_a_function(value) || calls_a_function(else_expr)
         }
         ExprKind::Builtin { args, .. } => any(args),
+        ExprKind::Atomic(atomic) => atomic.operands().any(calls_a_function),
         ExprKind::RecordLit { fields, .. } => any(fields),
         ExprKind::UnionLit { value, .. } => calls_a_function(value),
         ExprKind::ArrayLit(items) => any(items),
@@ -2545,6 +2954,7 @@ pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
             callee || any(args)
         }
         ExprKind::Builtin { args, .. } => any(args),
+        ExprKind::Atomic(atomic) => atomic.operands().any(|e| mentions_object(e, object)),
         ExprKind::RecordLit { fields, .. } => any(fields),
         ExprKind::UnionLit { value, .. } => mentions_object(value, object),
         ExprKind::ArrayLit(items) => any(items),

@@ -384,15 +384,31 @@ fn thread_local_objects_are_accepted_where_c_allows_them() {
 #[test]
 fn what_c11_added_and_this_crate_does_not_do() {
     rejected(
-        Standard::C11,
-        "_Atomic int counter;",
-        &["'_Atomic' is not supported yet"],
-    );
-    rejected(
         Standard::C23,
         "_BitInt(7) narrow;",
         &["'_BitInt' is not supported yet"],
     );
+    // `_Atomic` itself is here; what is not is an atomic *aggregate*, which is
+    // legal C with no lock-free Rust counterpart.
+    accepted(Standard::C11, "_Atomic int counter;");
+    accepted(Standard::C11, "_Atomic(long) big; _Atomic(int *) p;");
+    rejected(
+        Standard::C11,
+        "struct s { int a, b; }; _Atomic struct s value;",
+        &[
+            "'_Atomic struct s' is not supported yet: only the scalar types have a lock-free \
+             atomic in `core::sync::atomic`, and nothing in the generated Rust could stand \
+             for a lock",
+        ],
+    );
+}
+
+/// `_Atomic` is a C11 keyword, and an earlier strict entry point says so.
+#[test]
+fn the_atomic_qualifier_is_gated_on_c11() {
+    since(Standard::C11, "_Atomic int counter;", "'_Atomic'");
+    since(Standard::C11, "_Atomic(int) counter;", "'_Atomic'");
+    since(Standard::C11, "int *_Atomic p;", "'_Atomic'");
 }
 
 /// The C11 and C23 literal prefixes, and the revision each one needs.

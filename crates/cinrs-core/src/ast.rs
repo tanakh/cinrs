@@ -59,6 +59,14 @@ pub struct TypeQualifiers {
     pub is_volatile: bool,
     /// `restrict`
     pub is_restrict: bool,
+    /// `_Atomic`, written without a parenthesised type name — C11 6.7.3 makes
+    /// it a qualifier there and a type *specifier* in `_Atomic(T)`.
+    ///
+    /// Unlike the other three it changes the type: `_Atomic int` resolves to
+    /// [`crate::ir::Ty::Atomic`], which is a different type from `int` and has
+    /// its own alignment. That is why it is not part of [`TypeQualifiers::any`],
+    /// which asks about the qualifiers a type *name* carries beside its type.
+    pub is_atomic: bool,
 }
 
 impl TypeQualifiers {
@@ -67,9 +75,10 @@ impl TypeQualifiers {
         is_const: false,
         is_volatile: false,
         is_restrict: false,
+        is_atomic: false,
     };
 
-    /// Whether any qualifier is set.
+    /// Whether any of the three qualifiers that leave the type alone is set.
     pub fn any(self) -> bool {
         self.is_const || self.is_volatile || self.is_restrict
     }
@@ -80,6 +89,7 @@ impl TypeQualifiers {
             is_const: self.is_const || other.is_const,
             is_volatile: self.is_volatile || other.is_volatile,
             is_restrict: self.is_restrict || other.is_restrict,
+            is_atomic: self.is_atomic || other.is_atomic,
         }
     }
 }
@@ -234,7 +244,17 @@ pub enum TypeKind {
     /// `typeof(…)` / `typeof_unqual(…)` — C23.
     ///
     /// The operand lives in [`TranslationUnit::typeofs`]; see [`TypeofId`].
-    Typeof(TypeofId),
+    Typeof {
+        /// Which operand.
+        id: TypeofId,
+        /// Whether this is `typeof_unqual`, which takes the *unqualified*
+        /// type of its operand (C23 6.7.2.5p3).
+        ///
+        /// Only one qualifier is part of a [`crate::ir::Ty`] at all —
+        /// `_Atomic`, which changes the size, the alignment and what an access
+        /// to the object does — so that is the one this strips.
+        unqual: bool,
+    },
     /// The type `auto x = e;` infers from the initialiser — C23.
     Auto,
     /// Produced by error recovery; sema must not report further errors on it.

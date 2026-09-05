@@ -106,10 +106,17 @@ c99! {
     int has_overflow(void) { return 0; }
     #endif
 
-    #if __has_feature(c_static_assert) && !__has_feature(c_atomic)
+    #if __has_feature(c_static_assert) && __has_feature(c_atomic) && !__has_feature(blocks)
     int has_features(void) { return 1; }
     #else
     int has_features(void) { return 0; }
+    #endif
+
+    /* The atomic builtins answer `__has_builtin` under their own names. */
+    #if __has_builtin(__atomic_fetch_add) && __has_builtin(__sync_synchronize)
+    int has_atomic_builtins(void) { return 1; }
+    #else
+    int has_atomic_builtins(void) { return 0; }
     #endif
 }
 
@@ -121,6 +128,7 @@ fn the_has_family_answers_about_this_implementation() {
     assert_eq!(unsafe { has_cleanup() }, 0);
     assert_eq!(unsafe { has_overflow() }, 1);
     assert_eq!(unsafe { has_features() }, 1);
+    assert_eq!(unsafe { has_atomic_builtins() }, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +213,19 @@ c99! {
     const char *timestamp(void) { return __TIMESTAMP__; }
     int include_level(void) { return __INCLUDE_LEVEL__; }
 
-    #if defined(__STDC_NO_ATOMICS__) && defined(__STDC_NO_THREADS__) && defined(__STDC_NO_VLA__) && defined(__STDC_NO_COMPLEX__)
+    #if defined(__STDC_NO_THREADS__) && defined(__STDC_NO_VLA__) && defined(__STDC_NO_COMPLEX__)
     int subsetting(void) { return 1; }
     #else
     int subsetting(void) { return 0; }
+    #endif
+
+    /* Atomics are *not* left out, so the macro that would say so is not
+       defined — and the `__ATOMIC_*` orders and the `__sync_*` advertisement
+       are, in every entry point. */
+    #if !defined(__STDC_NO_ATOMICS__) && __ATOMIC_SEQ_CST == 5 && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4)
+    int has_atomics(void) { return 1; }
+    #else
+    int has_atomics(void) { return 0; }
     #endif
 }
 
@@ -229,6 +246,7 @@ fn the_predefined_macros_say_what_this_implementation_is() {
     assert_eq!(unsafe { strict() }, 1);
     assert_eq!(unsafe { gnu_strict() }, 0);
     assert_eq!(unsafe { subsetting() }, 1);
+    assert_eq!(unsafe { has_atomics() }, 1);
 
     let text = |p| unsafe { core::ffi::CStr::from_ptr(p) }.to_bytes().to_vec();
     assert!(text(unsafe { version() }).starts_with(b"cinrs "));

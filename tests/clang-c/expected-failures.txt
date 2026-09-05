@@ -58,7 +58,6 @@ C23/n3007.c            wrong line: `static auto c = 1UL;` is refused before the 
 C23/n3018.c:0          wrong line: a `constexpr` object whose initialiser overflows is not diagnosed; a `constexpr char[]` from a string is
 !C23/n3029.c:1         an enumerator too wide for `int` in a `c17!` block: C23 widens the enumeration (N3029) and `c23!` does too, where 6.7.2.2p2 makes it a constraint violation in every earlier revision. Clang warns instead, which this RUN line does not promote
 C23/n3030.c            wrong line: an enumeration redeclared with a different fixed underlying type is not diagnosed; `enum c : long{x}` in a parameter list is
-!C23/n3030_1.c         `_Atomic`: C11 6.10.8.3 makes atomics optional and cinrs predefines `__STDC_NO_ATOMICS__`
 C23/n3033.c            not a compilable translation unit: the RUN line is `-E … | FileCheck`, so the file is a *preprocessor output* test and its expansions (`f(0, a, b, c)` at file scope) are not valid C. The harness takes a FileCheck-only file as an accept case, which is right for every other one of them
 C23/n3037_1.c          C23 tag compatibility (N3037): a second, compatible definition of `struct S` in the same scope is refused as a redefinition
 !C99/block-scopes.c:0  a `//` comment in a `c89!` block; see `C11/n1310.c:0`

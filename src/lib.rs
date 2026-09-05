@@ -134,7 +134,8 @@
 //!
 //! `_Static_assert` at file scope, at block scope and among the members of a
 //! `struct`; `_Generic`; `_Alignof`; `_Alignas` on the members of a `struct`
-//! or `union`; `_Noreturn`; and anonymous `struct`/`union` members, whose own
+//! or `union`; `_Noreturn`; [`_Atomic` and `<stdatomic.h>`](#atomics); and
+//! anonymous `struct`/`union` members, whose own
 //! members are reached through the enclosing record.
 //!
 //! ```
@@ -206,15 +207,17 @@
 //!
 //! ## What the later revisions add and this crate does not do
 //!
-//! `_Atomic`, `_BitInt` and C23's *named* universal character
+//! `_BitInt` and C23's *named* universal character
 //! `\N{LATIN SMALL LETTER E WITH ACUTE}`: each is a located error rather
 //! than a silent mistranslation. `_Thread_local` *is* there — see
-//! [Thread-local objects](#thread-local-objects) — but the rest of C11's
-//! threads, `<threads.h>` and all, is not. C11's four subsetting macros —
-//! `__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
+//! [Thread-local objects](#thread-local-objects) — and so are
+//! [atomics](#atomics), but the rest of C11's threads, `<threads.h>` and all,
+//! is not. Three of C11's four subsetting macros —
+//! `__STDC_NO_THREADS__`, `__STDC_NO_VLA__` and
 //! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
-//! saying that those parts are left out. `__STDC_NO_VLA__` is the cautious one
-//! of the four: [one-dimensional variable length
+//! saying that those parts are left out; `__STDC_NO_ATOMICS__` is not, because
+//! that part is here. `__STDC_NO_VLA__` is the cautious one
+//! of the three: [one-dimensional variable length
 //! arrays](#variable-length-arrays-and-alloca) do work, and the macro stays
 //! defined until the rest of C99's variably modified types do, so that a
 //! program which tests it keeps taking its `malloc` path. Three things are
@@ -683,7 +686,8 @@
 //! is a byte string; `goto` is a state machine; `unreachable()` is
 //! [`core::hint::unreachable_unchecked`]; `offsetof` is
 //! [`core::mem::offset_of!`]; `__builtin_trap` and `assert` call the C
-//! library's `abort`; a `constructor` is a `#[used]` function pointer in
+//! library's `abort`; [atomics](#atomics) are [`core::sync::atomic`]; a
+//! `constructor` is a `#[used]` function pointer in
 //! `.init_array`. None of that touches `std`. The C *library* is still linked,
 //! because the C code calls it — that is a link-time dependency of the
 //! program, not a Rust one, and it is what the bundled headers declare.
@@ -781,6 +785,123 @@
 //! `#[thread_local]` attribute on an `extern` item, which is unstable; and
 //! `#pragma cinrs export` cannot give a `thread_local!` item a C symbol,
 //! because there is no stable way to.
+//!
+//! # Atomics
+//!
+//! C11's atomics are here, and so are the two builtin families that came
+//! before them. All of it is [`core::sync::atomic`], so all of it works in a
+//! `#![no_std]` crate:
+//!
+//! ```
+//! cinrs::c11! {
+//!     #include <stdatomic.h>
+//!
+//!     _Atomic int counter;
+//!     atomic_flag lock = ATOMIC_FLAG_INIT;
+//!
+//!     int bump(void) { return ++counter; }
+//!     int take(void) { return !atomic_flag_test_and_set(&lock); }
+//!     void give(void) { atomic_flag_clear(&lock); }
+//!     int add(int *p, int n) { return __atomic_fetch_add(p, n, __ATOMIC_RELAXED); }
+//!     int older(int *p, int n) { return __sync_add_and_fetch(p, n); }
+//! }
+//!
+//! assert_eq!(unsafe { bump() }, 1);
+//! assert_eq!(unsafe { take() }, 1);
+//! assert_eq!(unsafe { take() }, 0);
+//! unsafe { give() };
+//!
+//! let mut n = 0;
+//! assert_eq!(unsafe { add(&mut n, 5) }, 0);
+//! assert_eq!(unsafe { older(&mut n, 5) }, 10);
+//! ```
+//!
+//! ## The `_Atomic` object model
+//!
+//! `_Atomic T` — the qualifier, and the `_Atomic(T)` specifier form — is a
+//! *type*, not a flag on a declaration: `_Atomic int *` and `int *` are
+//! different types, and a store through the first one is atomic. The object
+//! itself is generated as a plain `T`, and every access to it goes through
+//! `AtomicX::from_ptr` over its address:
+//!
+//! * every read is a sequentially consistent **load**;
+//! * every write, and every plain assignment, is a sequentially consistent
+//!   **store** whose value is the value assigned;
+//! * `x += v`, `x |= v`, `x++` and `--x` are each one **read-modify-write**,
+//!   as C11 6.5.16.2p3 requires — never a load followed by a store. The five
+//!   operators an atomic has a method for become that method; the rest
+//!   (`*=`, `<<=`, a floating object, a pointer that moves by elements) become
+//!   the compare-exchange loop the method would have been;
+//! * the *initialiser* of a declaration is a plain write, which is what
+//!   7.17.2.1p2 says it is.
+//!
+//! Reading one gives a value of the underlying type — lvalue conversion drops
+//! the `_Atomic` (6.3.2.1p2) — so `_Generic(x, int: …)` matches an
+//! `_Atomic int` lvalue, passing one by value passes a `T`, and nothing
+//! downstream of the read has to know about atomics at all.
+//!
+//! The **alignment of an atomic type is its size**: `_Alignof(_Atomic long
+//! long)` is 8 wherever `sizeof` is, which is what a lock-free instruction
+//! needs and what GCC does too. A `struct` with an `_Atomic` member gets the
+//! `#[repr(C, align(N))]` and the padding that keeps the two sides agreeing
+//! about where the member went.
+//!
+//! Which types: `_Bool`, the 1-, 2-, 4- and 8-byte integers (`enum`s
+//! included), `float` and `double` — through the integer atomic of the same
+//! width and `to_bits`/`from_bits`, so the bits are exactly what the object
+//! holds — and object pointers, which are an `AtomicPtr`. An `_Atomic`
+//! `struct` or `union` is legal C and is **refused**: it would need a lock,
+//! and there is nothing in the generated Rust to be one. So is `_Atomic
+//! __int128`, for want of a stable `AtomicU128`, and an atomic function
+//! pointer, which Rust models as an `Option<fn>` rather than as a pointer.
+//! `_Atomic` on an array or a function type is a constraint violation and is
+//! reported as one.
+//!
+//! ## The builtins
+//!
+//! Three families, every one of them spelled with a leading double underscore
+//! and therefore available in **every entry point**, `c89!` included:
+//!
+//! * **`__atomic_*`** (GCC 4.7) takes the memory order as an argument:
+//!   `load_n`/`load`, `store_n`/`store`, `exchange_n`/`exchange`,
+//!   `compare_exchange_n`/`compare_exchange`, `fetch_add` … `fetch_nand` and
+//!   `add_fetch` … `nand_fetch`, `test_and_set`, `clear`, `thread_fence`,
+//!   `signal_fence`, `always_lock_free` and `is_lock_free`. The `_n`-less
+//!   forms take pointers to the values instead of the values.
+//! * **`__sync_*`** (GCC 4.1) is the older family, and every one of them is
+//!   sequentially consistent: `fetch_and_add` and its relatives,
+//!   `add_and_fetch` and its, `bool_compare_and_swap`,
+//!   `val_compare_and_swap`, `lock_test_and_set` (an acquire exchange),
+//!   `lock_release` (a release store of zero) and `synchronize`.
+//! * **`__c11_atomic_*`** is Clang's, and is what the bundled
+//!   `<stdatomic.h>` is written in terms of, exactly as Clang's own header is.
+//!
+//! The memory order must be an integer constant expression — one of the
+//! `__ATOMIC_RELAXED` … `__ATOMIC_SEQ_CST` macros, which are predefined
+//! everywhere, or a `memory_order_…` constant, which are the same values.
+//! `__ATOMIC_CONSUME` is an acquire, as it is in every compiler. An order that
+//! is *not* a constant falls back to `__ATOMIC_SEQ_CST`, as GCC's own
+//! documentation says it does, and the expression is still evaluated; a
+//! `weak` flag that is not a constant is taken as *strong*, which a weak
+//! compare-exchange is always allowed to be. An order
+//! the operation may not have — a load that releases, a store that acquires, a
+//! compare-exchange whose failure order is stronger than its success order —
+//! is a diagnostic here, where Rust would panic at run time and C leaves it
+//! undefined.
+//!
+//! **One deliberate difference between the families.** On a *pointer* object,
+//! `__atomic_fetch_add(&p, 4, …)` moves `p` on by four **bytes**, whatever it
+//! points at, which is what GCC's builtin does; `atomic_fetch_add(&p, 4)` from
+//! `<stdatomic.h>` moves it by four **elements**, which is what C11 7.17.7.5
+//! requires. The header goes through `__c11_atomic_fetch_add`, which is the
+//! one that scales.
+//!
+//! `<stdatomic.h>` is bundled: the `atomic_bool` … `atomic_uintmax_t`
+//! typedefs, `atomic_flag` with `ATOMIC_FLAG_INIT`, the `memory_order`
+//! enumeration, `ATOMIC_VAR_INIT`, `atomic_init`, `kill_dependency`, the
+//! fences, `atomic_is_lock_free`, the `ATOMIC_*_LOCK_FREE` macros (all `2`)
+//! and the generic functions. `<threads.h>` is not, and
+//! `__STDC_NO_THREADS__` stays defined; `__STDC_NO_ATOMICS__` does not.
 //!
 //! # Control flow
 //!
@@ -917,7 +1038,7 @@
 //!
 //! `cinrs` ships its own `<assert.h>`, `<ctype.h>`, `<errno.h>`, `<float.h>`,
 //! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<stdalign.h>`,
-//! `<stdarg.h>`,
+//! `<stdarg.h>`, `<stdatomic.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
 //! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>` and
 //! `<wctype.h>`,
@@ -1126,7 +1247,8 @@
 //! types around them — `int a[n][m]`, `int (*p)[n]`, a `typedef` of a VLA —
 //! are not.
 //!
-//! Deliberately never: `_Complex`, `setjmp`/`longjmp`, `_Atomic`, `_BitInt`,
+//! Deliberately never: `_Complex`, `setjmp`/`longjmp`, `_BitInt`, an
+//! `_Atomic` aggregate,
 //! C23's *named* universal character `\N{…}`, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
 //! implies). Each of them is a clear, located error rather than a silent

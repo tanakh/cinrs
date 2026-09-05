@@ -718,20 +718,42 @@ fn a_diagnostic_inside_a_header_names_the_header_and_points_at_the_directive() {
 /// A header that does not parse is worse than a missing one: the program that
 /// includes it is buried in diagnostics that are not its fault. They are
 /// written in the C99 this crate itself accepts, and this is what keeps them
-/// that way.
+/// that way — with one exception: `<stdatomic.h>` is a C11 header and is
+/// written in `_Atomic`, which a `c99!` block refuses by design.
 #[test]
 fn every_bundled_header_compiles_on_its_own() {
     for (name, _) in cinrs_core::include::BUNDLED {
         if *name == "setjmp.h" {
             continue;
         }
+        let standard = if *name == "stdatomic.h" {
+            Standard::C11
+        } else {
+            Standard::C99
+        };
         let source = format!("#include <{name}>");
-        let output = expand(stream(&source), &options()).to_string();
+        let output = expand(stream(&source), &Options::new(standard)).to_string();
         assert!(
             !output.contains("compile_error"),
             "<{name}> did not survive the front end: {output}"
         );
     }
+}
+
+/// `<stdatomic.h>` in a `c99!` block, which is the one entry point that
+/// refuses it: C11 6.10.8.3 makes atomics optional and `_Atomic` a C11
+/// keyword, and the header is written in it.
+#[test]
+fn stdatomic_needs_c11() {
+    let errors = emitted_errors(expand(stream("#include <stdatomic.h>"), &options()));
+    assert!(!errors.is_empty());
+    assert!(
+        errors[0]
+            .message
+            .contains("'_Atomic' requires C11 or later"),
+        "{:?}",
+        errors[0].message
+    );
 }
 
 /// The one bundled header that is a refusal rather than a set of
