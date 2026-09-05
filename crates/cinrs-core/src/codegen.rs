@@ -429,6 +429,14 @@ struct LoweredPlace {
     /// Set when the place is a bit-field, in which case `access` is the record
     /// holding it and the bits are reached through the generated accessors.
     bits: Option<BitAccess>,
+    /// Set when the object may not be aligned the way its type asks.
+    ///
+    /// C reaches such an object through a packed member or a pointer cast, and
+    /// says nothing about the load; Rust makes `*p` on an underaligned `p`
+    /// undefined behaviour, which a debug build turns into an abort. Such a
+    /// place is read and written through `read_unaligned` and
+    /// `write_unaligned` instead. See [`Codegen::place_align`].
+    unaligned: bool,
 }
 
 impl LoweredPlace {
@@ -438,6 +446,7 @@ impl LoweredPlace {
             setup,
             access,
             bits: None,
+            unaligned: false,
         }
     }
 }
@@ -1936,12 +1945,13 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
+                let (hoist, rhs) = self.compound_rhs(value);
                 let current = self.read(&lowered, span);
-                let updated = self.compound_value(current, place.ty, *op, value, *compute);
+                let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
                 let updated = updated.at(prec::LOWEST, span);
                 let store = self.write(&lowered, updated, span);
                 let setup = &lowered.setup;
-                quote_spanned! {span=> #setup #store }
+                quote_spanned! {span=> #setup #hoist #store }
             }
             ExprKind::IncDec { place, dec, .. } => {
                 let lowered = self.place(place, true);
@@ -2049,6 +2059,54 @@ impl<'a> Codegen<'a> {
     }
 
     fn expr(&mut self, expr: &Expr) -> Value {
+        let value = self.expr_value(expr);
+        // A chain of binary operators reduces each of its own nodes; see
+        // `Codegen::binary_chain`.
+        if matches!(expr.kind, ExprKind::Binary { .. }) {
+            return value;
+        }
+        self.reduce_bits(value, expr)
+    }
+
+    /// Reduces a computed value to the precision the expression is evaluated
+    /// in, which is narrower than its type only for a wide bit-field; see
+    /// [`ir::Expr::bits`].
+    ///
+    /// Only an operator whose result can leave the field's range needs it: a
+    /// bitwise `&`, `|` or `^` of two forty-bit values is a forty-bit value
+    /// already, and so is a quotient, a remainder or a right shift.
+    fn reduce_bits(&mut self, value: Value, expr: &Expr) -> Value {
+        let Some(bits) = expr.bits else {
+            return value;
+        };
+        let width = expr.ty.bits(&self.options.target);
+        let overflows = match &expr.kind {
+            ExprKind::Binary { op, .. } => {
+                matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Shl)
+            }
+            ExprKind::Neg(_) | ExprKind::BitNot(_) => true,
+            _ => false,
+        };
+        if !overflows || !expr.ty.is_integer() || bits == 0 || bits >= width {
+            return value;
+        }
+        let span = self.sp(expr.range);
+        if expr.ty.is_signed(&self.options.target) {
+            // Sign extension: the two shifts are what a narrower signed type
+            // does to a value that has just overflowed out of it.
+            let shift = Literal::u32_unsuffixed(width - bits);
+            let tokens = value.at(prec::CALL, span);
+            return Value::new(
+                quote_spanned! {span=> #tokens.wrapping_shl(#shift).wrapping_shr(#shift) },
+                prec::CALL,
+            );
+        }
+        let mask = bare_int_literal(((1u128 << bits) - 1) as i128, expr.ty, span);
+        let tokens = value.at(prec::BIT_AND, span);
+        Value::new(quote_spanned! {span=> #tokens & #mask }, prec::BIT_AND)
+    }
+
+    fn expr_value(&mut self, expr: &Expr) -> Value {
         let span = self.sp(expr.range);
         match &expr.kind {
             ExprKind::Int(value) => self.int_literal(*value, expr.ty, span),
@@ -2091,14 +2149,15 @@ impl<'a> Codegen<'a> {
                 compute,
             } => {
                 let lowered = self.place(place, true);
+                let (hoist, rhs) = self.compound_rhs(value);
                 let current = self.read(&lowered, span);
-                let updated = self.compound_value(current, place.ty, *op, value, *compute);
+                let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
                 let updated = updated.at(prec::LOWEST, span);
                 let store = self.write(&lowered, updated, span);
                 let read = self.read(&lowered, span).at(prec::LOWEST, span);
                 let setup = &lowered.setup;
                 Value::new(
-                    quote_spanned! {span=> { #setup #store #read } },
+                    quote_spanned! {span=> { #setup #hoist #store #read } },
                     prec::BLOCK,
                 )
             }
@@ -3145,7 +3204,8 @@ impl<'a> Codegen<'a> {
             };
             let span = self.sp(node.range);
             let (lhs_value, rhs_value) = self.operands_with(folded, lhs, rhs, *op);
-            folded = Some(self.binary(*op, lhs_value, rhs_value, node.ty, span));
+            let value = self.binary(*op, lhs_value, rhs_value, node.ty, span);
+            folded = Some(self.reduce_bits(value, node));
         }
         folded.expect("the chain has at least the node it started from")
     }
@@ -3255,30 +3315,77 @@ impl<'a> Codegen<'a> {
     }
 
     /// The value `place op= value` stores.
+    ///
+    /// `hoisted` is the right operand when it was evaluated ahead of the read;
+    /// see [`Codegen::compound_rhs`].
     fn compound_value(
         &mut self,
         current: Value,
         place_ty: Ty,
         op: BinOp,
         value: &Expr,
+        hoisted: Option<Value>,
         compute: Ty,
     ) -> Value {
         let span = self.sp(value.range);
         if place_ty.is_pointer() {
             // `p += n` moves by elements, not by bytes.
             let access = current.at(prec::CALL, span);
-            let offset = self.offset_argument(value, op == BinOp::Sub, span);
+            let offset = match hoisted {
+                Some(index) => self.offset_of_value(index, op == BinOp::Sub, span),
+                None => self.offset_argument(value, op == BinOp::Sub, span),
+            };
             return Value::new(quote_spanned! {span=> #access.offset(#offset) }, prec::CALL);
         }
         let current = self.cast(current, place_ty, compute, span);
         // The left operand is a place and therefore always typed, so a
         // constant right operand can stay a bare literal.
-        let rhs = match constant_of(value) {
-            Some(constant) => self.bare_value(constant, value.ty, span),
-            None => self.expr(value),
+        let rhs = match hoisted {
+            Some(rhs) => rhs,
+            None => match constant_of(value) {
+                Some(constant) => self.bare_value(constant, value.ty, span),
+                None => self.expr(value),
+            },
         };
         let result = self.binary(op, current, rhs, compute, span);
         self.cast(result, compute, place_ty, span)
+    }
+
+    /// Evaluates the right operand of a compound assignment ahead of the read,
+    /// when C says it happens either wholly before it or wholly after it.
+    ///
+    /// `E1 op= E2` is a read, an operation and a write, and C11 6.5.16.2p3
+    /// makes the three of them *one* evaluation with respect to an
+    /// indeterminately sequenced function call. Writing them out as
+    /// `E1 = E1 op E2` would read `E1`, call whatever `E2` calls, and only then
+    /// store — which is the one order the standard rules out, and which GCC's
+    /// `pr58943` is about. Binding `E2` to a temporary first restores it: the
+    /// place is computed, then the call happens, then the read-modify-write.
+    ///
+    /// Only an operand that can call something needs it; everything else is
+    /// left where it was written, because a temporary per `i += 1` would be
+    /// noise.
+    fn compound_rhs(&mut self, value: &Expr) -> (TokenStream, Option<Value>) {
+        if !ir::calls_a_function(value) {
+            return (TokenStream::new(), None);
+        }
+        let span = self.sp(value.range);
+        let tokens = self.expr(value).at(prec::LOWEST, span);
+        let tmp = self.temporary();
+        (
+            quote_spanned! {span=> let #tmp = #tokens; },
+            Some(Value::atom(quote_spanned! {span=> #tmp })),
+        )
+    }
+
+    /// The `offset` argument for an index that has already been emitted.
+    fn offset_of_value(&mut self, index: Value, sub: bool, span: Span) -> TokenStream {
+        let tokens = index.at(prec::CAST, span);
+        if sub {
+            quote_spanned! {span=> -(#tokens as isize) }
+        } else {
+            quote_spanned! {span=> #tokens as isize }
+        }
     }
 
     /// The value `++place` or `--place` stores.
@@ -3412,6 +3519,106 @@ impl<'a> Codegen<'a> {
     /// has to lose the qualifier: Rust refuses `&raw mut (*p).f` when `p` is a
     /// `*const T`, while reading through one is fine.
     fn place(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
+        let mut lowered = self.place_access(place, mutable);
+        if lowered.bits.is_none() && self.place_underaligned(place) {
+            lowered.unaligned = true;
+        }
+        lowered
+    }
+
+    /// Whether the place has to be reached through an unaligned load or store.
+    ///
+    /// Two shapes need one. A `*p` or a `p[i]` whose pointer this crate itself
+    /// built out of a packed member is underaligned, and so is a member read
+    /// through a pointer to a record that is: `(*(T *) &buf).f`, where `buf` is
+    /// a `char` array, is a member access Rust would compile to an aligned load
+    /// of a byte-aligned address. A member of a *packed* record whose own
+    /// address is fine needs nothing — Rust knows the layout of the item it was
+    /// given and reads such a member unaligned by itself.
+    fn place_underaligned(&self, place: &Place) -> bool {
+        match &place.kind {
+            PlaceKind::Deref(_) | PlaceKind::Index { .. } => {
+                self.place_align(place) < self.type_align(place.ty)
+            }
+            PlaceKind::Field { base, .. } => self.place_align(base) < self.type_align(base.ty),
+            _ => false,
+        }
+    }
+
+    /// The alignment code generation can count on for a place's address.
+    ///
+    /// Everything C promises about an object's alignment holds for a place that
+    /// names one, so the interesting half is what this crate itself can see
+    /// through: the address of a member sits at its offset from a base whose
+    /// alignment is known, and a cast in between changes nothing. Anything else
+    /// — a pointer out of a variable, a parameter, a call — is taken at C's
+    /// word and assumed to point at something its type is aligned for.
+    fn place_align(&self, place: &Place) -> u64 {
+        match &place.kind {
+            PlaceKind::Deref(ptr) => self.pointer_align(ptr),
+            PlaceKind::Index { base, .. } => {
+                // Every element of an array sits at a multiple of the element
+                // size from the first, and a size is always a multiple of the
+                // alignment, so the elements are no worse aligned than the
+                // element type asks and no better than the array is.
+                self.pointer_align(base).min(self.type_align(place.ty))
+            }
+            PlaceKind::Field {
+                base,
+                record,
+                index,
+            } => {
+                let base_align = self.place_align(base);
+                let offset = self.program.types.record(*record).fields[*index].offset;
+                if offset == 0 {
+                    base_align
+                } else {
+                    base_align.min(1 << offset.trailing_zeros())
+                }
+            }
+            _ => self.type_align(place.ty),
+        }
+    }
+
+    /// The alignment of what a pointer expression points at.
+    fn pointer_align(&self, ptr: &Expr) -> u64 {
+        match &ptr.kind {
+            ExprKind::AddrOf(place) => self.place_align(place),
+            // A pointer cast moves no bytes, and neither does the decay of an
+            // array to its first element.
+            ExprKind::Cast(inner) if inner.ty.is_pointer() || inner.ty.is_array() => {
+                self.pointer_align(inner)
+            }
+            ExprKind::PtrOffset { ptr, .. } => self
+                .pointer_align(ptr)
+                .min(self.pointee_align(ptr.ty).unwrap_or(1)),
+            _ => self.pointee_align(ptr.ty).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// The alignment of the type a pointer or array type addresses.
+    fn pointee_align(&self, ty: Ty) -> Option<u64> {
+        let pointee = self.program.types.pointee(ty)?;
+        (!pointee.is_void() && !pointee.is_func()).then(|| self.type_align(pointee))
+    }
+
+    /// The alignment the *generated Rust type* has, which is what a `*p` in the
+    /// expansion is checked against.
+    fn type_align(&self, ty: Ty) -> u64 {
+        match ty {
+            // A packed record's item is one byte aligned however strict C says
+            // the record is; see `ir::RecordDef::rust_align`.
+            Ty::Record(id) => self.program.types.record(id).rust_align,
+            Ty::Array(id) => self.type_align(self.program.types.array_type(id).elem),
+            _ => self
+                .program
+                .types
+                .size_align(ty, &self.options.target)
+                .map_or(1, |layout| layout.align),
+        }
+    }
+
+    fn place_access(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
         let span = self.sp(place.range);
         match &place.kind {
             PlaceKind::Object(id) => {
@@ -3458,6 +3665,7 @@ impl<'a> Codegen<'a> {
                         getter: c_ident(&bits.getter, span),
                         setter: c_ident(&bits.setter, span),
                     }),
+                    unaligned: false,
                 }
             }
             PlaceKind::Str(id) => {
@@ -3502,6 +3710,10 @@ impl<'a> Codegen<'a> {
                 let getter = &bits.getter;
                 Value::new(quote_spanned! {span=> #access.#getter() }, prec::CALL)
             }
+            None if place.unaligned => Value::new(
+                quote_spanned! {span=> (&raw const #access).read_unaligned() },
+                prec::CALL,
+            ),
             None => Value::atom(access.clone()),
         }
     }
@@ -3513,6 +3725,9 @@ impl<'a> Codegen<'a> {
             Some(bits) => {
                 let setter = &bits.setter;
                 quote_spanned! {span=> #access.#setter(#value); }
+            }
+            None if place.unaligned => {
+                quote_spanned! {span=> (&raw mut #access).write_unaligned(#value); }
             }
             None => quote_spanned! {span=> #access = #value; },
         }

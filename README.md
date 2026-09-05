@@ -200,10 +200,10 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,230 pass (69.5 %)** under `gnu11!`. Half of what is
+  exit status zero. **1,243 pass (70.3 %)** under `gnu11!`. Half of what is
   left is old-style (K&R) definitions and implicit declarations — C89 rules
-  these C89-era programs lean on — and fifteen are programs that built and
-  then did the wrong thing, which the document names one by one.
+  these C89-era programs lean on — and two are programs that built and then
+  did the wrong thing, which the document names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **79 of the 175 revisions run come out as

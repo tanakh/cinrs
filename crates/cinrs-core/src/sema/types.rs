@@ -257,10 +257,12 @@ impl Sema<'_> {
     /// pointer to a function.
     pub(super) fn resolve_param_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
         if let ast::TypeKind::Array { elem, .. } = &ty.kind {
-            // The bound of an array parameter is not part of its type at all,
-            // so it is not even evaluated: `void f(int n, int a[n])`,
-            // `int a[*]` and `int a[static n]` all declare an `int *`, exactly
-            // as `int a[]` does.
+            // The bound of an array parameter is not part of its type at all:
+            // `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all
+            // declare an `int *`, exactly as `int a[]` does. It is not
+            // evaluated here either — a *definition* evaluates it on entry,
+            // which is `Sema::parameter_size_effects`, and a declaration that
+            // is not one never evaluates it at all.
             let element = self.resolve_ty(elem)?;
             // ... but the *element* type still has to be one this crate can
             // point at, and `int a[3][n]` would be a pointer to a variable
@@ -781,6 +783,46 @@ impl Sema<'_> {
         record.flexible = flexible;
     }
 
+    /// Honours `typedef struct { … } T __attribute__((aligned(N)));`.
+    ///
+    /// GCC makes the attribute a property of the *typedef*: `T` is a variant
+    /// of the record whose alignment is stricter, while the record itself
+    /// keeps its own. There is no room for such a variant in this type model,
+    /// so the alignment is given to the record — which says exactly the same
+    /// thing when the record is anonymous, since the typedef name is then the
+    /// only way to name it at all. A tagged record is left alone: raising
+    /// `struct S` because one typedef of it asked would change the layout
+    /// everywhere the tag is used.
+    pub(super) fn align_typedef_record(&mut self, ty: Ty, want: u64, range: SourceRange) {
+        let Ty::Record(id) = ty else {
+            return;
+        };
+        let def = self.types().record(id);
+        let Some(layout) = def.layout else {
+            return;
+        };
+        if def.tag.is_some() || !def.complete || want <= layout.align {
+            return;
+        }
+        if def.packed.is_some() {
+            // Rust refuses `#[repr(C, packed, align(N))]` (`E0587`), the same
+            // way it does when both are written on the record itself.
+            self.error(
+                range,
+                "a record cannot be both packed and given a stricter alignment; Rust has \
+                 no representation for that combination",
+            );
+            return;
+        }
+        let record = self.program.types.record_mut(id);
+        record.layout = Some(ir::Layout {
+            size: round_up(layout.size, want),
+            align: want,
+        });
+        record.align = Some(want);
+        record.rust_align = want;
+    }
+
     /// Replaces `#[repr(C, align(N))]` with a zero-sized field of that
     /// alignment, wherever a record reached from `ty` carries one.
     ///
@@ -1023,7 +1065,7 @@ impl Sema<'_> {
 
     /// The alignment an `_Alignas` specifier asks for, reporting the operands
     /// that cannot be one.
-    fn alignment_of(&mut self, spec: Option<&ast::Alignment>) -> Option<u64> {
+    pub(super) fn alignment_of(&mut self, spec: Option<&ast::Alignment>) -> Option<u64> {
         let spec = spec?;
         let value = match &spec.kind {
             ast::AlignmentKind::Type(name) => {

@@ -508,6 +508,20 @@ impl<'a> Sema<'a> {
         self.scopes.last().and_then(|s| s.entries.get(name))
     }
 
+    /// What `name` denotes at file scope, which is where every declaration
+    /// that has *linkage* is registered.
+    ///
+    /// C99 6.2.2p4 makes an `extern` declaration name the linked object even
+    /// when a block-scope declaration of the same name is in scope: a prior
+    /// declaration only decides the linkage when it has linkage itself, and a
+    /// block-scope object declared without `extern` has none. Since every
+    /// declaration that does have linkage is also entered here — that is what
+    /// [`Sema::insert_at_file_scope`] is for — asking the file scope is
+    /// exactly asking "is a declaration with linkage visible?".
+    fn lookup_linked(&self, name: &str) -> Option<&Entry> {
+        self.scopes.first().and_then(|s| s.entries.get(name))
+    }
+
     fn insert(&mut self, name: &str, entry: Entry) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.entries.insert(name.to_owned(), entry);
@@ -709,6 +723,15 @@ impl<'a> Sema<'a> {
         self.types().record(*record).fields[*index].bits.as_ref()
     }
 
+    /// Whether reading this expression read a bit-field.
+    ///
+    /// The value of a bit-field is the one thing whose range is narrower than
+    /// its type's, which is what makes both the width-restricted promotions
+    /// and a cast to the field's own declared type observable.
+    pub(super) fn is_bit_field_load(&self, expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::Load(place) if self.bit_field_of(place).is_some())
+    }
+
     /// The type a value takes part in arithmetic as, after the integer
     /// promotions.
     ///
@@ -726,6 +749,57 @@ impl<'a> Sema<'a> {
                 .promote_bit_field(bits.width, bits.signed, &self.target);
         }
         expr.ty.promote(&self.target)
+    }
+
+    /// The width an integer value is really reduced to, when that is narrower
+    /// than its type.
+    ///
+    /// This is a bit-field the integer promotions do not reach: `unsigned long
+    /// long b : 40` stays `unsigned long long` through 6.3.1.1p2, but 40 bits
+    /// is the precision C99 6.7.2.1p10 gives the value and GCC computes with.
+    /// It rides along on [`ir::Expr::bits`] once an operator has produced one,
+    /// so a chain of them stays in the same precision.
+    fn narrow_bits(&self, expr: &Expr) -> Option<u32> {
+        if let Some(bits) = expr.bits {
+            return Some(bits);
+        }
+        let ExprKind::Load(place) = &expr.kind else {
+            return None;
+        };
+        let field = self.bit_field_of(place)?;
+        let promoted = expr
+            .ty
+            .promote_bit_field(field.width, field.signed, &self.target);
+        (promoted == expr.ty && field.width < expr.ty.bits(&self.target)).then_some(field.width)
+    }
+
+    /// The precision an operand takes part in arithmetic with: a narrow
+    /// bit-field's width, and the full width of the promoted type otherwise.
+    fn operand_bits(&self, expr: &Expr) -> u32 {
+        if let Some(bits) = self.narrow_bits(expr) {
+            return bits;
+        }
+        let ty = self.promoted(expr);
+        if ty.is_integer() {
+            ty.bits(&self.target)
+        } else {
+            0
+        }
+    }
+
+    /// The precision the result of an operation on `operands` has, given the
+    /// type the usual arithmetic conversions chose for it.
+    ///
+    /// `None` unless one of the operands really is narrower than `common`:
+    /// GCC's `c_common_type` picks the operand type of greater precision, so
+    /// a 40-bit bit-field against an `int` computes in forty bits and against
+    /// an `unsigned long long` in sixty-four.
+    fn result_bits(&self, common: Ty, operands: [&Expr; 2]) -> Option<u32> {
+        if !common.is_integer() || !operands.iter().any(|e| self.narrow_bits(e).is_some()) {
+            return None;
+        }
+        let bits = operands.map(|e| self.operand_bits(e)).into_iter().max()?;
+        (bits < common.bits(&self.target)).then_some(bits)
     }
 
     /// The same, for the place a compound assignment computes in.

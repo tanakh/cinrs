@@ -32,6 +32,28 @@ fn object_size_answer(mode: i128) -> i128 {
     if mode & 2 == 0 { -1 } else { 0 }
 }
 
+/// Whether `__builtin_constant_p` says yes to something that is not a number.
+///
+/// A string literal is the one object whose address GCC calls constant — it is
+/// in the constant pool, and asking for a character out of one at a constant
+/// index folds too. The address of a *variable* is not: it is the linker that
+/// decides it, which is why `bcp-1` requires `__builtin_constant_p(&global)`
+/// to be zero and `__builtin_constant_p("hi")` to be one.
+fn constant_string(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Cast(inner) => constant_string(inner),
+        ExprKind::AddrOf(place) => matches!(place.kind, ir::PlaceKind::Str(_)),
+        ExprKind::Load(place) => match &place.kind {
+            ir::PlaceKind::Str(_) => true,
+            ir::PlaceKind::Index { base, index } => {
+                matches!(index.kind, ExprKind::Int(_)) && constant_string(base)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 impl Sema<'_> {
     /// Checks a call to a `__builtin_*` form.
     ///
@@ -78,7 +100,7 @@ impl Sema<'_> {
             "constant_p" => {
                 self.builtin_arity(name, args, 1, range)?;
                 let value = self.expr(&args[0])?;
-                let folds = self.const_eval(&value).is_some();
+                let folds = self.const_eval(&value).is_some() || constant_string(&value);
                 Some(Expr::int(i128::from(folds), Ty::Int, range))
             }
             "popcount" | "popcountl" | "popcountll" => {

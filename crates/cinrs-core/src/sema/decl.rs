@@ -77,7 +77,9 @@ impl Sema<'_> {
         };
 
         if decl.specifiers.is_typedef() {
-            self.declare_typedef(name, &declarator.ty, declarator.init.as_ref());
+            let mut attrs = declarator.attrs.clone();
+            attrs.merge(decl.specifiers.attrs.clone());
+            self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
             return Vec::new();
         }
 
@@ -626,7 +628,12 @@ impl Sema<'_> {
                 ),
             );
         }
-        if let Some(Entry::Object(existing)) = self.lookup(&name.name).cloned() {
+        // The declaration a redeclaration has to agree with is the one with
+        // *linkage*, which lives at file scope: `int v = 4; { extern int v; }`
+        // names the file-scope `v` and not the local one (C99 6.2.2p4), since
+        // a block-scope object declared without `extern` has no linkage at
+        // all.
+        if let Some(Entry::Object(existing)) = self.lookup_linked(&name.name).cloned() {
             if self.program.object(existing).ty == ty {
                 self.insert(&name.name, Entry::Object(existing));
                 return;
@@ -663,6 +670,7 @@ impl Sema<'_> {
         name: &ast::Ident,
         ty: &ast::Type,
         init: Option<&ast::Initializer>,
+        attrs: &ast::Attributes,
     ) {
         if let Some(init) = init {
             self.error(init.range, "a 'typedef' cannot have an initializer");
@@ -683,6 +691,15 @@ impl Sema<'_> {
             if message == super::VM_UNSUPPORTED {
                 self.error(ty.range, super::VM_UNSUPPORTED);
             }
+        }
+        // `typedef struct { … } T __attribute__((aligned(N)));` asks for a
+        // stricter alignment than the members give; see
+        // `Sema::align_typedef_record`.
+        if let Ok(resolved) = &resolved
+            && let Some(aligned) = attrs.aligned.clone()
+            && let Some(want) = self.alignment_of(Some(&aligned))
+        {
+            self.align_typedef_record(*resolved, want, aligned.range);
         }
         let already = self.declared_here(&name.name).is_some();
         if already {
@@ -764,6 +781,57 @@ impl Sema<'_> {
     }
 
     // -- functions ----------------------------------------------------------
+
+    /// Evaluates the bounds of the array parameters of a definition, for their
+    /// side effects.
+    ///
+    /// The value is thrown away: the parameter is a pointer, and nothing about
+    /// the object it points at depends on the bound. A bound that plainly
+    /// cannot do anything — a constant, or a variable read — is left out, so
+    /// that the overwhelmingly common `void f(int n, int a[n])` still generates
+    /// nothing at all.
+    fn parameter_size_effects(&mut self, func: &ast::FunctionType) -> Vec<Stmt> {
+        // A compound literal written in a bound — `int g(char *p[f((int[27]){0})])`,
+        // which is WG14 N2819's example — is an object of the function body's
+        // outermost block, so its definition goes in front of everything, the
+        // way `Sema::block_items` puts a block's own literals at its head.
+        let enclosing = std::mem::take(&mut self.compound_literals);
+        let mut out = Vec::new();
+        for param in &func.params {
+            let ast::TypeKind::Array {
+                size: ast::ArraySize::Expr(size),
+                ..
+            } = &param.ty.kind
+            else {
+                continue;
+            };
+            let Some(value) = self.expr(size) else {
+                continue;
+            };
+            let harmless = match &value.kind {
+                ExprKind::Int(_) | ExprKind::Float(_) => true,
+                ExprKind::Load(place) => matches!(place.kind, PlaceKind::Object(_)),
+                _ => false,
+            };
+            if !harmless {
+                out.push(Stmt::Expr(value));
+            }
+        }
+        let literals = std::mem::replace(&mut self.compound_literals, enclosing);
+        let mut prologue = Vec::with_capacity(literals.len() + out.len());
+        for object in literals {
+            let info = self.program.object(object);
+            let (ty, range) = (info.ty, info.range);
+            let init = self.zero(ty, range);
+            prologue.push(Stmt::Let {
+                object,
+                init,
+                explicit: false,
+            });
+        }
+        prologue.append(&mut out);
+        prologue
+    }
 
     /// Declares (but does not define) a function.
     ///
@@ -1098,7 +1166,13 @@ impl Sema<'_> {
         // would find — is the function's, so the range of ids the body used is
         // what code generation names its locals from.
         let first_object = self.program.objects.len() as u32;
-        let mut body = self.block_items(&def.body.items);
+        // C99 6.9.1p10: the size expressions of a variably modified parameter
+        // are evaluated on entry to the function. The bound is not part of the
+        // adjusted type — the parameter is a pointer — but `void f(int n, int
+        // a[n++])` still increments `n`, and a definition is the one place
+        // where that is observable.
+        let mut body = self.parameter_size_effects(func);
+        body.extend(self.block_items(&def.body.items));
         // A forward `goto` names a label the walk above had not reached yet, so
         // the jumps are checked now that every label's scope is known.
         self.check_goto_vla_scopes();

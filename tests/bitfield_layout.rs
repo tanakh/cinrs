@@ -130,6 +130,16 @@ struct Field {
     store: Option<String>,
     /// Whether the member is a bit-field, which has no `offsetof`.
     bits: bool,
+    /// Whether the arithmetic probes are run on the member.
+    ///
+    /// They are, for a bit-field wider than `int` and unsigned: that is the
+    /// one shape whose *width* is the precision the arithmetic happens in
+    /// (C99 6.7.2.1p10), rather than the width of a promoted type, and the
+    /// one shape where every operation below is defined however far it
+    /// overflows. A signed field of the same width is left out because the
+    /// overflow is undefined there, and the two compilers are free to — and
+    /// do — answer differently.
+    arith: bool,
 }
 
 /// How a generated record is packed.
@@ -269,6 +279,16 @@ fn corpus() -> Corpus {
         }
         let _ = writeln!(queries, "        return -1;");
         let _ = writeln!(queries, "    }}");
+        // Op 5 asks whether the arithmetic probes — ops 6 and up — apply to
+        // this member at all; most do not, and the report leaves them out.
+        let _ = writeln!(queries, "    if (op == 5) {{");
+        for (k, field) in named.iter().enumerate() {
+            if field.arith {
+                let _ = writeln!(queries, "        if (k == {k}) return 1;");
+            }
+        }
+        let _ = writeln!(queries, "        return 0;");
+        let _ = writeln!(queries, "    }}");
         let _ = writeln!(queries, "    p = (unsigned char *) &v;");
         let _ = writeln!(queries, "    for (i = 0; i < sizeof v; i++) p[i] = 0;");
         for (k, field) in named.iter().enumerate() {
@@ -278,6 +298,22 @@ fn corpus() -> Corpus {
             }
         }
         let _ = writeln!(queries, "    for (i = 0; i < sizeof v; i++) out[i] = p[i];");
+        for (k, field) in named.iter().enumerate() {
+            let name = field.name.as_deref().expect("named");
+            if !field.arith {
+                continue;
+            }
+            let _ = writeln!(queries, "    if (k == {k}) {{");
+            for (e, form) in ARITH.iter().enumerate() {
+                let expression = form.replace('%', &format!("v.{name}"));
+                let _ = writeln!(
+                    queries,
+                    "        if (op == {}) return (long long) ({expression});",
+                    e + 6
+                );
+            }
+            let _ = writeln!(queries, "    }}");
+        }
         for (k, field) in named.iter().enumerate() {
             let name = field.name.as_deref().expect("named");
             if field.store.is_some() {
@@ -300,7 +336,7 @@ fn corpus() -> Corpus {
     }
     let _ = writeln!(out, "}};");
     let _ = writeln!(out);
-    out.push_str(HEADER_EPILOGUE);
+    out.push_str(&HEADER_EPILOGUE.replace("@@ARITH@@", &ARITH.len().to_string()));
     checks.push_str("}\n");
     Corpus {
         header: out,
@@ -367,6 +403,7 @@ fn record_fields(rng: &mut Rng, union: bool) -> Vec<Field> {
                 store: settable.then(|| prefix.to_owned()),
                 name: Some(name),
                 bits: false,
+                arith: false,
             });
             named += 1;
             continue;
@@ -387,6 +424,7 @@ fn record_fields(rng: &mut Rng, union: bool) -> Vec<Field> {
                 name: None,
                 store: None,
                 bits: true,
+                arith: false,
             });
             continue;
         }
@@ -397,6 +435,7 @@ fn record_fields(rng: &mut Rng, union: bool) -> Vec<Field> {
             store: Some(ty.to_owned()),
             name: Some(name),
             bits: true,
+            arith: computes_in_its_own_width(ty, width),
         });
         named += 1;
     }
@@ -408,10 +447,38 @@ fn record_fields(rng: &mut Rng, union: bool) -> Vec<Field> {
             name: Some("f9".to_owned()),
             store: Some("int".to_owned()),
             bits: true,
+            arith: false,
         });
     }
     fields
 }
+
+/// Whether a bit-field of this type and width takes part in arithmetic in its
+/// own width rather than in a promoted type's.
+///
+/// The integer promotions reach every field an `int` or an `unsigned int` can
+/// represent, which leaves the ones wider than that: they keep the declared
+/// type, and the value keeps the declared *width*. Only the unsigned ones are
+/// probed; see [`Field::arith`].
+fn computes_in_its_own_width(ty: &str, width: u32) -> bool {
+    ty == "unsigned long long" && (33..64).contains(&width)
+}
+
+/// The arithmetic the probes run on such a field, in C, with `%` for the
+/// member access.
+///
+/// Every one of them can leave the field's width, and every one of them is
+/// defined for an unsigned type however far it does — so a disagreement is a
+/// disagreement about the precision and nothing else.
+const ARITH: &[&str] = &[
+    "% * %",
+    "% + %",
+    "% - 1",
+    "% << 7",
+    "~%",
+    "-%",
+    "(% << 8) + (% >> 32)",
+];
 
 /// What every generated corpus starts with.
 const HEADER_PROLOGUE: &str = r#"/* The bit-field corpus, generated by tests/bitfield_layout.rs.
@@ -442,7 +509,10 @@ struct BfNested { unsigned int p : 3; int q : 5; char r; };
 "#;
 
 /// What every generated corpus ends with: the report both sides print.
-const HEADER_EPILOGUE: &str = r#"static const long long bf_values[5] = {
+const HEADER_EPILOGUE: &str = r#"/* How many arithmetic probes a bit-field wider than `int` answers. */
+#define BF_ARITH @@ARITH@@
+
+static const long long bf_values[5] = {
     0, -1, 1, 6148914691236517205LL, -6148914691236517206LL
 };
 
@@ -459,9 +529,9 @@ long long bf_query(int s, int op, int k, long long value, unsigned char *out) {
  */
 long bf_report(char *out) {
     char *w = out;
-    int s, k, vi;
+    int s, k, vi, e;
     unsigned long i;
-    long long size, align, members, offset, got;
+    long long size, align, members, offset, got, arith;
     unsigned char bytes[256];
     for (s = 0; s < bf_count(); s++) {
         size = bf_query(s, 0, 0, 0, bytes);
@@ -472,6 +542,7 @@ long bf_report(char *out) {
         for (k = 0; k < (int) members; k++) {
             offset = bf_query(s, 3, k, 0, bytes);
             w += sprintf(w, "S%03d f%d offset=%lld\n", s, k, offset);
+            arith = bf_query(s, 5, k, 0, bytes);
             for (vi = 0; vi < 5; vi++) {
                 got = bf_query(s, 4, k, bf_values[vi], bytes);
                 w += sprintf(w, "S%03d f%d v%d read=%lld bytes=", s, k, vi, got);
@@ -479,6 +550,14 @@ long bf_report(char *out) {
                     w += sprintf(w, "%02x", bytes[i]);
                 }
                 w += sprintf(w, "\n");
+                /* A bit-field wider than `int` computes in its own width; the
+                 * probes are the operations that can leave it. */
+                if (arith) {
+                    for (e = 0; e < BF_ARITH; e++) {
+                        got = bf_query(s, 6 + e, k, bf_values[vi], bytes);
+                        w += sprintf(w, "S%03d f%d v%d e%d=%lld\n", s, k, vi, e, got);
+                    }
+                }
             }
         }
     }

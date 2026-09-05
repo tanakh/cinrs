@@ -134,6 +134,30 @@ c99! {
     unsigned long moved_size(void) { return sizeof(struct Moved); }
 }
 
+c99! {
+    /* `aligned` written after the declarator of a `typedef` of an anonymous
+     * record is a property of the type it names, and the only way to name
+     * that record at all. */
+    typedef struct { char c[8]; } __attribute__((aligned(8))) Octet;
+    typedef struct { char c[3]; } Loose;
+
+    unsigned long octet_size(void)  { return sizeof(Octet); }
+    unsigned long octet_align(void) { return __alignof__(Octet); }
+    unsigned long loose_size(void)  { return sizeof(Loose); }
+
+    static Octet an_octet;
+    int octet_is_aligned(void) { return (((unsigned long) &an_octet) & 7) == 0; }
+}
+
+#[test]
+fn aligned_on_a_typedef_of_an_anonymous_record_is_honoured() {
+    assert_eq!(unsafe { octet_size() }, 8);
+    assert_eq!(unsafe { octet_align() }, 8);
+    assert_eq!(unsafe { loose_size() }, 3);
+    assert_eq!(align_of::<Octet>(), 8);
+    assert_eq!(unsafe { octet_is_aligned() }, 1);
+}
+
 #[test]
 fn aligned_raises_a_records_alignment_and_moves_a_member() {
     assert_eq!(unsafe { cache_line_size() }, 32);
@@ -142,6 +166,90 @@ fn aligned_raises_a_records_alignment_and_moves_a_member() {
     assert_eq!(unsafe { moved_offset() }, 16);
     assert_eq!(unsafe { moved_size() }, 32);
     assert_eq!(size_of::<Moved>(), 32);
+}
+
+// ---------------------------------------------------------------------------
+// reaching an underaligned member
+// ---------------------------------------------------------------------------
+
+c99! {
+    /* Packing moves a member to an offset its own type is not aligned for.
+     * Reading and writing it is what C is for; the generated Rust has to
+     * reach it without an aligned load, which is undefined behaviour there
+     * and an abort in a debug build. */
+    typedef struct {
+        char tag;
+        int  values[3];
+        struct Pair { short a; short b; } pair;
+    } __attribute__((packed)) Wire;
+
+    int  read_value(Wire *w, int i)          { return w->values[i]; }
+    void write_value(Wire *w, int i, int v)  { w->values[i] = v; }
+    short read_pair_b(Wire *w)               { return w->pair.b; }
+    void  write_pair_b(Wire *w, short v)     { w->pair.b = v; }
+    int   sum(Wire *w) {
+        int total = 0, i;
+        for (i = 0; i < 3; i++)
+            total += w->values[i];
+        return total;
+    }
+
+    unsigned long wire_size(void) { return sizeof(Wire); }
+
+    /* An array of packed records has every element at an odd offset from the
+     * one before, so the second element's members are misaligned too. */
+    int nth_value(Wire *ws, int n, int i) { return ws[n].values[i]; }
+}
+
+#[test]
+fn a_packed_member_is_read_and_written_through_a_pointer() {
+    assert_eq!(unsafe { wire_size() }, 1 + 12 + 4);
+    let mut w = Wire {
+        tag: 7,
+        values: [0; 3],
+        pair: Pair { a: 0, b: 0 },
+    };
+    unsafe {
+        for i in 0..3 {
+            write_value(&raw mut w, i, 100 + i);
+        }
+        for i in 0..3 {
+            assert_eq!(read_value(&raw mut w, i), 100 + i);
+        }
+        assert_eq!(sum(&raw mut w), 303);
+        write_pair_b(&raw mut w, -2);
+        assert_eq!(read_pair_b(&raw mut w), -2);
+
+        let mut many = [w, w];
+        many[1].values[2] = 9;
+        assert_eq!(nth_value(many.as_mut_ptr(), 1, 2), 9);
+        assert_eq!(nth_value(many.as_mut_ptr(), 0, 0), 100);
+    }
+}
+
+c99! {
+    /* Type punning a byte buffer to a record: the buffer is one byte aligned,
+     * so every member reached through the cast pointer is underaligned. */
+    typedef struct { int count; double *data; } Header;
+
+    static char buffer[64];
+
+    void store(double *p) {
+        ((Header *) buffer)->count = 3;
+        ((Header *) buffer)->data = p;
+    }
+    double first(void) { return ((Header *) buffer)->data[0]; }
+    int stored_count(void) { return ((Header *) buffer)->count; }
+}
+
+#[test]
+fn a_byte_buffer_punned_to_a_record_is_reached_unaligned() {
+    let mut values = [1.5f64, 2.5];
+    unsafe {
+        store(values.as_mut_ptr());
+        assert_eq!(stored_count(), 3);
+        assert_eq!(first(), 1.5);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1000,6 +1000,122 @@ fn declarations_may_shadow_in_inner_blocks() {
     assert_eq!(unsafe { shadow(1) }, 102);
 }
 
+#[test]
+fn a_block_scope_extern_names_the_object_with_linkage() {
+    c99! {
+        int shared = 3;
+        static int internal = 7;
+
+        /* C99 6.2.2p4: a block-scope object declared without `extern` has no
+         * linkage at all, so a prior declaration of one says nothing about
+         * what an `extern` declaration in an inner block names — which is the
+         * file-scope object, however deeply the local one shadows it. */
+        int reaches_the_global(void) {
+            int shared = 4;
+            {
+                extern int shared;
+                return shared;
+            }
+        }
+
+        int the_local_still_wins(void) {
+            int shared = 4;
+            return shared;
+        }
+
+        /* The prior declaration here *has* linkage — internal, in this case —
+         * and the `extern` inherits it rather than making a second object. */
+        int reaches_the_static(void) {
+            extern int internal;
+            return internal;
+        }
+
+        void set_shared(int v) {
+            extern int shared;
+            shared = v;
+        }
+    }
+
+    unsafe {
+        assert_eq!(reaches_the_global(), 3);
+        assert_eq!(the_local_still_wins(), 4);
+        assert_eq!(reaches_the_static(), 7);
+        set_shared(9);
+        assert_eq!({ shared }, 9);
+        assert_eq!(reaches_the_global(), 9);
+    }
+}
+
+#[test]
+fn an_array_parameters_bound_is_evaluated_on_entry() {
+    c99! {
+        /* C99 6.9.1p10: the bound is not part of the adjusted parameter type
+         * — `a` is an `int *` — but the size expressions of a definition are
+         * still evaluated when the function is entered, in the scope where
+         * the parameters before them are already visible. */
+        int bump_once(int n, int a[n++]) { (void) a; return n; }
+
+        static int calls;
+        int side_effects(void) { calls++; return 4; }
+        int call_count(void) { return calls; }
+
+        void twice(int a[side_effects()], int b[side_effects()]) {
+            (void) a;
+            (void) b;
+        }
+
+        int only_declared(int n, int a[n++]);
+        int only_declared(int n, int a[n++]) { (void) a; return n; }
+    }
+
+    unsafe {
+        let mut storage = [0; 8];
+        assert_eq!(bump_once(10, storage.as_mut_ptr()), 11);
+        assert_eq!(only_declared(1, storage.as_mut_ptr()), 2);
+        assert_eq!(call_count(), 0);
+        twice(storage.as_mut_ptr(), storage.as_mut_ptr());
+        assert_eq!(call_count(), 2);
+    }
+}
+
+#[test]
+fn a_compound_assignment_is_one_evaluation_around_a_call() {
+    c99! {
+        /* C11 6.5.16.2p3: with respect to an indeterminately sequenced
+         * function call, `E1 op= E2` is a *single* evaluation, so the call
+         * cannot happen between the read of `E1` and the write back to it.
+         * Writing it out as `E1 = E1 op E2` would do exactly that. */
+        unsigned int cell[1] = { 2 };
+
+        unsigned int side_effect(void) {
+            cell[0] |= 128;
+            return 1;
+        }
+
+        unsigned int compound(void) {
+            cell[0] |= side_effect();
+            return cell[0];
+        }
+
+        static int index_calls;
+        int which(void) { index_calls++; return 0; }
+        int index_call_count(void) { return index_calls; }
+
+        unsigned int the_place_is_computed_once(void) {
+            cell[which()] += side_effect();
+            return cell[0];
+        }
+    }
+
+    unsafe {
+        // The call sets bit 7 and returns 1; both survive.
+        assert_eq!(compound(), 2 | 128 | 1);
+        cell[0] = 0;
+        assert_eq!(the_place_is_computed_once(), 128 + 1);
+        assert_eq!(index_call_count(), 1);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // robustness
 // ---------------------------------------------------------------------------

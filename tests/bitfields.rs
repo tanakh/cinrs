@@ -184,6 +184,124 @@ fn a_bit_field_promotes_by_its_width() {
     }
 }
 
+#[test]
+fn a_cast_of_a_bit_field_is_not_a_no_op() {
+    c99! {
+        /* Reading `u` promotes it to `int` — every seven-bit unsigned value
+         * fits in one — so `%` below is signed. Writing the cast turns the
+         * same field into a full-width `unsigned int`, and the operation
+         * around it becomes unsigned. The two answers differ, which is the
+         * whole point: a cast to the field's own *declared* type is a
+         * conversion and not a no-op. */
+        struct Narrow { signed int s : 7; unsigned int u : 7; };
+
+        int promoted(int lhs) {
+            struct Narrow n;
+            n.u = 61;
+            return lhs % n.u;
+        }
+
+        unsigned int cast_to_unsigned(int lhs) {
+            struct Narrow n;
+            n.u = 61;
+            return lhs % (unsigned int) n.u;
+        }
+
+        int both_fields(void) {
+            struct Narrow n;
+            n.s = -13;
+            n.u = 61;
+            return n.s % n.u;
+        }
+
+        unsigned int both_fields_cast(void) {
+            struct Narrow n;
+            n.s = -13;
+            n.u = 61;
+            return n.s % (unsigned int) n.u;
+        }
+    }
+
+    unsafe {
+        // -13 % 61 is -13; 4294967283 % 61 is 44. Which of the two an
+        // operation gives is the whole difference the cast makes.
+        assert_eq!(promoted(-13), -13);
+        assert_eq!(cast_to_unsigned(-13), (-13i32 as u32) % 61);
+        assert_eq!(both_fields(), -13);
+        assert_eq!(both_fields_cast(), (-13i32 as u32) % 61);
+    }
+}
+
+#[test]
+fn a_field_wider_than_int_computes_in_its_own_width() {
+    c99! {
+        /* A field the integer promotions cannot reach keeps its declared
+         * type, and C99 6.7.2.1p10 gives its value the declared *width*: the
+         * arithmetic is done in that many bits, exactly as it is in thirty-two
+         * for an `unsigned int`. Two fields of different widths meet in the
+         * wider of the two. */
+        struct Wide {
+            unsigned long long a : 33;
+            unsigned long long b : 40;
+            unsigned long long c : 41;
+        };
+
+        unsigned long long square_a(unsigned long long v) {
+            struct Wide w; w.a = v; return w.a * w.a;
+        }
+        unsigned long long a_times_c(unsigned long long v) {
+            struct Wide w; w.a = v; w.c = v; return w.a * w.c;
+        }
+        unsigned long long shift_b(unsigned long long v, int by) {
+            struct Wide w; w.b = v; return w.b << by;
+        }
+        unsigned long long rotate_b(unsigned long long v) {
+            struct Wide w; w.b = v; return (w.b << 8) + (w.b >> 32);
+        }
+        unsigned long long minus_one(void) {
+            struct Wide w; w.b = 0; return w.b - 1;
+        }
+        unsigned long long against_int(unsigned long long v) {
+            /* An `int` operand has thirty-two bits and the field forty, so
+             * forty is where the addition happens. */
+            struct Wide w; w.b = v; return w.b + 1;
+        }
+        unsigned long long against_unsigned_long_long(unsigned long long v) {
+            /* Sixty-four bits beat forty, and nothing is truncated. */
+            struct Wide w; w.b = v; return w.b + 1ULL * 1;
+        }
+        unsigned long long complement(unsigned long long v) {
+            struct Wide w; w.b = v; return ~w.b;
+        }
+        long long signed_wide(long long v) {
+            struct { long long s : 33; } w;
+            w.s = v;
+            return w.s * 2;
+        }
+    }
+
+    unsafe {
+        // 2^20 squared is 2^40, which is zero in thirty-three bits.
+        assert_eq!(square_a(1 << 20), 0);
+        // …and 2^40 in forty-one, which is where `a * c` computes.
+        assert_eq!(a_times_c(1 << 20), 1 << 40);
+        assert_eq!(shift_b(0x100, 32), 0);
+        assert_eq!(shift_b(1, 8), 0x100);
+        assert_eq!(rotate_b(0x01_0000_0001), 0x101);
+        assert_eq!(rotate_b(0x01_0000_0000), 1);
+        assert_eq!(minus_one(), 0xff_ffff_ffff);
+        assert_eq!(against_int(0xff_ffff_ffff), 0);
+        assert_eq!(against_unsigned_long_long(0xff_ffff_ffff), 0x100_0000_0000);
+        assert_eq!(complement(0), 0xff_ffff_ffff);
+        assert_eq!(signed_wide(-1), -2);
+        assert_eq!(signed_wide(1 << 30), 1 << 31);
+        // Doubling 2^31 overflows a signed 33-bit field, which C leaves
+        // undefined; it wraps here, in the field's width, exactly as signed
+        // overflow wraps everywhere else in the generated code.
+        assert_eq!(signed_wide(1 << 31), -(1i64 << 32));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // updating in place
 // ---------------------------------------------------------------------------

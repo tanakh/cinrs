@@ -890,9 +890,10 @@ impl Sema<'_> {
                 let value = self.expr(operand)?;
                 self.require_arithmetic(&value, op.as_str(), operand.range)?;
                 let promoted = self.promoted(&value);
+                let bits = self.narrow_bits(&value);
                 let value = self.convert(value, promoted);
                 if op == ast::UnaryOp::Plus {
-                    return Some(Expr::new(value.kind, promoted, range));
+                    return Some(Expr::new(value.kind, promoted, range).narrowed(bits));
                 }
                 // Folding `-` into the literal is what makes a negative
                 // constant read like one in the generated code.
@@ -902,18 +903,15 @@ impl Sema<'_> {
                 if let ExprKind::Float(v) = &value.kind {
                     return Some(Expr::new(ExprKind::Float(-*v), promoted, range));
                 }
-                Some(Expr::new(ExprKind::Neg(Box::new(value)), promoted, range))
+                Some(Expr::new(ExprKind::Neg(Box::new(value)), promoted, range).narrowed(bits))
             }
             ast::UnaryOp::BitNot => {
                 let value = self.expr(operand)?;
                 self.require_integer(&value, "~", operand.range)?;
                 let promoted = self.promoted(&value);
+                let bits = self.narrow_bits(&value);
                 let value = self.convert(value, promoted);
-                Some(Expr::new(
-                    ExprKind::BitNot(Box::new(value)),
-                    promoted,
-                    range,
-                ))
+                Some(Expr::new(ExprKind::BitNot(Box::new(value)), promoted, range).narrowed(bits))
             }
             ast::UnaryOp::LogNot => {
                 // `!x` is `x == 0`, which also gives it the right type.
@@ -1114,32 +1112,47 @@ impl Sema<'_> {
 
         if bin.is_shift() {
             // The operands of a shift are promoted separately: the result has
-            // the type of the promoted left operand.
+            // the type of the promoted left operand, and — for a bit-field the
+            // promotions do not reach — its width. `x.b << 32` on a forty-bit
+            // field shifts in forty bits.
             let lhs_ty = self.promoted(&lhs_value);
             let rhs_ty = self.promoted(&rhs_value);
+            let bits = self.narrow_bits(&lhs_value);
             let lhs_value = self.convert(lhs_value, lhs_ty);
             let rhs_value = self.convert(rhs_value, rhs_ty);
-            return Some(Expr::new(
+            return Some(
+                Expr::new(
+                    ExprKind::Binary {
+                        op: bin,
+                        lhs: Box::new(lhs_value),
+                        rhs: Box::new(rhs_value),
+                    },
+                    lhs_ty,
+                    range,
+                )
+                .narrowed(bits),
+            );
+        }
+
+        let common = Ty::usual_arithmetic(
+            self.promoted(&lhs_value),
+            self.promoted(&rhs_value),
+            &self.target,
+        );
+        let bits = self.result_bits(common, [&lhs_value, &rhs_value]);
+        let (lhs_value, rhs_value, common) = self.balance(lhs_value, rhs_value);
+        Some(
+            Expr::new(
                 ExprKind::Binary {
                     op: bin,
                     lhs: Box::new(lhs_value),
                     rhs: Box::new(rhs_value),
                 },
-                lhs_ty,
+                common,
                 range,
-            ));
-        }
-
-        let (lhs_value, rhs_value, common) = self.balance(lhs_value, rhs_value);
-        Some(Expr::new(
-            ExprKind::Binary {
-                op: bin,
-                lhs: Box::new(lhs_value),
-                rhs: Box::new(rhs_value),
-            },
-            common,
-            range,
-        ))
+            )
+            .narrowed(bits),
+        )
     }
 
     /// `p + n`, `n + p`, `p - n` and `p - q`.
@@ -1829,6 +1842,17 @@ impl Sema<'_> {
             return Some(Expr::new(ExprKind::Zeroed, target, range));
         }
         if target.is_arithmetic() && value.ty.is_arithmetic() {
+            // A cast of a bit-field is never a no-op, even to the field's own
+            // declared type. `unsigned u : 7` reads back as an `int` — the
+            // width-restricted promotions of 6.3.1.1p2 — while
+            // `(unsigned int) x.u` converts to a full-width `unsigned int`
+            // and takes the arithmetic around it with it. Eliding the cast
+            // here would leave a bare load behind for `Sema::promoted` to
+            // promote all over again, which is exactly the bug GCC's
+            // `bitfld-1` was written for.
+            if value.ty == target && self.is_bit_field_load(&value) {
+                return Some(Expr::new(ExprKind::Cast(Box::new(value)), target, range));
+            }
             let converted = self.convert(value, target);
             // A cast is always explicit in the output, even when it is a
             // no-op, so that the generated code mirrors the source.

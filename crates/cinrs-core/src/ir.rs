@@ -1675,6 +1675,18 @@ pub struct Expr {
     pub kind: ExprKind,
     /// The type of its value.
     pub ty: Ty,
+    /// The number of bits the value is reduced to, when that is narrower than
+    /// [`Expr::ty`].
+    ///
+    /// A bit-field wider than `int` keeps its declared type through the
+    /// integer promotions (6.3.1.1p2 has nothing to say about it), but its
+    /// *value* still ranges over the declared width only, and C99 6.7.2.1p10
+    /// makes that width the type the arithmetic happens in: `unsigned long
+    /// long b : 40` multiplies, adds and shifts in forty bits, exactly as an
+    /// `unsigned int` does in thirty-two. Nothing else in the type model can
+    /// say that, so the width rides along on the expression and code
+    /// generation reduces the result to it.
+    pub bits: Option<u32>,
     /// Where it was written.
     pub range: SourceRange,
 }
@@ -1682,7 +1694,18 @@ pub struct Expr {
 impl Expr {
     /// Builds an expression.
     pub fn new(kind: ExprKind, ty: Ty, range: SourceRange) -> Self {
-        Self { kind, ty, range }
+        Self {
+            kind,
+            ty,
+            bits: None,
+            range,
+        }
+    }
+
+    /// The same expression, computed in `bits` bits; see [`Expr::bits`].
+    pub fn narrowed(mut self, bits: Option<u32>) -> Self {
+        self.bits = bits;
+        self
     }
 
     /// An integer constant of type `ty`.
@@ -2219,6 +2242,69 @@ pub fn expr_never_returns(expr: &Expr, functions: &[Function]) -> bool {
         ExprKind::Cast(inner) => expr_never_returns(inner, functions),
         ExprKind::Comma { rhs, .. } => expr_never_returns(rhs, functions),
         _ => false,
+    }
+}
+
+/// Whether evaluating `expr` can call a function.
+///
+/// C11 6.5.16.2p3 is why this is worth asking: a compound assignment is, "with
+/// respect to an indeterminately-sequenced function call, a single evaluation",
+/// so the read-modify-write of `x |= f()` may not be split around the call to
+/// `f` the way `x = x | f()` would be. Code generation evaluates such a right
+/// operand into a temporary first, and asks this to know when it has to.
+pub fn calls_a_function(expr: &Expr) -> bool {
+    let any = |list: &[Expr]| list.iter().any(calls_a_function);
+    match &expr.kind {
+        // A statement expression is a block, which can hold anything.
+        ExprKind::Call { .. } | ExprKind::StmtExpr { .. } => true,
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Zeroed
+        | ExprKind::FuncAddr(_)
+        | ExprKind::VaListPristine
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Unreachable
+        | ExprKind::VaEnd => false,
+        ExprKind::Load(place) | ExprKind::AddrOf(place) => place_calls_a_function(place),
+        ExprKind::VaArg { ap } => place_calls_a_function(ap),
+        ExprKind::Assign { place, value } | ExprKind::CompoundAssign { place, value, .. } => {
+            place_calls_a_function(place) || calls_a_function(value)
+        }
+        ExprKind::IncDec { place, .. } => place_calls_a_function(place),
+        ExprKind::Neg(inner) | ExprKind::BitNot(inner) | ExprKind::Cast(inner) => {
+            calls_a_function(inner)
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Compare { lhs, rhs, .. }
+        | ExprKind::Logical { lhs, rhs, .. }
+        | ExprKind::PtrDiff { lhs, rhs }
+        | ExprKind::Comma { lhs, rhs } => calls_a_function(lhs) || calls_a_function(rhs),
+        ExprKind::PtrOffset { ptr, index, .. } => calls_a_function(ptr) || calls_a_function(index),
+        ExprKind::Cond {
+            cond,
+            then_expr,
+            else_expr,
+        } => calls_a_function(cond) || calls_a_function(then_expr) || calls_a_function(else_expr),
+        ExprKind::CondDefault { value, else_expr } => {
+            calls_a_function(value) || calls_a_function(else_expr)
+        }
+        ExprKind::Builtin { args, .. } => any(args),
+        ExprKind::RecordLit { fields, .. } => any(fields),
+        ExprKind::UnionLit { value, .. } => calls_a_function(value),
+        ExprKind::ArrayLit(items) => any(items),
+        ExprKind::ArrayRepeat { value, .. } => calls_a_function(value),
+    }
+}
+
+/// [`calls_a_function`], for the expressions inside a place.
+fn place_calls_a_function(place: &Place) -> bool {
+    match &place.kind {
+        PlaceKind::Object(_) | PlaceKind::Str(_) => false,
+        PlaceKind::Deref(ptr) => calls_a_function(ptr),
+        PlaceKind::Index { base, index } => calls_a_function(base) || calls_a_function(index),
+        PlaceKind::Field { base, .. } => place_calls_a_function(base),
+        PlaceKind::Temporary(expr) => calls_a_function(expr),
+        PlaceKind::CompoundLiteral { init, .. } => calls_a_function(init),
     }
 }
 

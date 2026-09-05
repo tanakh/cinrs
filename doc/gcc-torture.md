@@ -147,17 +147,17 @@ pinned corpus revision.
 
 | group | run | passed | rate |
 | --- | ---: | ---: | ---: |
-| `execute` | 1691 | 1195 | **70.7 %** |
+| `execute` | 1691 | 1208 | **71.4 %** |
 | `execute/ieee` | 78 | 35 | 44.9 % |
-| **total** | **1769** | **1230** | **69.5 %** |
+| **total** | **1769** | **1243** | **70.3 %** |
 
-539 failed and 7 were not generated at all: five want the effective target
+526 failed and 7 were not generated at all: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
 literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-524 of the 539 are refused at compile time, in 60 distinct causes. The ones
+524 of the 526 are refused at compile time, in 60 distinct causes. The ones
 worth a line each:
 
 | cases | cause | e.g. |
@@ -194,40 +194,40 @@ expected-failure list.
 
 ### The programs that built and then did the wrong thing
 
-Fifteen cases compiled, ran and failed. These are the interesting ones — a
-miscompilation or an unsupported semantic that nothing diagnosed — and each is
-a to-do item with a name. Fourteen died on `abort()`, which in this corpus
-means the program's own check failed:
+**Two** cases compile, run and fail. These are the interesting ones — a
+miscompilation, or a semantic nothing diagnosed and nothing implemented — and
+there were fifteen of them until they were triaged one by one. Thirteen were
+bugs and are fixed; the two that are left are not bugs in the translation:
 
-```
-execute/20021127-1     execute/20050215-1     execute/20100430-1
-execute/bcp-1          execute/bitfld-1       execute/bitfld-3
-execute/eeprof-1       execute/pr32244-1      execute/pr34971
-execute/pr43987        execute/pr58943        execute/pr77767
-execute/scope-1        execute/strct-pack-2
-```
+| case | verdict |
+| --- | --- |
+| `execute/20021127-1` | the case *defines* `long long llabs(long long)` as a function that aborts, and requires the compiler to expand the builtin inline rather than call it. Defining a standard library function is undefined behaviour (7.1.3p2), and `cinrs` calls what the program defined. |
+| `execute/eeprof-1` | needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter` and `_exit` around its body. No entry point can ask for it, and the harness passes no options. |
 
-and one returned a non-zero status:
+Everything else on the list is fixed. Each of the thirteen was a real bug, and
+each has a regression test of its own next to the fix:
 
-```
-execute/970217-1
-```
+| cases | what was wrong |
+| --- | --- |
+| `bitfld-1` | a cast of a bit-field to its own declared type was elided as a no-op, so `(unsigned int) x.u` took part in arithmetic as the `int` the width-restricted promotions give a bare `x.u`. `tests/bitfields.rs` |
+| `bitfld-3`, `pr32244-1`, `pr34971` | a bit-field wider than `int` keeps its declared type through the promotions, but its value keeps the declared *width*, and C99 6.7.2.1p10 makes that width the precision the arithmetic happens in: `unsigned long long b : 40` multiplies, adds and shifts in forty bits. It was computing in sixty-four. `tests/bitfields.rs`, and the differential corpus in `tests/bitfield_layout.rs` now probes it against the host compiler. |
+| `strct-pack-2`, `20100430-1`, `pr43987` | an object reached through a packed member — or through a pointer cast that lands on one, which is what punning a `char` buffer to a record does — was loaded and stored as if it were aligned. That is undefined behaviour in Rust and an abort in a debug build; such a place now goes through `read_unaligned` and `write_unaligned`. `tests/gnu_attributes.rs` |
+| `20050215-1` | `__attribute__((aligned(N)))` written after the declarator of a `typedef` of an anonymous record was dropped. The typedef name is the only way to name such a record, so the alignment is given to the record itself. `tests/gnu_attributes.rs` |
+| `970217-1`, `pr77767` | the size expressions of an array parameter of a *definition* were never evaluated, and C99 6.9.1p10 evaluates them on entry: `void f(int n, int a[n++])` increments `n`. `tests/execute.rs` |
+| `scope-1` | `extern int v;` in a block bound to the block-scope `int v` that shadowed the file-scope one. A block-scope object declared without `extern` has no linkage at all, so it says nothing about what the `extern` names (6.2.2p4). `tests/execute.rs` |
+| `pr58943` | `x \|= f()` was written out as `x = x \| f()`, which reads `x`, calls `f` and only then stores. C11 6.5.16.2p3 makes the read-modify-write a *single* evaluation with respect to an indeterminately sequenced call, so the right operand is now evaluated into a temporary first. `tests/execute.rs` |
+| `bcp-1` | `__builtin_constant_p` said no to the address of a string literal, and to a character read out of one at a constant index. GCC says yes to both. `tests/gnu_builtins.rs` |
 
-Three groups stand out in that list and are where triage should start:
-`bitfld-1`, `bitfld-3` and `strct-pack-2` are bit-field layout and packing;
-`bcp-1`, `pr32244-1`, `pr34971` and `pr58943` are bit-field *arithmetic* and
-narrow-type promotion; `eeprof-1` and `scope-1` are about linkage and scope
-rather than about arithmetic. The report names every one of them, so
-`CINRS_GCC_TORTURE_REPORT=1` is where the current list lives if this one has
-gone stale.
+The report names both remaining cases, so `CINRS_GCC_TORTURE_REPORT=1` is where
+the current list lives if this one has gone stale.
 
 ## The expected-failure list
 
-`tests/gcc-torture/expected-failures.txt`, one id per line, in the same format
-the other two suites use — see
+`tests/gcc-torture/expected-failures.txt`, 526 lines, one id per line, in the
+same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has
-started passing so the line can go. 43 lines carry `?`, which here means "this
+started passing so the line can go. 45 lines carry `?`, which here means "this
 needs Rust 1.99": they pass on a newer toolchain and are guarded neither way.
 
 ## Reproducing the numbers

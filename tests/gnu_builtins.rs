@@ -54,6 +54,16 @@ c99! {
     int constant_of_a_literal(void) { return is_constant(1 + 2 * 3); }
     int constant_of_a_variable(int n) { return is_constant(n); }
 
+    /* A string literal lives in the constant pool, so GCC calls its address
+     * — and a character read out of it at a constant index — constant. The
+     * address of an object is not: the linker decides it. */
+    int global;
+    int constant_of_a_string(void) { return is_constant("hi"); }
+    int constant_of_a_string_char(void) { return is_constant("hi"[1]); }
+    int constant_of_an_address(void) { return is_constant(&global); }
+    int constant_of_a_local_array(void) { char buf[4]; return is_constant(buf); }
+    int constant_of_a_pointer_read(const char *p) { return is_constant(p[3]); }
+
     int same_type(void) { return __builtin_types_compatible_p(int, signed int); }
     int different_type(void) { return __builtin_types_compatible_p(int, long); }
     int pointer_types(void) {
@@ -79,6 +89,11 @@ c99! {
 fn the_questions_about_the_program_are_answered_at_compile_time() {
     assert_eq!(unsafe { constant_of_a_literal() }, 1);
     assert_eq!(unsafe { constant_of_a_variable(1) }, 0);
+    assert_eq!(unsafe { constant_of_a_string() }, 1);
+    assert_eq!(unsafe { constant_of_a_string_char() }, 1);
+    assert_eq!(unsafe { constant_of_an_address() }, 0);
+    assert_eq!(unsafe { constant_of_a_local_array() }, 0);
+    assert_eq!(unsafe { constant_of_a_pointer_read(c"hi".as_ptr()) }, 0);
     assert_eq!(unsafe { same_type() }, 1);
     assert_eq!(unsafe { different_type() }, 0);
     // `char *` and `const char *` are different types, as C says.
