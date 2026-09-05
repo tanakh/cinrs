@@ -5,16 +5,28 @@
 # one which has started passing is reported and the line can go. See
 # `doc/c-testsuite.md` for what the causes are.
 #
-# One test id per line, with a note after it. An id written `?NNNNN`
-# passes or fails depending on the toolchain, and is guarded neither
-# way. Regenerate with
+# One test id per line, with a note after it, and a marker in front of
+# the id saying what kind of claim the line makes:
+#
+#   NNNNN   `cinrs` gets this one wrong.
+#   ?NNNNN  It passes or fails depending on the toolchain, and is
+#           guarded neither way.
+#   !NNNNN  This entry point makes the case invalid, so refusing it is
+#           conforming behaviour and not a gap. Guard mode requires the
+#           case to fail to *compile*; one that builds and runs is a
+#           failure. The note may open with `error: "<substring>"`,
+#           which the diagnostic then has to contain.
+#
+# Regenerate with
 #
 #     CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_UPDATE_EXPECTED=1 \
 #         CINRS_CTESTSUITE_STANDARD=gnu23 cargo test --test c_testsuite
+#
+# which keeps every `?` and `!` line as it stands.
 
 ?00140  variadic function definition; needs Rust 1.99, so it passes there and not before
 00204   unsupported: `va_arg` with a struct type
 00207   unsupported: variable length array
-00209   conforming: it calls an `int (*fp)();` with an argument, which C23 removed; `gcc -std=c23` refuses it in the same words
+!00209  error: "too many arguments to function call"  conforming: C23 removed function declarators without a prototype (N2841), so the `int (*fp)();` this case calls with an argument takes none and the call has one argument too many; `gcc -std=c23` refuses it in the same words
 00213   unsupported: a `goto` out of a statement expression, and `?:` with one `void` operand
 00216   unsupported: initializing a flexible array member; under `c99!` also the C23 empty initializer `{}`

@@ -79,7 +79,10 @@ failure is reported by `ui_test` exactly as a failure in `tests/ui` is, with
 the compiler's diagnostics or the stdout diff. The listed ones are generated
 into a directory of their own and run as well, but only so that one which has
 *started* passing is reported and its line can be deleted. That report is a
-warning; `CINRS_CTESTSUITE_STRICT=1` makes it a failure.
+warning; `CINRS_CTESTSUITE_STRICT=1` makes it a failure. A `!` entry is the
+exception: it is *asserted* rather than skipped, and the assertion failing is a
+failure whatever `CINRS_CTESTSUITE_STRICT` says. See [the markers](#the-markers)
+below.
 
 **Report mode** runs everything, fails nothing and prints the numbers:
 
@@ -94,8 +97,9 @@ CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_UPDATE_EXPECTED=1 \
     cargo test --test c_testsuite
 ```
 
-which keeps the note already written against an id that still fails, and adds
-the one-line classification as the note for a new one.
+which keeps the note already written against an id that still fails, adds the
+one-line classification as the note for a new one, and leaves every `?` and
+`!` line exactly as it stands.
 
 | variable | effect |
 | --- | --- |
@@ -103,8 +107,8 @@ the one-line classification as the note for a new one.
 | `CINRS_CTESTSUITE_STANDARD=c99\|c11\|c23\|gnu99\|gnu11\|gnu23` | which entry point to translate with, and which cases are eligible; default `c99` |
 | `CINRS_CTESTSUITE_FILTER=<substring>` | only the cases whose id contains it |
 | `CINRS_CTESTSUITE_REPORT=1` | report mode |
-| `CINRS_CTESTSUITE_STRICT=1` | a stale expected-failure entry is a failure |
-| `CINRS_CTESTSUITE_UPDATE_EXPECTED=1` | rewrite the list from the report |
+| `CINRS_CTESTSUITE_STRICT=1` | a stale expected-failure entry is a failure — a broken `!` assertion is one either way |
+| `CINRS_CTESTSUITE_UPDATE_EXPECTED=1` | rewrite the list from the report, keeping every `?` and `!` line |
 | `CINRS_CTESTSUITE_TIMEOUT=<seconds>` | per-case timeout, 20 by default; `0` disables it |
 
 The expected-failure list for `c99!` is
@@ -112,9 +116,38 @@ The expected-failure list for `c99!` is
 its own — `expected-failures-c11.txt`, `-c23.txt`, `-gnu99.txt`, `-gnu11.txt`
 and `-gnu23.txt` — because a case that needs C11 fails under `c99!` and passes
 under `c11!` and one list cannot say both. The format is one id per line with a
-note after it and `#` for a comment; an id written `?NNNNN` passes or fails
-depending on the *toolchain* and is guarded neither way — `00140` defines a
-variadic function, which needs Rust 1.99.
+note after it and `#` for a comment.
+
+### The markers
+
+A marker in front of the id says what kind of claim the line is making, and
+the three kinds are handled differently in each mode.
+
+| line | means |
+| --- | --- |
+| `NNNNN  <note>` | `cinrs` gets this one wrong. |
+| `?NNNNN  <note>` | It passes or fails depending on the *toolchain*. |
+| `!NNNNN  <note>` | This entry point makes the case **invalid**, so refusing it is conforming behaviour and not a gap. |
+
+A `!` line may name the diagnostic the case has to be refused with, written in
+front of the note as `error: "<substring>"`:
+
+```
+!00209  error: "too many arguments to function call"  conforming: C23 removed …
+```
+
+The substring is plain text, matched against everything the compiler wrote;
+there is no escape, so it cannot itself contain a `"`.
+
+| | plain | `?` | `!` |
+| --- | --- | --- | --- |
+| **guard** | skipped; a warning (a failure under `CINRS_CTESTSUITE_STRICT=1`) if it starts passing | run, but guarded neither way | **asserted**: the case must fail to *compile*, and the output must contain the substring where one is given. One that builds and runs, or is refused in the wrong words, is a failure whatever `CINRS_CTESTSUITE_STRICT` says |
+| **report** | counted as a failure, listed under its cause | counted as it came out here, and listed under `toolchain-dependent` | counted under `rejected as the standard requires` and listed there, never as a failure |
+| **update** | rewritten from the run | kept as it stands | kept as it stands; never downgraded to a plain failure, and a case that stopped being refused is warned about rather than deleted |
+
+`00140` is the `?` entry: it defines a variadic function, which needs Rust
+1.99, so it passes on a new enough compiler and not on an older one. `00209`
+is the `!` entry, under `c23!` and `gnu23!` only.
 
 ## Which cases are selected
 
@@ -208,25 +241,41 @@ is an ordinary run failure, reported as `runtime: killed by signal N`.
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
 corpus revision.
 
-| entry point | selected | passed | rate |
+| entry point | selected | passed | rate | rejected | failed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `c99!` | 218 | 212 | **97.2 %** | — | 6 |
+| `c11!` | 220 | 215 | **97.7 %** | — | 5 |
+| `c23!` | 220 | 214 | **97.3 %** | 1 | 5 |
+| `gnu99!` | 220 | 215 | **97.7 %** | — | 5 |
+| `gnu11!` | 220 | 215 | **97.7 %** | — | 5 |
+| `gnu23!` | 220 | 214 | **97.3 %** | 1 | 5 |
+
+*rejected* is the `!` category: a case this entry point is *required* to
+refuse, which is neither a pass nor a failure. It stays in the denominator —
+it is one of the cases the run looked at — so the three columns add up to
+*selected*, and the rate is the fraction of the selection that was accepted
+and produced the right output. The report mode summary line says the same
+thing:
+
+```
+c-testsuite / single-exec through `c23!`: 214/220 passed (97.3%), 1 rejected as the standard requires, 5 failed
+```
+
+Per tag, under `c23!` (a run that selects everything and has a rejection in
+it):
+
+| tag | passed | rate | rejected |
 | --- | ---: | ---: | ---: |
-| `c99!` | 218 | 212 | **97.2 %** |
-| `c11!` | 220 | 215 | **97.7 %** |
-| `c23!` | 220 | 214 | **97.3 %** |
-| `gnu99!` | 220 | 215 | **97.7 %** |
-| `gnu11!` | 220 | 215 | **97.7 %** |
-| `gnu23!` | 220 | 214 | **97.3 %** |
+| `portable` | 214/220 | 97.3 % | 1 |
+| `c89` | 170/174 | 97.7 % | 1 |
+| `c99` | 42/43 | 97.7 % | — |
+| `c11` | 2/2 | 100 % | — |
+| `needs-cpp` | 95/98 | 96.9 % | — |
+| `needs-libc` | 60/63 | 95.2 % | — |
 
-Per tag, under `c11!` (the run that selects everything):
-
-| tag | passed | rate |
-| --- | ---: | ---: |
-| `portable` | 215/220 | 97.7 % |
-| `c89` | 171/174 | 98.3 % |
-| `c99` | 42/43 | 97.7 % |
-| `c11` | 2/2 | 100 % |
-| `needs-cpp` | 95/98 | 96.9 % |
-| `needs-libc` | 60/63 | 95.2 % |
+Under `c11!`, where nothing is rejected, the same rows are 215/220 (97.7 %)
+`portable`, 171/174 (98.3 %) `c89`, 42/43 `c99`, 2/2 `c11`, 95/98 `needs-cpp`
+and 60/63 `needs-libc`.
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
@@ -240,9 +289,9 @@ switching the dialect on buys eligibility rather than passes.
 
 ### The failures, by cause
 
-Five cases fail under `c11!`, all of them to compile. `c99!` adds `00219`,
-which wants a later entry point, and the two C23 entry points add `00209`,
-which C23 itself makes invalid. None of them is a `cinrs` bug: the earlier
+Five cases fail under `c11!`, all of them to compile, and the two C23 entry
+points fail the same five. `c99!` adds `00219`, which wants a later entry
+point. None of them is a `cinrs` bug: the earlier
 measurements' failures — `00110`, `00149`, `00150`, `00152`, `00159`, `00200`,
 `00209`, `00218`, `00219` and `00220` — are fixed and have regression tests of
 their own, and so are the six the GNU extensions closed (`00095`, `00170`,
@@ -264,11 +313,25 @@ needs Rust 1.99.
 tagged `c89`, so `c99!` refuses it and says to write `c11!`. Under every other
 entry point — including `gnu99!`, which accepts what C11 added — it passes.
 
-**Made invalid by the entry point (1, `c23!` and `gnu23!` only).** `00209`
-calls an `int (*fp)();` with an argument. That is C89 through C17, and
+### Rejected as the standard requires
+
+One case, under `c23!` and `gnu23!` only, and not a failure of anything.
+
+`00209` calls an `int (*fp)();` with an argument. That is C89 through C17, and
 `cinrs` supports it there; C23 removed function declarators without a
 prototype (N2841), so `fp` takes no parameters and the call has one argument
-too many. `gcc -std=c23` refuses the case in the same words.
+too many. `gcc -std=c23` refuses the case in the same words. Refusing it is
+the *correct* answer for those two entry points, so the c23 and gnu23 lists
+carry it as a `!` entry and the harness asserts the refusal rather than
+tolerating it:
+
+```
+!00209  error: "too many arguments to function call"  conforming: C23 removed …
+```
+
+If `cinrs` ever started accepting `00209` under `c23!`, `cargo test` would
+fail — which is the point of the marker: the other five entries record what
+the compiler cannot yet do, and this one records what it must not do.
 
 ## Reproducing the numbers
 
@@ -277,6 +340,8 @@ cargo test --test c_testsuite                                   # guard, c99
 CINRS_CTESTSUITE_REPORT=1 cargo test --test c_testsuite          # report, c99
 CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_STANDARD=c11 \
     cargo test --test c_testsuite                                # report, c11
+CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_STANDARD=c23 \
+    cargo test --test c_testsuite                                # report, c23
 CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_STANDARD=gnu99 \
     cargo test --test c_testsuite                                # report, gnu99
 ```

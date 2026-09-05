@@ -25,9 +25,7 @@
 //! listed ones are generated into a directory of their own and run as well,
 //! but only so that one which has started passing can be reported — as a
 //! warning, or as a failure under `CINRS_CTESTSUITE_STRICT=1` — so that the
-//! list gets pruned instead of quietly rotting. An id written `?NNNNN` there
-//! passes or fails depending on the toolchain, and is guarded neither way:
-//! `00140` defines a variadic function, which needs Rust 1.99.
+//! list gets pruned instead of quietly rotting.
 //!
 //! **Report mode** (`CINRS_CTESTSUITE_REPORT=1`) generates every selected
 //! case, runs them all, never fails the process, and prints the pass rate
@@ -35,6 +33,25 @@
 //! `CINRS_CTESTSUITE_UPDATE_EXPECTED=1` then rewrites the expected-failure
 //! list from what it saw, keeping the notes already written against ids that
 //! still fail.
+//!
+//! # The three markers
+//!
+//! A line of an expected-failure list is `[marker]NNNNN  <note>`, and the
+//! marker says what kind of claim the line is making. See [`EntryKind`].
+//!
+//! | marker | means | guard mode | report mode |
+//! | --- | --- | --- | --- |
+//! | none | `cinrs` gets it wrong | skipped; reported if it starts passing | counted as a failure |
+//! | `?` | the answer depends on the toolchain | guarded neither way | counted as it came out, listed separately |
+//! | `!` | the standard requires it to be *refused* | **asserted** to fail to compile | counted separately, not as a failure |
+//!
+//! A `!` line may name the diagnostic it must be refused with, as
+//! `!NNNNN  error: "<substring>"  <note>`; guard mode then also requires the
+//! compiler's output to contain that substring. `!` is for a case the entry
+//! point makes invalid — `00209` calls an `int (*fp)();` with an argument,
+//! which is fine through C17 and which C23 removed — so refusing it is
+//! conforming behaviour and not a gap, and a `!` case that *compiles and runs*
+//! fails the guard.
 //!
 //! # What is generated
 //!
@@ -561,7 +578,18 @@ enum Outcome {
         classification: String,
         /// The first interesting line of what the failing command wrote.
         detail: String,
+        /// Everything the failing command wrote, for a `!` entry that names a
+        /// substring its diagnostic has to contain.
+        output: String,
     },
+}
+
+impl Outcome {
+    /// Whether the case was refused by the compiler, rather than built and
+    /// then found wanting.
+    fn is_compile_error(&self) -> bool {
+        matches!(self, Outcome::Failed { classification, .. } if classification.starts_with("compile error"))
+    }
 }
 
 /// One recorded run of one file, in one phase.
@@ -739,6 +767,7 @@ fn classify(revision: &str, errors: &[Error], output: &[u8]) -> Outcome {
     Outcome::Failed {
         classification,
         detail,
+        output: String::from_utf8_lossy(output).into_owned(),
     }
 }
 
@@ -786,20 +815,83 @@ fn list_path(standard: Standard) -> PathBuf {
     }
 }
 
+/// What the marker on an expected-failure line claims about its case.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum EntryKind {
+    /// A plain `NNNNN`: something `cinrs` gets wrong. Guard mode skips the
+    /// case and reports it if it starts passing, so that the line can go.
+    #[default]
+    Failure,
+    /// `?NNNNN`: the result depends on the *toolchain*, so neither answer says
+    /// anything about the list, and the case is guarded neither way. `00140`
+    /// needs C-variadic *definitions*, which Rust stabilised in 1.99, and so
+    /// passes on a new enough compiler and not on an older one.
+    ToolchainDependent,
+    /// `!NNNNN`: the entry point makes the case *invalid*, so refusing it is
+    /// conforming behaviour rather than a gap. Guard mode asserts that the
+    /// case fails to compile — a `!` case that builds and runs means the
+    /// compiler has stopped conforming, and is a failure.
+    Rejected {
+        /// A substring the diagnostic has to contain, written
+        /// `error: "<substring>"` in front of the note. Plain text: there is
+        /// no escape, so the substring cannot itself hold a `"`.
+        diagnostic: Option<String>,
+    },
+}
+
+impl EntryKind {
+    /// The character an id of this kind is written with.
+    fn marker(&self) -> &'static str {
+        match self {
+            EntryKind::Failure => "",
+            EntryKind::ToolchainDependent => "?",
+            EntryKind::Rejected { .. } => "!",
+        }
+    }
+
+    /// Whether a line of this kind survives an update untouched, whatever the
+    /// run made of its case.
+    ///
+    /// A `?` entry may well have passed in *this* run and still be right about
+    /// the next compiler along; a `!` entry is a statement about the language,
+    /// which a run cannot refute — only report on.
+    fn is_permanent(&self) -> bool {
+        !matches!(self, EntryKind::Failure)
+    }
+}
+
 /// One line of an expected-failure list.
 #[derive(Clone, Debug, Default)]
 struct Entry {
-    /// Whether the id was written `?NNNNN`: a case whose result depends on the
-    /// toolchain, which is therefore neither required to fail nor reported
-    /// when it passes. `00140` needs C-variadic *definitions*, which Rust
-    /// stabilised in 1.99, and so passes on a new enough compiler and not on
-    /// an older one.
-    toolchain_dependent: bool,
-    /// What the line says about why it fails.
+    /// What the marker in front of the id says.
+    kind: EntryKind,
+    /// What the line says about why the case does not pass.
     note: String,
 }
 
-/// Reads a list of `[?]id [note]` lines, ignoring `#` comments and blanks.
+/// Splits an `error: "<substring>"` prefix off a `!` line's note.
+///
+/// Returns the substring the diagnostic must contain, and what is left of the
+/// note. A note that does not open with `error:` names no substring.
+fn split_required_diagnostic(note: &str) -> Result<(Option<String>, String)> {
+    let Some(rest) = note.strip_prefix("error:") else {
+        return Ok((None, note.to_owned()));
+    };
+    let malformed = || {
+        eyre!(
+            "`error:` in {note:?} must be followed by a quoted substring, as \
+             `error: \"too many arguments\"`"
+        )
+    };
+    let rest = rest.trim_start().strip_prefix('"').ok_or_else(malformed)?;
+    let (wanted, note) = rest.split_once('"').ok_or_else(malformed)?;
+    if wanted.is_empty() {
+        return Err(malformed());
+    }
+    Ok((Some(wanted.to_owned()), note.trim().to_owned()))
+}
+
+/// Reads a list of `[?!]id [note]` lines, ignoring `#` comments and blanks.
 fn read_list(path: &Path) -> Result<BTreeMap<String, Entry>> {
     let mut out = BTreeMap::new();
     let text = match std::fs::read_to_string(path) {
@@ -807,33 +899,48 @@ fn read_list(path: &Path) -> Result<BTreeMap<String, Entry>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(err) => return Err(eyre!("reading {}: {err}", path.display())),
     };
-    for line in text.lines() {
+    for (number, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        let at = |err| eyre!("{}:{}: {err}", path.display(), number + 1);
         let (id, note) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
-        let note = note.trim().trim_start_matches('#').trim().to_owned();
-        let (id, toolchain_dependent) = match id.strip_prefix('?') {
-            Some(id) => (id, true),
-            None => (id, false),
+        let note = note.trim().trim_start_matches('#').trim();
+        let (kind, note) = match id.as_bytes().first() {
+            Some(b'?') => (EntryKind::ToolchainDependent, note.to_owned()),
+            Some(b'!') => {
+                let (diagnostic, note) = split_required_diagnostic(note).map_err(at)?;
+                (EntryKind::Rejected { diagnostic }, note)
+            }
+            _ => (EntryKind::Failure, note.to_owned()),
         };
-        out.insert(
-            id.to_owned(),
-            Entry {
-                toolchain_dependent,
-                note,
-            },
-        );
+        let id = id.trim_start_matches(['?', '!']);
+        out.insert(id.to_owned(), Entry { kind, note });
     }
     Ok(out)
 }
 
+/// The text after the id, `error: "…"` prefix and all.
+fn entry_note(entry: &Entry) -> String {
+    let note = entry.note.replace('\n', " ");
+    match &entry.kind {
+        EntryKind::Rejected {
+            diagnostic: Some(wanted),
+        } => format!("error: \"{wanted}\"  {}", note.trim()),
+        _ => note.trim().to_owned(),
+    }
+}
+
 /// Rewrites the list from a report, keeping the notes already written.
 ///
-/// Every case that failed goes in, together with every toolchain-dependent
-/// entry the file already had — one of those may well have passed in *this*
-/// run, and dropping it would break the next compiler along.
+/// Every case that failed goes in, together with every `?` and `!` entry the
+/// file already had, marker and note and all. Those two say something a single
+/// run cannot check: a `?` entry may well have passed *here* and still be
+/// right about the next compiler along, and a `!` entry is a claim about the
+/// language rather than about `cinrs`, so an update never downgrades one to a
+/// plain failure or drops it because the case happened to build. A `!` case
+/// that passed is warned about instead, and kept.
 fn write_list(
     path: &Path,
     standard: Standard,
@@ -842,7 +949,7 @@ fn write_list(
 ) -> Result<usize> {
     let mut lines: BTreeMap<&str, Entry> = previous
         .iter()
-        .filter(|(_, entry)| entry.toolchain_dependent)
+        .filter(|(_, entry)| entry.kind.is_permanent())
         .map(|(id, entry)| (id.as_str(), entry.clone()))
         .collect();
     for (id, outcome) in results {
@@ -861,13 +968,9 @@ fn write_list(
 
     let mut body = String::new();
     for (id, entry) in &lines {
-        let id = if entry.toolchain_dependent {
-            format!("?{id}")
-        } else {
-            (*id).to_owned()
-        };
-        let note = entry.note.replace('\n', " ");
-        writeln!(body, "{id:<8}{}", note.trim()).expect("writing to a String");
+        let id = format!("{}{id}", entry.kind.marker());
+        let line = format!("{id:<8}{}", entry_note(entry));
+        writeln!(body, "{}", line.trim_end()).expect("writing to a String");
     }
 
     let standard = standard.name();
@@ -879,12 +982,24 @@ fn write_list(
          # one which has started passing is reported and the line can go. See\n\
          # `doc/c-testsuite.md` for what the causes are.\n\
          #\n\
-         # One test id per line, with a note after it. An id written `?NNNNN`\n\
-         # passes or fails depending on the toolchain, and is guarded neither\n\
-         # way. Regenerate with\n\
+         # One test id per line, with a note after it, and a marker in front of\n\
+         # the id saying what kind of claim the line makes:\n\
+         #\n\
+         #   NNNNN   `cinrs` gets this one wrong.\n\
+         #   ?NNNNN  It passes or fails depending on the toolchain, and is\n\
+         #           guarded neither way.\n\
+         #   !NNNNN  This entry point makes the case invalid, so refusing it is\n\
+         #           conforming behaviour and not a gap. Guard mode requires the\n\
+         #           case to fail to *compile*; one that builds and runs is a\n\
+         #           failure. The note may open with `error: \"<substring>\"`,\n\
+         #           which the diagnostic then has to contain.\n\
+         #\n\
+         # Regenerate with\n\
          #\n\
          #     CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_UPDATE_EXPECTED=1 \\\n\
          #         CINRS_CTESTSUITE_STANDARD={standard} cargo test --test c_testsuite\n\
+         #\n\
+         # which keeps every `?` and `!` line as it stands.\n\
          \n"
     );
     if let Some(dir) = path.parent() {
@@ -892,6 +1007,81 @@ fn write_list(
     }
     std::fs::write(path, format!("{header}{body}"))?;
     Ok(lines.len())
+}
+
+// ---------------------------------------------------------------------------
+// the `!` assertion
+// ---------------------------------------------------------------------------
+
+/// What a `!` case actually did, measured against what its line requires.
+#[derive(Clone, Debug)]
+enum Rejection {
+    /// Refused at compile time, with the diagnostic the line asked for.
+    AsRequired,
+    /// Refused, but not in the words the line names.
+    WrongDiagnostic { wanted: String, detail: String },
+    /// It got past the compiler; what happened after that is beside the point.
+    NotRejected { what: String },
+}
+
+impl Rejection {
+    /// The sentence that goes after `NNNNN in <list> …`.
+    fn complaint(&self) -> Option<String> {
+        match self {
+            Rejection::AsRequired => None,
+            Rejection::WrongDiagnostic { wanted, detail } => Some(format!(
+                "is marked `!` and must be refused with a diagnostic containing {wanted:?}. \
+                 It was refused, but the diagnostic was: {detail}"
+            )),
+            Rejection::NotRejected { what } => Some(format!(
+                "is marked `!`, which says this entry point must refuse it, but {what}. \
+                 Either the entry point has stopped conforming or the entry is wrong."
+            )),
+        }
+    }
+}
+
+/// Measures one `!` case against its line.
+fn check_rejection(diagnostic: Option<&str>, outcome: &Outcome) -> Rejection {
+    match outcome {
+        Outcome::Failed { detail, output, .. } if outcome.is_compile_error() => match diagnostic {
+            Some(wanted) if !output.contains(wanted) => Rejection::WrongDiagnostic {
+                wanted: wanted.to_owned(),
+                detail: detail.clone(),
+            },
+            _ => Rejection::AsRequired,
+        },
+        Outcome::Failed { classification, .. } => Rejection::NotRejected {
+            what: format!("it compiled and then failed at run time ({classification})"),
+        },
+        Outcome::Passed => Rejection::NotRejected {
+            what: "it compiled and ran successfully".to_owned(),
+        },
+        Outcome::Ignored => Rejection::NotRejected {
+            what: "it was ignored".to_owned(),
+        },
+    }
+}
+
+/// Every `!` entry of `list` that names a case with a result, with what that
+/// case did.
+fn rejections<'a>(
+    list: &'a BTreeMap<String, Entry>,
+    results: &BTreeMap<String, Outcome>,
+) -> Vec<(&'a str, &'a Entry, Rejection)> {
+    list.iter()
+        .filter_map(|(id, entry)| {
+            let EntryKind::Rejected { diagnostic } = &entry.kind else {
+                return None;
+            };
+            let outcome = results.get(id)?;
+            Some((
+                id.as_str(),
+                entry,
+                check_rejection(diagnostic.as_deref(), outcome),
+            ))
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -966,20 +1156,54 @@ fn run(config: Config, emitter: Box<dyn StatusEmitter>, collector: &Collector) -
 // ---------------------------------------------------------------------------
 
 /// The pass rate overall and per tag, and every failure with its cause.
-fn print_report(standard: Standard, tests: &[&Test], results: &BTreeMap<String, Outcome>) {
+///
+/// Three categories come out of a run, and each gets a list of its own so that
+/// the summary line can be read straight off them: the cases that **failed**,
+/// the ones the standard requires the entry point to **reject** (a `!` line,
+/// which is conforming behaviour and so not a failure), and the ones whose
+/// answer is **toolchain-dependent** (a `?` line, which is counted however it
+/// came out here). A rejected case stays in the denominator everywhere — it is
+/// one of the cases the run looked at — but is never counted as a failure, and
+/// the per-tag table gives it a column rather than folding it into the rate.
+fn print_report(run: &Run<'_>, results: &BTreeMap<String, Outcome>) {
+    let tests = &run.selected;
     let by_id: BTreeMap<&str, &&Test> = tests.iter().map(|test| (test.id.as_str(), test)).collect();
+
+    let rejections = rejections(&run.expected_failures, results);
+    let rejected: BTreeSet<&str> = rejections
+        .iter()
+        .filter(|(_, _, how)| matches!(how, Rejection::AsRequired))
+        .map(|(id, _, _)| *id)
+        .collect();
+    let toolchain: BTreeSet<&str> = run
+        .expected_failures
+        .iter()
+        .filter(|(_, entry)| entry.kind == EntryKind::ToolchainDependent)
+        .map(|(id, _)| id.as_str())
+        .collect();
+
     let passed = |id: &str| matches!(results.get(id), Some(Outcome::Passed));
-    let rate = |tests: &[&&Test]| {
+    // Passed, rejected as required, and everything else — which is a failure,
+    // whether it built and misbehaved, was refused, or never ran at all.
+    let tally = |tests: &[&&Test]| {
         let ok = tests.iter().filter(|test| passed(&test.id)).count();
-        (ok, tests.len())
+        let refused = tests
+            .iter()
+            .filter(|test| rejected.contains(test.id.as_str()))
+            .count();
+        (ok, refused, tests.len() - ok - refused, tests.len())
     };
 
-    let (ok, total) = rate(&tests.iter().collect::<Vec<_>>());
+    let (ok, refused, failed, total) = tally(&tests.iter().collect::<Vec<_>>());
     println!();
     println!(
-        "c-testsuite / single-exec through `{}!`: {ok}/{total} passed ({})",
-        standard.name(),
+        "c-testsuite / single-exec through `{}!`: {ok}/{total} passed ({}){}, {failed} failed",
+        run.standard.name(),
         percent(ok, total),
+        match refused {
+            0 => String::new(),
+            n => format!(", {n} rejected as the standard requires"),
+        },
     );
 
     let mut tags: BTreeSet<&str> = BTreeSet::new();
@@ -987,42 +1211,59 @@ fn print_report(standard: Standard, tests: &[&Test], results: &BTreeMap<String, 
         tags.extend(test.tags.iter().map(String::as_str));
     }
     println!();
-    println!("  by tag");
+    if refused == 0 {
+        println!("  by tag");
+    } else {
+        println!("  by tag (`rejected` is a case the standard requires this entry point to");
+        println!("          refuse: it is in the total, but it is not a failure)");
+    }
+    let row = |name: &str, tagged: &[&&Test]| {
+        let (ok, refused, _, total) = tally(tagged);
+        let refused = match refused {
+            0 => String::new(),
+            n => format!("   {n} rejected"),
+        };
+        println!(
+            "    {name:<14}{ok:>4}/{total:<4}  {:>6}{refused}",
+            percent(ok, total)
+        );
+    };
     for tag in tags {
         let tagged: Vec<_> = tests.iter().filter(|t| t.tags.contains(tag)).collect();
-        let (ok, total) = rate(&tagged);
-        println!("    {tag:<14}{ok:>4}/{total:<4}  {}", percent(ok, total));
+        row(tag, &tagged);
     }
     let untagged: Vec<_> = tests.iter().filter(|test| test.tags.is_empty()).collect();
     if !untagged.is_empty() {
-        let (ok, total) = rate(&untagged);
-        println!(
-            "    {:<14}{ok:>4}/{total:<4}  {}",
-            "(none)",
-            percent(ok, total)
-        );
+        row("(none)", &untagged);
     }
 
-    // The failures, grouped by the kind of failure they are.
+    // The failures, grouped by the kind of failure they are. A rejection and a
+    // toolchain-dependent case are neither of them a failure of `cinrs`, so
+    // they come out of these groups and into lists of their own below.
     let mut groups: BTreeMap<&str, Vec<(&str, &str, &str)>> = BTreeMap::new();
     let mut missing = Vec::new();
     for test in tests {
-        match results.get(&test.id) {
+        let id = test.id.as_str();
+        if rejected.contains(id) || toolchain.contains(id) {
+            continue;
+        }
+        match results.get(id) {
             Some(Outcome::Failed {
                 classification,
                 detail,
+                ..
             }) => {
                 let kind = classification
                     .split_once(':')
                     .map_or(classification.as_str(), |(kind, _)| kind);
                 groups.entry(kind).or_default().push((
-                    test.id.as_str(),
+                    id,
                     classification.as_str(),
                     detail.as_str(),
                 ));
             }
             Some(_) => {}
-            None => missing.push(test.id.as_str()),
+            None => missing.push(id),
         }
     }
 
@@ -1042,6 +1283,63 @@ fn print_report(standard: Standard, tests: &[&Test], results: &BTreeMap<String, 
             if !detail.is_empty() && *detail != what {
                 println!("        {detail}");
             }
+        }
+    }
+
+    if !rejected.is_empty() {
+        println!();
+        println!("  rejected as the standard requires ({})", rejected.len());
+        for (id, entry, _) in rejections
+            .iter()
+            .filter(|(_, _, how)| matches!(how, Rejection::AsRequired))
+        {
+            let Some(test) = by_id.get(id) else { continue };
+            println!("    {id}  [{}]", test.tag_list());
+            println!("        {}", entry.note);
+            if let Some(Outcome::Failed { detail, .. }) = results.get(*id) {
+                println!("        {detail}");
+            }
+        }
+    }
+
+    // A `!` line the run did not bear out. Report mode fails nothing, but this
+    // is the one thing in the list a run *can* contradict, so it is not left
+    // to be inferred from a missing line above.
+    let anomalies: Vec<_> = rejections
+        .iter()
+        .filter_map(|(id, _, how)| Some((*id, how.complaint()?)))
+        .collect();
+    if !anomalies.is_empty() {
+        println!();
+        println!("  marked `!` but not rejected ({})", anomalies.len());
+        for (id, complaint) in anomalies {
+            match by_id.get(id) {
+                Some(test) => println!("    {id}  [{}]", test.tag_list()),
+                None => println!("    {id}"),
+            }
+            println!("        {complaint}");
+        }
+    }
+
+    let toolchain: Vec<&str> = toolchain
+        .into_iter()
+        .filter(|id| by_id.contains_key(id))
+        .collect();
+    if !toolchain.is_empty() {
+        println!();
+        println!("  toolchain-dependent ({})", toolchain.len());
+        for id in toolchain {
+            println!("    {id}  [{}]", by_id[id].tag_list());
+            println!("        {}", run.expected_failures[id].note);
+            println!(
+                "        here: {}",
+                match results.get(id) {
+                    Some(Outcome::Passed) => "passed".to_owned(),
+                    Some(Outcome::Ignored) => "ignored".to_owned(),
+                    Some(Outcome::Failed { classification, .. }) => classification.clone(),
+                    None => "not run".to_owned(),
+                }
+            );
         }
     }
 
@@ -1187,9 +1485,23 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
     drop(self::run(config, Box::new(()), &collector));
 
     let results = collector.results();
-    print_report(run.standard, &run.selected, &results);
+    print_report(run, &results);
 
     if update {
+        // A `!` line says what the *language* requires, so a run that does not
+        // bear it out is news about the compiler and not a reason to rewrite
+        // the line; `write_list` keeps it either way, and says so here.
+        for (id, _, how) in rejections(&run.expected_failures, &results) {
+            if let Some(complaint) = how.complaint() {
+                println!(
+                    "c-testsuite: warning: {id} in {} {complaint}",
+                    run.list.display()
+                );
+                println!(
+                    "c-testsuite: warning: the `!{id}` line is kept; delete it by hand if it is wrong."
+                );
+            }
+        }
         let written = write_list(&run.list, run.standard, &results, &run.expected_failures)?;
         println!(
             "c-testsuite: wrote {written} expected failures to {}",
@@ -1198,10 +1510,12 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
     } else {
         // The `?` entries are left out of the comparison: whether they fail
         // depends on the compiler, so neither answer means the list is wrong.
+        // A `!` entry stays in — it does fail, and one that stopped failing is
+        // exactly the news the comparison is for.
         let optional = |id: &str| {
             run.expected_failures
                 .get(id)
-                .is_some_and(|entry| entry.toolchain_dependent)
+                .is_some_and(|entry| entry.kind == EntryKind::ToolchainDependent)
         };
         let failed: BTreeSet<&str> = results
             .iter()
@@ -1211,7 +1525,7 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
         let listed: BTreeSet<&str> = run
             .expected_failures
             .iter()
-            .filter(|(_, entry)| !entry.toolchain_dependent)
+            .filter(|(_, entry)| entry.kind != EntryKind::ToolchainDependent)
             .map(|(id, _)| id.as_str())
             .collect();
         if failed != listed {
@@ -1254,11 +1568,24 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
         &run.work_root,
     )?;
 
+    let must_be_refused = known_bad
+        .iter()
+        .filter(|test| {
+            matches!(
+                run.expected_failures[&test.id].kind,
+                EntryKind::Rejected { .. }
+            )
+        })
+        .count();
     println!(
-        "c-testsuite: {} must pass; {} listed as failing in {}",
+        "c-testsuite: {} must pass; {} listed as failing in {}{}",
         plural(expect_pass.len(), "case", "cases"),
         plural(known_bad.len(), "case is", "cases are"),
         run.list.display(),
+        match must_be_refused {
+            0 => String::new(),
+            n => format!(", {n} of them marked `!` and required to be refused"),
+        },
     );
 
     // The cases that must pass. Their failures are real failures, rendered by
@@ -1271,26 +1598,39 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
     let guarded = self::run(config, emitter, &Collector::default());
 
     // The known-failing ones, silently, so that one which has started passing
-    // can be reported. They share a build directory with the run above, so the
-    // dependency is built once.
-    let now_passing: Vec<String> = if known_bad.is_empty() {
-        Vec::new()
-    } else {
+    // can be reported and so that a `!` one can be *required* to fail. They
+    // share a build directory with the run above, so the dependency is built
+    // once.
+    let mut now_passing: Vec<String> = Vec::new();
+    let mut nonconforming: Vec<String> = Vec::new();
+    if !known_bad.is_empty() {
         let collector = Collector::default();
         let config = test_config(&known_bad_root, &run.build_root, run.compile_timeout)?;
         drop(self::run(config, Box::new(()), &collector));
         let results = collector.results();
-        known_bad
+        now_passing = known_bad
             .iter()
             .filter(|test| {
-                // A `?` entry is expected to depend on the compiler, so it
-                // passing here says nothing about the list being stale.
-                !run.expected_failures[&test.id].toolchain_dependent
+                // A `?` entry is expected to depend on the compiler and a `!`
+                // one is checked below, so neither passing here says anything
+                // about the list being stale.
+                run.expected_failures[&test.id].kind == EntryKind::Failure
                     && matches!(results.get(&test.id), Some(Outcome::Passed))
             })
             .map(|test| test.id.clone())
-            .collect()
-    };
+            .collect();
+        // The `!` assertion: the standard requires these to be refused, so one
+        // that builds means the entry point has stopped conforming. That is a
+        // failure whatever `CINRS_CTESTSUITE_STRICT` says, since it is a claim
+        // about the language and not a note that has gone stale.
+        nonconforming = rejections(&run.expected_failures, &results)
+            .iter()
+            .filter_map(|(id, _, how)| {
+                let complaint = how.complaint()?;
+                Some(format!("{id} in {} {complaint}", run.list.display()))
+            })
+            .collect();
+    }
 
     // Entries naming something this run does not have: a case that left the
     // corpus, or one the standard excluded. A filter excludes cases on
@@ -1330,8 +1670,19 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
     if !problems.is_empty() {
         println!("c-testsuite: CINRS_CTESTSUITE_STRICT=1 makes the above a failure.");
     }
+    for complaint in &nonconforming {
+        println!("c-testsuite: error: {complaint}");
+    }
 
     guarded?;
+    if !nonconforming.is_empty() {
+        return Err(eyre!(
+            "{}\n{}",
+            nonconforming.join("\n"),
+            "A `!` line records what the standard requires this entry point to refuse, \
+             so this is a failure however CINRS_CTESTSUITE_STRICT is set."
+        ));
+    }
     if strict && !problems.is_empty() {
         return Err(eyre!("{}", problems.join("\n")));
     }
