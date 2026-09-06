@@ -1772,9 +1772,44 @@ pub struct Function {
     pub locals: Vec<ObjectId>,
     /// The body, present once a definition has been type checked.
     pub body: Option<Body>,
+    /// The Rust item name, when it is not the C name.
+    ///
+    /// Only a lifted [GNU nested function](EnvParam) has one: it becomes a
+    /// file-scope item, so it needs a name that cannot collide with the C
+    /// function of the same name at file scope, while [`Function::name`] stays
+    /// what the program called it — which is what diagnostics and `__func__`
+    /// say.
+    pub item_name: Option<String>,
+    /// The hidden environment parameters a lifted GNU nested function takes in
+    /// front of its declared ones, in the order they are passed.
+    ///
+    /// Empty for every ordinary function, and for a nested one that captures
+    /// nothing — which is why such a nested function's address may still be
+    /// taken: the generated item has exactly the signature C gave it.
+    pub env: Vec<EnvParam>,
     /// Where the function's name was written, at its definition if there is one
     /// and at its first declaration otherwise.
     pub range: SourceRange,
+}
+
+/// One hidden parameter of a lifted [GNU nested
+/// function](crate::sema#nested-functions).
+///
+/// GCC gives a nested function a *static chain* — a pointer to the enclosing
+/// frame — and writes a trampoline when its address is taken. This crate
+/// lambda-lifts instead: each enclosing object the body uses becomes a
+/// pointer parameter of its own, the body reads and writes it through that
+/// pointer, and every call site passes the address of the object it has. The
+/// sharing C promises is therefore kept — a store in the nested function is
+/// visible in the enclosing one — without a trampoline, at the price of not
+/// being able to hand the function's address out.
+#[derive(Clone, Copy, Debug)]
+pub struct EnvParam {
+    /// The enclosing function's object the pointer carries.
+    pub owner: ObjectId,
+    /// The `*mut T` (or `*const T`) parameter of *this* function that holds
+    /// its address.
+    pub param: ObjectId,
 }
 
 /// What `always_inline` and `noinline` ask for.
@@ -1799,6 +1834,16 @@ impl Function {
     /// Whether this function is only declared here and linked from elsewhere.
     pub fn is_extern(&self) -> bool {
         self.body.is_none()
+    }
+
+    /// The name the generated Rust item has.
+    pub fn item_name(&self) -> &str {
+        self.item_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Whether this is a lifted GNU nested function.
+    pub fn is_nested(&self) -> bool {
+        self.item_name.is_some()
     }
 }
 

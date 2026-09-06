@@ -521,7 +521,17 @@ impl Sema<'_> {
     }
 
     /// The value of a function name used as an expression: a pointer to it.
+    ///
+    /// A [lifted nested function](Sema::nested_function_def) that captures
+    /// nothing is an ordinary function and its address is an ordinary pointer;
+    /// one that captures is not, because the generated item takes hidden
+    /// parameters no C caller would pass. Which it is may still change — a
+    /// call further down can make it capture — so the use is recorded and
+    /// checked once the unit is done.
     fn function_designator(&mut self, id: crate::ir::FuncId, range: SourceRange) -> Expr {
+        if self.program.function(id).is_nested() {
+            self.nested_addresses.push((id, range));
+        }
         let sig = self.program.function(id).sig.clone();
         let func = if sig.prototyped {
             self.program
@@ -592,14 +602,11 @@ impl Sema<'_> {
         match &expr.kind {
             ast::ExprKind::Ident(name) => match self.lookup(&name.name) {
                 Some(Entry::Object(id)) => {
+                    // Inside a nested function this may be an object of the
+                    // enclosing one, which is reached through the hidden
+                    // pointer it was passed in.
                     let id = *id;
-                    let info = self.program.object(id);
-                    Some(place_of(
-                        PlaceKind::Object(id),
-                        info.ty,
-                        info.is_const,
-                        range,
-                    ))
+                    Some(self.object_place(id, range))
                 }
                 Some(_) => {
                     self.error(range, "expression is not assignable");
@@ -1891,6 +1898,17 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         let (target, sig, name) = self.callee(callee)?;
+        // A call to a nested function has to pass the addresses of whatever it
+        // captures, and for an object the caller does not own itself that means
+        // the caller has to have been passed it too. What the callee captures
+        // may not be settled yet — a forward-declared nested function is only
+        // defined further down — so the edge is recorded and the environments
+        // are closed over once the unit is done.
+        if let (Callee::Direct(callee), Some(frame)) = (&target, self.nest.last())
+            && self.program.function(*callee).is_nested()
+        {
+            self.nested_calls.push((frame.func, *callee));
+        }
 
         let mut values = Vec::with_capacity(args.len());
         let mut failed = false;
@@ -1995,6 +2013,8 @@ impl Sema<'_> {
             locals: Vec::new(),
             uses_alloca: false,
             body: None,
+            item_name: None,
+            env: Vec::new(),
             range: name.range,
         });
         self.item_names.insert(name.name.clone());

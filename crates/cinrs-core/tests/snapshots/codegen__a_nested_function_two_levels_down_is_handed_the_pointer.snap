@@ -1,0 +1,34 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int outer(int n) {\n            int base = n;\n            int middle(int a) {\n                int inner(int b) { return b + base; }\n                return inner(a);\n            }\n            return middle(1);\n        }\n        \")"
+---
+mod __cinrs_unit_cb3f0833 {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    pub unsafe extern "C" fn outer(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut base: ::core::ffi::c_int = n;
+            return __cinrs_outer_middle(&raw mut base, 1);
+        }
+    }
+    #[allow(…)]
+    unsafe extern "C" fn __cinrs_outer_middle(
+        __env_base: *mut ::core::ffi::c_int,
+        mut a: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return __cinrs_middle_inner(__env_base, a);
+        }
+    }
+    #[allow(…)]
+    unsafe extern "C" fn __cinrs_middle_inner(
+        __env_base: *mut ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return b.wrapping_add((*__env_base));
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_cb3f0833::*;

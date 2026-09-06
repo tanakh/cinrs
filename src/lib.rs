@@ -305,7 +305,9 @@
 //! `__complex__` and `#include_next`. Neither `alloca` nor `cleanup` is on
 //! that list any more: see [Variably modified types and
 //! `alloca`](#variably-modified-types-and-alloca) and
-//! [`cleanup`](#the-cleanup-attribute), and nor is
+//! [`cleanup`](#the-cleanup-attribute); nor are [nested
+//! functions](#nested-functions), which are lifted out rather than refused,
+//! and nor is
 //! `__attribute__((mode(M)))`, which now names the width of the type it is
 //! written on — `QI`, `HI`, `SI`, `DI`, `TI`, `byte`, `word`, `pointer`, `SF`
 //! and `DF`, with the modes that name a type this crate does not have refused
@@ -373,6 +375,68 @@
 //! warning, and `cinrs` refuses it with the reason rather than changing what
 //! the program does. A `goto` *into* the scope of one is allowed, and the
 //! cleanup still runs when the scope ends — which is GCC's behaviour too.
+//!
+//! ## Nested functions
+//!
+//! GNU C lets a function be *defined* inside another one, where it sees the
+//! enclosing function's locals. GCC compiles that with a **static chain** — a
+//! hidden pointer to the enclosing frame — and, when the nested function's
+//! address is taken, with a **trampoline** written onto the stack. Rust has
+//! neither, so `cinrs` **lambda-lifts** instead:
+//!
+//! ```
+//! cinrs::gnu99! {
+//!     int report(int a, int b) {
+//!         int tally = 0;
+//!
+//!         void note(int value) { tally += value; }
+//!
+//!         note(a);
+//!         note(b);
+//!         return tally;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { report(20, 22) }, 42);
+//! ```
+//!
+//! `note` becomes a file-scope item of its own, `__cinrs_report_note`, private
+//! to the expansion — never a C symbol, even under `#pragma cinrs export`.
+//! Each object of the enclosing function it uses becomes a hidden pointer
+//! parameter in front of the declared ones, named after the variable it
+//! carries, and every use of the variable inside the body becomes a
+//! dereference of it:
+//!
+//! ```text
+//! unsafe extern "C" fn __cinrs_report_note(__env_tally: *mut c_int, mut value: c_int) {
+//!     (*__env_tally) = (*__env_tally).wrapping_add(value);
+//! }
+//! ```
+//!
+//! so the call site reads `__cinrs_report_note(&raw mut tally, a)`. The object
+//! is therefore **shared, not copied** — a store in the nested function is
+//! visible in the enclosing one the moment it returns, which is the whole
+//! reason the extension exists — and `&x`, `x++`, `a[i]`, `p.f` and
+//! `sizeof x` all keep meaning what they meant, the hidden pointer being a
+//! *place* rather than a value. Recursion passes the same environment through;
+//! a function nested two levels down receives an outermost local through the
+//! middle one, which takes the pointer whether it mentions the variable or
+//! not; a nested function that calls a capturing sibling gets what the sibling
+//! needs; and `auto int g(int);`, GNU's forward declaration, works, so two
+//! nested functions may call each other.
+//!
+//! A nested function that uses **nothing** of the enclosing frame is lifted to
+//! a plain function, and **its address may be taken** — it can be handed to
+//! `qsort` like any other callback, since the item's signature is the one C
+//! gave it.
+//!
+//! Four things are refused, each by name rather than mistranslated: **the
+//! address of a nested function that does use the enclosing frame** (`&g`, a
+//! decay, a callback), which is exactly what GCC's trampoline is for and which
+//! the diagnostic names the variables in the way of; a **nonlocal `goto`**,
+//! which jumps from the nested body to a label of the enclosing function; and
+//! capturing a **variable length array** or a **`va_list`**, neither of which
+//! is a plain address — those two say "not supported yet".
 //!
 //! ## `__int128`
 //!
@@ -1469,7 +1533,8 @@
 //! On top of that come the [GNU extensions](#gnu-extensions), which real C
 //! leans on: statement expressions, `typeof`, `__attribute__`, `#pragma pack`,
 //! the `__builtin_*` family, case ranges, flexible array members, `alloca`,
-//! [`__int128`](#__int128), [`__thread`](#thread-local-objects) and the rest.
+//! [nested functions](#nested-functions), [`__int128`](#__int128),
+//! [`__thread`](#thread-local-objects) and the rest.
 //!
 //! [Variably modified types](#variably-modified-types-and-alloca) are there —
 //! `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the

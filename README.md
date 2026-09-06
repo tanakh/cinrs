@@ -122,6 +122,11 @@ Run it with `cargo run --example fact`.
   is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
   `asm` labels, `constructor`/`destructor`, `__func__`, casts to a union type,
+  **nested functions** — lambda-lifted to a private file-scope item that takes
+  a pointer to each enclosing local it uses, so a store inside one is visible
+  outside it, and no trampoline is written onto the stack (the address of a
+  nested function that *does* use the enclosing frame is the one thing a
+  trampoline is for, and is refused by name) —
   `__attribute__((mode(DI)))`, the `__builtin_*`
   family — bit counting, checked overflow, `__builtin_expect`,
   `__builtin_types_compatible_p`, the floating classifications
@@ -419,10 +424,11 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,478 pass (83.6 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,382 (78.1 %) under
+  exit status zero. **1,493 pass (84.4 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,396 (78.9 %) under
   `gnu11!`. What is left is inline assembly, the vector extensions, the complex
-  *integer* types, nested functions, computed `goto`, the handful of
+  *integer* types, computed `goto`, the two corners of nested functions that
+  need a trampoline or a nonlocal `goto`, the handful of
   `__builtin_*` forms this crate does not implement, and the variadic
   definitions that need Rust 1.99 — plus five programs that built and then did
   the wrong thing, which the document names one by one.

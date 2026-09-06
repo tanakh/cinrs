@@ -993,6 +993,8 @@ impl Sema<'_> {
             locals: Vec::new(),
             uses_alloca: false,
             body: None,
+            item_name: None,
+            env: Vec::new(),
             range,
         });
         self.item_names.insert(name.to_owned());

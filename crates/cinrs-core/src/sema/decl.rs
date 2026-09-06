@@ -1,5 +1,7 @@
 //! Declarations: objects, `typedef`s, functions and the `extern` block.
 
+use std::collections::HashSet;
+
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
@@ -7,7 +9,7 @@ use crate::ir::{
     Storage, Ty, TypedefItem,
 };
 
-use super::{Entry, Sema, TypedefEntry};
+use super::{Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
 
 /// What a declaration's `_Thread_local` specifier came to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -103,6 +105,27 @@ impl Sema<'_> {
             }
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
+            // GNU spells the forward declaration of a nested function
+            // `auto int g(int);`, which is the one way to write two nested
+            // functions that call each other. At file scope the storage class
+            // means nothing a function can have.
+            let scope = match storage {
+                Some(ast::StorageClass::Auto) if !file_scope => FuncScope::Nested,
+                Some(ast::StorageClass::Auto) => {
+                    let at = decl
+                        .specifiers
+                        .storage
+                        .as_ref()
+                        .map_or(name.range, |s| s.range);
+                    self.error(
+                        at,
+                        "'auto' is not allowed on a file-scope function; it declares a nested \
+                         function, which only a block may hold",
+                    );
+                    FuncScope::File
+                }
+                _ => FuncScope::File,
+            };
             self.declare_function(
                 decl,
                 name,
@@ -111,6 +134,7 @@ impl Sema<'_> {
                 &attrs,
                 declarator.asm_label.as_ref(),
                 None,
+                scope,
             );
             return Vec::new();
         }
@@ -389,6 +413,12 @@ impl Sema<'_> {
             self.error(name.range, "cleanup argument not a function");
             return None;
         };
+        // The structured lowering holds the cleanup function in a drop guard,
+        // which is its *address*; a lifted nested function that uses the
+        // enclosing frame has none to give.
+        if self.program.function(func).is_nested() {
+            self.nested_addresses.push((func, name.range));
+        }
         let entry = self.program.function(func);
         let (sig, declared, fname) = (entry.sig.clone(), entry.range, entry.name.clone());
         if sig.params.len() != 1 || sig.variadic {
@@ -1410,7 +1440,10 @@ impl Sema<'_> {
     /// Declares (but does not define) a function.
     ///
     /// `definition` carries the parameter declarations of a *definition*, which
-    /// is what turns the check into "this is the definition".
+    /// is what turns the check into "this is the definition". `scope` says
+    /// whether the name belongs to the file scope, where C gives every
+    /// function its linkage, or to the block it was written in, which is where
+    /// GNU puts a [nested one](Sema::nested_function_def).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn declare_function(
         &mut self,
@@ -1421,10 +1454,13 @@ impl Sema<'_> {
         attrs: &ast::Attributes,
         asm_label: Option<&ast::Spanned<String>>,
         definition: Option<&ast::FunctionDef>,
+        scope: FuncScope,
     ) -> Option<FuncId> {
         let specifiers = &decl.specifiers;
-        let is_static =
-            specifiers.storage.as_ref().map(|s| s.node) == Some(ast::StorageClass::Static);
+        // A nested function is an item of this unit and never a symbol of its
+        // own, whatever the unit's `#pragma cinrs export` says.
+        let is_static = scope == FuncScope::Nested
+            || specifiers.storage.as_ref().map(|s| s.node) == Some(ast::StorageClass::Static);
         let is_inline = specifiers.inline;
         let is_noreturn = specifiers.noreturn.is_some() || attrs.noreturn.is_some();
         let inline_hint = match (attrs.always_inline.is_some(), attrs.noinline.is_some()) {
@@ -1525,7 +1561,16 @@ impl Sema<'_> {
             prototyped: self.is_prototyped(func),
         };
 
-        let existing = match self.lookup(&name.name) {
+        // A nested function has no linkage: its name lives in the block it was
+        // written in, where it shadows whatever a file-scope declaration of the
+        // same name means, and the only declaration it can be a redeclaration
+        // of is one written in the same block — GNU's `auto int g(int);`
+        // forward declaration.
+        let visible = match scope {
+            FuncScope::File => self.lookup(&name.name),
+            FuncScope::Nested => self.declared_here(&name.name),
+        };
+        let existing = match visible {
             Some(Entry::Function(id)) => Some(*id),
             Some(other) => {
                 let what = other.describe();
@@ -1612,6 +1657,17 @@ impl Sema<'_> {
             }
             None => {
                 let id = FuncId(self.program.functions.len() as u32);
+                // A lifted nested function becomes a file-scope Rust item, so
+                // it needs a name of its own: `__cinrs_<enclosing>_<name>`,
+                // which reads as what it is and is made unique against
+                // everything else the unit generates.
+                let item_name = match scope {
+                    FuncScope::File => None,
+                    FuncScope::Nested => {
+                        let base = format!("__cinrs_{}_{}", self.func_name, name.name);
+                        Some(self.reserve_item_name(&base))
+                    }
+                };
                 self.program.functions.push(Function {
                     name: name.name.clone(),
                     sig,
@@ -1629,10 +1685,17 @@ impl Sema<'_> {
                     locals: Vec::new(),
                     uses_alloca: false,
                     body: None,
+                    item_name,
+                    env: Vec::new(),
                     range: name.range,
                 });
-                self.item_names.insert(name.name.clone());
-                self.insert_at_file_scope(&name.name, Entry::Function(id));
+                match scope {
+                    FuncScope::File => {
+                        self.item_names.insert(name.name.clone());
+                        self.insert_at_file_scope(&name.name, Entry::Function(id));
+                    }
+                    FuncScope::Nested => self.insert(&name.name, Entry::Function(id)),
+                }
                 id
             }
         };
@@ -1787,6 +1850,51 @@ impl Sema<'_> {
     }
 
     pub(super) fn function_def(&mut self, def: &ast::FunctionDef) {
+        self.check_function_def(def, FuncScope::File);
+    }
+
+    /// Checks GNU's nested function definition and lifts it out.
+    ///
+    /// The body is checked where it stands, so it sees the enclosing
+    /// function's parameters and locals exactly as far as C's scoping makes
+    /// them visible; every one of those it uses becomes a hidden pointer
+    /// parameter (see [`ir::EnvParam`]), and the definition becomes a
+    /// file-scope item that nothing else in the unit can name. What is left in
+    /// the enclosing function is nothing at all: the name is in scope for the
+    /// rest of its block, and a call to it passes the addresses of the objects
+    /// it uses.
+    pub(super) fn nested_function_def(&mut self, def: &ast::FunctionDef) {
+        if self.nest.is_empty() {
+            // A statement expression written in a file-scope initialiser is
+            // the one block that is inside no function at all, and there is
+            // nothing for a nested definition there to be nested in.
+            self.error(
+                def.name.range,
+                format!(
+                    "'{}' is defined inside a statement expression at file scope, which is \
+                     inside no function; a nested function definition needs an enclosing one",
+                    def.name.name
+                ),
+            );
+            return;
+        }
+        if let Some(storage) = &def.specifiers.storage
+            && storage.node != ast::StorageClass::Auto
+        {
+            self.error(
+                storage.range,
+                format!(
+                    "'{}' is not allowed on a nested function definition: a nested function \
+                     has no linkage, and 'auto' is the only storage class GNU C accepts on \
+                     one",
+                    storage.node.as_str()
+                ),
+            );
+        }
+        self.check_function_def(def, FuncScope::Nested);
+    }
+
+    fn check_function_def(&mut self, def: &ast::FunctionDef, scope: FuncScope) {
         let ast::TypeKind::Function(func) = &def.ty.kind else {
             return;
         };
@@ -1815,9 +1923,20 @@ impl Sema<'_> {
             &attrs,
             def.asm_label.as_ref(),
             Some(def),
+            scope,
         ) else {
             return;
         };
+        // The enclosing function's state goes aside for the length of a nested
+        // definition, and the nesting gains a level.
+        let saved = (scope == FuncScope::Nested).then(|| self.save_function_state());
+        self.nest.push(NestFrame {
+            func: id,
+            labels: HashSet::new(),
+        });
+        self.nest_chains
+            .insert(id, self.nest.iter().map(|frame| frame.func).collect());
+        let level = (self.nest.len() - 1) as u32;
 
         // Parameters live in the same scope as the body's outermost block, so
         // that `int f(int x) { int x; }` is the redefinition C says it is.
@@ -1840,6 +1959,12 @@ impl Sema<'_> {
         // it is checked, because it changes how `switch` is lowered.
         self.cfg_mode = Self::needs_cfg(&def.body);
         self.collect_labels(&def.body);
+        // A `goto` in a function nested inside this one that names one of
+        // these labels is GNU's nonlocal goto, which is refused by name rather
+        // than as "no such label".
+        if let Some(frame) = self.nest.last_mut() {
+            frame.labels = self.labels.keys().cloned().collect();
+        }
 
         let mut params = Vec::with_capacity(func.params.len());
         // The old-style parameters whose declared type is not what the ABI
@@ -1986,15 +2111,83 @@ impl Sema<'_> {
             ir::Body::Structured(body)
         };
         let last_object = self.program.objects.len() as u32;
+        // A nested function's own objects are inside this range too, and they
+        // are its locals rather than this one's; the level each object was
+        // created at is what separates them. So are the hidden environment
+        // parameters, which are parameters and not `let` bindings.
+        let hidden: Vec<ObjectId> = self
+            .program
+            .function(id)
+            .env
+            .iter()
+            .map(|entry| entry.param)
+            .collect();
         let locals: Vec<ObjectId> = (first_object..last_object)
             .map(ObjectId)
-            .filter(|id| self.program.object(*id).storage == Storage::Automatic)
+            .filter(|object| {
+                self.program.object(*object).storage == Storage::Automatic
+                    && self.object_level(*object) == level as usize
+                    && !hidden.contains(object)
+            })
             .collect();
         let entry = &mut self.program.functions[id.0 as usize];
         entry.params = params;
         entry.locals = locals;
         entry.uses_alloca = self.func_uses_alloca;
         entry.body = Some(body);
+        self.nest.pop();
+        if let Some(saved) = saved {
+            self.restore_function_state(saved);
+        }
+    }
+
+    /// Puts the state of the function being checked aside, so that a nested
+    /// definition can be checked in the middle of it.
+    fn save_function_state(&mut self) -> Box<SavedFunc> {
+        Box::new(SavedFunc {
+            ret_ty: self.ret_ty,
+            func_name: std::mem::take(&mut self.func_name),
+            func_variadic: self.func_variadic,
+            func_params: std::mem::take(&mut self.func_params),
+            va_param: self.va_param.take(),
+            cfg_mode: self.cfg_mode,
+            labels: std::mem::take(&mut self.labels),
+            breakables: std::mem::take(&mut self.breakables),
+            switch_stack: std::mem::take(&mut self.switch_stack),
+            vla_scopes: std::mem::take(&mut self.vla_scopes),
+            label_vla_scopes: std::mem::take(&mut self.label_vla_scopes),
+            goto_scopes: std::mem::take(&mut self.goto_scopes),
+            switch_vla_depths: std::mem::take(&mut self.switch_vla_depths),
+            func_uses_alloca: self.func_uses_alloca,
+            // A `cleanup` owed by the enclosing block is not owed by the
+            // nested function's `return`.
+            cleanup_depth: std::mem::take(&mut self.cleanup_depth),
+            next_loop: self.next_loop,
+            next_switch: self.next_switch,
+            next_label: self.next_label,
+        })
+    }
+
+    fn restore_function_state(&mut self, saved: Box<SavedFunc>) {
+        let saved = *saved;
+        self.ret_ty = saved.ret_ty;
+        self.func_name = saved.func_name;
+        self.func_variadic = saved.func_variadic;
+        self.func_params = saved.func_params;
+        self.va_param = saved.va_param;
+        self.cfg_mode = saved.cfg_mode;
+        self.labels = saved.labels;
+        self.breakables = saved.breakables;
+        self.switch_stack = saved.switch_stack;
+        self.vla_scopes = saved.vla_scopes;
+        self.label_vla_scopes = saved.label_vla_scopes;
+        self.goto_scopes = saved.goto_scopes;
+        self.switch_vla_depths = saved.switch_vla_depths;
+        self.func_uses_alloca = saved.func_uses_alloca;
+        self.cleanup_depth = saved.cleanup_depth;
+        self.next_loop = saved.next_loop;
+        self.next_switch = saved.next_switch;
+        self.next_label = saved.next_label;
     }
 
     // -- static initialisers ------------------------------------------------

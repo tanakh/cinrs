@@ -376,6 +376,7 @@ impl<'a> Dumper<'a> {
             BlockItem::Decl(d) => self.decl(d),
             BlockItem::Stmt(s) => self.stmt(s),
             BlockItem::StaticAssert(sa) => self.static_assert(sa),
+            BlockItem::NestedFunction(f) => self.function_def(f),
         }
     }
 

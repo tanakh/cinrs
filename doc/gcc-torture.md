@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | passed | rejected as required | failed |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1414/1691 (83.6 %) | 64/78 (82.1 %) | **1478/1769 (83.6 %)** | — | 291 |
-| `gnu11!` | 1318/1691 (77.9 %) | 64/78 (82.1 %) | 1382/1769 (78.1 %) | 104 | 283 |
+| **`gnu89!`** | 1429/1691 (84.5 %) | 64/78 (82.1 %) | **1493/1769 (84.4 %)** | — | 276 |
+| `gnu11!` | 1332/1691 (78.8 %) | 64/78 (82.1 %) | 1396/1769 (78.9 %) | 104 | 269 |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -176,10 +176,11 @@ an implicit function declaration (3) — and a C99-or-later entry point is
 GCC 14 made both constraint violations errors. Each is an `!` line in
 `tests/gcc-torture/expected-failures.txt` naming the diagnostic it must be
 refused with, so guard mode asserts the refusal rather than tolerating a
-failure: a case that started *compiling* would be the news. Ninety-six of the
-104 pass under `gnu89!`; the other eight get past the C89 rule there and stop
-at a second gap — six at a nested function definition, two at a later
-declaration.
+failure: a case that started *compiling* would be the news. Ninety-seven of the
+104 pass under `gnu89!`; the other seven get past the C89 rule there and stop
+at a second gap — two at a computed `goto`, two at a nonlocal `goto` out of a
+nested function, one at a nested function that uses the enclosing function's
+variable length array, and two at a later declaration.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
@@ -187,37 +188,66 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 286 of the 291 failures are refused at compile time, in 31
-distinct causes; under `gnu11!`, 278 of 283, in 30. The ones worth a line
+Under `gnu89!`, 271 of the 276 failures are refused at compile time, in 34
+distinct causes; under `gnu11!`, 264 of 269, in 32. The ones worth a line
 each, with what the same cause costs under `gnu11!` beside it — the 104
 conforming rejections above are *not* in this table:
 
 | `gnu89!` | `gnu11!` | cause | e.g. |
 | ---: | ---: | --- | --- |
-| 67 | 67 | inline assembly is not supported | `execute/20001009-2` |
+| 68 | 68 | inline assembly is not supported | `execute/20001009-2` |
 | 44 | 44 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| 38 | 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
-| 29 | 23 | `nested function definitions are a GNU extension cinrs does not support; move 'f2' to file scope (if it uses the enclosing function's locals, pass them as parameters)` | `execute/20000822-1` |
+| 39 | 39 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
 | 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
+| 15 | 13 | `expected expression, found '&&'` — computed `goto` | `execute/20040302-1` |
 | 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
-| 11 | 11 | `expected expression, found '&&'` — computed `goto` | `execute/20040302-1` |
 | 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
+| 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
 | 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
-| 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | 5 | 5 | a `#include` of a corpus file outside the sparse checkout (`../../gcc.dg/…`) | `execute/pr105777` |
 | 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
+| 5 | 3 | a **nonlocal `goto`**: a jump out of a nested function to a label of the enclosing one, which GCC reaches through the enclosing frame | `execute/nestfunc-5` |
 | 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
 | 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
 | 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
+| 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
+| 1 | — | a nested function that uses the enclosing function's **variable length array** | `execute/921017-1` |
 
-The remaining causes have two cases or fewer each; the report prints all
-thirty-one. The `__builtin_…` count is the sum of two rows the report prints
-separately, because a diagnostic raised inside an `#include`d corpus file
-carries the file name and is grouped on its own.
+The last three rows are the whole cost of what nested functions cannot do; the
+other causes below them have two cases or fewer each, and the report prints
+all thirty-four. The `__builtin_…` count is the sum of two rows the report
+prints separately, because a diagnostic raised inside an `#include`d corpus
+file carries the file name and is grouped on its own; the
+address-of-a-nested-function count is the sum of two for the same reason, the
+diagnostic naming the variables in the way.
 
-The last round of work — `_Complex` — took both entry points up by **15**, and
+The last round of work — **nested functions**, lifted out of the function they
+were written in — took `gnu89!` up by **15** and `gnu11!` by **14**, and
 **no case went the other way** in either:
+
+| cases | what landed |
+| ---: | --- |
+| 14 | the shapes that lift: `execute/20010209-1` (a non-capturing nested function called with the enclosing VLA), `20010605-1` (`inline` on one), `20030501-1`, `20040520-1`, `20090219-1`, `920612-2` (reading and writing an enclosing local), `931002-1` (the address of a *non*-capturing one), `nest-align-1`, `nestfunc-1`, `nestfunc-2`, `nestfunc-7` (a `struct` returned from one), `pr103405`, `pr22061-3` and `pr22061-4` (a parameter whose bound is a captured variable) |
+| 1 | `execute/921215-1`, which `gnu89!` alone selects |
+
+Eleven of the corpus's nested-function cases still fail — nine under `gnu11!`,
+which counts two of the eleven as conforming rejections instead — each for a
+reason the lifting cannot reach:
+
+* the **address** of a function that uses the enclosing frame, which is what
+  GCC's trampoline is for: `20000822-1`, and `nestfunc-3`, where the function
+  whose address is taken needs the frame only because of a sibling it calls;
+* a **nonlocal `goto`**: `nestfunc-5`, `nestfunc-6`, `pr24135`, and under
+  `gnu89!` also `920428-2` and `920501-7`;
+* a **computed `goto`** on top of that: `920721-4` and `pr51447`;
+* inline assembly, which stops `20061220-1` before anything else does;
+* a nested function that uses the enclosing function's **variable length
+  array**: `921017-1`, under `gnu89!`;
+* and a **variadic** nested function, which needs Rust 1.99 like any other
+  variadic definition: `nest-stdar-1`.
+
+The round before that — `_Complex` — took both entry points up by **15**:
 
 | cases | what landed |
 | ---: | --- |
@@ -231,7 +261,7 @@ the front end and fails on a packed-member reference that the complex
 diagnostic had been hiding. `ieee/cdivchkd` is the one case that compiles,
 runs and gives an answer GCC would not; see the section below.
 
-The round before that took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
+The round before *that* took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
 to 1367:
 
 | cases | what landed |

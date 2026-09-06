@@ -890,6 +890,52 @@ fn a_statement_expression_becomes_a_rust_block() {
 }
 
 #[test]
+fn a_nested_function_is_lifted_with_a_pointer_to_what_it_uses() {
+    // GNU's nested function becomes a file-scope item of its own. Every object
+    // of the enclosing function it uses arrives as a hidden `*mut T` in front
+    // of the declared parameters, named after the variable it carries; the
+    // body reads and writes through it, and the call site passes `&raw mut`.
+    // A nested function that uses nothing stays an ordinary function, which is
+    // why its address can still be taken.
+    insta::assert_snapshot!(generate(
+        r"
+        int report(int a, int b) {
+            int tally = 0;
+
+            void note(int value) { tally += value; }
+
+            note(a);
+            note(b);
+            return tally;
+        }
+
+        int plain(int n) {
+            int doubled(int x) { return x * 2; }
+            return doubled(n);
+        }
+        "
+    ));
+}
+
+#[test]
+fn a_nested_function_two_levels_down_is_handed_the_pointer() {
+    // The innermost function uses the *outermost* function's variable, so the
+    // middle one takes the pointer it never mentions and passes it on.
+    insta::assert_snapshot!(generate(
+        r"
+        int outer(int n) {
+            int base = n;
+            int middle(int a) {
+                int inner(int b) { return b + base; }
+                return inner(a);
+            }
+            return middle(1);
+        }
+        "
+    ));
+}
+
+#[test]
 fn the_function_attributes_become_rust_ones() {
     insta::assert_snapshot!(generate(
         r#"

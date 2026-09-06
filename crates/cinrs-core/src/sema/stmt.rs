@@ -46,6 +46,9 @@ impl Sema<'_> {
                 }
                 ast::BlockItem::Stmt(stmt) => out.push(self.stmt(stmt)),
                 ast::BlockItem::StaticAssert(assert) => self.static_assert(assert),
+                // A nested function is lifted to an item of its own, so it
+                // contributes nothing to the block it was written in.
+                ast::BlockItem::NestedFunction(def) => self.nested_function_def(def),
             }
         }
         self.vla_scopes.truncate(vla_depth);
@@ -310,10 +313,7 @@ impl Sema<'_> {
                     }
                 }
                 None => {
-                    self.error(
-                        label.range,
-                        format!("use of undeclared label '{}'", label.name),
-                    );
+                    self.report_missing_label(label);
                     Stmt::Nop
                 }
             },
@@ -478,6 +478,38 @@ impl Sema<'_> {
                 self.collect_labels_in(stmt);
             }
         }
+    }
+
+    /// Reports a `goto` whose label this function does not have.
+    ///
+    /// When an *enclosing* function has it, the jump is GNU's nonlocal goto:
+    /// it unwinds to the enclosing frame, which GCC arranges with the frame
+    /// pointer the nested function was handed. Lambda lifting keeps no such
+    /// pointer, so the construct is named rather than reported as a label
+    /// nobody wrote.
+    fn report_missing_label(&mut self, label: &ast::Ident) {
+        let nonlocal = self.nest.split_last().is_some_and(|(_, enclosing)| {
+            enclosing
+                .iter()
+                .any(|frame| frame.labels.contains(&label.name))
+        });
+        if nonlocal {
+            self.error(
+                label.range,
+                format!(
+                    "'goto {}' leaves this nested function for a label of the enclosing one; \
+                     GNU C calls that a nonlocal goto and reaches it through the enclosing \
+                     frame, which cinrs cannot do. Return a value the enclosing function can \
+                     branch on instead",
+                    label.name
+                ),
+            );
+            return;
+        }
+        self.error(
+            label.range,
+            format!("use of undeclared label '{}'", label.name),
+        );
     }
 
     fn collect_labels_in(&mut self, stmt: &ast::Stmt) {
@@ -702,6 +734,7 @@ impl Sema<'_> {
         for item in items {
             match item {
                 ast::BlockItem::StaticAssert(assert) => self.static_assert(assert),
+                ast::BlockItem::NestedFunction(def) => self.nested_function_def(def),
                 ast::BlockItem::Decl(decl) => {
                     let stmts = self.hoisted_decl(decl, &mut hoisted);
                     match groups.last_mut() {
@@ -1079,7 +1112,12 @@ fn block_needs_cfg(block: &ast::Block, switch_depth: u32, at_top: bool) -> bool 
             .declarators
             .iter()
             .any(|d| d.attrs.cleanup.is_some() || decl.specifiers.attrs.cleanup.is_some()),
-        ast::BlockItem::Decl(_) | ast::BlockItem::StaticAssert(_) => false,
+        // A nested function definition is an item of its own: whether *its*
+        // body needs the CFG lowering is decided when it is checked, and says
+        // nothing about the function it was written in.
+        ast::BlockItem::Decl(_)
+        | ast::BlockItem::StaticAssert(_)
+        | ast::BlockItem::NestedFunction(_) => false,
     })
 }
 

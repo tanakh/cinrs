@@ -724,6 +724,14 @@ pub enum BlockItem {
     Stmt(Stmt),
     /// `_Static_assert(…);` — C11.
     StaticAssert(StaticAssert),
+    /// GNU's nested function definition, `int f(void) { int g(int x) { … } }`.
+    ///
+    /// It is a block *item* rather than a declaration or a statement: it
+    /// declares a name in the enclosing block, contributes no statement to it,
+    /// and its body is checked in a scope of its own. Semantic analysis lifts
+    /// it to a file-scope item with a hidden environment; see
+    /// `Sema::nested_function_def`.
+    NestedFunction(FunctionDef),
 }
 
 /// A statement.

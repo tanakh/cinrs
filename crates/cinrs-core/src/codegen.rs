@@ -625,6 +625,13 @@ struct Codegen<'a> {
     /// local of the function shares one scope, and for a local whose name
     /// would shadow a file-scope item (see [`PRELUDE_PATTERNS`]).
     local_names: HashMap<ir::ObjectId, String>,
+    /// The hidden pointer the function being generated reaches each enclosing
+    /// object through, when it is a [lifted nested function](ir::EnvParam).
+    ///
+    /// It is what a call from inside one passes on: an object this function
+    /// does not own itself arrives as a pointer, and the callee wants the same
+    /// pointer rather than the address of a local that is not there.
+    env: HashMap<ir::ObjectId, ir::ObjectId>,
     /// The names a `let` binding or a parameter must not use.
     reserved: HashSet<String>,
     va_source: VaSource,
@@ -669,6 +676,7 @@ impl<'a> Codegen<'a> {
             options,
             continue_styles: HashMap::new(),
             local_names: HashMap::new(),
+            env: HashMap::new(),
             reserved,
             va_source: VaSource::None,
             ret_ty: Ty::Void,
@@ -1645,8 +1653,18 @@ impl<'a> Codegen<'a> {
 
     fn signature(&mut self, func: &Function) -> TokenStream {
         let span = self.sp(func.range);
-        let name = c_ident(&func.name, span);
+        let name = c_ident(func.item_name(), span);
         let mut params = TokenStream::new();
+        // A lifted nested function takes the objects it uses from the
+        // enclosing frame as pointers, in front of everything the program
+        // wrote; see [`ir::EnvParam`].
+        for entry in &func.env {
+            let object = self.program.object(entry.param);
+            let pspan = self.sp(object.range);
+            let pname = self.object_ident(entry.param, pspan);
+            let pty = self.ty(object.ty, pspan);
+            params.extend(quote_spanned! {pspan=> #pname: #pty , });
+        }
         // A definition whose parameters did not check out may have fewer than
         // the signature says; either way the list still has to have the right
         // shape, so it falls back to names of our own.
@@ -1754,12 +1772,13 @@ impl<'a> Codegen<'a> {
     /// told so rather than quietly built without it.
     fn init_array_item(&mut self, func: &Function, kind: ir::InitKind) -> TokenStream {
         let span = self.sp(func.range);
-        let name = c_ident(&func.name, span);
+        let name = c_ident(func.item_name(), span);
         let signature = self.function_pointer_ty(func, span);
         let item = Ident::new(
             &format!(
                 "__CINRS_INIT_{:08x}_{}",
-                self.program.unit_id as u32, func.name
+                self.program.unit_id as u32,
+                func.item_name()
             ),
             span,
         );
@@ -1875,13 +1894,19 @@ impl<'a> Codegen<'a> {
         self.temporaries = 0;
         self.continue_styles.clear();
         self.local_names.clear();
+        self.env = func
+            .env
+            .iter()
+            .map(|entry| (entry.owner, entry.param))
+            .collect();
 
         // Every object this function binds with a `let` or a parameter, so
         // that one that would shadow a file-scope item can be renamed apart
         // and the rename can be checked against the others. Sema's list is
         // what makes a local declared inside a statement expression — which no
         // walk over the *statements* would reach — part of it.
-        let mut bound: Vec<ir::ObjectId> = func.params.clone();
+        let mut bound: Vec<ir::ObjectId> = func.env.iter().map(|entry| entry.param).collect();
+        bound.extend(func.params.iter().copied());
         if let Some(Body::Cfg(cfg)) = &func.body {
             for local in &cfg.locals {
                 self.local_names
@@ -4340,9 +4365,13 @@ impl<'a> Codegen<'a> {
             );
         }
 
-        let mut tokens = TokenStream::new();
+        // A lifted nested function's hidden arguments come first, and one
+        // written argument after them needs the comma the loop would only put
+        // between two of its own.
+        let mut tokens = self.env_arguments(callee, span);
+        let hidden = !tokens.is_empty();
         for (index, arg) in args.iter().enumerate() {
-            if index > 0 {
+            if index > 0 || hidden {
                 tokens.extend(quote_spanned! {span=> , });
             }
             match params.get(index) {
@@ -4362,6 +4391,42 @@ impl<'a> Codegen<'a> {
         }
         let call = parenthesize(tokens, span);
         Value::new(quote_spanned! {span=> #target #call }, prec::CALL)
+    }
+
+    /// The hidden arguments a call to a lifted nested function opens with.
+    ///
+    /// Each one is the address of the object the callee wants: the enclosing
+    /// function passes `&raw mut x` for a local of its own, and a function
+    /// that was itself passed the pointer passes that on. Nothing else has a
+    /// hidden argument, so this is empty for every ordinary call.
+    fn env_arguments(&self, callee: &Callee, span: Span) -> TokenStream {
+        let Callee::Direct(id) = callee else {
+            return TokenStream::new();
+        };
+        let mut tokens = TokenStream::new();
+        for (index, entry) in self.program.function(*id).env.iter().enumerate() {
+            if index > 0 {
+                tokens.extend(quote_spanned! {span=> , });
+            }
+            match self.env.get(&entry.owner) {
+                // The caller was handed the pointer itself; it passes it on.
+                Some(param) => {
+                    let name = self.object_ident(*param, span);
+                    tokens.extend(quote_spanned! {span=> #name });
+                }
+                // The object is the caller's own.
+                None => {
+                    let object = self.program.object(entry.owner);
+                    let name = self.object_ident(entry.owner, span);
+                    tokens.extend(if object.is_const {
+                        quote_spanned! {span=> &raw const #name }
+                    } else {
+                        quote_spanned! {span=> &raw mut #name }
+                    });
+                }
+            }
+        }
+        tokens
     }
 
     /// The signature a call goes through: the callee's own for a direct call,
@@ -4423,7 +4488,7 @@ impl<'a> Codegen<'a> {
             let name = Ident::new(&self.program.extern_name(&function.name), span);
             return quote_spanned! {span=> #name };
         }
-        let name = c_ident(&function.name, span);
+        let name = c_ident(function.item_name(), span);
         quote_spanned! {span=> #name }
     }
 

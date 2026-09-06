@@ -31,6 +31,38 @@
 //! `va` the `<stdarg.h>` builtins. They are all inherent `impl` blocks on the
 //! one `Sema` struct; the split is for reading, not for encapsulation.
 //!
+//! # Nested functions
+//!
+//! GNU's nested function definitions are the one construct this pass does not
+//! merely *check* but rewrites: a definition written inside another function's
+//! body is **lambda-lifted** into a file-scope [`ir::Function`] of its own.
+//!
+//! The body is checked where it stands, in a scope nested in the enclosing
+//! function's, so C's own scoping decides what it can see. `Sema::nest` is the
+//! stack of levels that says which function is being checked, and
+//! `Sema::object_level` records the level each object was created at, so a
+//! name that resolves to an *enclosing* function's automatic object is
+//! recognised as a **capture**. Each captured object becomes a hidden pointer
+//! parameter of the lifted function — an [`ir::EnvParam`] — and the reference
+//! becomes the place `*ptr`, which is what keeps assignment, `&x`, `x++`,
+//! subscripting, member access and `sizeof x` meaning what C says and keeps
+//! the object *shared* with the enclosing function rather than copied. A level
+//! in between takes the pointer whether it uses the object or not, so that it
+//! can pass it on.
+//!
+//! A call to a nested function needs the addresses of whatever the callee
+//! captures, which the caller may itself only have as a pointer. What the
+//! callee captures is not always known at the call site — GNU's
+//! `auto int g(int);` exists so that two nested functions can call each other
+//! — so the call *edges* are recorded and `Sema::propagate_nested_env` closes
+//! over them at the end of the unit; [`crate::codegen`] then writes the
+//! arguments out.
+//!
+//! What is refused is what a lifting cannot express: the **address** of a
+//! nested function that captures (GCC writes a trampoline onto the stack for
+//! it), a **nonlocal `goto`**, and capturing a variable length array or a
+//! `va_list`.
+//!
 //! # Purity
 //!
 //! Nothing here touches `proc_macro2`. Diagnostics and IR nodes carry byte
@@ -280,6 +312,60 @@ struct SwitchState {
     default: Option<SourceRange>,
 }
 
+/// Which scope a function declaration's name belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FuncScope {
+    /// The file scope, where C gives a function its linkage — including a
+    /// block-scope `int g(int);`, which declares the external `g` (6.2.2p4).
+    File,
+    /// The block it was written in: GNU's nested function, which has no
+    /// linkage at all.
+    Nested,
+}
+
+/// One level of the function nesting the statement being checked sits in.
+///
+/// There is always exactly one frame per level while a body is checked: the
+/// file-scope function is level zero, a [nested
+/// function](Sema::nested_function_def) written in its body is level one, and
+/// so on. The hidden environment parameters themselves live on
+/// [`ir::Function`], where they are still reachable once the frame is gone.
+struct NestFrame {
+    /// The function this level is checking.
+    func: FuncId,
+    /// Its labels, so that a `goto` in a *deeper* level can be told the
+    /// difference between a name nothing declares and GNU's nonlocal goto.
+    labels: HashSet<String>,
+}
+
+/// The per-function state a nested definition has to put aside while its own
+/// body is checked, and give back afterwards.
+///
+/// A nested function is checked where it stands, in the middle of the
+/// enclosing function's body, so everything the enclosing one had accumulated
+/// — its labels, its loops, the variable length arrays in scope — has to
+/// survive the detour untouched.
+struct SavedFunc {
+    ret_ty: Ty,
+    func_name: String,
+    func_variadic: bool,
+    func_params: Vec<ObjectId>,
+    va_param: Option<ObjectId>,
+    cfg_mode: bool,
+    labels: HashMap<String, Label>,
+    breakables: Vec<Breakable>,
+    switch_stack: Vec<SwitchState>,
+    vla_scopes: Vec<ObjectId>,
+    label_vla_scopes: HashMap<ir::LabelId, Vec<ObjectId>>,
+    goto_scopes: Vec<(SourceRange, ir::LabelId, Vec<ObjectId>)>,
+    switch_vla_depths: Vec<usize>,
+    func_uses_alloca: bool,
+    cleanup_depth: usize,
+    next_loop: u32,
+    next_switch: u32,
+    next_label: u32,
+}
+
 /// Why a type could not be resolved, and where to say so.
 struct TypeError {
     range: SourceRange,
@@ -433,6 +519,35 @@ struct Sema<'a> {
     /// another object's initialiser — is the value it was written with, and
     /// this is what lets `static_init` reach it. (c-testsuite `00216`.)
     static_literals: HashMap<ObjectId, usize>,
+    /// The function-nesting level each object was created at, indexed by
+    /// [`ObjectId`]: zero for everything a file-scope declaration or an
+    /// ordinary function body made, one for the body of a function nested in
+    /// one of those, and so on.
+    ///
+    /// It is what answers "does this automatic object belong to the function
+    /// being checked, or to one that encloses it?" — and therefore what makes
+    /// a [nested function](Sema::nested_function_def) capture.
+    object_level: Vec<u32>,
+    /// The chain of functions enclosing the one being checked, outermost
+    /// first, with the one being checked at the end. Empty outside a body.
+    nest: Vec<NestFrame>,
+    /// For every function that has been checked, the chain
+    /// [`Sema::nest`] had while its body was: `[f]` for a file-scope function,
+    /// `[f, g]` for a `g` nested in `f`.
+    ///
+    /// [`Sema::propagate_nested_env`] needs it after the fact, to give a
+    /// caller the hidden parameters its callee turned out to want.
+    nest_chains: HashMap<FuncId, Vec<FuncId>>,
+    /// Every call from one function to a lifted nested one, which is what
+    /// [`Sema::propagate_nested_env`] walks: a caller has to pass on whatever
+    /// its callee captures and it does not own itself.
+    nested_calls: Vec<(FuncId, FuncId)>,
+    /// Where the address of a lifted nested function was taken, checked once
+    /// every capture is known; see [`Sema::check_nested_addresses`].
+    nested_addresses: Vec<(FuncId, SourceRange)>,
+    /// The enclosing objects a nested function has already been told it cannot
+    /// use, so that a body which reads one five times is told once.
+    refused_captures: HashSet<(FuncId, ObjectId)>,
     /// Return type of the function being checked.
     ret_ty: Ty,
     /// Name of the function being checked, for diagnostics and for mangling.
@@ -502,6 +617,12 @@ impl<'a> Sema<'a> {
             pending_discard: Vec::new(),
             cleanup_depth: 0,
             static_literals: HashMap::new(),
+            object_level: Vec::new(),
+            nest: Vec::new(),
+            nest_chains: HashMap::new(),
+            nested_calls: Vec::new(),
+            nested_addresses: Vec::new(),
+            refused_captures: HashSet::new(),
             ret_ty: Ty::Void,
             func_name: String::new(),
             func_variadic: false,
@@ -557,6 +678,12 @@ impl<'a> Sema<'a> {
             }
         }
         self.complete_tentative_arrays();
+        // What a nested function captures is only final once every call to it
+        // has been seen, and what may be done with its address follows from
+        // that.
+        self.propagate_nested_env();
+        self.check_nested_addresses();
+        self.check_nested_definitions();
     }
 
     /// C99 6.9.2p5: a tentative definition whose type is still an incomplete
@@ -1052,6 +1179,22 @@ impl<'a> Sema<'a> {
         is_const: bool,
         range: SourceRange,
     ) -> ObjectId {
+        let level = self.nest.len().saturating_sub(1) as u32;
+        self.new_object_at(name, ty, storage, is_const, range, level)
+    }
+
+    /// The same, for an object that belongs to a function *other* than the one
+    /// being checked: the hidden environment parameter a middle level of a
+    /// nesting has to take so that it can pass it on.
+    fn new_object_at(
+        &mut self,
+        name: &str,
+        ty: Ty,
+        storage: Storage,
+        is_const: bool,
+        range: SourceRange,
+        level: u32,
+    ) -> ObjectId {
         let id = ObjectId(self.program.objects.len() as u32);
         self.program.objects.push(ir::Object {
             name: name.to_owned(),
@@ -1063,7 +1206,243 @@ impl<'a> Sema<'a> {
             section: None,
             range,
         });
+        self.object_level.push(level);
         id
+    }
+
+    // -- nested functions ---------------------------------------------------
+
+    /// The function-nesting level `id` was created at.
+    fn object_level(&self, id: ObjectId) -> usize {
+        self.object_level
+            .get(id.0 as usize)
+            .copied()
+            .unwrap_or_default() as usize
+    }
+
+    /// The place a reference to `id` denotes here.
+    ///
+    /// An automatic object of an *enclosing* function is reached through the
+    /// hidden pointer parameter the lifted function took it in, so that
+    /// assignment, `&x`, `x++`, subscripting and member access all keep
+    /// working and every one of them is seen by the enclosing function too.
+    fn object_place(&mut self, id: ObjectId, range: SourceRange) -> Place {
+        let info = self.program.object(id);
+        let (ty, is_const) = (info.ty, info.is_const);
+        let Some(ptr) = self.capture(id, range) else {
+            return place_of(PlaceKind::Object(id), ty, is_const, range);
+        };
+        let pty = self.program.object(ptr).ty;
+        let load = Expr::new(
+            ExprKind::Load(place_of(PlaceKind::Object(ptr), pty, true, range)),
+            pty,
+            range,
+        );
+        place_of(PlaceKind::Deref(Box::new(load)), ty, is_const, range)
+    }
+
+    /// The hidden pointer the function being checked reaches `owner` through,
+    /// or `None` when it owns the object itself.
+    ///
+    /// Everything with static storage duration is an item rather than a frame
+    /// slot, so nothing has to be captured to reach it; that covers a
+    /// file-scope object and an enclosing function's `static` local alike.
+    fn capture(&mut self, owner: ObjectId, range: SourceRange) -> Option<ObjectId> {
+        if self.nest.len() < 2 || self.program.object(owner).storage != Storage::Automatic {
+            return None;
+        }
+        let level = self.object_level(owner);
+        if level + 1 >= self.nest.len() {
+            return None;
+        }
+        if !self.capturable(owner, range) {
+            return None;
+        }
+        let chain: Vec<FuncId> = self.nest.iter().map(|frame| frame.func).collect();
+        self.env_chain(&chain, owner, level)
+    }
+
+    /// Whether an enclosing object may be captured at all.
+    ///
+    /// Two kinds cannot be, in this release: a variably modified object, whose
+    /// bounds live in hidden objects of the enclosing frame that would have to
+    /// be captured with it, and a `va_list`, which is a borrow of the caller's
+    /// argument list and has no address a callee may keep.
+    fn capturable(&mut self, owner: ObjectId, range: SourceRange) -> bool {
+        let object = self.program.object(owner);
+        let (ty, name, declared) = (object.ty, object.name.clone(), object.range);
+        let reason = if object.vla_storage || self.types().is_vm(ty) {
+            "it is a variable length array, whose length lives in the enclosing frame, and \
+             cinrs does not capture that yet. Pass the array and its length as parameters"
+        } else if ty.is_va_list() {
+            "a 'va_list' belongs to the function whose arguments it walks, and cinrs does \
+             not capture one yet. Read the arguments in the enclosing function and pass the \
+             values"
+        } else {
+            return true;
+        };
+        // A body that reads the object five times is told once.
+        let here = self.nest.last().expect("a capture needs a nesting").func;
+        if self.refused_captures.insert((here, owner)) {
+            self.error_note(
+                range,
+                format!("a nested function cannot use '{name}': {reason}"),
+                declared,
+                format!("'{name}' is declared here"),
+            );
+        }
+        false
+    }
+
+    /// Gives every function in `chain` above `level` a hidden parameter for
+    /// `owner`, and hands back the last one's.
+    ///
+    /// A two-level nesting is what makes this a loop: an inner function that
+    /// uses the *outermost* function's variable receives it through the middle
+    /// function, which has to take it whether it uses the variable itself or
+    /// not.
+    fn env_chain(&mut self, chain: &[FuncId], owner: ObjectId, level: usize) -> Option<ObjectId> {
+        let mut ptr = None;
+        for (index, func) in chain.iter().enumerate().skip(level + 1) {
+            ptr = Some(self.env_param(*func, owner, index));
+        }
+        ptr
+    }
+
+    /// The hidden parameter `func` carries `owner` in, adding one if this is
+    /// the first use.
+    fn env_param(&mut self, func: FuncId, owner: ObjectId, level: usize) -> ObjectId {
+        if let Some(entry) = self
+            .program
+            .function(func)
+            .env
+            .iter()
+            .find(|entry| entry.owner == owner)
+        {
+            return entry.param;
+        }
+        let object = self.program.object(owner);
+        let (ty, is_const, name, range) = (
+            object.ty,
+            object.is_const,
+            object.name.clone(),
+            object.range,
+        );
+        let pointer = self.ptr_to(ty, is_const);
+        // The hidden parameter is named after the variable it carries, so that
+        // the generated Rust reads as what it is.
+        let param = self.new_object_at(
+            &format!("__env_{name}"),
+            pointer,
+            Storage::Automatic,
+            true,
+            range,
+            level as u32,
+        );
+        self.program.functions[func.0 as usize]
+            .env
+            .push(ir::EnvParam { owner, param });
+        param
+    }
+
+    /// Passes on what a callee captures.
+    ///
+    /// A function that calls a nested one has to hand it the addresses it
+    /// wants, and for an object it does not own itself that means taking a
+    /// hidden parameter of its own. Doing it here rather than at the call site
+    /// is what lets a call be checked before the callee's own body has been:
+    /// GNU's `auto int g(int);` forward declaration exists for exactly that,
+    /// and mutual recursion between two nested functions needs it.
+    ///
+    /// The iteration is a fixed point because one caller's new parameter may
+    /// be another's, up the chain.
+    fn propagate_nested_env(&mut self) {
+        if self.nested_calls.is_empty() {
+            return;
+        }
+        let edges = std::mem::take(&mut self.nested_calls);
+        loop {
+            let mut changed = false;
+            for (caller, callee) in &edges {
+                let owners: Vec<ObjectId> = self
+                    .program
+                    .function(*callee)
+                    .env
+                    .iter()
+                    .map(|entry| entry.owner)
+                    .collect();
+                let Some(chain) = self.nest_chains.get(caller).cloned() else {
+                    continue;
+                };
+                for owner in owners {
+                    let level = self.object_level(owner);
+                    if level + 1 >= chain.len() {
+                        continue;
+                    }
+                    let before = self.program.function(*caller).env.len();
+                    self.env_chain(&chain, owner, level);
+                    changed |= self.program.function(*caller).env.len() != before;
+                }
+            }
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    /// Reports every address taken of a nested function that turned out to
+    /// capture something.
+    ///
+    /// The check waits until [`Sema::propagate_nested_env`] has run: a
+    /// function that only calls a capturing sibling captures nothing of its
+    /// own, and is still not a function whose address this crate can hand out.
+    fn check_nested_addresses(&mut self) {
+        for (id, range) in std::mem::take(&mut self.nested_addresses) {
+            let function = self.program.function(id);
+            if function.env.is_empty() {
+                continue;
+            }
+            let name = function.name.clone();
+            let uses: Vec<String> = function
+                .env
+                .iter()
+                .map(|entry| format!("'{}'", self.program.object(entry.owner).name))
+                .collect();
+            let declared = function.range;
+            self.error_note(
+                range,
+                format!(
+                    "the address of the nested function '{name}' cannot be taken: it uses the \
+                     enclosing function's {}, which GCC reaches through a trampoline written \
+                     onto the stack and cinrs cannot generate. Move '{name}' to file scope and \
+                     pass what it uses as parameters",
+                    join_names(&uses)
+                ),
+                declared,
+                format!("'{name}' is defined here"),
+            );
+        }
+    }
+
+    /// Reports a nested function that was forward-declared with `auto` and
+    /// never defined.
+    fn check_nested_definitions(&mut self) {
+        let missing: Vec<(String, SourceRange)> = self
+            .program
+            .functions
+            .iter()
+            .filter(|function| function.is_nested() && function.is_extern())
+            .map(|function| (function.name.clone(), function.range))
+            .collect();
+        for (name, range) in missing {
+            self.error(
+                range,
+                format!(
+                    "the nested function '{name}' is declared but never defined; a nested \
+                     function has no linkage, so nothing outside this function can define it"
+                ),
+            );
+        }
     }
 
     /// Reports a redefinition if `name` already means something in this scope.
@@ -1631,6 +2010,16 @@ fn render_case_value(value: i128, ty: Ty, target: &TargetModel) -> String {
         value.to_string()
     } else {
         (value as u128).to_string()
+    }
+}
+
+/// A list of names the way a sentence would read it: `a`, `a and b`,
+/// `a, b and c`.
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 

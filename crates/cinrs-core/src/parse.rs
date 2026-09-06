@@ -973,7 +973,7 @@ impl Parser<'_> {
 
         let mut kr_decls = Vec::new();
         while self.starts_declaration() {
-            match self.parse_declaration(false) {
+            match self.parse_declaration() {
                 Ok(decl) => kr_decls.push(decl),
                 Err(bail) => {
                     self.pop_scope();
@@ -1061,27 +1061,41 @@ impl Parser<'_> {
         })
     }
 
-    /// Parses a declaration.
+    /// Parses a declaration that cannot be a function definition.
     ///
-    /// `at_block_scope` says this one is a block item, which is the only place
-    /// where what looks like a declaration may really be a function
-    /// *definition*: GNU's nested functions. See
-    /// [`Parser::refuse_nested_function`]. A K&R parameter declaration list
-    /// and a `for` clause both pass `false` — neither may hold a definition,
-    /// and in the K&R list the `{` that follows opens the body of the function
-    /// being defined, not a nested one.
-    fn parse_declaration(&mut self, at_block_scope: bool) -> PResult<Decl> {
+    /// A K&R parameter declaration list and a `for` clause are the two places
+    /// that use it — neither may hold a definition, and in the K&R list the
+    /// `{` that follows opens the body of the function being defined, not a
+    /// nested one. A block item goes through
+    /// [`Parser::parse_block_declaration`], which may find GNU's nested
+    /// function definition instead.
+    fn parse_declaration(&mut self) -> PResult<Decl> {
         // `__extension__` covers the declaration it is written on, so one
         // nested inside another — a local in the body of a function whose
         // definition carries it — starts afresh, and the enclosing one gets
         // its answer back whichever way this goes.
         let enclosing = std::mem::take(&mut self.in_extension);
-        let result = self.parse_declaration_inner(at_block_scope);
+        let result = self.parse_declaration_inner();
         self.in_extension = enclosing;
         result
     }
 
-    fn parse_declaration_inner(&mut self, at_block_scope: bool) -> PResult<Decl> {
+    fn parse_declaration_inner(&mut self) -> PResult<Decl> {
+        let (specs, start) = self.parse_declaration_head()?;
+        if let Some(semi) = self.eat_punct(Punct::Semi) {
+            return Ok(Decl {
+                specifiers: specs,
+                declarators: Vec::new(),
+                range: start.join(semi),
+            });
+        }
+        self.finish_declaration(specs, None, start)
+    }
+
+    /// The `__extension__`s, attributes and declaration specifiers that a
+    /// declaration — and a nested function definition, which begins as one —
+    /// opens with, and where they began.
+    fn parse_declaration_head(&mut self) -> PResult<(DeclSpecifiers, SourceRange)> {
         let start = self.cur_range();
         while self.eat_keyword(Keyword::Extension).is_some() {
             self.in_extension = true;
@@ -1090,25 +1104,42 @@ impl Parser<'_> {
         let mut specs = self.parse_decl_specifiers(true)?;
         specs.attrs.merge(attrs);
         specs.noreturn = specs.noreturn.or(specs.attrs.noreturn);
+        Ok((specs, start))
+    }
+
+    /// Parses a block item that begins like a declaration.
+    ///
+    /// Block scope is the one place where what looks like a declaration may
+    /// really be a function *definition*: GNU's nested functions. See
+    /// [`Parser::parse_nested_function`].
+    fn parse_block_declaration(&mut self) -> PResult<BlockItem> {
+        let enclosing = std::mem::take(&mut self.in_extension);
+        let result = self.parse_block_declaration_inner();
+        self.in_extension = enclosing;
+        result
+    }
+
+    fn parse_block_declaration_inner(&mut self) -> PResult<BlockItem> {
+        let (specs, start) = self.parse_declaration_head()?;
         if let Some(semi) = self.eat_punct(Punct::Semi) {
-            return Ok(Decl {
+            return Ok(BlockItem::Decl(Decl {
                 specifiers: specs,
                 declarators: Vec::new(),
                 range: start.join(semi),
-            });
+            }));
         }
-        if at_block_scope {
-            // The first declarator is taken here rather than left to
-            // [`Parser::finish_declaration`], because it is the declarator
-            // that says whether this is a declaration at all.
-            let mut first = self.parse_declarator(specs.base.clone(), false)?;
-            self.parse_declarator_tail(&mut first)?;
-            if self.at_nested_function_body(&specs, &first) {
-                return Ok(self.refuse_nested_function(specs, first, start));
-            }
-            return self.finish_declaration(specs, Some(first), start);
+        // The first declarator is taken here rather than left to
+        // [`Parser::finish_declaration`], because it is the declarator that
+        // says whether this is a declaration at all.
+        let mut first = self.parse_declarator(specs.base.clone(), false)?;
+        self.parse_declarator_tail(&mut first)?;
+        if self.at_nested_function_body(&specs, &first) {
+            return self
+                .parse_nested_function(specs, first, start)
+                .map(BlockItem::NestedFunction);
         }
-        self.finish_declaration(specs, None, start)
+        self.finish_declaration(specs, Some(first), start)
+            .map(BlockItem::Decl)
     }
 
     /// Whether the block-scope declaration just read is really the head of a
@@ -1162,86 +1193,79 @@ impl Parser<'_> {
         n > 0 && self.nth(n).is_punct(Punct::LBrace)
     }
 
-    /// Reports a GNU nested function definition, and skips its body.
+    /// Parses a GNU nested function definition, body and all.
     ///
-    /// A nested function reads the enclosing function's locals, so GCC gives a
-    /// pointer to one a trampoline on the stack: there is nothing in Rust for
-    /// that to become, and `doc/gnu-extensions.md` has the row that says so.
-    /// The construct is therefore named and refused rather than mis-parsed.
-    ///
-    /// What is left behind is the *declaration* that a definition also is, so
-    /// the calls to it further down still resolve and type-check; the body is
-    /// skipped whole, brackets balanced, so that the rest of the enclosing
-    /// function is checked in full. One diagnostic for the construct, and no
-    /// cascade after it.
-    fn refuse_nested_function(
+    /// The shape is a function definition written where a declaration may
+    /// stand, so this is [`Parser::finish_function_def`] with two differences:
+    /// the name is declared in the *enclosing block*, which is the scope GNU
+    /// gives it and which is what lets the body call the function
+    /// recursively, and the result is a block item rather than an external
+    /// declaration. Semantic analysis lifts it out; see
+    /// `Sema::nested_function_def`.
+    fn parse_nested_function(
         &mut self,
         specs: DeclSpecifiers,
-        mut declarator: DeclaratorResult,
+        declarator: DeclaratorResult,
         start: SourceRange,
-    ) -> Decl {
+    ) -> PResult<FunctionDef> {
         let name = declarator
             .name
             .clone()
             .expect("at_nested_function_body requires a name");
-        // An old-style declarator names its parameters and says nothing about
-        // their types, which only a *definition* may do (6.7.6.3p3). The
-        // definition is gone, so the identifier list goes with it and what
-        // stays is `int g();` — the same declaration with no prototype, which
-        // is what keeps the calls below from cascading.
-        if let TypeKind::Function(ft) = &mut declarator.ty.kind {
-            ft.kr_names.clear();
-        }
-        self.error(
-            declarator.range,
-            format!(
-                "nested function definitions are a GNU extension cinrs does not support; \
-                 move '{}' to file scope (if it uses the enclosing function's locals, pass \
-                 them as parameters)",
-                name.name
-            ),
-        );
         self.declare(&name.name, SymKind::Ordinary);
-        // The K&R declaration list, if there is one, and then the body.
-        while !self.at_punct(Punct::LBrace) && !self.at_eof() {
-            self.advance();
-        }
-        self.skip_balanced_braces();
-        Decl {
-            specifiers: specs,
-            declarators: vec![InitDeclarator {
-                name: Some(name),
-                ty: declarator.ty,
-                init: None,
-                attrs: declarator.attrs,
-                asm_label: declarator.asm_label,
-                range: declarator.range,
-            }],
-            // The body is not part of what was kept, so neither is it part of
-            // the range: a later diagnostic about the declaration points at
-            // the declaration.
-            range: start.join(declarator.range),
-        }
-    }
 
-    /// From the current `{`, skips to just past its matching `}`.
-    fn skip_balanced_braces(&mut self) {
-        if !self.at_punct(Punct::LBrace) {
-            return;
-        }
-        let mut depth = 0i32;
-        while !self.at_eof() {
-            if self.at_punct(Punct::LBrace) {
-                depth += 1;
-            } else if self.at_punct(Punct::RBrace) {
-                depth -= 1;
-                if depth == 0 {
-                    self.advance();
-                    return;
+        // Parameters (and old-style parameter declarations) share a scope with
+        // the body's outermost block.
+        self.push_scope();
+        if let TypeKind::Function(ft) = &declarator.ty.kind {
+            for param in &ft.params {
+                if let Some(pname) = &param.name {
+                    self.scopes
+                        .last_mut()
+                        .expect("scope stack is never empty")
+                        .syms
+                        .insert(pname.name.clone(), SymKind::Ordinary);
                 }
             }
-            self.advance();
+            for kr in &ft.kr_names {
+                self.scopes
+                    .last_mut()
+                    .expect("scope stack is never empty")
+                    .syms
+                    .insert(kr.name.clone(), SymKind::Ordinary);
+            }
         }
+
+        let mut kr_decls = Vec::new();
+        while self.starts_declaration() {
+            match self.parse_declaration() {
+                Ok(decl) => kr_decls.push(decl),
+                Err(bail) => {
+                    self.pop_scope();
+                    return Err(bail);
+                }
+            }
+        }
+
+        let body = match self.parse_compound_stmt() {
+            Ok(body) => body,
+            Err(bail) => {
+                self.pop_scope();
+                return Err(bail);
+            }
+        };
+        self.pop_scope();
+
+        Ok(FunctionDef {
+            specifiers: specs,
+            name,
+            ty: declarator.ty,
+            kr_decls,
+            attrs: declarator.attrs,
+            asm_label: declarator.asm_label,
+            body,
+            range: self.span_to_here(start),
+        })
     }
 }
 
@@ -2751,10 +2775,12 @@ impl Parser<'_> {
                 match self.parse_attributes() {
                     Ok(attrs) => {
                         if self.starts_declaration() {
-                            self.parse_declaration(true).map(|mut decl| {
-                                decl.specifiers.noreturn =
-                                    decl.specifiers.noreturn.or(attrs.noreturn);
-                                BlockItem::Decl(decl)
+                            self.parse_block_declaration().map(|mut item| {
+                                if let BlockItem::Decl(decl) = &mut item {
+                                    decl.specifiers.noreturn =
+                                        decl.specifiers.noreturn.or(attrs.noreturn);
+                                }
+                                item
                             })
                         } else {
                             self.parse_stmt().map(BlockItem::Stmt)
@@ -3096,7 +3122,7 @@ impl Parser<'_> {
             } else if parser.starts_declaration() {
                 let at = parser.cur_range();
                 parser.require_standard(Standard::C99, "a declaration in a 'for' clause", at);
-                ForInit::Decl(Box::new(parser.parse_declaration(false)?))
+                ForInit::Decl(Box::new(parser.parse_declaration()?))
             } else {
                 let expr = parser.parse_expr()?;
                 parser.expect_punct(Punct::Semi, " after 'for' initializer")?;

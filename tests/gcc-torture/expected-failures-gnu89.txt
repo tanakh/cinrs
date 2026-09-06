@@ -29,11 +29,9 @@
 # which keeps every `?` and `!` line as it stands.
 
 ?execute/20000519-1                   compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/20000822-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'f2' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/20000822-1                    compile error: the address of the nested function 'f2' cannot be taken: it uses the enclosing function's 'i', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'f2' to file scope and pass what it uses as parameters
 execute/20001009-2                    compile error: inline assembly is not supported
 execute/20010122-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20010209-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'bar' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/20010605-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'fff' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/20010924-1                    compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20020107-1                    compile error: inline assembly is not supported
 execute/20020227-1                    compile error: E0793: reference to field of packed struct is unaligned
@@ -43,13 +41,11 @@ execute/20030109-1                    compile error: a flexible array member can
 execute/20030125-1                    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
 execute/20030222-1                    compile error: inline assembly is not supported
 execute/20030323-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20030501-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'retframe_block' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/20030811-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ?execute/20030914-2                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20040302-1                    compile error: expected expression, found '&&'
 execute/20040308-1                    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/20040423-1                    compile error: a member of a struct cannot have a variably modified type
-execute/20040520-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'bar' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 ?execute/20041113-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20041124-1                    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20041201-1                    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
@@ -64,7 +60,7 @@ execute/20050604-1                    compile error: 'vector_size' is not suppor
 execute/20050607-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20060420-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20061031-1                    compile error: inline assembly is not supported
-execute/20061220-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'nested' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/20061220-1                    compile error: inline assembly is not supported
 execute/20070919-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20071210-1                    compile error: expected expression, found '&&'
 execute/20071211-1                    compile error: inline assembly is not supported
@@ -72,29 +68,25 @@ execute/20071211-1                    compile error: inline assembly is not supp
 execute/20071220-1                    compile error: inline assembly is not supported
 execute/20071220-2                    compile error: inline assembly is not supported
 execute/20080122-1                    compile error: inline assembly is not supported
-execute/20090219-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'bar' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/20101011-1                    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
 ?execute/20180921-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20210505-1                    compile error: expected ';' after declaration, found identifier 'buf'
 execute/20230630-2                    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/20230630-4                    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/920302-1                      compile error: expected expression, found '&&'
-execute/920415-1                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'x' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/920428-2                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'f' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/920415-1                      compile error: expected expression, found '&&' — computed goto
+execute/920428-2                      compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/920501-3                      compile error: expected identifier after 'goto', found '*'
 execute/920501-4                      compile error: expected expression, found '&&'
 execute/920501-5                      compile error: expected expression, found '&&'
-execute/920501-7                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'y' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/920501-7                      compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 ?execute/920501-8                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/920612-2                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'a' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/920625-1                      compile error: va_arg with a struct type is not supported yet
-execute/920721-4                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'do_switch' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/920721-4                      compile error: expected expression, found '&&' — computed goto, and a nonlocal one at that: the nested function returns the address of a label of the enclosing one
 ?execute/920726-1                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/920908-1                      compile error: va_arg with a struct type is not supported yet
-execute/921017-1                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'g' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/921215-1                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'p' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/921017-1                      compile error: a nested function cannot use 'a': it is a variable length array, whose length lives in the enclosing frame, and cinrs does not capture that yet. Pass the array and its length as parameters
 execute/930406-1                      compile error: a label cannot appear inside a statement expression; nothing outside the expression can jump to it
-execute/931002-1                      compile error: nested function definitions are a GNU extension cinrs does not support; move 't0' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/931004-10                     compile error: va_arg with a struct type is not supported yet
 execute/931004-12                     compile error: va_arg with a struct type is not supported yet
 execute/931004-14                     compile error: va_arg with a struct type is not supported yet
@@ -121,7 +113,7 @@ execute/bitfld-5                      compile error: inline assembly is not supp
 execute/built-in-setjmp               compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/builtin-types-compatible-p    runtime: killed by signal 6 — it requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous enums to answer no; `long double` is `double` here and an untagged `enum` is `int`, both documented mappings
 execute/comp-goto-1                   compile error: expected expression, found '&&'
-execute/comp-goto-2                   compile error: nested function definitions are a GNU extension cinrs does not support; move 'y' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/comp-goto-2                   compile error: expected expression, found '&&' — computed goto
 execute/complex-6                     compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/eeprof-1                      runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
 ?execute/fprintf-chk-1                compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -131,17 +123,12 @@ execute/loop-2g                       compile error: <sys/mman.h> file not found
 execute/medce-1                       compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and requires the optimiser to delete the call, which nothing here does
 execute/misalign                      compile error: inline assembly is not supported
 ?execute/multi-ix                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/nest-align-1                  compile error: nested function definitions are a GNU extension cinrs does not support; move 'bar' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nest-stdar-1                  compile error: nested function definitions are a GNU extension cinrs does not support; move 'f' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-1                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'f2' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-2                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'nested' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-3                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'nested_0' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-5                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'do_goto' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-6                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'compare' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/nestfunc-7                    compile error: nested function definitions are a GNU extension cinrs does not support; move 'Foo' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+?execute/nest-stdar-1                 compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older) — the nested function is variadic, which is the only thing in the case's way
+execute/nestfunc-3                    compile error: the address of the nested function 'nested_2' cannot be taken: it uses the enclosing function's 'sum', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'nested_2' to file scope and pass what it uses as parameters
+execute/nestfunc-5                    compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
+execute/nestfunc-6                    compile error: 'goto nonlocal' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/packed-aligned                compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/pr103376                      compile error: inline assembly is not supported
-execute/pr103405                      compile error: nested function definitions are a GNU extension cinrs does not support; move 'check' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/pr104604                      compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr105613                      compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr105777                      compile error: "../../gcc.dg/tree-ssa/pr105777.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
@@ -166,10 +153,8 @@ execute/pr126405                      compile error: 'vector_size' is not suppor
 execute/pr126405-2                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr126405-3                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr17377                       compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr22061-3                     compile error: nested function definitions are a GNU extension cinrs does not support; move 'foo' to file scope (if it uses the enclosing function's locals, pass them as parameters)
-execute/pr22061-4                     compile error: nested function definitions are a GNU extension cinrs does not support; move 'foo' to file scope (if it uses the enclosing function's locals, pass them as parameters)
 execute/pr23135                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr24135                       compile error: nested function definitions are a GNU extension cinrs does not support; move 'y' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/pr24135                       compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/pr28865                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/pr30314                       compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
 execute/pr33382                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
@@ -191,7 +176,7 @@ execute/pr47925                       compile error: inline assembly is not supp
 execute/pr49218                       compile error: inline assembly is not supported
 execute/pr49279                       compile error: inline assembly is not supported
 execute/pr49390                       compile error: inline assembly is not supported
-execute/pr51447                       compile error: nested function definitions are a GNU extension cinrs does not support; move 'bar' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+execute/pr51447                       compile error: expected expression, found '&&' — computed goto; the nested function then makes a nonlocal jump to that label
 execute/pr51581-1                     compile error: inline assembly is not supported
 execute/pr51581-2                     compile error: inline assembly is not supported
 execute/pr51877                       compile error: inline assembly is not supported
