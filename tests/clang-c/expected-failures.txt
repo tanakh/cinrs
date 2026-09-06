@@ -10,98 +10,118 @@
 # a sparse checkout of it, and without it the harness skips itself. This
 # file therefore holds names and notes and nothing of LLVM's own.
 #
-# `!` here means `cinrs` refuses the revision on purpose and is right to
-# — a Clang extension it declines rather than mistranslates. Guard mode
-# asserts the refusal is still there.
+# `!` here is a Clang extension `cinrs` declines rather than
+# mistranslates — a later revision's feature in an earlier entry point,
+# which that entry point is required to refuse.
 #
-# One id per line, with a note after it, and a marker in front of the
-# id saying what kind of claim the line makes:
+# A note of the form ``see `<id>`` says this revision fails for the same
+# reason as another; the report follows the reference, so a cause that
+# answers for five revisions of one file is counted once.
 #
-#   ID    `cinrs` gets this one wrong.
-#   ?ID   It passes or fails depending on the toolchain, and is
-#         guarded neither way.
-#   !ID   This entry point makes the case invalid, so refusing it is
-#         conforming behaviour and not a gap. Guard mode requires the
-#         case to fail to *compile*; one that builds and runs is a
-#         failure. The note may open with `error: "<substring>"`,
-#         which the diagnostic then has to contain.
+# One id per line: a marker, the id, a category tag and a note. A case
+# that must fail and does fail is *correct*, so only a plain line
+# records something wrong, and its tag says what kind of wrong:
+#
+#   ID  [bug]              `cinrs` is wrong here — it mistranslates
+#                          the case, refuses code it means to support,
+#                          or emits Rust that will not compile.
+#   ID  [unimplemented]    A feature `cinrs` means to have and has not
+#                          got to yet.
+#   ID  [not-planned]      Deliberately unsupported, with a located
+#                          error rather than a mistranslation. Nothing
+#                          to fix.
+#   ?ID                    It passes or fails depending on the
+#                          toolchain, and is guarded neither way.
+#   !ID                    This entry point makes the case invalid, so
+#                          refusing it is conforming behaviour and not
+#                          an error at all. Guard mode requires the
+#                          case to fail to *compile*; one that builds
+#                          and runs is a failure. The note may open
+#                          with `error: "<substring>"`, which the
+#                          diagnostic then has to contain.
+#
+# `doc/testsuites.md` is where the categories are explained. A failure
+# that is not listed here at all counts as a bug until somebody says
+# otherwise, and an update writes it in as one.
 #
 # Regenerate with
 #
 #     CINRS_CLANG_C_REPORT=1 CINRS_CLANG_C_UPDATE_EXPECTED=1 \
 #         cargo test --test clang_c
 #
-# which keeps every `?` and `!` line as it stands.
+# which keeps every `?` line, every `!` line and every tag as it
+# stands. Deleting the file first re-measures the notes — and throws
+# every tag away, so everything comes back as `[bug]  classify me:`.
 
-!C11/n1310.c:0         a `//` comment in a `c89!` block; C99 took them from C++ (N644) and Clang has them everywhere as an extension
-!C11/n1310.c:1         `_Static_assert` in a `c99!` block; write `c11!`
-!C11/n1310.c:2         `__builtin_bit_cast`, a Clang-only builtin; the diagnostic is a plain syntax error rather than a named refusal
-!C11/n1310.c:3         `__builtin_bit_cast`; see `C11/n1310.c:2`
-!C11/n1310.c:4         `__builtin_bit_cast`; see `C11/n1310.c:2`
-C11/n1330.c            wrong line: the `_Static_assert(0, ...)` the test asks for is not reached, because a `_Generic` in the same file is refused first
-C11/n1518.c:0          wrong line: cinrs takes a non-ASCII identifier character by the same rule in every revision, so the C11-only and C23-only errors land on each other's lines
-C11/n1518.c:1          see `C11/n1518.c:0`
-C23/n2322.c            the line number of a macro invocation spanning spliced lines: cinrs and Clang disagree about which physical line it is, and the paper leaves it unspecified — Clang's own comment calls its answer a FIXME
-!C23/n2350.c:3         a `//` comment in a `c89!` block; see `C11/n1310.c:0`. The other seven revisions of this file — which are about `offsetof` with a nested member designator — now come out as required
-!C23/n2508.c:1         a label at the end of a compound statement in a `c11!` block; C23 made it legal and `c23!` accepts it
-!C23/n2549.c:1         a binary integer constant in a `c17!` block; C23 added them and `c23!` accepts them (Clang takes them as an extension everywhere)
-C23/n2607.c:0          wrong line: the conditional-operator case the file ends on is not the error reported; `const array a` puts the qualifier on the *object* rather than on the array's elements (6.7.3p9), so `&a` is not the `const int (*)[1]` the `_Generic` before it asks for
-C23/n2607.c:1          see `C23/n2607.c:0`
-C23/n2836_n2939.c:0    wrong line: `\N{...}` named universal character escapes are not implemented, so the wrong one of them is diagnosed
-C23/n2838.c            wrong line: a `_BitInt` array bound is refused before the "array is too large" the test asks for
-C23/n2900_n3011.c:0    wrong line: an empty initialiser for a variable length array is refused, where the test asks about the compound-literal form on a later line
-C23/n2900_n3011.c:1    see `C23/n2900_n3011.c:0`
-C23/n3006.c            wrong line: `auto x = (enum E { }){ }` — an empty enumeration in a compound literal — is not the error reported
-C23/n3007.c            wrong line: `static auto c = 1UL;` is refused before the incompatible-pointer initialisation the test asks about
-C23/n3018.c:0          wrong line: a `constexpr` object whose initialiser overflows is not diagnosed; a `constexpr char[]` from a string is
-!C23/n3029.c:1         an enumerator too wide for `int` in a `c17!` block: C23 widens the enumeration (N3029) and `c23!` does too, where 6.7.2.2p2 makes it a constraint violation in every earlier revision. Clang warns instead, which this RUN line does not promote
-C23/n3030.c            wrong line: an enumeration redeclared with a different fixed underlying type is not diagnosed; `enum c : long{x}` in a parameter list is
-C23/n3033.c            not a compilable translation unit: the RUN line is `-E … | FileCheck`, so the file is a *preprocessor output* test and its expansions (`f(0, a, b, c)` at file scope) are not valid C. The harness takes a FileCheck-only file as an accept case, which is right for every other one of them
-C23/n3037_1.c          C23 tag compatibility (N3037): a second, compatible definition of `struct S` in the same scope is refused as a redefinition
-!C99/block-scopes.c:0  a `//` comment in a `c89!` block; see `C11/n1310.c:0`
-!C99/block-scopes.c:1  `_Static_assert` in a `c99!` block: cinrs gates a later revision's feature on the entry point, where Clang takes it as an extension (`-Wc11-extensions`, which this RUN line silences)
-C99/n448.c:0           wrong line: `_Static_assert` in a `c99!` block is refused, and the file's last `expected-error` is inside `#if __STDC_VERSION__ >= 202311L`, which this revision does not compile — Clang's `-verify` never sees a directive in a skipped conditional and the harness, which reads them out of the raw text, does. The `c23!` revision of this file passes
-!C99/n570.c:0          `_Static_assert` in a `c99!` block; write `c11!`
-C99/n717.c:0           wrong line: every universal character name in the file is written as the argument of a macro that expands to nothing, so the diagnostic for one that names a basic-character member never reaches the output; the first error the file does produce is the out-of-range one on a later line
-C99/n717.c:1           see `C99/n717.c:0`
-C99/n809.c             wrong line: every `_Imaginary` declaration the file asks about *is* diagnosed, and so is the `_Static_assert` it goes on to use — cinrs gates a later revision's feature on the entry point where Clang takes it as an extension. See `C99/n448.c:0`; the sibling files `n809_2.c` and `n809_3.c` now come out as required
-!drs/dr094.c:0         a `//` comment in a `c89!` block; see `C11/n1310.c:0`
-drs/dr0xx.c:0          see `drs/dr0xx.c:2`
-drs/dr0xx.c:2          wrong line: a block-scope `extern int i[10];` gives the object it redeclares the composite type for the whole function, where C scopes that to the inner block — so `sizeof i` after it is accepted where DR011 asks for the incomplete type's error
-drs/dr0xx.c:3          see `drs/dr0xx.c:2`
-drs/dr0xx.c:4          see `drs/dr0xx.c:2`
-drs/dr0xx.c:5          wrong line: C23 requires a type specifier on every declaration; cinrs reports the missing one on the declarator's line rather than the declaration's
-drs/dr1xx.c:0          see `drs/dr1xx.c:1`
-drs/dr1xx.c:1          wrong line: a tag declared in a *parameter list* has the scope of that list (DR103), so two such `struct S` are two types and the declarations conflict; cinrs puts the tag in the enclosing scope, which makes them one and leaves the conflict undiagnosed on one line and reported on another
-drs/dr1xx.c:2          see `drs/dr1xx.c:1`
-drs/dr1xx.c:3          see `drs/dr1xx.c:1`
-drs/dr1xx.c:4          wrong line: in C23 a compatible redefinition of `struct S` is legal (N3037) and cinrs refuses it
-!drs/dr206.c:0         `_Complex` in a `c89!` block, which is the one entry point that has neither it nor `<complex.h>`; the other four revisions of this file now come out as required
-!drs/dr253.c:0         a designated initializer in a `c89!` block; C99 added them (N494), and the other four revisions of this file — which are about designator lists — now come out as required
-drs/dr2xx.c:0          see `drs/dr2xx.c:1`
-drs/dr2xx.c:1          wrong line: `#nondirective` — an unknown directive — is accepted, and the file's own `#error` fires first
-drs/dr2xx.c:3          see `drs/dr2xx.c:1`
-drs/dr2xx.c:4          see `drs/dr2xx.c:1`
-drs/dr2xx.c:5          see `drs/dr2xx.c:1`
-!drs/dr335.c:0         `_Bool` in a `c89!` block; C99 added it and Clang takes it as an extension in `-std=c89`
-!drs/dr335.c:1         `_Bool` in a `c89!` block; see `drs/dr335.c:0`
-drs/dr3xx.c:0          see `drs/dr3xx.c:1`
-drs/dr3xx.c:1          wrong line: the file's one `expected-error` is the file-scope VLA of DR320 on line 139, and something earlier is refused first in every revision — a variable length array (line 82) in `c89!`, which does not have them, and a `_Static_assert` (line 104) in `c99!`, which does not either; from `c11!` on the file reaches line 226, where a compound literal of variably modified type at file scope is refused and Clang's own comment calls not diagnosing it a FIXME
-drs/dr3xx.c:2          see `drs/dr3xx.c:1`
-drs/dr3xx.c:3          see `drs/dr3xx.c:1`
-drs/dr3xx.c:4          see `drs/dr3xx.c:1`
-!drs/dr411.c:1         `_Static_assert` in a `c99!` block; write `c11!`
-!drs/dr464.c:0         `_Static_assert` in a `c89!` block; write `c11!`
-!drs/dr464.c:1         `_Static_assert` in a `c99!` block; write `c11!`
-!drs/dr466.c:0         a declaration in a `for` clause in a `c89!` block; C99 added it (N740)
-!drs/dr483.c:0         `_Static_assert` in a `c89!` block; write `c11!`
-!drs/dr483.c:1         `_Static_assert` in a `c99!` block; write `c11!`
-!drs/dr494.c:0         `_Alignof` in a `c89!` block; write `c11!`
-!drs/dr494.c:1         `_Alignof` in a `c99!` block; write `c11!`
-drs/dr4xx.c:0          see `drs/dr4xx.c:1`
-drs/dr4xx.c:1          wrong line: a compound literal as the operand of `_Static_assert` is refused, before the `const`-qualified `typeof` assignment the test asks about
-drs/dr4xx.c:2          see `drs/dr4xx.c:1`
-drs/dr4xx.c:3          see `drs/dr4xx.c:1`
-drs/dr4xx.c:4          see `drs/dr4xx.c:1`
-!drs/dr5xx.c:0         an anonymous struct member in a `c89!` block; write `c11!`
-!drs/dr5xx.c:1         an anonymous struct member in a `c99!` block; write `c11!`
+!C11/n1310.c:0                          a `//` comment in a `c89!` block; C99 took them from C++ (N644) and Clang has them everywhere as an extension
+!C11/n1310.c:1                          `_Static_assert` in a `c99!` block; write `c11!`
+!C11/n1310.c:2                          `__builtin_bit_cast`, a Clang-only builtin; the diagnostic is a plain syntax error rather than a named refusal
+!C11/n1310.c:3                          `__builtin_bit_cast`; see `C11/n1310.c:2`
+!C11/n1310.c:4                          `__builtin_bit_cast`; see `C11/n1310.c:2`
+C11/n1330.c            [bug]            wrong line: the parse recovery from a `_Static_assert` in a *parameter list* — which Clang also refuses, on line 38 — reports a second, spurious `expected a declaration, found '{'` on the line after it, and the `_Static_assert(0, ...)` on line 44 that the test asks about is never reached
+C11/n1518.c:0          [unimplemented]  wrong line: cinrs takes a non-ASCII identifier character by the same rule in every revision, where C11 has Annex D's ranges and C23 has XID_Start/XID_Continue, so the C11-only and C23-only errors land on each other's lines
+C11/n1518.c:1          [unimplemented]  see `C11/n1518.c:0`
+C23/n2322.c            [not-planned]    the line number of a macro invocation spanning spliced lines: cinrs and Clang disagree about which physical line it is, and the paper leaves it unspecified — Clang's own comment calls its answer a FIXME
+!C23/n2350.c:3                          a `//` comment in a `c89!` block; see `C11/n1310.c:0`. The other seven revisions of this file — which are about `offsetof` with a nested member designator — now come out as required
+!C23/n2508.c:1                          a label at the end of a compound statement in a `c11!` block; C23 made it legal and `c23!` accepts it
+!C23/n2549.c:1                          a binary integer constant in a `c17!` block; C23 added them and `c23!` accepts them (Clang takes them as an extension everywhere)
+C23/n2607.c:0          [bug]            wrong line: the conditional-operator case the file ends on is not the error reported; `const array a` puts the qualifier on the *object* rather than on the array's elements (6.7.3p9), so `&a` is not the `const int (*)[1]` the `_Generic` before it asks for
+C23/n2607.c:1          [bug]            see `C23/n2607.c:0`
+C23/n2836_n2939.c:0    [unimplemented]  wrong line: `\N{...}` named universal character escapes are not implemented, so the `\` is refused as a stray character on line 61 and the escape the test asks about on line 35 is never reached
+C23/n2838.c            [not-planned]    wrong line: the `wb` suffix of a `_BitInt` constant is not a suffix cinrs has — `_BitInt` is 🔴 No in doc/c-status.md — so the bound on line 10 that the test says is "juuuuuust right" is refused, and the too-large one on line 7 never gets its own error
+C23/n2900_n3011.c:0    [unimplemented]  wrong line: C23's empty initializer for a *variable length array* (N2900) is refused on line 28, so the compound-literal form the test asks about on line 33 is never reached
+C23/n2900_n3011.c:1    [not-planned]    wrong line: this revision is `c17!`, where an empty initializer is a C23 feature cinrs gates on the entry point and Clang takes as an extension; the refusal on line 12 comes before the line the test asks about
+C23/n3006.c            [bug]            wrong line: `constexpr auto ce_struct_zero_init = (struct S2 { int x; }){ 0 };` on line 50 is refused as a declaration with no type specifier — `auto` is not taken as C23 type inference when another specifier precedes it; see `C23/n3007.c`. The empty enumeration in a compound literal the test asks about, on line 42, is never reached
+C23/n3007.c            [bug]            wrong line: `static auto c = 1UL;` is refused as a declaration with no type specifier. C23 type inference (N3007) is implemented — the `const auto a = x;` and `auto b = y;` two lines above it work — but not when a *storage-class* specifier precedes the `auto`
+C23/n3018.c:0          [unimplemented]  wrong line: a `constexpr` object of an array type is not supported yet (only the arithmetic types are), so the `constexpr char[]` on line 18 is refused and the overflowing initializer the test asks about on line 12 is never diagnosed
+!C23/n3029.c:1                          an enumerator too wide for `int` in a `c17!` block: C23 widens the enumeration (N3029) and `c23!` does too, where 6.7.2.2p2 makes it a constraint violation in every earlier revision. Clang warns instead, which this RUN line does not promote
+C23/n3030.c            [bug]            wrong line: an enumeration redeclared with a *different* fixed underlying type (line 29) is not diagnosed at all. The enumerator-range errors the file opens with are answered as asked
+C23/n3033.c            [not-planned]    not a compilable translation unit: the RUN line is `-E … | FileCheck`, so the file is a *preprocessor output* test and its expansions (`f(0, a, b, c)` at file scope) are not valid C. The harness takes a FileCheck-only file as an accept case, which is right for every other one of them
+C23/n3037_1.c          [unimplemented]  C23 tag compatibility (N3037): a second, compatible definition of `struct S` in the same scope is refused as a redefinition
+!C99/block-scopes.c:0                   a `//` comment in a `c89!` block; see `C11/n1310.c:0`
+!C99/block-scopes.c:1                   `_Static_assert` in a `c99!` block: cinrs gates a later revision's feature on the entry point, where Clang takes it as an extension (`-Wc11-extensions`, which this RUN line silences)
+C99/n448.c:0           [not-planned]    wrong line: `_Static_assert` in a `c99!` block is refused, which is the same conforming gate as `!C99/n570.c:0`; and the file's last `expected-error` is inside `#if __STDC_VERSION__ >= 202311L`, which this revision does not compile — Clang's `-verify` never sees a directive in a skipped conditional and the harness, which reads them out of the raw text, does. The `c23!` revision of this file passes
+!C99/n570.c:0                           `_Static_assert` in a `c99!` block; write `c11!`
+C99/n717.c:0           [bug]            wrong line: every universal character name in the file is written as the argument of a macro that expands to nothing, and cinrs validates a UCN where the token is *used* rather than where it is lexed, so `$` naming a member of the basic character set is never diagnosed; the first error the file does produce is the out-of-range one on a later line
+C99/n717.c:1           [bug]            see `C99/n717.c:0`
+C99/n809.c             [not-planned]    wrong line: every `_Imaginary` declaration the file asks about *is* diagnosed, and so is the `_Static_assert` it goes on to use — cinrs gates a later revision's feature on the entry point where Clang takes it as an extension. See `C99/n448.c:0`; the sibling files `n809_2.c` and `n809_3.c` now come out as required
+!drs/dr094.c:0                          a `//` comment in a `c89!` block; see `C11/n1310.c:0`
+drs/dr0xx.c:0          [bug]            see `drs/dr0xx.c:2`
+drs/dr0xx.c:2          [bug]            wrong line: a block-scope `extern int i[10];` gives the object it redeclares the composite type for the whole function, where C scopes that to the inner block — so `sizeof i` after it is accepted where DR011 asks for the incomplete type's error. What is reported instead is the `_Static_assert` this entry point gates
+drs/dr0xx.c:3          [bug]            wrong line: DR012's `(void)&*p` with a `void *p` is valid from C99 on, and cinrs refuses the indirection. Behind it this revision has DR011 too; see `drs/dr0xx.c:2`
+drs/dr0xx.c:4          [bug]            see `drs/dr0xx.c:3`
+drs/dr0xx.c:5          [bug]            see `drs/dr0xx.c:3`
+drs/dr1xx.c:0          [bug]            see `drs/dr1xx.c:1`
+drs/dr1xx.c:1          [bug]            wrong line: a tag declared in a *parameter list* has the scope of that list (DR103), so two such `struct S` are two types and the declarations conflict; cinrs puts the tag in the enclosing scope, which makes them one and leaves the conflict undiagnosed on one line and reported on another
+drs/dr1xx.c:2          [bug]            see `drs/dr1xx.c:1`
+drs/dr1xx.c:3          [bug]            see `drs/dr1xx.c:1`
+drs/dr1xx.c:4          [unimplemented]  wrong line: in C23 a compatible redefinition of `struct S` is legal (N3037) and cinrs refuses it; see `C23/n3037_1.c`
+!drs/dr206.c:0                          `_Complex` in a `c89!` block, which is the one entry point that has neither it nor `<complex.h>`; the other four revisions of this file now come out as required
+!drs/dr253.c:0                          a designated initializer in a `c89!` block; C99 added them (N494), and the other four revisions of this file — which are about designator lists — now come out as required
+drs/dr2xx.c:0          [bug]            see `drs/dr2xx.c:1`
+drs/dr2xx.c:1          [bug]            wrong line: `__LLONG_WIDTH__` is not predefined — cinrs defines GCC's `__LONG_LONG_WIDTH__` spelling of it and not Clang's — so the `#if __LLONG_WIDTH__ > __LONG_WIDTH__` and the `#elif __LLONG_WIDTH__ == __LONG_WIDTH__` after it are both false and the file's own `#error` fires on line 97. DR250's `#nondirective` on line 218, which the test asks about, is never reached
+drs/dr2xx.c:3          [bug]            see `drs/dr2xx.c:1`
+drs/dr2xx.c:4          [bug]            see `drs/dr2xx.c:1`
+drs/dr2xx.c:5          [bug]            see `drs/dr2xx.c:1`
+!drs/dr335.c:0                          `_Bool` in a `c89!` block; C99 added it and Clang takes it as an extension in `-std=c89`
+!drs/dr335.c:1                          `_Bool` in a `c89!` block; see `drs/dr335.c:0`
+drs/dr3xx.c:0          [not-planned]    see `drs/dr3xx.c:1`
+drs/dr3xx.c:1          [not-planned]    wrong line: the file's one `expected-error` is the file-scope VLA of DR320 on line 139, and something earlier is refused first in every revision — a variable length array (line 82) in `c89!`, which does not have them, and a `_Static_assert` (line 104) in `c99!`, which does not either; from `c11!` on the file reaches line 226, where a compound literal of variably modified type at file scope is refused and Clang's own comment calls not diagnosing it a FIXME
+drs/dr3xx.c:2          [not-planned]    see `drs/dr3xx.c:1`
+drs/dr3xx.c:3          [not-planned]    see `drs/dr3xx.c:1`
+drs/dr3xx.c:4          [not-planned]    see `drs/dr3xx.c:1`
+!drs/dr411.c:1                          `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr464.c:0                          `_Static_assert` in a `c89!` block; write `c11!`
+!drs/dr464.c:1                          `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr466.c:0                          a declaration in a `for` clause in a `c89!` block; C99 added it (N740)
+!drs/dr483.c:0                          `_Static_assert` in a `c89!` block; write `c11!`
+!drs/dr483.c:1                          `_Static_assert` in a `c99!` block; write `c11!`
+!drs/dr494.c:0                          `_Alignof` in a `c89!` block; write `c11!`
+!drs/dr494.c:1                          `_Alignof` in a `c99!` block; write `c11!`
+drs/dr4xx.c:0          [not-planned]    see `drs/dr4xx.c:1`
+drs/dr4xx.c:1          [not-planned]    wrong line: the `_Static_assert` on line 108 takes a compound literal, which is not an integer constant expression — Clang folds it as a documented GNU extension and warns, and cinrs refuses it. Under `c89!` and `c99!` the `_Static_assert` itself is the gate. Either way DR423's `const`-qualified `typeof` assignment, which the test asks about, is never reached
+drs/dr4xx.c:2          [not-planned]    see `drs/dr4xx.c:1`
+drs/dr4xx.c:3          [not-planned]    see `drs/dr4xx.c:1`
+drs/dr4xx.c:4          [not-planned]    see `drs/dr4xx.c:1`
+!drs/dr5xx.c:0                          an anonymous struct member in a `c89!` block; write `c11!`
+!drs/dr5xx.c:1                          an anonymous struct member in a `c99!` block; write `c11!`

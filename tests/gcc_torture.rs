@@ -23,9 +23,9 @@
 //! [`conformance::skip_unless_measured_build`].
 //!
 //! Everything shared with the [c-testsuite](c_testsuite) and [Clang](clang_c)
-//! harnesses — the three modes, the expected-failure list and its markers, the
-//! result collector, the timeouts — is in
-//! [`support/conformance.rs`](conformance).
+//! harnesses — the three modes, the expected-failure list with its markers and
+//! [category tags](conformance::Category), what "correct" means, the result
+//! collector, the timeouts — is in [`support/conformance.rs`](conformance).
 //!
 //! # The two groups
 //!
@@ -109,9 +109,9 @@ use ui_test::status_emitter::StatusEmitter;
 mod conformance;
 
 use conformance::{
-    COMPILE_TIMEOUT, Collector, Entry, EntryKind, MainKind, Outcome, Skipped, duration, flag,
-    group_causes, listing, marker_legend, percent, plural, raw_string_hashes, read_list,
-    rejections, watchdog, write_list,
+    Bucket, COMPILE_TIMEOUT, Category, Collector, Entry, EntryKind, MainKind, Outcome, Skipped,
+    Tally, duration, flag, group_causes, listing, marker_legend, plural, raw_string_hashes,
+    read_list, rejections, tally_header, tally_row, watchdog, write_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -914,9 +914,12 @@ fn list_header(standard: Standard) -> String {
 // reporting
 // ---------------------------------------------------------------------------
 
-/// The pass rate overall and per group, then every failure cause with a count.
+/// What the run got right, then what it got wrong and why.
 ///
-/// The point of this report is the last section: about thirty distinct causes
+/// The headline is the **correct** rate — passed plus the cases this entry
+/// point is required to refuse — because a case that must fail and does fail
+/// is not a shortfall. What is left is broken down by category, and the point
+/// of the report is the section after that: about thirty distinct causes
 /// account for every failure in a corpus of eighteen hundred programs, and the
 /// order they come out in is the order the work should be done in.
 fn print_report(
@@ -942,41 +945,58 @@ fn print_report(
         .iter()
         .filter(|case| !skipped_ids.contains(case.id.as_str()))
         .collect();
+    let bucket = |case: &Case| -> Bucket {
+        if results.get(&case.id).is_some_and(Outcome::is_pass) {
+            return Bucket::Passed;
+        }
+        conformance::bucket(
+            run.expected_failures.get(&case.id),
+            rejected.contains(case.id.as_str()),
+        )
+    };
     let tally = |cases: &[&&Case]| {
-        let ok = cases
-            .iter()
-            .filter(|case| results.get(&case.id).is_some_and(Outcome::is_pass))
-            .count();
-        let refused = cases
-            .iter()
-            .filter(|case| rejected.contains(case.id.as_str()))
-            .count();
-        (ok, refused, cases.len() - ok - refused, cases.len())
+        let mut tally = Tally::default();
+        for case in cases {
+            tally.count(bucket(case));
+        }
+        tally
     };
 
-    let (ok, refused, failed, total) = tally(&ran);
+    let overall = tally(&ran);
     println!();
     println!(
-        "gcc.c-torture/execute through `{}!`: {ok}/{total} passed ({}){}, {failed} failed, \
-         {} skipped — {took}",
+        "gcc.c-torture/execute through `{}!`: {}",
         run.standard.name(),
-        percent(ok, total),
-        match refused {
-            0 => String::new(),
-            n => format!(", {n} rejected as the standard requires"),
-        },
-        skipped.len(),
+        overall.headline()
     );
+    println!("  {}", overall.errors_line());
+    println!("  ({} not generated) — {took}", skipped.len());
 
     println!();
-    println!("  by group");
+    println!("{}", tally_header("by group"));
     for (group, _) in GROUPS {
         let in_group: Vec<&&Case> = ran.iter().copied().filter(|c| c.group == *group).collect();
-        let (ok, _, _, total) = tally(&in_group);
+        println!("{}", tally_row(group, &tally(&in_group)));
+    }
+    let unlisted: Vec<&str> = ran
+        .iter()
+        .map(|case| case.id.as_str())
+        .filter(|id| {
+            !rejected.contains(id)
+                && !run.expected_failures.contains_key(*id)
+                && !results.get(*id).is_some_and(Outcome::is_pass)
+        })
+        .collect();
+    if !unlisted.is_empty() {
+        println!();
         println!(
-            "    {group:<10}{ok:>5}/{total:<5}  {:>6}",
-            percent(ok, total)
+            "  {} not in {} yet, and counted as bugs until classified:",
+            plural(unlisted.len(), "failure is", "failures are"),
+            run.list.display()
         );
+        for id in &unlisted {
+            println!("    {id}");
+        }
     }
 
     // What the prelude is doing, and what the upstream options say.
@@ -1015,35 +1035,36 @@ fn print_report(
         }
     }
 
-    // The failures. A run-time failure and a compile-time one are different
-    // kinds of news, so they are grouped separately even though both are one
-    // line of "what went wrong".
-    let mut compile: Vec<(&str, &str)> = Vec::new();
-    let mut runtime: Vec<(&str, &str)> = Vec::new();
+    // The failures, category by category — bugs first, since they are the
+    // only rows anybody has to do something about. Within a category a
+    // run-time failure and a compile-time one are different kinds of news, so
+    // they are grouped separately even though both are one line of "what went
+    // wrong".
+    let mut compile: BTreeMap<Category, Vec<(&str, &str)>> = BTreeMap::new();
+    let mut runtime: BTreeMap<Category, Vec<(&str, &str)>> = BTreeMap::new();
     let mut missing: Vec<&str> = Vec::new();
     for case in &ran {
         let id = case.id.as_str();
-        if rejected.contains(id) {
+        let Bucket::Error(category) = bucket(case) else {
             continue;
-        }
+        };
         match results.get(id) {
             Some(Outcome::Failed {
                 classification,
                 detail,
                 ..
             }) => {
-                if classification.starts_with("compile error") {
-                    compile.push((
-                        id,
-                        if detail.is_empty() {
-                            classification
-                        } else {
-                            detail
-                        },
-                    ));
+                let what = if classification.starts_with("compile error") {
+                    &mut compile
                 } else {
-                    runtime.push((id, classification.as_str()));
-                }
+                    &mut runtime
+                };
+                let cause = if classification.starts_with("compile error") && !detail.is_empty() {
+                    detail
+                } else {
+                    classification
+                };
+                what.entry(category).or_default().push((id, cause));
             }
             Some(_) => {}
             None => missing.push(id),
@@ -1055,30 +1076,66 @@ fn print_report(
     // readable; a run-time failure is a *miscompilation* — the program built,
     // ran and did the wrong thing — and there are few enough of them that
     // each one is a to-do item with a name.
-    let section = |title: &str, items: &[(&str, &str)], every: bool| {
-        if items.is_empty() {
+    let section = |title: &str, items: Option<&Vec<(&str, &str)>>, every: bool| {
+        let Some(items) = items.filter(|items| !items.is_empty()) else {
             return;
-        }
+        };
         let groups = group_causes(items.iter().copied());
-        println!();
         println!(
-            "  {title}: {} in {} distinct causes",
+            "    {title}: {} in {} distinct causes",
             items.len(),
             groups.len()
         );
         for group in &groups {
-            println!("    {:>5}  {}", group.count(), group.cause);
+            println!("      {:>5}  {}", group.count(), group.cause);
             if every {
                 for case in &group.cases {
-                    println!("           {case}");
+                    println!("             {case}");
                 }
             } else {
-                println!("           e.g. {}", group.example);
+                println!("             e.g. {}", group.example);
             }
         }
     };
-    section("compile failures", &compile, false);
-    section("run-time failures", &runtime, true);
+    for category in Category::ALL {
+        let count = overall.of(category);
+        if count == 0 {
+            continue;
+        }
+        println!();
+        println!("  {} ({count})", category.label());
+        section("compile failures", compile.get(&category), false);
+        section("run-time failures", runtime.get(&category), true);
+    }
+
+    // The fourth category. Not a cause group, because there is only ever one
+    // cause: this compiler is older than the feature.
+    let toolchain: Vec<&str> = run
+        .expected_failures
+        .iter()
+        .filter(|(id, entry)| {
+            entry.kind == EntryKind::ToolchainDependent && by_id.contains_key(id.as_str())
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    if !toolchain.is_empty() {
+        println!();
+        println!(
+            "  toolchain ({} listed, {} of them failing here)",
+            toolchain.len(),
+            overall.toolchain
+        );
+        for id in toolchain {
+            println!("    {id}");
+            println!("        {}", run.expected_failures[id].note);
+            println!(
+                "        here: {}",
+                results
+                    .get(id)
+                    .map_or("not run".to_owned(), Outcome::describe)
+            );
+        }
+    }
 
     if !rejected.is_empty() {
         println!();
@@ -1098,29 +1155,6 @@ fn print_report(
         for (id, complaint) in anomalies {
             println!("    {id}");
             println!("        {complaint}");
-        }
-    }
-
-    let toolchain: Vec<&str> = run
-        .expected_failures
-        .iter()
-        .filter(|(id, entry)| {
-            entry.kind == EntryKind::ToolchainDependent && by_id.contains_key(id.as_str())
-        })
-        .map(|(id, _)| id.as_str())
-        .collect();
-    if !toolchain.is_empty() {
-        println!();
-        println!("  toolchain-dependent ({})", toolchain.len());
-        for id in toolchain {
-            println!("    {id}");
-            println!("        {}", run.expected_failures[id].note);
-            println!(
-                "        here: {}",
-                results
-                    .get(id)
-                    .map_or("not run".to_owned(), Outcome::describe)
-            );
         }
     }
 
@@ -1369,7 +1403,7 @@ fn guard(run: &Run<'_>, strict: bool, filtered: bool) -> Result<()> {
         now_passing = known_bad
             .iter()
             .filter(|case| {
-                run.expected_failures[&case.id].kind == EntryKind::Failure
+                run.expected_failures[&case.id].kind.is_failure()
                     && results.get(&case.id).is_some_and(Outcome::is_pass)
             })
             .map(|case| case.id.clone())

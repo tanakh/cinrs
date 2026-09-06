@@ -10,8 +10,9 @@ run through a new front end, and the one whose failures map most directly onto
 a to-do list.
 
 The harness is [`tests/gcc_torture.rs`](../tests/gcc_torture.rs); everything it
-shares with the other two suites — the modes, the expected-failure list and its
-markers, the result collector, the ceilings — is in
+shares with the other two suites — the modes, the expected-failure list with its
+markers and category tags, what "correct" means, the result collector, the
+ceilings — is in
 [`tests/support/conformance.rs`](../tests/support/conformance.rs). See
 [`doc/testsuites.md`](testsuites.md) for the three of them side by side.
 
@@ -65,7 +66,7 @@ extern void abort(void); extern void exit(int);
 
 The declarations are compatible with the ones the cases write for themselves
 and with the bundled `<stdlib.h>`, so a case that has its own is unaffected;
-**580 of the 1,769** need them.
+**580 of the 1,769 that are run** need them.
 
 **`c89!` and `gnu89!` get them left out**, because those two entry points
 implement the rule the cases are leaning on: a call to an undeclared `abort`
@@ -144,8 +145,8 @@ Run the suite like this, and not otherwise:
 
 The outer `ulimit` is belt and braces for the ceilings above; the outer
 `timeout` bounds the whole run; `--test-threads=2` keeps the peak down further
-than the built-in cap does. Measured that way, a full run takes **4 m 35 s**
-and peaks at **298 MiB** of resident set.
+than the built-in cap does. Measured that way, a full guard run takes
+**4 m 50 s** and peaks at **298 MiB** of resident set.
 
 ## Baseline
 
@@ -155,72 +156,107 @@ corpus revision, under the two entry points worth pointing at this corpus:
 `gnu11!`, the harness default and the closest thing here to the
 `-std=gnu17 -w` GCC compiles them with.
 
-| entry point | `execute` | `execute/ieee` | passed | rejected as required | failed |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1429/1691 (84.5 %) | 64/78 (82.1 %) | **1493/1769 (84.4 %)** | — | 276 |
-| `gnu11!` | 1332/1691 (78.8 %) | 64/78 (82.1 %) | 1396/1769 (78.9 %) | 104 | 269 |
+**Correct** is passed plus refused-as-the-standard-requires; the errors are
+broken down into the four categories
+[`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)
+defines.
 
-**`gnu89!` is what this corpus should be measured with**, and what to reach
+```
+gcc.c-torture/execute through `gnu11!`: 1500/1769 correct (84.8%) — 1396 passed, 104 rejected as the standard requires
+  errors: 269 — bug 1, unimplemented 36, not planned 185, toolchain 47
+  (7 not generated) — 4 m 19 s
+```
+
+| entry point | correct | rate | passed | rejected | bug | unimplemented | not planned | toolchain |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **`gnu11!`** | **1500/1769** | **84.8 %** | 1396 | 104 | 1 | 36 | 185 | 47 |
+| `gnu89!` | 1493/1769 | 84.4 % | 1493 | — | 1 | 39 | 189 | 47 |
+
+by group:
+
+| group | `gnu11!` | `gnu89!` |
+| --- | ---: | ---: |
+| `execute` | 1436/1691 (84.9 %) | 1429/1691 (84.5 %) |
+| `execute/ieee` | 64/78 (82.1 %) | 64/78 (82.1 %) |
+
+**There is exactly one `[bug]` in this whole corpus**, under either entry
+point: `execute/20020227-1`, whose expansion `rustc` refuses with `E0793`
+(a reference to a field of a packed struct). Everything else that does not
+pass is a feature not implemented yet, a feature deliberately not planned, or
+the Rust 1.99 variadic gap.
+
+### The two entry points, and why `gnu11!` now scores higher
+
+**`gnu89!` is the language these programs were written in**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
 revision deleted — implicit `int`, implicit function declarations and (with
 every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
-[prelude](#the-prelude): a call to an undeclared `abort` declares it.
+[prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
+1493 cases build and run.
 
-**104 of `gnu11!`'s non-passes are not gaps**, which is why they are counted
-apart from the failures: they are the cases that lean on one of the rules C99
-deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R parameter) and
-an implicit function declaration (3) — and a C99-or-later entry point is
-*required* to refuse them. `gcc -std=gnu11` refuses them too, and has since
-GCC 14 made both constraint violations errors. Each is an `!` line in
+**`gnu11!` gets the same 1396 of those, refuses 104 more as the standard
+requires it to, and comes out seven ahead.** Those 104 are the cases that lean
+on a rule C99 deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R
+parameter) and an implicit function declaration (3) — and a C99-or-later entry
+point is *required* to refuse them. `gcc -std=gnu11` refuses them too, and has
+since GCC 14 made both constraint violations errors. Each is an `!` line in
 `tests/gcc-torture/expected-failures.txt` naming the diagnostic it must be
 refused with, so guard mode asserts the refusal rather than tolerating a
-failure: a case that started *compiling* would be the news. Ninety-seven of the
-104 pass under `gnu89!`; the other seven get past the C89 rule there and stop
-at a second gap — two at a computed `goto`, two at a nonlocal `goto` out of a
-nested function, one at a nested function that uses the enclosing function's
-variable length array, and two at a later declaration.
+failure: a case that started *compiling* would be the news.
+
+Ninety-seven of the 104 pass under `gnu89!`; the other seven get past the C89
+rule there and stop at a second gap — two at a computed `goto`, two at a
+nonlocal `goto` out of a nested function, one at a nested function that uses
+the enclosing function's variable length array, and two at `<setjmp.h>`. That
+is the whole of the difference: 1493 = 1396 + 97, and 1500 = 1396 + 104.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
-literal may not), and one is not valid UTF-8.
+literal may not), and one is not valid UTF-8. They are out of the denominator,
+because GCC's own runner would not have run them either.
 
-### The failures, by cause
+### The errors, by category and cause
 
-Under `gnu89!`, 271 of the 276 failures are refused at compile time, in 34
-distinct causes; under `gnu11!`, 264 of 269, in 32. The ones worth a line
-each, with what the same cause costs under `gnu11!` beside it — the 104
-conforming rejections above are *not* in this table:
+Under `gnu11!` 264 of the 269 errors are refused at compile time, in 29
+distinct causes, and 5 are programs that built and then did the wrong thing;
+under `gnu89!`, 271 of 276 in 31. The ones worth a line each, with what the
+same cause costs under `gnu89!` beside it — the 104 conforming rejections
+above are *not* in this table:
 
-| `gnu89!` | `gnu11!` | cause | e.g. |
-| ---: | ---: | --- | --- |
-| 68 | 68 | inline assembly is not supported | `execute/20001009-2` |
-| 44 | 44 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| 39 | 39 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
-| 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
-| 15 | 13 | `expected expression, found '&&'` — computed `goto` | `execute/20040302-1` |
-| 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
-| 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
-| 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
-| 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
-| 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
-| 5 | 5 | a `#include` of a corpus file outside the sparse checkout (`../../gcc.dg/…`) | `execute/pr105777` |
-| 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
-| 5 | 3 | a **nonlocal `goto`**: a jump out of a nested function to a label of the enclosing one, which GCC reaches through the enclosing frame | `execute/nestfunc-5` |
-| 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
-| 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
-| 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
-| 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
-| 1 | — | a nested function that uses the enclosing function's **variable length array** | `execute/921017-1` |
+| category | `gnu89!` | `gnu11!` | cause | e.g. |
+| --- | ---: | ---: | --- | --- |
+| not planned | 68 | 68 | inline assembly is not supported | `execute/20001009-2` |
+| not planned | 45 | 45 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
+| toolchain | 39 | 39 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
+| not planned | 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
+| unimplemented | 15 | 13 | `expected expression, found '&&'` — computed `goto`, which is 🟠 planned for the CFG lowering | `execute/20040302-1` |
+| unimplemented | 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
+| toolchain | 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
+| not planned | 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
+| not planned | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
+| not planned | 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
+| not planned | 5 | 5 | a `#include` of a corpus file outside the sparse checkout (`../../gcc.dg/…`) | `execute/pr105777` |
+| not planned | 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
+| not planned | 5 | 3 | a **nonlocal `goto`**: a jump out of a nested function to a label of the enclosing one, which GCC reaches through the enclosing frame | `execute/nestfunc-5` |
+| not planned | 5 | 5 | a program that built and then did the wrong thing — see [below](#the-programs-that-built-and-then-did-the-wrong-thing) | `ieee/cdivchkd` |
+| unimplemented | 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
+| not planned | 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
+| not planned | 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
+| not planned | 2 | — | `<setjmp.h>`, which cinrs does not bundle: nothing in Rust unwinds a C `longjmp`. Under `gnu11!` both cases stop at the C89 implicit `int` first, and are conforming rejections there | `execute/pr56982` |
+| not planned | 2 | 2 | `<sys/mman.h>`: cinrs bundles the ISO C headers and never searches the platform's include path | `execute/loop-2f` |
+| not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
+| not planned | 2 | 2 | a `link_error()` nothing defines, which an optimiser is required to delete | `execute/medce-1` |
+| unimplemented | 2 | 2 | a pointer to a `va_list` | `execute/pr64979` |
+| bug | 1 | 1 | **`E0793`: a reference to a field of a packed struct**, in the Rust the expansion emits | `execute/20020227-1` |
+| unimplemented | 1 | — | a nested function that uses the enclosing function's **variable length array** | `execute/921017-1` |
 
-The last three rows are the whole cost of what nested functions cannot do; the
-other causes below them have two cases or fewer each, and the report prints
-all thirty-four. The `__builtin_…` count is the sum of two rows the report
-prints separately, because a diagnostic raised inside an `#include`d corpus
-file carries the file name and is grouped on its own; the
-address-of-a-nested-function count is the sum of two for the same reason, the
-diagnostic naming the variables in the way.
+Everything below those has one case each, and the report prints all of them.
+The `__builtin_…` count is the sum of two rows the report prints separately,
+because a diagnostic raised inside an `#include`d corpus file carries the file
+name and is grouped on its own; the `vector_size` and
+address-of-a-nested-function counts are sums of two for the same reason.
 
 The last round of work — **nested functions**, lifted out of the function they
 were written in — took `gnu89!` up by **15** and `gnu11!` by **14**, and
@@ -283,22 +319,27 @@ other. Nothing here optimises, so the call survives and the link fails. They
 would pass under `-O`, and asking `rustc` for that would change what the whole
 suite measures.
 
-**What the C89 rules are worth here is the first row and the last two.** 104
-cases — a quarter of every compile failure under `gnu11!` — are implicit `int`,
-an implicit function declaration or a K&R parameter with no declaration, and
-under `gnu89!` they are not diagnostics at all: 96 of them build and run,
-which is the whole difference between the two lines of the table, and the rest
-meet a second gap behind the first. The Rust 1.99 variadic gap (38 + 8) comes
-next, and those simply pass on a newer toolchain, which is why they are marked
-`?` in both expected-failure lists. What is left after that is the honest list
-of what `cinrs` does not implement.
+**Read the table by its first column.** 232 of `gnu11!`'s 269 errors are the
+top four `not planned` rows — inline assembly, the vector extensions, the
+`__builtin_…` forms nobody is going to write, and the `_FloatN`, complex-integer
+and `va_list`-in-a-record corners Rust has no counterpart for. 47 more are the
+Rust 1.99 variadic gap, which simply passes on a newer toolchain and is marked
+`?` in both lists. 36 are the honest list of what is not implemented yet, and
+it is dominated by two entries: computed `goto` (13) and `va_arg` with a struct
+type (14). One is a bug.
+
+The 104 C89-rule cases — implicit `int`, an implicit function declaration, a
+K&R parameter with no declaration — are not in the table at all, because under
+`gnu11!` refusing them *is* the right answer. Under `gnu89!` they are not
+diagnostics at all and 97 of them build and run.
 
 ### The programs that built and then did the wrong thing
 
 **Five** cases compile, run and fail. These are the interesting ones — a
 miscompilation, or a semantic nothing diagnosed and nothing implemented — and
 there were fifteen of them until they were triaged one by one. Thirteen were
-bugs and are fixed; the five that are left are not bugs in the translation:
+bugs and are fixed; the five that are left are not bugs in the translation, and
+each is a `[not-planned]` line for the reason in its row:
 
 | case | verdict |
 | --- | --- |
@@ -332,19 +373,23 @@ where the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 387 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 291.
-One id per line, in the same format the other two suites use — see
-[`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
-Guard mode skips every listed case, runs it anyway, and reports one that has
-started passing so the line can go. 46 lines of each of them
-carry `?`, which here means "this needs Rust 1.99": they pass on a newer
-toolchain and are guarded neither way, and the harness marks them itself from
-the wording of the diagnostic, so a regenerated list keeps them.
+`gnu11!`'s, 373 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 276.
+One id per line, in the same format the other two suites use — a marker, the
+id, a category tag and a note; see
+[`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)
+for what the categories mean and what `?` and `!` say. Guard mode skips every
+listed case, runs it anyway, and reports one that has started passing so the
+line can go. 47 lines of each list carry `?`, which here means "this needs Rust
+1.99": they pass on a newer toolchain and are guarded neither way, and the
+harness marks them itself from the wording of the diagnostic, so a regenerated
+list keeps them. 104 lines of the `gnu11!` list carry `!`.
 
-An update *keeps* the note a line already has, so that a hand-written one
-survives; when a fix changes what a still-failing case fails on, the way to
-refresh every note at once is to delete the file and regenerate it, which is
-what the numbers above were measured with.
+An update *keeps* the note and the category a line already has, so that a
+hand-written one survives, and writes a new failure in as
+`[bug]  classify me: …` rather than guessing. When a fix changes what a
+still-failing case fails on, the way to refresh every note at once is to delete
+the file and regenerate it — which throws every category away too, so
+everything comes back as a bug waiting to be classified.
 
 ## Reproducing the numbers
 

@@ -92,3 +92,11 @@ harness = false
 name = "clang_c"
 path = "tests/clang_c.rs"
 harness = false
+
+# The three harnesses' expected-failure lists are hand-edited as well as
+# machine-written; this checks that every one of them parses — tags and all —
+# and is written the way an update would write it. It needs no corpus.
+[[test]]
+name = "expected_lists"
+path = "tests/expected_lists.rs"
+harness = false

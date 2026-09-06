@@ -30,9 +30,16 @@
 //!   *default features* build it, so a harness asks
 //!   [`skip_unless_measured_build`] before it starts and skips itself, exactly
 //!   as it does without a corpus, when it is not that build.
-//! * **The expected-failure list.** One id per line with a note, and a marker
-//!   in front of the id saying what kind of claim the line makes — see
-//!   [`EntryKind`]. [`read_list`] and [`write_list`] are the two ends of it.
+//! * **The expected-failure list.** One id per line with a note, a marker in
+//!   front of the id saying what kind of claim the line makes — see
+//!   [`EntryKind`] — and, on a line that records something *wrong*, a
+//!   [`Category`] tag saying what kind of wrong. [`read_list`] and
+//!   [`write_list`] are the two ends of it.
+//! * **What a run was worth.** A case that must fail and does fail is
+//!   *correct*, so the rate a report leads with is [`Tally::correct`] — passed
+//!   plus refused-as-required — and what is left is broken down by category.
+//!   [`bucket`] is the one place that decides which of the five a case fell
+//!   into.
 //! * **Outcomes.** `ui_test` renders failures to a terminal; a report has to
 //!   *classify* them, so [`Collector`] keeps the errors instead of printing
 //!   them and [`classify`] turns each into one line saying what kind of failure
@@ -1018,16 +1025,127 @@ fn group_by<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// cascades
+// ---------------------------------------------------------------------------
+
+/// The id a note points at with ``see `<id>` ``, if it points at one.
+///
+/// Half of a large expected-failure list is *cascade*: one cause makes a
+/// dozen entries fail, and eleven of their notes say "see the twelfth". Any
+/// count of causes that reads those eleven as eleven separate problems is
+/// wrong by an order of magnitude, so a report follows the reference instead.
+pub fn see_reference(note: &str) -> Option<&str> {
+    let at = note.to_ascii_lowercase().find("see `")?;
+    let rest = &note[at + "see `".len()..];
+    let end = rest.find('`')?;
+    Some(&rest[..end])
+}
+
+/// The entry `id`'s note ultimately blames, following ``see `…` `` as far as
+/// it goes.
+///
+/// An id that names nothing in the list, or a chain that comes back round on
+/// itself, stops where it is; the answer is always an id the caller can look
+/// up.
+pub fn root_cause<'a>(list: &'a BTreeMap<String, Entry>, id: &'a str) -> &'a str {
+    let mut seen: Vec<&str> = vec![id];
+    let mut at = id;
+    loop {
+        let Some(entry) = list.get(at) else { return at };
+        let Some(next) = see_reference(&entry.note) else {
+            return at;
+        };
+        let Some((next, _)) = list.get_key_value(next) else {
+            return at;
+        };
+        if seen.contains(&next.as_str()) {
+            return at;
+        }
+        seen.push(next);
+        at = next;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the expected-failure list
 // ---------------------------------------------------------------------------
 
-/// What the marker on an expected-failure line claims about its case.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum EntryKind {
-    /// A plain id: something `cinrs` gets wrong. Guard mode skips the case and
-    /// reports it if it starts passing, so that the line can go.
+/// What kind of error a listed failure stands for.
+///
+/// The rule the whole measurement rests on is that **a case which must fail
+/// and does fail is correct**: a `!` line is conforming behaviour and a `?`
+/// line is a statement about the toolchain, and neither is anything wrong. A
+/// plain line is, and there are exactly three ways for it to be wrong — which
+/// is what this says, and what the tag after the id spells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Category {
+    /// `cinrs` is **wrong**: it accepts the case and mistranslates it, or it
+    /// refuses code it means to support, or it produces Rust that will not
+    /// compile. These are the work items; a failure nobody has classified yet
+    /// counts as one.
     #[default]
-    Failure,
+    Bug,
+    /// A feature `cinrs` **intends to have** and does not have yet — the
+    /// `planned` rows of `doc/gnu-extensions.md`, and every diagnostic that
+    /// says "not supported yet".
+    Unimplemented,
+    /// **Deliberately** unsupported, with a located error rather than a
+    /// mistranslation: inline assembly, the vector extensions, the trampoline
+    /// and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`,
+    /// `long double` as a type distinct from `double`, the complex *integer*
+    /// types, `-finstrument-functions`, programs that need an optimiser to
+    /// delete dead code, `__builtin_return_address` and its relatives, a
+    /// record both packed and over-aligned, and everything `doc/`'s tables
+    /// mark `not planned` or `impossible`. Nothing here is a to-do.
+    NotPlanned,
+}
+
+impl Category {
+    /// Every category, in the order a report lists them: bugs first, because
+    /// they are the only ones anybody has to do something about.
+    pub const ALL: [Category; 3] = [Category::Bug, Category::Unimplemented, Category::NotPlanned];
+
+    /// How the category is written in a list, brackets and all.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Category::Bug => "[bug]",
+            Category::Unimplemented => "[unimplemented]",
+            Category::NotPlanned => "[not-planned]",
+        }
+    }
+
+    /// How the category is written in a report.
+    pub fn label(self) -> &'static str {
+        match self {
+            Category::Bug => "bug",
+            Category::Unimplemented => "unimplemented",
+            Category::NotPlanned => "not planned",
+        }
+    }
+
+    /// The category a tag names, or `None` for anything else.
+    pub fn parse(tag: &str) -> Option<Self> {
+        Category::ALL.into_iter().find(|it| it.tag() == tag)
+    }
+}
+
+/// The width of the column the category tag is written in.
+///
+/// Constant rather than measured, so that changing one line's category never
+/// reflows the other four hundred. `[unimplemented]` is the longest tag and
+/// two spaces separate it from the note.
+pub const TAG_WIDTH: usize = 17;
+
+/// What the marker on an expected-failure line claims about its case.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// A plain id: something `cinrs` gets wrong, of the kind the tag says.
+    /// Guard mode skips the case and reports it if it starts passing, so that
+    /// the line can go.
+    Failure {
+        /// What kind of wrong; written after the id as `[bug]` and friends.
+        category: Category,
+    },
     /// `?id`: the result depends on the *toolchain*, so neither answer says
     /// anything about the list, and the case is guarded neither way.
     ToolchainDependent,
@@ -1043,14 +1161,47 @@ pub enum EntryKind {
     },
 }
 
+impl Default for EntryKind {
+    /// An unclassified failure, which is a bug until somebody says otherwise.
+    fn default() -> Self {
+        EntryKind::Failure {
+            category: Category::Bug,
+        }
+    }
+}
+
 impl EntryKind {
     /// The character an id of this kind is written with.
     pub fn marker(&self) -> &'static str {
         match self {
-            EntryKind::Failure => "",
+            EntryKind::Failure { .. } => "",
             EntryKind::ToolchainDependent => "?",
             EntryKind::Rejected { .. } => "!",
         }
+    }
+
+    /// The tag written between the id and the note.
+    ///
+    /// Empty for `?` and `!`, whose marker has already said everything there
+    /// is to say: neither of them records an error.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            EntryKind::Failure { category } => category.tag(),
+            _ => "",
+        }
+    }
+
+    /// The category this line records an error of, if it records one at all.
+    pub fn category(&self) -> Option<Category> {
+        match self {
+            EntryKind::Failure { category } => Some(*category),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a plain line — one that says `cinrs` is at fault.
+    pub fn is_failure(&self) -> bool {
+        matches!(self, EntryKind::Failure { .. })
     }
 
     /// Whether a line of this kind survives an update untouched, whatever the
@@ -1060,7 +1211,7 @@ impl EntryKind {
     /// the next compiler along; a `!` entry is a statement about the language,
     /// which a run cannot refute — only report on.
     pub fn is_permanent(&self) -> bool {
-        !matches!(self, EntryKind::Failure)
+        !self.is_failure()
     }
 }
 
@@ -1095,7 +1246,32 @@ fn split_required_diagnostic(note: &str) -> Result<(Option<String>, String)> {
     Ok((Some(wanted.to_owned()), note.trim().to_owned()))
 }
 
-/// Reads a list of `[?!]id [note]` lines, ignoring `#` comments and blanks.
+/// Splits the `[bug]`-and-friends tag off a plain line's note.
+///
+/// The tag is not optional: a line with no category says nothing about what
+/// kind of failure it records, and the whole point of the tags is that the
+/// error count can be broken down without anybody reading four hundred notes.
+/// A new failure gets `[bug]` and a note that asks to be classified, which is
+/// the conservative direction — never a silent `[not-planned]`.
+fn split_category(rest: &str) -> Result<(Category, String)> {
+    let (tag, note) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    match Category::parse(tag) {
+        Some(category) => Ok((category, note.trim().to_owned())),
+        None => Err(eyre!(
+            "expected a category tag between the id and the note — one of {} — but found {}. \
+             `doc/testsuites.md` says what the four categories mean.",
+            Category::ALL.map(Category::tag).join(", "),
+            if tag.is_empty() {
+                "nothing".to_owned()
+            } else {
+                format!("{tag:?}")
+            }
+        )),
+    }
+}
+
+/// Reads a list of `[?!]id [tag] [note]` lines, ignoring `#` comments and
+/// blanks.
 pub fn read_list(path: &Path) -> Result<BTreeMap<String, Entry>> {
     let mut out = BTreeMap::new();
     let text = match std::fs::read_to_string(path) {
@@ -1111,13 +1287,33 @@ pub fn read_list(path: &Path) -> Result<BTreeMap<String, Entry>> {
         let at = |err| eyre!("{}:{}: {err}", path.display(), number + 1);
         let (id, note) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         let note = note.trim().trim_start_matches('#').trim();
+        let marked = |note: &str| {
+            note.starts_with('[').then(|| {
+                at(eyre!(
+                    "a `{}` line may not carry a category tag: the marker has already said that \
+                     it records no error",
+                    &id[..1]
+                ))
+            })
+        };
         let (kind, note) = match id.as_bytes().first() {
-            Some(b'?') => (EntryKind::ToolchainDependent, note.to_owned()),
+            Some(b'?') => {
+                if let Some(err) = marked(note) {
+                    return Err(err);
+                }
+                (EntryKind::ToolchainDependent, note.to_owned())
+            }
             Some(b'!') => {
+                if let Some(err) = marked(note) {
+                    return Err(err);
+                }
                 let (diagnostic, note) = split_required_diagnostic(note).map_err(at)?;
                 (EntryKind::Rejected { diagnostic }, note)
             }
-            _ => (EntryKind::Failure, note.to_owned()),
+            _ => {
+                let (category, note) = split_category(note).map_err(at)?;
+                (EntryKind::Failure { category }, note)
+            }
         };
         let id = id.trim_start_matches(['?', '!']);
         out.insert(id.to_owned(), Entry { kind, note });
@@ -1145,7 +1341,33 @@ fn id_column(ids: impl IntoIterator<Item = usize>) -> usize {
     ids.into_iter().map(|len| len + 2).max().unwrap_or(0).max(8)
 }
 
-/// Rewrites the list from a report, keeping the notes already written.
+/// The body of a list — every line but the header comment — as it is written.
+///
+/// One function, so that [`write_list`] and the round-trip test in
+/// [`tests/expected_lists.rs`](../expected_lists.rs) cannot disagree about
+/// what canonical looks like. Three columns: the marked id, the category tag
+/// (blank for `?` and `!`, which record no error), and the note.
+pub fn render_list(entries: &BTreeMap<&str, Entry>) -> String {
+    let width = id_column(
+        entries
+            .iter()
+            .map(|(id, entry)| id.len() + entry.kind.marker().len()),
+    );
+    let mut out = String::new();
+    for (id, entry) in entries {
+        let id = format!("{}{id}", entry.kind.marker());
+        let tag = entry.kind.tag();
+        let line = format!("{id:<width$}{tag:<TAG_WIDTH$}{}", entry_note(entry));
+        writeln!(out, "{}", line.trim_end()).expect("writing to a String");
+    }
+    out
+}
+
+/// What the note of a failure nobody has looked at yet opens with.
+pub const CLASSIFY_ME: &str = "classify me:";
+
+/// Rewrites the list from a report, keeping the notes and tags already
+/// written.
 ///
 /// Every case that failed goes in, together with every `?` and `!` entry the
 /// file already had, marker and note and all. Those two say something a single
@@ -1154,6 +1376,13 @@ fn id_column(ids: impl IntoIterator<Item = usize>) -> usize {
 /// language rather than about `cinrs`, so an update never downgrades one to a
 /// plain failure or drops it because the case happened to build. A `!` case
 /// that passed is warned about instead, and kept.
+///
+/// A case that failed and is *already* listed keeps its line as it stands —
+/// its [`Category`] included, since a run has no way to work out which of the
+/// three a failure is. One that is **not** listed is new, and comes out as a
+/// [`Category::Bug`] whose note opens with [`CLASSIFY_ME`]: an unexamined
+/// failure is a regression until somebody has looked at it, and the one thing
+/// an update must never do is file it quietly under `not planned`.
 ///
 /// `header` is the comment block written above the list, which says what the
 /// list is for and how to regenerate it; it is the one part that differs
@@ -1173,28 +1402,20 @@ pub fn write_list(
         let Outcome::Failed { classification, .. } = outcome else {
             continue;
         };
-        let entry = lines.entry(id.as_str()).or_default();
-        if entry.note.is_empty() {
-            entry.note = previous
-                .get(id)
-                .map(|entry| entry.note.clone())
-                .filter(|note| !note.is_empty())
-                .unwrap_or_else(|| classification.clone());
+        if lines.contains_key(id.as_str()) {
+            continue;
         }
+        let mut entry = previous.get(id).cloned().unwrap_or_else(|| Entry {
+            kind: EntryKind::default(),
+            note: format!("{CLASSIFY_ME} {classification}"),
+        });
+        if entry.note.is_empty() {
+            entry.note = classification.clone();
+        }
+        lines.insert(id.as_str(), entry);
     }
 
-    let width = id_column(
-        lines
-            .iter()
-            .map(|(id, entry)| id.len() + entry.kind.marker().len()),
-    );
-    let mut body = String::new();
-    for (id, entry) in &lines {
-        let id = format!("{}{id}", entry.kind.marker());
-        let line = format!("{id:<width$}{}", entry_note(entry));
-        writeln!(body, "{}", line.trim_end()).expect("writing to a String");
-    }
-
+    let body = render_list(&lines);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -1202,30 +1423,187 @@ pub fn write_list(
     Ok(lines.len())
 }
 
-/// The paragraph every list's header ends with, explaining the markers.
+/// The paragraph every list's header ends with, explaining the markers and
+/// the category tags.
 ///
 /// `regenerate` is the command that rewrites this particular list.
 pub fn marker_legend(regenerate: &str) -> String {
     format!(
         "#\n\
-         # One id per line, with a note after it, and a marker in front of the\n\
-         # id saying what kind of claim the line makes:\n\
+         # One id per line: a marker, the id, a category tag and a note. A case\n\
+         # that must fail and does fail is *correct*, so only a plain line\n\
+         # records something wrong, and its tag says what kind of wrong:\n\
          #\n\
-         #   ID    `cinrs` gets this one wrong.\n\
-         #   ?ID   It passes or fails depending on the toolchain, and is\n\
-         #         guarded neither way.\n\
-         #   !ID   This entry point makes the case invalid, so refusing it is\n\
-         #         conforming behaviour and not a gap. Guard mode requires the\n\
-         #         case to fail to *compile*; one that builds and runs is a\n\
-         #         failure. The note may open with `error: \"<substring>\"`,\n\
-         #         which the diagnostic then has to contain.\n\
+         #   ID  [bug]              `cinrs` is wrong here — it mistranslates\n\
+         #                          the case, refuses code it means to support,\n\
+         #                          or emits Rust that will not compile.\n\
+         #   ID  [unimplemented]    A feature `cinrs` means to have and has not\n\
+         #                          got to yet.\n\
+         #   ID  [not-planned]      Deliberately unsupported, with a located\n\
+         #                          error rather than a mistranslation. Nothing\n\
+         #                          to fix.\n\
+         #   ?ID                    It passes or fails depending on the\n\
+         #                          toolchain, and is guarded neither way.\n\
+         #   !ID                    This entry point makes the case invalid, so\n\
+         #                          refusing it is conforming behaviour and not\n\
+         #                          an error at all. Guard mode requires the\n\
+         #                          case to fail to *compile*; one that builds\n\
+         #                          and runs is a failure. The note may open\n\
+         #                          with `error: \"<substring>\"`, which the\n\
+         #                          diagnostic then has to contain.\n\
+         #\n\
+         # `doc/testsuites.md` is where the categories are explained. A failure\n\
+         # that is not listed here at all counts as a bug until somebody says\n\
+         # otherwise, and an update writes it in as one.\n\
          #\n\
          # Regenerate with\n\
          #\n\
          {regenerate}\
          #\n\
-         # which keeps every `?` and `!` line as it stands.\n\
+         # which keeps every `?` line, every `!` line and every tag as it\n\
+         # stands. Deleting the file first re-measures the notes — and throws\n\
+         # every tag away, so everything comes back as `[bug]  classify me:`.\n\
          \n"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// what a run was worth
+// ---------------------------------------------------------------------------
+
+/// Which of the five a case that ran fell into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bucket {
+    /// It passed.
+    Passed,
+    /// It was refused, and being refused is what this entry point owes the
+    /// standard. Correct, and not an error.
+    Rejected,
+    /// It failed for a reason that is not about `cinrs` at all: the toolchain
+    /// is older than the feature the case needs.
+    Toolchain,
+    /// It failed, and the list says what kind of error that is.
+    Error(Category),
+}
+
+/// The bucket a case that did not pass belongs in, read off its list entry.
+///
+/// `refused_as_required` is what [`check_rejection`] made of the case, and
+/// only matters for a `!` entry. An entry that is not in the list at all is a
+/// **bug**: it is either a regression or something nobody has classified, and
+/// both are things to look at rather than things to file away.
+pub fn bucket(entry: Option<&Entry>, refused_as_required: bool) -> Bucket {
+    match entry.map(|entry| &entry.kind) {
+        Some(EntryKind::Rejected { .. }) if refused_as_required => Bucket::Rejected,
+        Some(EntryKind::Rejected { .. }) => Bucket::Error(Category::Bug),
+        Some(EntryKind::ToolchainDependent) => Bucket::Toolchain,
+        Some(EntryKind::Failure { category }) => Bucket::Error(*category),
+        None => Bucket::Error(Category::Bug),
+    }
+}
+
+/// How a set of cases came out, in the five buckets above.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Tally {
+    /// Compiled, ran and produced what was asked for.
+    pub passed: usize,
+    /// Refused, as the standard requires this entry point to refuse it.
+    pub rejected: usize,
+    /// Failed, by category.
+    pub bug: usize,
+    pub unimplemented: usize,
+    pub not_planned: usize,
+    /// Failed for want of a newer Rust.
+    pub toolchain: usize,
+}
+
+impl Tally {
+    /// Files one case.
+    pub fn count(&mut self, bucket: Bucket) {
+        match bucket {
+            Bucket::Passed => self.passed += 1,
+            Bucket::Rejected => self.rejected += 1,
+            Bucket::Toolchain => self.toolchain += 1,
+            Bucket::Error(Category::Bug) => self.bug += 1,
+            Bucket::Error(Category::Unimplemented) => self.unimplemented += 1,
+            Bucket::Error(Category::NotPlanned) => self.not_planned += 1,
+        }
+    }
+
+    /// How many the run got **right**: passed, plus refused as required.
+    pub fn correct(&self) -> usize {
+        self.passed + self.rejected
+    }
+
+    /// How many it got wrong, of any kind.
+    pub fn errors(&self) -> usize {
+        self.bug + self.unimplemented + self.not_planned + self.toolchain
+    }
+
+    /// How many cases were counted at all.
+    pub fn total(&self) -> usize {
+        self.correct() + self.errors()
+    }
+
+    /// How many are of one category.
+    pub fn of(&self, category: Category) -> usize {
+        match category {
+            Category::Bug => self.bug,
+            Category::Unimplemented => self.unimplemented,
+            Category::NotPlanned => self.not_planned,
+        }
+    }
+
+    /// `1500/1769 correct (84.8%) — 1396 passed, 104 rejected as the standard
+    /// requires`.
+    pub fn headline(&self) -> String {
+        format!(
+            "{}/{} correct ({}) — {} passed{}",
+            self.correct(),
+            self.total(),
+            percent(self.correct(), self.total()),
+            self.passed,
+            match self.rejected {
+                0 => String::new(),
+                n => format!(", {n} rejected as the standard requires"),
+            }
+        )
+    }
+
+    /// `errors: 283 — bug 2, unimplemented 22, not planned 212, toolchain 47`.
+    ///
+    /// Every category is named even at zero: the shape of the breakdown is
+    /// half of what it says.
+    pub fn errors_line(&self) -> String {
+        format!(
+            "errors: {} — bug {}, unimplemented {}, not planned {}, toolchain {}",
+            self.errors(),
+            self.bug,
+            self.unimplemented,
+            self.not_planned,
+            self.toolchain
+        )
+    }
+}
+
+/// The header of a table of [`Tally`] rows; `what` names the first column.
+pub fn tally_header(what: &str) -> String {
+    format!(
+        "    {what:<14}{:>11}  {:>7}  {:>5}  {:>13}  {:>11}  {:>9}",
+        "correct", "rate", "bug", "unimplemented", "not planned", "toolchain"
+    )
+}
+
+/// One row of that table.
+pub fn tally_row(name: &str, tally: &Tally) -> String {
+    format!(
+        "    {name:<14}{:>11}  {:>7}  {:>5}  {:>13}  {:>11}  {:>9}",
+        format!("{}/{}", tally.correct(), tally.total()),
+        percent(tally.correct(), tally.total()),
+        tally.bug,
+        tally.unimplemented,
+        tally.not_planned,
+        tally.toolchain
     )
 }
 

@@ -402,41 +402,52 @@ exactly that.
 
 ## Conformance
 
-`cinrs` is measured against three public corpora — about 2,265 cases in about
-four and a half minutes. [`doc/testsuites.md`](doc/testsuites.md) is the
-overview: how to fetch them, the three modes each harness has, the
-expected-failure lists and their markers, and **the memory ceilings a run has
-to be given**, which are not optional.
+`cinrs` is measured against three public corpora — about 2,270 cases in about
+ten minutes. [`doc/testsuites.md`](doc/testsuites.md) is the overview: how to
+fetch them, the three modes each harness has, the expected-failure lists with
+their markers and **category tags**, and **the memory ceilings a run has to be
+given**, which are not optional.
+
+The number each suite leads with is its **correct** rate — a case that passed,
+plus one this entry point is *required* to refuse and did refuse — and what is
+left over is broken down into four kinds of error: a `cinrs` **bug**, something
+**unimplemented**, something **not planned** (inline assembly, the vector
+extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
+**toolchain** being older than Rust 1.99. Across all three corpora there are
+**23 tagged `[bug]`**, and every one of them is named in the documents below.
 
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
-  suite, **213 of the 218 that `c99!` is eligible for pass (97.7 %)**, and 216
-  of 220 under `c11!`, `gnu89!`, `gnu99!` and `gnu11!`. What is left is one
-  construct
-  listed as unsupported above — `va_arg` with a struct — plus two corners GCC
-  has and this does not: a `goto` out of a statement expression, and
-  initialising a flexible array member. One needs a newer Rust than 1.97, and
-  the two C23 entry points give up one more case that C23 itself made invalid.
-  Strict `c89!` is the outlier at 152 of the 175 it selects, because
-  twenty-one cases the corpus tags `c89` use something C99 added.
-  The corpus is a git submodule, so a fresh checkout skips the suite until
-  `git submodule update --init third_party/c-testsuite` fetches it.
+  suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
+  and 216 of 220 under `c11!`, `c23!` and every GNU dialect. **Not one error in
+  this corpus is a bug**: three are constructs `cinrs` has not implemented — a
+  `goto` out of a statement expression, `va_arg` with a struct, an initialised
+  flexible array member — and the fourth needs a newer Rust than 1.97. Strict
+  `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
+  use something C99 added and a strict C89 entry point is required to refuse
+  them. The corpus is a git submodule, so a fresh checkout skips the suite
+  until `git submodule update --init third_party/c-testsuite` fetches it.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
-* **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
+* **[GCC's C torture tests](doc/gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,493 pass (84.4 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,396 (78.9 %) under
-  `gnu11!`. What is left is inline assembly, the vector extensions, the complex
+  exit status zero. **1,500 of the 1,769 run are correct (84.8 %)** under
+  `gnu11!` — 1,396 passing and 104 refused as C99 requires — and 1,493
+  (84.4 %) under `gnu89!`, which is the language these C89-era programs were
+  written in and refuses none of them. **Exactly one of the 269 errors is a
+  bug**; the rest are inline assembly, the vector extensions, the complex
   *integer* types, computed `goto`, the two corners of nested functions that
-  need a trampoline or a nonlocal `goto`, the handful of
-  `__builtin_*` forms this crate does not implement, and the variadic
-  definitions that need Rust 1.99 — plus five programs that built and then did
-  the wrong thing, which the document names one by one.
+  need a trampoline or a nonlocal `goto`, the handful of `__builtin_*` forms
+  this crate does not implement, the variadic definitions that need Rust 1.99,
+  and five programs that built and then did the wrong thing, which the document
+  names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **131 of the 203 revisions run come out as
-  required (64.5 %)**, and this is the only suite that measures what `cinrs`
-  *refuses*, which is half of what a front end is for.
+  which lines must be diagnosed. **158 of the 203 revisions run are correct
+  (77.8 %)** — 131 answered exactly and 27 refused because the entry point
+  requires it — and of the 620 `expected-error` lines the suite asks about,
+  **463 are diagnosed on the right line**. This is the only suite that measures
+  what `cinrs` *refuses*, which is half of what a front end is for, and it is
+  where the other 22 bugs are: 8 root causes, listed in the document.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
 each harness skips itself with a note when its corpus is missing.

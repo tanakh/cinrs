@@ -120,15 +120,15 @@ override both.
 
 ### The outcome classes
 
-| class | meaning |
-| --- | --- |
-| accepted as required | Clang wants no error, there was none, and the expansion compiled |
-| rejected as required (lines match) | Clang wants errors on a set of lines, and that is what came out |
-| false rejection | Clang wants no error and `cinrs` reported one |
-| missed rejection | Clang wants errors and `cinrs` reported none: invalid code accepted |
-| wrong line | errors, but not on the lines asked for |
-| rust compile error | valid C whose expansion `rustc` refused — always a `cinrs` bug |
-| skipped | not run, with a reason |
+| class | meaning | counts as |
+| --- | --- | --- |
+| accepted as required | Clang wants no error, there was none, and the expansion compiled | correct |
+| rejected as required (lines match) | Clang wants errors on a set of lines, and that is what came out | correct |
+| false rejection | Clang wants no error and `cinrs` reported one | **correct** when the line is marked `!` — this entry point is required to refuse it — and an error of its category otherwise |
+| missed rejection | Clang wants errors and `cinrs` reported none: invalid code accepted | an error |
+| wrong line | errors, but not on the lines asked for | an error |
+| rust compile error | valid C whose expansion `rustc` refused — always a `cinrs` bug | an error |
+| skipped | not run, with a reason | neither: out of the denominator |
 
 ## Skipped revisions
 
@@ -158,37 +158,126 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 203 run, 131 as required (64.5 %)**,
-73 skipped, in about ten seconds.
+corpus revision: **99 files, 276 RUN lines, 203 run, 73 skipped**, in about ten
+seconds.
 
-| directory | run | as required | rate | revisions | skipped |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `C99` | 30 | 23 | **76.7 %** | 37 | 7 |
-| `C11` | 23 | 15 | 65.2 % | 30 | 7 |
-| `C23` | 45 | 28 | 62.2 % | 69 | 24 |
-| `drs` | 105 | 65 | 61.9 % | 140 | 35 |
+```
+clang/test/C: 158/203 correct (77.8%) — 131 passed, 27 rejected as the standard requires
+  errors: 45 — bug 22, unimplemented 7, not planned 16, toolchain 0
+  (73 skipped) — 9.5 s
+```
+
+**Correct** is a revision that came out as the test asks, plus one `cinrs`
+refuses *on purpose* because the entry point requires it to — a `//` comment
+in a `c89!` block, `_Static_assert` in a `c99!` one. Refusing those is
+conforming behaviour, so counting them as shortfalls measures the wrong thing;
+[`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)
+is where the rule and the four error categories are set out.
+
+| directory | run | correct | rate | bug | unimplemented | not planned | revisions | skipped |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `C99` | 30 | 26 | **86.7 %** | 2 | 0 | 2 | 37 | 7 |
+| `C11` | 23 | 20 | **87.0 %** | 1 | 2 | 0 | 30 | 7 |
+| `C23` | 45 | 32 | **71.1 %** | 5 | 4 | 4 | 69 | 24 |
+| `drs` | 105 | 80 | **76.2 %** | 14 | 1 | 10 | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
 
-The rate went *down* once, when the C89 revisions started running — 79 of 175
-(45.1 %) became 85 of 203 (41.9 %) — and that was what one should expect: the
-28 revisions that joined were 6 more passes and 22 more mismatches, most of
-them a `-std=c89` RUN line using a C99 feature that Clang takes as an
-extension and `c89!` refuses on purpose. Those are `!` entries; see below.
-Trigraphs and designator lists took it back up to 96 of 203 (47.3 %), the
-round after that to 123 — 13 of those are the directive-line rule above, which
-was the harness reading Clang's annotations wrongly rather than anything
-`cinrs` did, and the other 14 are the fixes listed at the end of this document
-— and `_Complex` took it to 131.
+### Why the revision number is the lowest of the three suites
 
-### The mismatches, by cause
+**77.8 % here does not mean 22 % of the C is wrong.** Three things compress it,
+and none of them is a translation error:
 
-72 revisions do not come out as the test asks. Every one of them is in
-`tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
+1. **A revision is all-or-nothing.** One error on one line, out of the forty
+   annotations `drs/dr0xx.c` carries, and the whole revision is a mismatch.
+   The [annotation rate](#annotations-the-other-half-of-the-picture) below is
+   the same run measured per *line*, and it is much higher.
+2. **A file is five revisions.** `drs/dr0xx.c`, `dr1xx.c`, `dr2xx.c`,
+   `dr3xx.c` and `dr4xx.c` are compiled once per revision of C, so a single
+   cause is counted five times. Collapsing the cascades leaves **41 distinct
+   root causes** behind the 72 listed revisions — 21 of them conforming
+   refusals — and the report prints them with their counts.
+3. **27 of the 72 are conforming refusals**, which the correct rate above
+   already counts as correct rather than as gaps.
 
-**Deliberate refusals (27, marked `!`).** These are not gaps. Guard mode
-asserts that the refusal is still there.
+Put together: 45 errors in **20 root causes**, of which 8 are bugs.
+
+### Annotations: the other half of the picture
+
+The report counts the `expected-error` *lines* as well as the revisions:
+
+```
+  annotations, over the 203 revisions run
+      620  lines carry a required `expected-error`
+      463  of them were diagnosed (74.7%)
+      157  were not
+      552  errors landed on a line no directive names
+           162 of those are on the 27 revisions this entry point is required
+           to refuse, where every later revision's feature is one of them
+```
+
+620 lines are asked about and **463 are answered on the right line**. The last
+row is what an earlier entry point costs rather than a count of wrong answers:
+a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
+file, and Clang — which takes each as an extension and only warns — names none
+of them. 162 of the 552 are on the 27 revisions that are conforming refusals
+outright; the other 390 are on the 45 error revisions, where the same effect
+piles up behind whichever refusal came first.
+
+### The errors, by category
+
+45 revisions do not come out as the test asks and are not deliberate refusals.
+Every one is in `tests/clang-c/expected-failures.txt` with a category and a
+one-line cause, and a note of the form ``see `<id>`` says "same reason as that
+one", which is how the report collapses the cascades.
+
+**`[bug]` — 22 revisions, 8 root causes.** These are the work items:
+
+| root cause | revisions |
+| --- | ---: |
+| DR011: the composite type a block-scope `extern int i[10];` gives an object is scoped to that block, and `cinrs` scopes it to the function (`drs/dr0xx.c`) | 5 |
+| `__LLONG_WIDTH__` is not predefined — `cinrs` has GCC's `__LONG_LONG_WIDTH__` spelling and not Clang's — so `drs/dr2xx.c`'s `#if`/`#elif` on it both fail and the file's own `#error` fires | 5 |
+| DR103: a tag declared in a *parameter list* has the scope of that list, and `cinrs` puts it in the enclosing scope (`drs/dr1xx.c`) | 4 |
+| C23 type inference is not taken when a *storage-class* specifier precedes the `auto`: `static auto c = 1UL;` (`C23/n3007.c`, `n3006.c`) | 2 |
+| 6.7.3p9: `const int a[1]` qualifies the *element* type, and `cinrs` qualifies the object (`C23/n2607.c`) | 2 |
+| a universal character name is validated where the token is used rather than where it is lexed, so one inside a macro argument that expands to nothing is never diagnosed (`C99/n717.c`) | 2 |
+| an enumeration redeclared with a different fixed underlying type is not diagnosed (`C23/n3030.c`) | 1 |
+| the parse recovery from a `_Static_assert` in a parameter list emits a second, spurious error (`C11/n1330.c`) | 1 |
+
+**`[unimplemented]` — 7 revisions, 5 root causes.** C23 tag compatibility
+(N3037, 2 revisions: `C23/n3037_1.c` and `drs/dr1xx.c:4`); the C11 and C23
+identifier-character tables, which `cinrs` has as one rule for every revision
+(2, `C11/n1518.c`); `\N{…}` named universal character escapes (1); an empty
+initializer for a variable length array (1); a `constexpr` object of an array
+type (1).
+
+**`[not-planned]` — 16 revisions, 8 root causes.** Nothing here is a to-do:
+
+* `drs/dr4xx.c` (5): a compound literal as the operand of `_Static_assert`.
+  Clang folds it as a documented GNU extension and *warns*; ISO C does not
+  make it an integer constant expression, and `cinrs` refuses it.
+* `drs/dr3xx.c` (5): the file-scope compound literal of variably modified
+  type on line 226, which `cinrs` diagnoses and Clang's own comment calls a
+  FIXME for not diagnosing — plus the C99 features its `c89!` and `c99!`
+  revisions meet first.
+* `C99/n448.c` and `C99/n809.c` (2): a `_Static_assert` gate, and a
+  `-verify` directive inside an `#if __STDC_VERSION__ >= 202311L` that the
+  revision does not compile. Clang's `-verify` never sees a directive in a
+  skipped conditional; this harness, which reads them out of the raw text,
+  does.
+* one each: `_BitInt`'s `wb` constants (🔴 in
+  [`doc/c-status.md`](c-status.md)); the line number of a macro invocation
+  spanning spliced lines, which the paper leaves unspecified and Clang's own
+  comment calls a FIXME; `C23/n2900_n3011.c:1`, an empty initializer in a
+  `c17!` block; and `C23/n3033.c`, a `-E … | FileCheck` test whose
+  *expansions* are not a translation unit.
+
+**Missed rejection (0).**
+
+### The deliberate refusals (27, marked `!`)
+
+These are not gaps, and guard mode asserts that the refusal is still there.
 
 * *A later revision's feature in an earlier block* (23): `_Static_assert` and
   `_Alignof` in a `c99!` block, an anonymous `struct` member in `c99!`, a
@@ -207,36 +296,26 @@ asserts that the refusal is still there.
   N1464 is about — all came out as required once the complex types landed.
 * *Clang-only builtins* (3): `__builtin_bit_cast`.
 
-**Genuine gaps, false rejections (3).** Valid C that `cinrs` refuses. There
-are 30 false rejections in all; the other 27 are the deliberate ones above.
+### How the number has moved
 
-| cause | revisions |
-| --- | ---: |
-| C23 tag compatibility (N3037): a compatible redefinition of `struct S` | 1 |
-| the line number of a macro invocation spanning spliced lines (unspecified; Clang's own comment calls its answer a FIXME) | 1 |
-| `C23/n3033.c` is a `-E … \| FileCheck` test whose *expansions* are not a translation unit; the harness compiles a FileCheck-only file, which is right for every other one of them | 1 |
+The pass rate went *down* once, when the C89 revisions started running — 79 of
+175 (45.1 %) became 85 of 203 (41.9 %) — and that was what one should expect:
+the 28 revisions that joined were 6 more passes and 22 more mismatches, most of
+them a `-std=c89` RUN line using a C99 feature that Clang takes as an extension
+and `c89!` refuses on purpose. Those are the `!` entries above, and counting
+them as correct is what took the headline from 64.5 % to 77.8 % without
+changing a line of the compiler. Before that, trigraphs and designator lists
+took it from 41.9 % to 47.3 %, the round after that to 123 of 203 — 13 of those
+are the directive-line rule above, which was the harness reading Clang's
+annotations wrongly rather than anything `cinrs` did, and the other 14 are the
+fixes listed at the end of this document — and `_Complex` took it to 131.
 
-**Wrong line (42).** The error came out somewhere other than where the test
-asks. Almost all of these are files carrying *many* annotations — `drs/dr0xx.c`
-has forty — where `cinrs` reports one of them on a different line, or reports
-an unrelated refusal first and never reaches the one asked about. The two
-worth naming as their own bug are both about *scope*: a tag declared in a
-parameter list has the scope of that list (DR103, `drs/dr1xx.c`), and the
-composite type a block-scope `extern int i[10];` gives an object is scoped to
-that block (DR011, `drs/dr0xx.c`); `cinrs` puts both in the enclosing scope.
-`drs/dr3xx.c` used to be a harness one and is not any more: the file writes
+`drs/dr3xx.c` used to be a harness problem and is not any more: the file writes
 `#include "./abc_123.h"`, which is looked for beside the file the directive is
 written in, and the file this harness compiles is a *generated* one under
 `target/`. Every case's own directory now goes on the search path, exactly as
 the gcc-torture harness has always done, so the header is found and the file's
 five revisions have moved on to a later refusal apiece.
-`C99/n448.c:0` is a harness one: its last `expected-error` is inside
-`#if __STDC_VERSION__ >= 202311L`, which the `c99!` revision does not compile —
-Clang's `-verify` never sees a directive in a skipped conditional and this
-harness, which reads them out of the raw text, does. The rest are cascades from
-what is above.
-
-**Missed rejection (0).**
 
 ### What the results changed in `doc/c-status.md`
 

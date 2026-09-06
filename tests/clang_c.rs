@@ -81,8 +81,9 @@ use ui_test::color_eyre::eyre::{Result, eyre};
 mod conformance;
 
 use conformance::{
-    COMPILE_TIMEOUT, Collector, Entry, EntryKind, Outcome, confuses_ui_test, duration, flag,
-    group_texts, listing, marker_legend, percent, plural, raw_string_hashes, read_list, write_list,
+    Bucket, COMPILE_TIMEOUT, Category, Collector, Entry, EntryKind, Outcome, Tally,
+    confuses_ui_test, duration, flag, group_texts, listing, marker_legend, percent, plural,
+    raw_string_hashes, read_list, root_cause, tally_header, tally_row, write_list,
 };
 
 // ---------------------------------------------------------------------------
@@ -945,6 +946,10 @@ enum Class {
     WrongLine {
         expected: Option<usize>,
         got: Option<usize>,
+        /// The first error `cinrs` did report, which is nearly always the
+        /// whole explanation — a refusal earlier in the file that the case
+        /// never gets past.
+        message: String,
     },
     /// Valid C whose expansion `rustc` refused.
     RustCompileError(String),
@@ -985,13 +990,17 @@ impl Class {
             Class::FalseRejection(message) => {
                 format!("false rejection (rejected valid code: {message})")
             }
-            Class::WrongLine { expected, got } => {
+            Class::WrongLine {
+                expected,
+                got,
+                message,
+            } => {
                 let show = |line: &Option<usize>| match line {
                     Some(line) => line.to_string(),
                     None => "none".to_owned(),
                 };
                 format!(
-                    "wrong line (expected {}, got {})",
+                    "wrong line (expected {}, got {}): {message}",
                     show(expected),
                     show(got)
                 )
@@ -1016,6 +1025,9 @@ struct Result_ {
     /// Which entry point it used, when it used one.
     entry: Option<&'static str>,
     class: Class,
+    /// How its `expected-error` lines came out; all zero for a revision the
+    /// front end never saw.
+    annotations: Annotations,
 }
 
 /// The id of one revision of one file.
@@ -1082,10 +1094,65 @@ fn classify(
     if missing.is_none() && extra.is_none() && !unplaced {
         return Ok(Class::RejectedAsRequired);
     }
+    let got = extra.or_else(|| reported.first().copied());
+    // The error *on the line that went wrong*, which is the one that explains
+    // the mismatch; the first error of the file is usually one the test asked
+    // for and says nothing. An error the harness could not place at all is the
+    // next best thing, and only then the first of them.
+    let message = errors
+        .iter()
+        .find(|error| error.line.is_some() && error.line == got)
+        .or_else(|| errors.iter().find(|error| error.line.is_none()))
+        .or_else(|| errors.first())
+        .map(|error| error.message.clone())
+        .unwrap_or_default();
     Ok(Class::WrongLine {
         expected: missing.or_else(|| oracle.required.first().copied()),
-        got: extra.or_else(|| reported.first().copied()),
+        got,
+        message,
     })
+}
+
+/// How one revision's `expected-error` lines came out.
+///
+/// The revision-level number is all-or-nothing — one error on the wrong line
+/// and the whole revision is a mismatch, however many of its forty annotations
+/// were answered — so this is the other half of the picture: how many of the
+/// *lines* the suite asks about were diagnosed.
+#[derive(Clone, Copy, Debug, Default)]
+struct Annotations {
+    /// Lines carrying a required `expected-error`.
+    required: usize,
+    /// How many of those got an error.
+    matched: usize,
+    /// Errors somewhere no directive names — an extra line, or an error the
+    /// harness could not place at all (in a header, or in its own prelude).
+    unexpected: usize,
+}
+
+impl Annotations {
+    /// Counts one revision, from what the oracle asked for and what came out.
+    fn read(oracle: &Oracle, errors: &[Reported]) -> Self {
+        let reported: BTreeSet<usize> = errors.iter().filter_map(|error| error.line).collect();
+        let allowed: BTreeSet<usize> = oracle.required.union(&oracle.optional).copied().collect();
+        Annotations {
+            required: oracle.required.len(),
+            matched: oracle.required.intersection(&reported).count(),
+            unexpected: reported.difference(&allowed).count()
+                + errors.iter().filter(|error| error.line.is_none()).count(),
+        }
+    }
+
+    /// The lines that were asked about and not diagnosed.
+    fn missed(&self) -> usize {
+        self.required - self.matched
+    }
+
+    fn add(&mut self, other: Annotations) {
+        self.required += other.required;
+        self.matched += other.matched;
+        self.unexpected += other.unexpected;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,6 +1266,7 @@ fn main() -> Result<()> {
                         stem: file.stem.clone(),
                         entry: None,
                         class: Class::Skipped(reason.clone()),
+                        annotations: Annotations::default(),
                     });
                     continue;
                 }
@@ -1211,11 +1279,13 @@ fn main() -> Result<()> {
                     stem: file.stem.clone(),
                     entry: Some(plan.entry.name),
                     class: Class::Skipped(reason.clone()),
+                    annotations: Annotations::default(),
                 });
                 continue;
             }
             let (unit, prelude_lines) = unit_text(file, plan);
             let errors = front_end_errors(unit, plan.entry.options(), prelude_lines)?;
+            let annotations = Annotations::read(&oracle, &errors);
             let class = match classify(file, plan, &oracle, &errors) {
                 Ok(class) => class,
                 Err(unit) if confuses_ui_test(&unit) => {
@@ -1241,12 +1311,20 @@ fn main() -> Result<()> {
                     Class::AcceptedAsRequired
                 }
             };
+            // A revision the front end never really answered — one whose C
+            // `ui_test` would misread — has no annotation count to give.
+            let annotations = if class.ran() {
+                annotations
+            } else {
+                Annotations::default()
+            };
             results.push(Result_ {
                 id,
                 dir: file.dir,
                 stem: file.stem.clone(),
                 entry: Some(plan.entry.name),
                 class,
+                annotations,
             });
         }
     }
@@ -1319,6 +1397,28 @@ fn main() -> Result<()> {
     }
 }
 
+/// Which bucket one revision fell into, or `None` when it did not run.
+///
+/// A `!` entry says `cinrs` refuses the revision on purpose — a later
+/// revision's feature in an earlier entry point, which the entry point is
+/// *required* to refuse — so a false rejection there is the right answer and
+/// not an error. That is exactly the rule guard mode asserts.
+fn bucket_of(result: &Result_, expected_failures: &BTreeMap<String, Entry>) -> Option<Bucket> {
+    if !result.class.ran() {
+        return None;
+    }
+    if matches!(
+        result.class,
+        Class::AcceptedAsRequired | Class::RejectedAsRequired
+    ) {
+        return Some(Bucket::Passed);
+    }
+    Some(conformance::bucket(
+        expected_failures.get(&result.id),
+        matches!(result.class, Class::FalseRejection(_)),
+    ))
+}
+
 /// Report mode: say what happened, fail nothing.
 fn report(
     results: &[Result_],
@@ -1328,28 +1428,37 @@ fn report(
     update: bool,
 ) -> Result<()> {
     let ran: Vec<&Result_> = results.iter().filter(|r| r.class.ran()).collect();
-    let passed = ran.iter().filter(|r| r.class.is_pass()).count();
+    let tally = |results: &[&Result_]| {
+        let mut tally = Tally::default();
+        for result in results {
+            if let Some(bucket) = bucket_of(result, expected_failures) {
+                tally.count(bucket);
+            }
+        }
+        tally
+    };
+    let overall = tally(&ran);
     println!();
-    println!(
-        "clang/test/C: {passed}/{} revisions came out as required ({}), \
-         {} skipped — {took}",
-        ran.len(),
-        percent(passed, ran.len()),
-        results.len() - ran.len(),
-    );
+    println!("clang/test/C: {}", overall.headline());
+    println!("  {}", overall.errors_line());
+    println!("  ({} skipped) — {took}", results.len() - ran.len());
 
     println!();
-    println!("  by directory and outcome");
+    println!("{}", tally_header("by directory"));
+    for dir in DIRS {
+        let here: Vec<&Result_> = results
+            .iter()
+            .filter(|r| r.dir == *dir && r.class.ran())
+            .collect();
+        println!("{}", tally_row(dir, &tally(&here)));
+    }
+    println!();
+    println!("  outcome classes, by directory");
     for dir in DIRS {
         let here: Vec<&Result_> = results.iter().filter(|r| r.dir == *dir).collect();
         let ran = here.iter().filter(|r| r.class.ran()).count();
-        let ok = here
-            .iter()
-            .filter(|r| r.class.ran() && r.class.is_pass())
-            .count();
         println!(
-            "    {dir:<6}{ok:>4}/{ran:<4}  {:>6}   ({} revisions, {} skipped)",
-            percent(ok, ran),
+            "    {dir:<6}  {} revisions, {ran} run, {} skipped",
             here.len(),
             here.len() - ran,
         );
@@ -1361,6 +1470,42 @@ fn report(
             println!("        {count:>4}  {class}");
         }
     }
+
+    // The other half of the picture. A revision is all-or-nothing — one error
+    // on the wrong line and a file with forty annotations is one mismatch —
+    // so the revision rate says nothing about how many of the *questions* were
+    // answered. This does.
+    let mut annotations = Annotations::default();
+    let mut refused = Annotations::default();
+    let mut refusals = 0usize;
+    for result in &ran {
+        annotations.add(result.annotations);
+        if bucket_of(result, expected_failures) == Some(Bucket::Rejected) {
+            refused.add(result.annotations);
+            refusals += 1;
+        }
+    }
+    println!();
+    println!("  annotations, over the {} revisions run", ran.len());
+    println!(
+        "    {:>5}  lines carry a required `expected-error`",
+        annotations.required
+    );
+    println!(
+        "    {:>5}  of them were diagnosed ({})",
+        annotations.matched,
+        percent(annotations.matched, annotations.required)
+    );
+    println!("    {:>5}  were not", annotations.missed());
+    println!(
+        "    {:>5}  errors landed on a line no directive names",
+        annotations.unexpected
+    );
+    println!(
+        "           {} of those are on the {refusals} revisions this entry point is required",
+        refused.unexpected
+    );
+    println!("           to refuse, where every later revision's feature is one of them");
 
     let skipped: Vec<(&str, String)> = results
         .iter()
@@ -1382,11 +1527,22 @@ fn report(
         }
     }
 
-    let mismatches: Vec<&Result_> = ran.iter().copied().filter(|r| !r.class.is_pass()).collect();
-    if !mismatches.is_empty() {
+    // Every error, under the category its line was given.
+    let mut unlisted: Vec<&str> = Vec::new();
+    for category in Category::ALL {
+        let here: Vec<&&Result_> = ran
+            .iter()
+            .filter(|r| bucket_of(r, expected_failures) == Some(Bucket::Error(category)))
+            .collect();
+        if here.is_empty() {
+            continue;
+        }
         println!();
-        println!("  mismatches ({})", mismatches.len());
-        for result in &mismatches {
+        println!("  {} ({})", category.label(), here.len());
+        for result in here {
+            if !expected_failures.contains_key(&result.id) {
+                unlisted.push(&result.id);
+            }
             println!(
                 "    {:<28} {}  [{}]",
                 result.id,
@@ -1394,6 +1550,58 @@ fn report(
                 result.entry.unwrap_or("-")
             );
             println!("        {}", result.class.describe());
+        }
+    }
+    if !unlisted.is_empty() {
+        println!();
+        println!(
+            "  {} not in {} yet, and counted as bugs until classified:",
+            plural(unlisted.len(), "revision is", "revisions are"),
+            list.display()
+        );
+        for id in &unlisted {
+            println!("    {id}");
+        }
+    }
+
+    // Cascades collapsed. Half of this list is one refusal answering for five
+    // revisions of the same file, and counting those five as five problems is
+    // the single easiest way to misread the suite.
+    let mut roots: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for result in &ran {
+        if !matches!(
+            bucket_of(result, expected_failures),
+            Some(Bucket::Error(_) | Bucket::Rejected)
+        ) {
+            continue;
+        }
+        roots
+            .entry(root_cause(expected_failures, &result.id))
+            .or_default()
+            .push(&result.id);
+    }
+    let mut roots: Vec<(&str, Vec<&str>)> = roots.into_iter().collect();
+    roots.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(b.0)));
+    println!();
+    println!(
+        "  root causes ({}, once a `see `<id>`` note is counted against what it names)",
+        roots.len()
+    );
+    for (root, revisions) in &roots {
+        let entry = expected_failures.get(*root);
+        let label = match entry.map(|entry| &entry.kind) {
+            Some(EntryKind::Failure { category }) => category.tag(),
+            Some(EntryKind::Rejected { .. }) => "[conforming]",
+            Some(EntryKind::ToolchainDependent) => "[toolchain]",
+            None => "[unlisted]",
+        };
+        println!("    {:>3}  {label:<15}  {root}", revisions.len());
+        if let Some(entry) = entry {
+            println!("         {}", entry.note);
+        }
+        let others: Vec<&str> = revisions.iter().copied().filter(|id| id != root).collect();
+        if !others.is_empty() {
+            println!("         and so: {}", others.join(", "));
         }
     }
 
@@ -1443,7 +1651,7 @@ fn guard(
                     ));
                 }
             }
-            Some(EntryKind::Failure) => {
+            Some(EntryKind::Failure { .. }) => {
                 if result.class.is_pass() {
                     now_passing.push(&result.id);
                 }
@@ -1554,9 +1762,13 @@ fn list_header() -> String {
          # a sparse checkout of it, and without it the harness skips itself. This\n\
          # file therefore holds names and notes and nothing of LLVM's own.\n\
          #\n\
-         # `!` here means `cinrs` refuses the revision on purpose and is right to\n\
-         # — a Clang extension it declines rather than mistranslates. Guard mode\n\
-         # asserts the refusal is still there.\n\
+         # `!` here is a Clang extension `cinrs` declines rather than\n\
+         # mistranslates — a later revision's feature in an earlier entry point,\n\
+         # which that entry point is required to refuse.\n\
+         #\n\
+         # A note of the form ``see `<id>`` says this revision fails for the same\n\
+         # reason as another; the report follows the reference, so a cause that\n\
+         # answers for five revisions of one file is counted once.\n\
          {}",
         marker_legend(regenerate)
     )

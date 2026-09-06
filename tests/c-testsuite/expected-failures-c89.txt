@@ -5,45 +5,61 @@
 # one which has started passing is reported and the line can go. See
 # `doc/c-testsuite.md` for what the causes are.
 #
-# One test id per line, with a note after it, and a marker in front of
-# the id saying what kind of claim the line makes:
+# One id per line: a marker, the id, a category tag and a note. A case
+# that must fail and does fail is *correct*, so only a plain line
+# records something wrong, and its tag says what kind of wrong:
 #
-#   NNNNN   `cinrs` gets this one wrong.
-#   ?NNNNN  It passes or fails depending on the toolchain, and is
-#           guarded neither way.
-#   !NNNNN  This entry point makes the case invalid, so refusing it is
-#           conforming behaviour and not a gap. Guard mode requires the
-#           case to fail to *compile*; one that builds and runs is a
-#           failure. The note may open with `error: "<substring>"`,
-#           which the diagnostic then has to contain.
+#   ID  [bug]              `cinrs` is wrong here — it mistranslates
+#                          the case, refuses code it means to support,
+#                          or emits Rust that will not compile.
+#   ID  [unimplemented]    A feature `cinrs` means to have and has not
+#                          got to yet.
+#   ID  [not-planned]      Deliberately unsupported, with a located
+#                          error rather than a mistranslation. Nothing
+#                          to fix.
+#   ?ID                    It passes or fails depending on the
+#                          toolchain, and is guarded neither way.
+#   !ID                    This entry point makes the case invalid, so
+#                          refusing it is conforming behaviour and not
+#                          an error at all. Guard mode requires the
+#                          case to fail to *compile*; one that builds
+#                          and runs is a failure. The note may open
+#                          with `error: "<substring>"`, which the
+#                          diagnostic then has to contain.
+#
+# `doc/testsuites.md` is where the categories are explained. A failure
+# that is not listed here at all counts as a bug until somebody says
+# otherwise, and an update writes it in as one.
 #
 # Regenerate with
 #
 #     CINRS_CTESTSUITE_REPORT=1 CINRS_CTESTSUITE_UPDATE_EXPECTED=1 \
 #         CINRS_CTESTSUITE_STANDARD=c89 cargo test --test c_testsuite
 #
-# which keeps every `?` and `!` line as it stands.
+# which keeps every `?` line, every `!` line and every tag as it
+# stands. Deleting the file first re-measures the notes — and throws
+# every tag away, so everything comes back as `[bug]  classify me:`.
 
-00054   needs `c99!`: a trailing comma in an enumerator list
-00055   needs `c99!`: a trailing comma in an enumerator list
-00084   needs `c99!`: a variadic macro
-00097   needs `c99!`: a variadic macro
-00129   needs `c99!`: mixed declarations and code
-?00140  variadic function definition; needs Rust 1.99, so it passes there and not before
-00154   needs `c99!`: mixed declarations and code
-00170   needs `c99!`: a trailing comma in an enumerator list
-00173   needs `c99!`: mixed declarations and code
-00175   needs `c99!`: mixed declarations and code
-00185   needs `c99!`: mixed declarations and code
-00187   needs `c99!`: mixed declarations and code
-00198   needs `c99!`: mixed declarations and code
-00200   needs `c99!`: `long long`
-00203   needs `c99!`: `long long`
-00207   needs `c99!`: a variable length array
-00210   needs `c99!`: mixed declarations and code
-00212   needs `c99!`: `long long`
-00213   unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
-00214   needs `c99!`: mixed declarations and code
-00216   needs `c99!`: a compound literal; the case then wants a flexible array member initialized
-00217   needs `c99!`: `long long`
-00219   needs `c11!`: `_Generic`
+!00054                   error: "a trailing comma in an enumerator list requires C99 or later"  conforming: a trailing comma in an enumerator list is C99, so strict C89 is required to refuse it; write `c99!`
+!00055                   error: "a trailing comma in an enumerator list requires C99 or later"  conforming: a trailing comma in an enumerator list is C99, so strict C89 is required to refuse it; write `c99!`
+!00084                   error: "a variadic macro requires C99 or later"  conforming: a variadic macro is C99, so strict C89 is required to refuse it; write `c99!`
+!00097                   error: "a variadic macro requires C99 or later"  conforming: a variadic macro is C99, so strict C89 is required to refuse it; write `c99!`
+!00129                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+?00140                   variadic function definition; needs Rust 1.99, so it passes there and not before
+!00154                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00170                   error: "a trailing comma in an enumerator list requires C99 or later"  conforming: a trailing comma in an enumerator list is C99, so strict C89 is required to refuse it; write `c99!`
+!00173                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00175                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00185                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00187                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00198                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00200                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
+!00203                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
+!00207                   error: "a variable length array requires C99 or later"  conforming: a variable length array is C99, so strict C89 is required to refuse it; write `c99!`
+!00210                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00212                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
+00213   [unimplemented]  unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
+!00214                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
+!00216                   error: "a compound literal requires C99 or later"  conforming: a compound literal is C99, so strict C89 is required to refuse it; write `c99!`. Behind that the case wants an initialised flexible array member, which is the `[unimplemented]` line every other entry point has
+!00217                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
+!00219                   error: "'_Generic' requires C11 or later"  conforming: `_Generic` is C11, so strict C89 is required to refuse it; write `c11!`

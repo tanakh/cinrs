@@ -3,15 +3,22 @@
 `cinrs` is measured against three public corpora. They are three different
 questions, which is why there are three of them and not one:
 
-| suite | corpus | what it asks | cases | passing |
-| --- | --- | --- | ---: | ---: |
-| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **97.7 %** (`c99!`) |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1769 | **84.4 %** (`gnu89!`), 78.9 % (`gnu11!`) |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **64.5 %** of the 203 run |
+| suite | corpus | what it asks | cases | **correct** | errors |
+| --- | --- | --- | ---: | ---: | --- |
+| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`) | 4: 3 unimplemented, 1 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **84.8 %** (`gnu11!`), 84.4 % (`gnu89!`) | 269: 1 bug, 36 unimplemented, 185 not planned, 47 toolchain |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **77.8 %** of the 203 run | 45: 22 bug, 7 unimplemented, 16 not planned |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
-they are about 2,265 cases and about five minutes.
+they are about 2,270 cases and about ten minutes.
+
+**Correct** is not the same as *passing*: a case that the entry point is
+*required* to refuse, and does refuse, is correct too. The
+[section below](#what-correct-means-and-the-four-kinds-of-error) says what that
+means and what the four kinds of error are; between the three suites there are
+**23 tagged `[bug]`** — one in the torture corpus and 22 revisions, in 8 root
+causes, in Clang's — and they are named one by one in the three documents.
 
 Each suite has a document of its own with its baseline, its failures by cause
 and how to reproduce the numbers. What follows is what they have in common.
@@ -141,14 +148,79 @@ own environment-variable prefix (`CINRS_CTESTSUITE_`, `CINRS_GCC_TORTURE_`,
 `…_FILTER=<substring>` narrows a run to the cases whose id contains it, and
 `…_STRICT=1` makes a stale list entry a failure rather than a warning.
 
-The list itself is one id per line with a note, and a marker in front of the id
-saying what kind of claim the line makes:
+## What "correct" means, and the four kinds of error
 
-| marker | claim |
-| --- | --- |
-| *(none)* | `cinrs` gets this one wrong. |
-| `?` | it passes or fails depending on the *toolchain* — the Rust 1.99 variadic gap, mostly — and is guarded neither way. |
-| `!` | this entry point makes the case invalid, or refusing it is conforming behaviour, so the refusal is the *right* answer. Guard mode asserts the case still fails to compile; one that builds and runs is a failure. The note may open with `error: "<substring>"`, which the diagnostic then has to contain. |
+**A case that must fail and does fail is correct.** That is the rule the
+numbers in all four documents are built on, and it is why the headline of every
+report is a *correct* rate rather than a pass rate:
+
+```
+correct = passed + rejected as the standard requires
+```
+
+The second term is the `!` lines below — a `c89!` block that uses `long long`,
+a `c23!` one that calls an unprototyped function pointer with an argument.
+Refusing those is what the entry point owes the standard, so counting them as
+shortfalls measures the wrong thing.
+
+What is left over is an **error**, and there are exactly four kinds. Every
+report breaks its error count down into them, in this order:
+
+| category | tag | what it means |
+| --- | --- | --- |
+| **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
+| **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
+| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: inline assembly, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
+| **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. Today that is `c_variadic`, stable in 1.99 — a variadic *definition* or a `va_list` object. |
+
+A summary therefore reads
+
+```
+gcc.c-torture/execute through `gnu11!`: 1500/1769 correct (84.8%) — 1396 passed, 104 rejected as the standard requires
+  errors: 269 — bug 1, unimplemented 36, not planned 185, toolchain 47
+  (7 not generated) — 4 m 19 s
+```
+
+and the old numbers are still there: `passed` is the pass rate's numerator.
+
+### The line format
+
+One id per line: a marker, the id, a category tag and a note.
+
+```
+execute/20001009-2  [not-planned]    compile error: inline assembly is not supported
+00204               [unimplemented]  unsupported: `va_arg` with a struct type
+?00140                               variadic function definition; needs Rust 1.99
+!00200                               error: "'long long' requires C99 or later"  conforming: …
+```
+
+| marker | claim | tag |
+| --- | --- | --- |
+| *(none)* | `cinrs` gets this one wrong. | **required** — one of `[bug]`, `[unimplemented]`, `[not-planned]` |
+| `?` | it passes or fails depending on the *toolchain*, and is guarded neither way. | none: the marker is the category |
+| `!` | this entry point makes the case invalid, or refusing it is conforming behaviour, so the refusal is the *right* answer. Guard mode asserts the case still fails to compile; one that builds and runs is a failure. The note may open with `error: "<substring>"`, which the diagnostic then has to contain. | none: it records no error |
+
+A plain line with no tag is a **read error** naming the file and line, so a
+list cannot quietly lose its classification. Guard mode ignores tags entirely —
+a tagged failure is still a failure that is expected — and an update keeps
+every tag, every `?` and every `!` as it stands. A failure that appears in an
+update and is *not* already listed is written in as
+
+```
+NNNNN  [bug]  classify me: compile error: …
+```
+
+which is the conservative direction: an unexamined failure is a regression
+until somebody has looked at it, and the one thing an update must never do is
+file a new one quietly under `not planned`. Deleting a list before regenerating
+it — the way to refresh every note at once — therefore throws every tag away
+too, and everything comes back as `classify me:`.
+
+[`tests/expected_lists.rs`](../tests/expected_lists.rs) reads every list in the
+repository, checks that it parses and that it is written the way an update
+would write it, and needs no corpus; it is part of an ordinary `cargo test`.
+`CINRS_EXPECTED_LISTS_BLESS=1 cargo test --test expected_lists` tidies a hand
+edit up without running a suite.
 
 ## Should there be a fourth? — chibicc
 
@@ -168,7 +240,7 @@ Against what the three suites already do:
 
 * **The language ground is duplicated, in less depth.** Every `.c` file above
   has a counterpart among c-testsuite's 220 whole programs and, far more
-  thoroughly, among the torture suite's 1,769. Forty files against 2,265 is not
+  thoroughly, among the torture suite's 1,776. Forty files against 2,270 is not
   where the next conformance bug is hiding.
 * **What is *not* duplicated is largely what `cinrs` documents as
   unsupported.** `asm.c` is inline assembly — a located error on purpose. It
