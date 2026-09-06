@@ -52,7 +52,6 @@ execute/20001009-2                    [not-planned]    compile error: inline ass
 execute/20010122-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20010924-1                    [unimplemented]  compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20020107-1                    [not-planned]    compile error: inline assembly is not supported
-execute/20020227-1                    [bug]            compile error: E0793: reference to field of packed struct is unaligned
 !execute/20020314-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20020412-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 !execute/20020819-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!

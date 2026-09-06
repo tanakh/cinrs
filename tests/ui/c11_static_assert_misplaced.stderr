@@ -1,0 +1,26 @@
+error: expected a declaration, found keyword '_Static_assert'
+  --> tests/ui/c11_static_assert_misplaced.rs:19:9
+   |
+19 |         _Static_assert(1, "not a parameter")
+   |         ^^^^^^^^^^^^^^
+
+error: expected a declaration, found keyword '_Static_assert'
+  --> tests/ui/c11_static_assert_misplaced.rs:23:9
+   |
+23 |         _Static_assert(1, "not a parameter")
+   |         ^^^^^^^^^^^^^^
+
+error: a static assertion is not allowed in the declaration list of an old-style function definition; every declaration there has to declare one of the parameters (C99 6.9.1p6)
+  --> tests/ui/c11_static_assert_misplaced.rs:28:7
+   |
+28 |       _Static_assert(1, "not a parameter declaration");
+   |       ^^^^^^^^^^^^^^
+
+error: static assertion failed: "the file was read to the end"
+  --> tests/ui/c11_static_assert_misplaced.rs:32:5
+   |
+32 |     _Static_assert(0, "the file was read to the end");
+   |     ^^^^^^^^^^^^^^
+
+error: aborting due to 4 previous errors
+

@@ -137,6 +137,50 @@ fn a_character_outside_the_identifier_syntax_is_still_refused() {
     );
 }
 
+/// A universal character name is checked where it is *written*, not where the
+/// token it is part of is used.
+///
+/// C99 6.4.3p2 forbids a UCN from naming a character below U+00A0 or a
+/// surrogate; that is a constraint on the *spelling*, so translation phase 3
+/// settles it and a macro that throws the argument away does not make it
+/// well formed. Clang's `C99/n717.c` is a whole file written this way — every
+/// name in it is the argument of a `#define M(arg)` that expands to nothing —
+/// and each one still has to be diagnosed.
+///
+/// What does *not* travel that way is a stray character: C99 6.4p3 makes any
+/// character that fits no other category a preprocessing token of its own, so
+/// a lone `\` or `$` inside an argument nobody looks at is not an error at
+/// all. Only a `#define` that *uses* the parameter reaches the parser with it.
+#[test]
+fn a_universal_character_name_is_checked_where_it_is_written() {
+    for name in ["\\u0024", "\\U00000024", "\\u0040", "\\u0060", "\\uD800"] {
+        let found = errors(Standard::C99, &format!("#define M(arg)\nM({name})\nint x;"));
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("is not a valid character in an identifier")),
+            "{name}: {found:#?}"
+        );
+    }
+    // A name that is merely not an identifier character — one outside Unicode
+    // altogether — says nothing about a token nothing parses.
+    assert!(
+        errors(
+            Standard::C99,
+            "#define M(arg)\nM(\\U12345678)\nM($)\nM(\\u12)\nint x;"
+        )
+        .is_empty()
+    );
+    // A string literal's spelling is settled there too.
+    let found = errors(Standard::C99, "#define M(arg)\nM(\"\\U00110000\")\nint x;");
+    assert!(
+        found
+            .iter()
+            .any(|m| m.contains("is not a valid universal character name")),
+        "{found:#?}"
+    );
+}
+
 /// C99 introduced the universal character name; `c89!` says so.
 #[test]
 fn c89_has_no_universal_character_names() {

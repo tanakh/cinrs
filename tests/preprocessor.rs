@@ -501,6 +501,69 @@ fn the_gcc_limit_and_type_macros_have_the_right_values() {
     }
 }
 
+/// GCC and Clang do not predefine the *same* `__…_WIDTH__` macros, so both
+/// spellings are here.
+///
+/// GCC has `__LONG_LONG_WIDTH__` and `__SCHAR_WIDTH__`; Clang has
+/// `__LLONG_WIDTH__`, `__BOOL_WIDTH__`, `__POINTER_WIDTH__`,
+/// `__UINTMAX_WIDTH__` and `__UINTPTR_WIDTH__`. Code in the wild tests
+/// whichever its author's compiler had, and a program that finds one
+/// undefined does not fail to compile — `#if __LLONG_WIDTH__ > __LONG_WIDTH__`
+/// silently takes the wrong branch, which is what makes Clang's own
+/// `drs/dr2xx.c` `#error` out. So the union is defined, and the two spellings
+/// of one width are one value.
+#[test]
+fn both_compilers_spellings_of_the_width_macros_are_defined() {
+    c99! {
+        #include <limits.h>
+        #include <stddef.h>
+
+        #if __LLONG_WIDTH__ != __LONG_LONG_WIDTH__
+        #error "the two spellings of the same width disagree"
+        #endif
+
+        int widths_agree(void) {
+            return __BOOL_WIDTH__ == 1
+                && __SCHAR_WIDTH__ == CHAR_BIT
+                && __SHRT_WIDTH__ == sizeof(short) * CHAR_BIT
+                && __INT_WIDTH__ == sizeof(int) * CHAR_BIT
+                && __LONG_WIDTH__ == sizeof(long) * CHAR_BIT
+                && __LLONG_WIDTH__ == sizeof(long long) * CHAR_BIT
+                && __POINTER_WIDTH__ == sizeof(void *) * CHAR_BIT
+                && __UINTPTR_WIDTH__ == sizeof(void *) * CHAR_BIT
+                && __SIZE_WIDTH__ == sizeof(size_t) * CHAR_BIT
+                && __UINTMAX_WIDTH__ == __INTMAX_WIDTH__
+                && __INT_LEAST8_WIDTH__ == 8
+                && __INT_LEAST16_WIDTH__ == 16
+                && __INT_LEAST32_WIDTH__ == 32
+                && __INT_LEAST64_WIDTH__ == 64
+                && __INT_FAST8_WIDTH__ == 8
+                && __INT_FAST64_WIDTH__ == 64;
+        }
+
+        /* The "fast" widths have to agree with the typedefs <stdint.h>
+         * writes, or the macro and a `sizeof` would answer differently. */
+        int fast_widths_match_the_typedefs(void);
+    }
+
+    // `<stdint.h>` is included by the second block so that the first one shows
+    // the macros are there before any header is.
+    c99! {
+        #include <stdint.h>
+        #define BITS(t) (sizeof(t) * __CHAR_BIT__)
+
+        int fast_widths_match_the_typedefs(void) {
+            return __INT_FAST16_WIDTH__ == BITS(int_fast16_t)
+                && __INT_FAST32_WIDTH__ == BITS(int_fast32_t);
+        }
+    }
+
+    unsafe {
+        assert_eq!(widths_agree(), 1);
+        assert_eq!(fast_widths_match_the_typedefs(), 1);
+    }
+}
+
 #[test]
 fn a_line_splice_may_sit_inside_a_token() {
     // Translation phase 2 deletes a backslash-newline *before* the source is

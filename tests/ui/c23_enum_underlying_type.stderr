@@ -1,0 +1,32 @@
+error: 'enum A' was previously declared with the fixed underlying type 'short', which every declaration of it has to repeat
+  --> tests/ui/c23_enum_underlying_type.rs:16:5
+   |
+16 |     enum A { a1 };
+   |     ^^^^
+
+error: 'enum B' is redeclared with the underlying type 'int', where the previous declaration said 'short'
+  --> tests/ui/c23_enum_underlying_type.rs:21:5
+   |
+21 |     enum B : int { b1 };
+   |     ^^^^
+
+error: 'enum C' was previously declared without a fixed underlying type, and a later declaration may not add one
+  --> tests/ui/c23_enum_underlying_type.rs:26:5
+   |
+26 |     enum C : int;
+   |     ^^^^
+
+error: 'enum D' is redeclared with the underlying type 'long', where the previous declaration said 'short'
+  --> tests/ui/c23_enum_underlying_type.rs:31:5
+   |
+31 |     enum D : long;
+   |     ^^^^
+
+error: 'enum E' is redeclared with the underlying type 'long', where the previous declaration said 'short'
+  --> tests/ui/c23_enum_underlying_type.rs:38:9
+   |
+38 |         enum E : long { e1 };
+   |         ^^^^
+
+error: aborting due to 5 previous errors
+

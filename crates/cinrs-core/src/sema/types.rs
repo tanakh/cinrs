@@ -128,7 +128,16 @@ struct LaidOut {
 impl Sema<'_> {
     /// Resolves an AST type into a [`Ty`], or explains why it cannot.
     pub(super) fn resolve_ty(&mut self, ty: &ast::Type) -> Result<Ty, TypeError> {
-        let resolved = self.resolve_unqualified_ty(ty)?;
+        let mut resolved = self.resolve_unqualified_ty(ty)?;
+        // C99 6.7.3p9 qualifies the *elements* of an array, not the array. The
+        // array declarator spelling has already done that — the `const` of
+        // `const int a[1]` is written on `int` — but a `typedef` or a `typeof`
+        // that names the array whole has the qualifier out here, and it has to
+        // go the same place, or `&a` is not the `const int (*)[1]` the
+        // standard says it is.
+        if ty.qualifiers.is_const {
+            resolved = self.program.types.const_elements(resolved);
+        }
         self.check_restrict(ty, resolved)?;
         if ty.qualifiers.is_atomic {
             return self.make_atomic(resolved, ty.range);
@@ -1957,6 +1966,46 @@ impl Sema<'_> {
 
     // -- enum ---------------------------------------------------------------
 
+    /// C23 6.7.2.2p... (N3030): every declaration of one enumeration has to
+    /// give it the same underlying type.
+    ///
+    /// `declared` is the type the tag already has and `fixed` whether that was
+    /// written or defaulted to `int`; `again` is the fixed type this
+    /// declaration writes. Two mistakes are possible and they read differently
+    /// — a *different* fixed type, and a fixed type on a tag that was declared
+    /// without one — because the second is the one that usually means the
+    /// author forgot which of the two declarations came first.
+    fn check_fixed_underlying(
+        &mut self,
+        tag: &str,
+        declared: Ty,
+        fixed: bool,
+        again: Ty,
+        range: SourceRange,
+    ) -> Result<(), TypeError> {
+        if !fixed {
+            return Err(TypeError::at(
+                range,
+                format!(
+                    "'enum {tag}' was previously declared without a fixed underlying type, \
+                     and a later declaration may not add one"
+                ),
+            ));
+        }
+        if declared == again {
+            return Ok(());
+        }
+        Err(TypeError::at(
+            range,
+            format!(
+                "'enum {tag}' is redeclared with the underlying type '{}', where the \
+                 previous declaration said '{}'",
+                self.tyname(again),
+                self.tyname(declared)
+            ),
+        ))
+    }
+
     fn enum_ty(&mut self, spec_id: ast::EnumSpecId) -> Result<Ty, TypeError> {
         if let Some(ty) = self.enum_by_spec[spec_id.index()] {
             return Ok(ty);
@@ -1991,7 +2040,25 @@ impl Sema<'_> {
         let Some(enumerators) = &spec.enumerators else {
             let name = spec.name.as_ref().expect("the parser requires a tag here");
             return match self.lookup_tag(&name.name) {
-                Some(TagEntry::Enum { ty, unsigned, .. }) => {
+                Some(TagEntry::Enum {
+                    ty,
+                    unsigned,
+                    fixed,
+                    ..
+                }) => {
+                    // `enum E : long;` after an `enum E : short;` or an
+                    // `enum E { … }` *in the same scope*. A mention with no
+                    // underlying type of its own — `enum E x;` — asks nothing
+                    // and is left alone; and one in an inner block declares a
+                    // tag of that block rather than redeclaring the outer one,
+                    // so it has nothing to agree with.
+                    let same_scope =
+                        matches!(self.tag_here(&name.name), Some(TagEntry::Enum { .. }));
+                    if let Some(again) = underlying
+                        && same_scope
+                    {
+                        self.check_fixed_underlying(&name.name, ty, fixed, again, spec.range)?;
+                    }
                     self.enum_by_spec[spec_id.index()] = Some(ty);
                     self.enum_unsigned[spec_id.index()] = Some(unsigned);
                     Ok(ty)
@@ -2019,6 +2086,7 @@ impl Sema<'_> {
                         TagEntry::Enum {
                             ty,
                             unsigned,
+                            fixed: underlying.is_some(),
                             complete: false,
                         },
                     );
@@ -2040,7 +2108,30 @@ impl Sema<'_> {
                         format!("redefinition of 'enum {}'", name.name),
                     ));
                 }
-                Some(TagEntry::Enum { ty, .. }) => declared = Some(ty),
+                Some(TagEntry::Enum { ty, fixed, .. }) => {
+                    // The definition of a tag this scope has already declared:
+                    // both have to say the same thing about the underlying
+                    // type, whether that is a type or the absence of one.
+                    match underlying {
+                        Some(again) => {
+                            self.check_fixed_underlying(&name.name, ty, fixed, again, spec.range)?;
+                        }
+                        None if fixed => {
+                            return Err(TypeError::at(
+                                spec.range,
+                                format!(
+                                    "'enum {}' was previously declared with the fixed \
+                                     underlying type '{}', which every declaration of it \
+                                     has to repeat",
+                                    name.name,
+                                    self.tyname(ty)
+                                ),
+                            ));
+                        }
+                        None => {}
+                    }
+                    declared = Some(ty);
+                }
                 _ => {}
             }
         }
@@ -2096,6 +2187,7 @@ impl Sema<'_> {
                 TagEntry::Enum {
                     ty,
                     unsigned: false,
+                    fixed: underlying.is_some(),
                     complete: true,
                 },
             );
@@ -2239,6 +2331,7 @@ impl Sema<'_> {
                 TagEntry::Enum {
                     ty,
                     unsigned,
+                    fixed: underlying.is_some(),
                     complete: true,
                 },
             );

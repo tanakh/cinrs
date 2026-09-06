@@ -842,13 +842,25 @@ impl Parser<'_> {
                     self.advance();
                 }
                 TokenKind::Punct(Punct::RBrace | Punct::RParen | Punct::RBracket) => {
+                    let paren = self.at_punct(Punct::RParen) || self.at_punct(Punct::RBracket);
                     depth -= 1;
                     self.advance();
                     if depth <= 0 {
                         // `struct S { int x };` — swallow the `;` that closes
                         // the declaration so that it is not mistaken for the
                         // start of the next one.
-                        self.eat_punct(Punct::Semi);
+                        if self.eat_punct(Punct::Semi).is_some() {
+                            return;
+                        }
+                        // A declarator's own `)` or `]` closing is not the end
+                        // of the declaration: `void f(<error>) { … }` still
+                        // owes a body, and reporting its `{` as a stray one
+                        // would be a second error for one mistake. Keep
+                        // scanning and let the body's `}` finish the job.
+                        if paren && self.at_punct(Punct::LBrace) {
+                            depth = 0;
+                            continue;
+                        }
                         return;
                     }
                 }
@@ -938,6 +950,35 @@ impl Parser<'_> {
         }
     }
 
+    /// The declaration list of an old-style definition — `int a, b;` between
+    /// `f(a, b)` and the body.
+    ///
+    /// A static assertion is a declaration, so the grammar admits one here and
+    /// C99 6.9.1p6 then forbids it: every declaration in the list has to
+    /// declare one of the parameters, and a static assertion declares nothing.
+    /// Saying so and reading on is one error for one mistake — giving up here
+    /// would report the body's `{` as a stray one as well, which is two.
+    fn parse_kr_declaration_list(&mut self) -> PResult<Vec<Decl>> {
+        let mut decls = Vec::new();
+        loop {
+            if self.at_static_assert() {
+                let range = self.cur_range();
+                self.error(
+                    range,
+                    "a static assertion is not allowed in the declaration list of an old-style \
+                     function definition; every declaration there has to declare one of the \
+                     parameters (C99 6.9.1p6)",
+                );
+                self.parse_static_assert()?;
+                continue;
+            }
+            if !self.starts_declaration() {
+                return Ok(decls);
+            }
+            decls.push(self.parse_declaration()?);
+        }
+    }
+
     fn finish_function_def(
         &mut self,
         specs: DeclSpecifiers,
@@ -971,16 +1012,13 @@ impl Parser<'_> {
             }
         }
 
-        let mut kr_decls = Vec::new();
-        while self.starts_declaration() {
-            match self.parse_declaration() {
-                Ok(decl) => kr_decls.push(decl),
-                Err(bail) => {
-                    self.pop_scope();
-                    return Err(bail);
-                }
+        let kr_decls = match self.parse_kr_declaration_list() {
+            Ok(decls) => decls,
+            Err(bail) => {
+                self.pop_scope();
+                return Err(bail);
             }
-        }
+        };
 
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
@@ -1236,16 +1274,13 @@ impl Parser<'_> {
             }
         }
 
-        let mut kr_decls = Vec::new();
-        while self.starts_declaration() {
-            match self.parse_declaration() {
-                Ok(decl) => kr_decls.push(decl),
-                Err(bail) => {
-                    self.pop_scope();
-                    return Err(bail);
-                }
+        let kr_decls = match self.parse_kr_declaration_list() {
+            Ok(decls) => decls,
+            Err(bail) => {
+                self.pop_scope();
+                return Err(bail);
             }
-        }
+        };
 
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
@@ -1461,6 +1496,10 @@ impl Parser<'_> {
         let mut tag: Option<Type> = None;
         let mut typedef_name: Option<Ident> = None;
         let mut auto_type: Option<SourceRange> = None;
+        // Where the C23 `auto` was written, which is *not* the same question
+        // as what [`DeclSpecifiers::storage`] holds; see the storage-class
+        // branch below.
+        let mut auto_kw: Option<SourceRange> = None;
         let mut consumed_any = false;
 
         loop {
@@ -1514,11 +1553,52 @@ impl Parser<'_> {
                     let range = self.bump_range();
                     self.require_keyword(k, range);
                     consumed_any = true;
+                    // C23 6.7.1p2 keeps "at most one storage-class specifier"
+                    // but makes `auto` the exception: it "may appear with all
+                    // the others, except `typedef`". That is what
+                    // `static auto c = 1UL;` is — an object with static
+                    // storage duration whose type is inferred — and the
+                    // exception is symmetric, so `auto static c = 1UL;` says
+                    // the same thing. `auto` therefore does not claim the one
+                    // slot: it is remembered in `auto_kw`, which is what
+                    // decides the inference below, and yields the slot to the
+                    // specifier that decides the storage duration whichever
+                    // side of it that one was written.
+                    let c23_auto = allow_storage
+                        && self.standard >= Standard::C23
+                        && (sc == StorageClass::Auto
+                            || matches!(
+                                storage,
+                                Some(Spanned {
+                                    node: StorageClass::Auto,
+                                    ..
+                                })
+                            ))
+                        && sc != StorageClass::Typedef
+                        && !matches!(
+                            storage,
+                            Some(Spanned {
+                                node: StorageClass::Typedef,
+                                ..
+                            })
+                        );
+                    if sc == StorageClass::Auto {
+                        auto_kw = auto_kw.or(Some(range));
+                    }
                     if !allow_storage {
                         self.error(
                             range,
                             format!("storage class '{}' is not allowed here", sc.as_str()),
                         );
+                    } else if c23_auto {
+                        // A specifier that is *not* `auto` takes the slot, so
+                        // `auto` written first gives way and `auto` written
+                        // second leaves what is already there alone. With
+                        // nothing else in the declaration `auto` keeps it, as
+                        // it did before C23.
+                        if sc != StorageClass::Auto || storage.is_none() {
+                            storage = Some(Spanned::new(sc, range));
+                        }
                     } else if let Some(prev) = &storage {
                         self.error(
                             range,
@@ -1732,15 +1812,7 @@ impl Parser<'_> {
         // with no type specifier at all takes its type from the initialiser.
         let no_type = !counts.any() && tag.is_none() && typedef_name.is_none();
         let inferred = no_type
-            && (auto_type.is_some()
-                || (self.standard >= Standard::C23
-                    && matches!(
-                        storage,
-                        Some(Spanned {
-                            node: StorageClass::Auto,
-                            ..
-                        })
-                    )));
+            && (auto_type.is_some() || (self.standard >= Standard::C23 && auto_kw.is_some()));
         let base = if inferred {
             Type::new(TypeKind::Auto, quals, specs_range)
         } else {
@@ -3119,6 +3191,10 @@ impl Parser<'_> {
             let init = if parser.at_punct(Punct::Semi) {
                 parser.advance();
                 ForInit::None
+            } else if parser.at_static_assert() {
+                // A static assertion is a declaration and takes its own `;`
+                // with it; see [`ForInit::StaticAssert`].
+                ForInit::StaticAssert(parser.parse_static_assert()?)
             } else if parser.starts_declaration() {
                 let at = parser.cur_range();
                 parser.require_standard(Standard::C99, "a declaration in a 'for' clause", at);

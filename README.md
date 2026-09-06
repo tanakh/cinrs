@@ -414,7 +414,8 @@ left over is broken down into four kinds of error: a `cinrs` **bug**, something
 **unimplemented**, something **not planned** (inline assembly, the vector
 extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
 **toolchain** being older than Rust 1.99. Across all three corpora there are
-**23 tagged `[bug]`**, and every one of them is named in the documents below.
+**12 tagged `[bug]`**, all of them in Clang's, and every one of them is named
+in the documents below.
 
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
@@ -430,11 +431,11 @@ extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,500 of the 1,769 run are correct (84.8 %)** under
-  `gnu11!` — 1,396 passing and 104 refused as C99 requires — and 1,493
-  (84.4 %) under `gnu89!`, which is the language these C89-era programs were
-  written in and refuses none of them. **Exactly one of the 269 errors is a
-  bug**; the rest are inline assembly, the vector extensions, the complex
+  exit status zero. **1,501 of the 1,769 run are correct (84.9 %)** under
+  `gnu11!` — 1,397 passing and 104 refused as C99 requires — and 1,494
+  (84.5 %) under `gnu89!`, which is the language these C89-era programs were
+  written in and refuses none of them. **Not one of the 268 errors is a
+  bug**; they are inline assembly, the vector extensions, the complex
   *integer* types, computed `goto`, the two corners of nested functions that
   need a trampoline or a nonlocal `goto`, the handful of `__builtin_*` forms
   this crate does not implement, the variadic definitions that need Rust 1.99,
@@ -442,12 +443,12 @@ extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
   names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **158 of the 203 revisions run are correct
-  (77.8 %)** — 131 answered exactly and 27 refused because the entry point
+  which lines must be diagnosed. **160 of the 203 revisions run are correct
+  (78.8 %)** — 133 answered exactly and 27 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
-  **463 are diagnosed on the right line**. This is the only suite that measures
+  **491 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and it is
-  where the other 22 bugs are: 8 root causes, listed in the document.
+  where all 12 bugs are: 5 root causes, listed in the document.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
 each harness skips itself with a note when its corpus is missing.

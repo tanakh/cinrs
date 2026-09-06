@@ -78,7 +78,7 @@ use crate::Complex;
 macro_rules! complex_ops {
     ($t:ty, $mul:ident, $div:ident, $mul_real:ident, $real_mul:ident, $add_real:ident,
      $real_add:ident, $sub_real:ident, $real_sub:ident, $div_real:ident, $real_div:ident,
-     $conj:ident, $proj:ident, $nonzero:ident, $cty:literal) => {
+     $conj:ident, $proj:ident, $nonzero:ident, $eq:ident, $ne:ident, $cty:literal) => {
         /// The product of two
         #[doc = $cty]
         /// values (C99 6.5.5, Annex G.5.1).
@@ -261,6 +261,30 @@ macro_rules! complex_ops {
         pub fn $nonzero(z: Complex<$t>) -> bool {
             z.re != 0 as $t || z.im != 0 as $t
         }
+
+        /// Whether two
+        #[doc = $cty]
+        /// values are equal: C99 6.5.9p3, both parts equal.
+        ///
+        /// The same answer `PartialEq` gives, and it is here because that one
+        /// takes `&self`: a reference to a field of a `#[repr(packed)]`
+        /// record is `E0793`, and a packed complex member is exactly what
+        /// `gcc.c-torture/execute/20020227-1` compares. Taking both operands
+        /// by value asks for a copy, which a packed field will give.
+        #[inline]
+        pub fn $eq(z: Complex<$t>, w: Complex<$t>) -> bool {
+            z.re == w.re && z.im == w.im
+        }
+
+        /// Whether two
+        #[doc = $cty]
+        /// values differ — the negation of
+        #[doc = concat!("[`", stringify!($eq), "`]")]
+        /// , and `!=` in C.
+        #[inline]
+        pub fn $ne(z: Complex<$t>, w: Complex<$t>) -> bool {
+            !$eq(z, w)
+        }
     };
 }
 
@@ -279,6 +303,8 @@ complex_ops!(
     conj_f32,
     proj_f32,
     nonzero_f32,
+    eq_f32,
+    ne_f32,
     "`float _Complex`"
 );
 
@@ -297,6 +323,8 @@ complex_ops!(
     conj_f64,
     proj_f64,
     nonzero_f64,
+    eq_f64,
+    ne_f64,
     "`double _Complex`"
 );
 

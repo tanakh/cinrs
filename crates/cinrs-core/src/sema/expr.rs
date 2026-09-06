@@ -1181,6 +1181,38 @@ impl Sema<'_> {
     }
 
     fn address_of(&mut self, operand: &ast::Expr, range: SourceRange) -> Option<Expr> {
+        // C99 6.5.3.2p3: "if the operand is the result of a unary `*`
+        // operator, neither that operator nor the `&` operator is evaluated
+        // and the result is as if both were omitted, except that the
+        // constraints on the operators still apply and the result is not an
+        // lvalue". `&*E` is therefore `E` and nothing else, which is the whole
+        // of DR012: `&*p` is valid for a `void *p` — and for a pointer to any
+        // other incomplete type, and for a function pointer — because the
+        // indirection that would need a complete object type never happens.
+        // `*p` written on its own still does, and is still refused.
+        if let ast::ExprKind::Unary {
+            op: ast::UnaryOp::Deref,
+            operand: inner,
+        } = &operand.kind
+        {
+            let ptr = self.expr(inner)?;
+            if ptr.ty.is_error() {
+                return None;
+            }
+            // The one constraint that survives: the operand of `*` has to be
+            // a pointer.
+            if self.pointee(ptr.ty).is_none() {
+                self.error(
+                    operand.range,
+                    format!(
+                        "indirection requires pointer operand ('{}' invalid)",
+                        self.tyname(ptr.ty)
+                    ),
+                );
+                return None;
+            }
+            return Some(Expr::new(ptr.kind, ptr.ty, range));
+        }
         if let ast::ExprKind::Ident(name) = &operand.kind
             && let Some(Entry::Function(id)) = self.lookup(&name.name)
         {
@@ -1211,8 +1243,12 @@ impl Sema<'_> {
                 return None;
             }
             // `&a` on an array is a pointer *to the array*, not to its first
-            // element, which is exactly what the place's own type gives.
-            let ty = self.ptr_to(place.ty, place.is_const);
+            // element, which is exactly what the place's own type gives. An
+            // array type is never itself qualified (6.7.3p9) — the `const` of
+            // `const A a;` is on the elements, and `Sema::ptr_to` reads it
+            // from there — so the object's own flag says nothing here, and
+            // taking it would make the two spellings of one type two types.
+            let ty = self.ptr_to(place.ty, place.is_const && !place.ty.is_array());
             return Some(Expr::new(ExprKind::AddrOf(place), ty, range));
         }
         let value = self.expr(operand)?;
@@ -1882,8 +1918,17 @@ impl Sema<'_> {
         // (6.7.6.3p15), and two integer types that differ only in signedness,
         // which is `-Wpointer-sign` and which GCC accepts here too.
         // `execute/enum-3` is `1 ? (enum e *)q : (int *)p`.
-        if self.pointer_assignable(lhs.ty, rhs.ty) {
-            let pointee = self.pointee(lhs.ty).expect("a pointer");
+        //
+        // It is not a *directed* question, though `pointer_assignable` is one:
+        // the composite is "qualified with all the qualifiers of the types
+        // pointed-to by both operands", so where only one side will take the
+        // other — an array whose elements are `const` (N2607) is the case that
+        // shows it — the composite is that side's pointee whichever operand it
+        // was. `1 ? &a : &const_a` and `1 ? &const_a : &a` are one type.
+        let from_lhs = self.pointer_assignable(lhs.ty, rhs.ty);
+        if from_lhs || self.pointer_assignable(rhs.ty, lhs.ty) {
+            let composite = if from_lhs { lhs.ty } else { rhs.ty };
+            let pointee = self.pointee(composite).expect("a pointer");
             let konst =
                 self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
             return Some(self.ptr_to(pointee, konst));
@@ -2856,7 +2901,22 @@ impl Sema<'_> {
         } else if to.is_integer() && expr.ty.is_pointer() {
             Some("a pointer cannot be converted to an integer without a cast")
         } else if to.is_pointer() && expr.ty.is_pointer() {
-            Some("the pointee types differ; add a cast if the conversion is intended")
+            // Two records can wear one tag and still be two types: a tag
+            // belongs to the scope it was declared in, and a `struct S` first
+            // named inside a parameter list belongs to *that list* (6.2.1p4),
+            // so the `struct S` the file scope goes on to declare is another
+            // one. "The pointee types differ" over two spellings that are
+            // letter for letter the same is a riddle; this says which riddle.
+            if self.tyname(to) == self.tyname(expr.ty) {
+                Some(
+                    "these are two different types with the same spelling: a tag belongs to \
+                     the scope it was declared in, and one written inside a parameter list \
+                     belongs to that list (6.2.1p4), so nothing after the closing \
+                     parenthesis can name it. Declare the type before the prototype",
+                )
+            } else {
+                Some("the pointee types differ; add a cast if the conversion is intended")
+            }
         } else {
             None
         };

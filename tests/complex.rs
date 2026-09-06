@@ -169,6 +169,15 @@ c99! {
         __imag__ p->z = im;
     }
     double _Complex squeezed_scaled(struct Squeezed *p) { return p->z * 2.0; }
+    /* Comparing one is the case Rust's own `==` cannot serve: `PartialEq::eq`
+       takes `&self`, and a reference to a field of a packed record is E0793.
+       `gcc.c-torture/execute/20020227-1` is exactly this. */
+    int squeezed_is(struct Squeezed *p, double re, double im) {
+        return p->z == re + im * I;
+    }
+    int squeezed_isnt(struct Squeezed *p, double re, double im) {
+        return p->z != re + im * I;
+    }
 
     double _Complex sum_array(const double _Complex *a, int n) {
         double _Complex total = 0;
@@ -500,6 +509,12 @@ fn a_complex_member_of_a_packed_record_is_reached_unaligned() {
         squeezed_set(&raw mut s, 3.0, -4.0);
         assert_eq!(squeezed_im(&raw mut s), -4.0);
         eq_c(squeezed_scaled(&raw mut s), Complex::new(6.0, -8.0));
+        // `==` and `!=` on such a member: C99 6.5.9p3 compares both parts,
+        // and neither operand may be *borrowed* to do it.
+        assert_eq!(squeezed_is(&raw mut s, 3.0, -4.0), 1);
+        assert_eq!(squeezed_is(&raw mut s, 3.0, 4.0), 0);
+        assert_eq!(squeezed_isnt(&raw mut s, 3.0, -4.0), 0);
+        assert_eq!(squeezed_isnt(&raw mut s, 0.0, 0.0), 1);
     }
 }
 

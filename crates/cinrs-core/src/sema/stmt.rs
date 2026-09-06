@@ -281,6 +281,12 @@ impl Sema<'_> {
                         }
                         out
                     }
+                    // Nothing to run: the assertion is checked here and
+                    // generates no code, exactly as it does anywhere else.
+                    ast::ForInit::StaticAssert(assert) => {
+                        self.static_assert(assert);
+                        Vec::new()
+                    }
                 };
                 let cond = cond.as_ref().and_then(|c| self.condition(c));
                 let step = step.as_ref().and_then(|s| self.expr(s));

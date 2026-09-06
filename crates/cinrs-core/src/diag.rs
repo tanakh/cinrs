@@ -55,6 +55,18 @@ pub struct Diagnostic {
     pub range: SourceRange,
     /// Additional remarks.
     pub notes: Vec<Note>,
+    /// Whether the *spelling* of a preprocessing token is what is wrong —
+    /// something translation phase 3 decided while the token was being formed.
+    ///
+    /// The lexer's findings are normally held on the token and reported only
+    /// if it survives into the preprocessor's output, because C99 6.4p3 makes
+    /// any character that fits nothing else a preprocessing token of its own:
+    /// a stray `\` or `$` handed to a macro that drops its argument is not an
+    /// error at all. A constraint on the spelling is different — a universal
+    /// character name that names a character 6.4.3p2 forbids is ill-formed
+    /// where it is *written*, and throwing the token away does not make it
+    /// well-formed — so these are reported as soon as the token is read.
+    pub lexical: bool,
 }
 
 impl Diagnostic {
@@ -65,6 +77,7 @@ impl Diagnostic {
             message: message.into(),
             range,
             notes: Vec::new(),
+            lexical: false,
         }
     }
 
@@ -75,7 +88,15 @@ impl Diagnostic {
             message: message.into(),
             range,
             notes: Vec::new(),
+            lexical: false,
         }
+    }
+
+    /// Marks this as a problem with a token's spelling; see
+    /// [`Diagnostic::lexical`].
+    pub fn at_lexing(mut self) -> Self {
+        self.lexical = true;
+        self
     }
 
     /// Attaches a note.

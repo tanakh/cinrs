@@ -9,7 +9,7 @@ use crate::ir::{
     Storage, Ty, TypedefItem,
 };
 
-use super::{Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
+use super::{ConvContext, Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
 
 /// What a declaration's `_Thread_local` specifier came to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -806,6 +806,25 @@ impl Sema<'_> {
                 );
                 return None;
             }
+            // `_Atomic auto x = 12;` is `_Atomic int`: N3007 keeps `_Atomic`
+            // out of the "no other type specifier beside `auto`" rule
+            // precisely because in this spelling it is a *qualifier*, and it
+            // is the one qualifier an inferred type has to carry itself —
+            // `const` and `volatile` live on the object. `_Atomic(auto)`, the
+            // specifier spelling, is a different thing and is refused where
+            // every other use of `auto` in a type name is.
+            if declarator.ty.qualifiers.is_atomic {
+                return match self.make_atomic(value.ty, declarator.ty.range) {
+                    Ok(ty) => {
+                        let value = self.convert_for(value, ty, ConvContext::Init(name.to_owned()));
+                        Some((ty, Some(value)))
+                    }
+                    Err(err) => {
+                        self.report_type_error(err);
+                        None
+                    }
+                };
+            }
             return Some((value.ty, Some(value)));
         }
 
@@ -870,7 +889,7 @@ impl Sema<'_> {
         // (6.2.7p4), which is how `int j[]; int j[3];` ends up with a size.
         let composite = match self.declared_here(&name.name).cloned() {
             Some(Entry::Object(existing)) if file_scope => {
-                let declared = self.program.object(existing).ty;
+                let declared = self.visible_object_ty(existing);
                 self.composite_object_ty(declared, ty)
             }
             _ => None,
@@ -880,6 +899,7 @@ impl Sema<'_> {
             && let Some(Entry::Object(existing)) = self.declared_here(&name.name).cloned()
         {
             self.retype_object(existing, composite, declarator);
+            self.note_object_ty(existing, composite);
             // C11 6.7.1p3: if `_Thread_local` appears in any declaration of an
             // object it has to appear in every one. Letting the two disagree
             // would silently give the object whichever storage the *first*
@@ -935,6 +955,12 @@ impl Sema<'_> {
         };
         let id = self.new_object(&name.name, ty, storage, is_const, name.range);
         self.insert(&name.name, Entry::Object(id));
+        if file_scope {
+            // An identifier with linkage carries the type of the declaration
+            // it was named through rather than the object's; see
+            // [`Scope::composites`].
+            self.note_object_ty(id, ty);
+        }
 
         // C zero-initialises static storage; an initialiser, if written, must
         // be a constant expression, and replaces the zero once it has been
@@ -1094,9 +1120,17 @@ impl Sema<'_> {
         // a block-scope object declared without `extern` has no linkage at
         // all.
         if let Some(Entry::Object(existing)) = self.lookup_linked(&name.name).cloned() {
-            let declared = self.program.object(existing).ty;
+            // The type to compose with is the one *visible here* rather than
+            // the object's, which may already carry a composite an inner block
+            // elsewhere gave it and which C would not have shown this
+            // declaration (6.2.7p4).
+            let declared = self.visible_object_ty(existing);
             if let Some(composite) = self.composite_object_ty(declared, ty) {
                 self.retype_object(existing, composite, declarator);
+                // The composite lasts to the end of *this* scope only, so a
+                // `sizeof` after the block sees the outer declaration's type
+                // again — WG14 DR011.
+                self.note_object_ty(existing, composite);
                 self.insert(&name.name, Entry::Object(existing));
                 return;
             }
@@ -1123,6 +1157,7 @@ impl Sema<'_> {
         // wherever it is written, so the name belongs in the file scope.
         self.insert_at_file_scope(&name.name, Entry::Object(id));
         self.insert(&name.name, Entry::Object(id));
+        self.note_object_ty(id, ty);
     }
 
     // -- typedef ------------------------------------------------------------
@@ -1542,7 +1577,10 @@ impl Sema<'_> {
         // see [`BoundMode::Unevaluated`].
         self.push_prototype_scope();
         let result = self.declare_params(func, definition, &mut param_tys, &mut param_names);
-        self.pop_prototype_scope();
+        // A tag the list declared belongs to the prototype scope and is gone
+        // with it — unless this list is a *definition*'s, where 6.2.1p4 gives
+        // it the body's block scope instead; see [`Sema::param_tags`].
+        self.pop_prototype_scope(definition.is_some());
         result?;
 
         if func.old_style {
@@ -1941,6 +1979,11 @@ impl Sema<'_> {
         // Parameters live in the same scope as the body's outermost block, so
         // that `int f(int x) { int x; }` is the redefinition C says it is.
         self.push_scope();
+        // And so do the tags the parameter list declared: a `struct T` written
+        // in a *definition*'s list has block scope terminating with the body
+        // (6.2.1p4), which is what makes `f(struct T { int a; } t)` able to
+        // reach `t.a`.
+        self.take_param_tags();
         self.ret_ty = self.program.function(id).sig.ret;
         self.func_name = def.name.name.clone();
         self.func_variadic = func.variadic;

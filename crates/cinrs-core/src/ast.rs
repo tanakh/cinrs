@@ -834,6 +834,16 @@ pub enum ForInit {
     Expr(Expr),
     /// `for (int i = 0; …)` — C99.
     Decl(Box<Decl>),
+    /// `for (_Static_assert(1, "…"); …)`.
+    ///
+    /// A static assertion is a *declaration*, so the grammar puts it here,
+    /// and C11 6.8.5p3 then forbids it — the clause may only declare objects
+    /// with automatic or register storage duration, and this declares nothing
+    /// at all. GCC and Clang both accept it anyway (Clang's `C11/n1330.c`
+    /// says so in as many words), it asserts exactly what it would one line
+    /// higher up, and refusing it would be refusing something both compilers
+    /// this crate follows take.
+    StaticAssert(StaticAssert),
 }
 
 // ---------------------------------------------------------------------------

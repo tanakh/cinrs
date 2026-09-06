@@ -6,8 +6,8 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **84.8 %** (`gnu11!`), 84.4 % (`gnu89!`) | 269: 1 bug, 36 unimplemented, 185 not planned, 47 toolchain |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **77.8 %** of the 203 run | 45: 22 bug, 7 unimplemented, 16 not planned |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **84.9 %** (`gnu11!`), 84.5 % (`gnu89!`) | 268: 0 bug, 36 unimplemented, 185 not planned, 47 toolchain |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **78.8 %** of the 203 run | 43: 12 bug, 8 unimplemented, 23 not planned |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
@@ -17,8 +17,9 @@ they are about 2,270 cases and about ten minutes.
 *required* to refuse, and does refuse, is correct too. The
 [section below](#what-correct-means-and-the-four-kinds-of-error) says what that
 means and what the four kinds of error are; between the three suites there are
-**23 tagged `[bug]`** — one in the torture corpus and 22 revisions, in 8 root
-causes, in Clang's — and they are named one by one in the three documents.
+**12 tagged `[bug]`** — none in the torture corpus and none in c-testsuite, and
+12 revisions in 5 root causes in Clang's — and they are named one by one in the
+three documents.
 
 Each suite has a document of its own with its baseline, its failures by cause
 and how to reproduce the numbers. What follows is what they have in common.
@@ -176,9 +177,9 @@ report breaks its error count down into them, in this order:
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1500/1769 correct (84.8%) — 1396 passed, 104 rejected as the standard requires
-  errors: 269 — bug 1, unimplemented 36, not planned 185, toolchain 47
-  (7 not generated) — 4 m 19 s
+gcc.c-torture/execute through `gnu11!`: 1501/1769 correct (84.9%) — 1397 passed, 104 rejected as the standard requires
+  errors: 268 — bug 0, unimplemented 36, not planned 185, toolchain 47
+  (7 not generated) — 4 m 30 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.

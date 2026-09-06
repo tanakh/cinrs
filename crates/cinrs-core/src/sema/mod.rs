@@ -268,6 +268,15 @@ enum TagEntry {
         /// Whether the enumeration's underlying type is unsigned, which is
         /// only observable through a bit-field of the type.
         unsigned: bool,
+        /// Whether the type above was *written* — C23's fixed underlying type
+        /// (N3030) — rather than the `int` this crate gives an enumeration
+        /// that has none.
+        ///
+        /// Every declaration of one tag has to agree about it and about the
+        /// type: `enum E : short; enum E : long { … };` is a constraint
+        /// violation, and so is a fixed type on one declaration and none on
+        /// another.
+        fixed: bool,
         /// Whether an enumerator list has been seen. GNU allows `enum e;`
         /// before one, which C99 does not have at all.
         complete: bool,
@@ -277,6 +286,28 @@ enum TagEntry {
 #[derive(Default)]
 struct Scope {
     entries: HashMap<String, Entry>,
+    /// The type each object *with linkage* declared in this scope has when it
+    /// is named through this scope's declaration of it.
+    ///
+    /// C99 6.2.7p4 gives a redeclaration of a linked identifier the composite
+    /// type of the prior visible declaration and this one — and gives it "for
+    /// the remainder of the scope in which the later declaration appears"
+    /// only. One object, several declarations, and the type a use sees is the
+    /// innermost declaration's composite:
+    ///
+    /// ```c
+    /// void f(void) {
+    ///     extern int i[];
+    ///     { extern int i[10]; (void)sizeof(i); } /* 40 */
+    ///     (void)sizeof(i);                       /* an error again */
+    /// }
+    /// ```
+    ///
+    /// which is WG14 DR011. The [object](ir::Object) keeps the composite,
+    /// because that is the type this unit generates for; this is what says
+    /// which *declaration* a name went through. See
+    /// [`Sema::visible_object_ty`].
+    composites: HashMap<ObjectId, Ty>,
 }
 
 /// What an enclosing `break` or `continue` would leave.
@@ -467,6 +498,17 @@ struct Sema<'a> {
     /// How many of [`Sema::scopes`] are [prototype
     /// scopes](Sema::push_prototype_scope), which are not blocks.
     proto_depth: usize,
+    /// The tags a function *definition*'s parameter list declared, waiting for
+    /// the body's block to be pushed.
+    ///
+    /// C99 6.2.1p4 gives an identifier declared "within the list of parameter
+    /// declarations in a function definition" block scope terminating at the
+    /// end of the body, rather than the function prototype scope a
+    /// *declaration*'s list gives it. That is what makes
+    /// `int f(struct T { int a; } t) { return t.a; }` legal, and the type is
+    /// gone again after the closing brace. The signature is resolved before
+    /// the body's scope exists, so the tags wait here in between.
+    param_tags: HashMap<String, TagEntry>,
     /// Whether the type being resolved is a *parameter's*.
     ///
     /// A parameter's array bound is not part of its type at all (C99
@@ -608,6 +650,7 @@ impl<'a> Sema<'a> {
             bound_mode: BoundMode::Expression,
             vm_name: String::new(),
             proto_depth: 0,
+            param_tags: HashMap::new(),
             in_param_type: false,
             vla_scopes: Vec::new(),
             label_vla_scopes: HashMap::new(),
@@ -810,18 +853,39 @@ impl<'a> Sema<'a> {
     /// a parameter list, visible to the declarators that follow them and
     /// nowhere else.
     ///
-    /// Only the ordinary namespace gets a scope of its own — a tag first
-    /// mentioned in a parameter list is left where this crate has always put
-    /// it — and the scope does not count as a block, so a compound literal or
-    /// an array bound written in the list is still at file scope when the
-    /// declaration is.
+    /// **Tags go in it too.** 6.2.1p4 scopes an identifier by where its
+    /// declarator or type specifier stands, and a `struct S` written in a
+    /// parameter list stands there, so — WG14 DR103 — the two `struct S` of
+    ///
+    /// ```c
+    /// void f(struct S s);
+    /// void f(struct S { int a; } s) { }
+    /// ```
+    ///
+    /// are two unrelated types and the second declaration conflicts with the
+    /// first. It is also why GCC warns that such a tag "will not be visible
+    /// outside of this definition or declaration": nothing after the closing
+    /// parenthesis can name it. A parameter list that belongs to a
+    /// **definition** is the exception the same paragraph makes — the
+    /// identifier has block scope, terminating with the body — and that is
+    /// what [`Sema::param_tags`] carries across.
+    ///
+    /// The scope does not count as a block, so a compound literal or an array
+    /// bound written in the list is still at file scope when the declaration
+    /// is.
     fn push_prototype_scope(&mut self) {
         self.scopes.push(Scope::default());
+        self.tags.push(HashMap::new());
         self.proto_depth += 1;
     }
 
-    fn pop_prototype_scope(&mut self) {
+    /// Leaves the prototype scope. `carry` is for a parameter list that
+    /// belongs to a function *definition*, whose tags go on to the body's
+    /// block; see [`Sema::param_tags`].
+    fn pop_prototype_scope(&mut self, carry: bool) {
         self.scopes.pop();
+        let tags = self.tags.pop().unwrap_or_default();
+        self.param_tags = if carry { tags } else { HashMap::new() };
         self.proto_depth -= 1;
     }
 
@@ -866,6 +930,25 @@ impl<'a> Sema<'a> {
         }
     }
 
+    /// Records the type a declaration of a linked object in *this* scope gives
+    /// it; see [`Scope::composites`].
+    fn note_object_ty(&mut self, id: ObjectId, ty: Ty) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.composites.insert(id, ty);
+        }
+    }
+
+    /// The type `id` has where it is being named — the innermost declaration's
+    /// composite (6.2.7p4), and the object's own type where no scope in
+    /// between declared it.
+    fn visible_object_ty(&self, id: ObjectId) -> Ty {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.composites.get(&id).copied())
+            .unwrap_or_else(|| self.program.object(id).ty)
+    }
+
     fn lookup_tag(&self, name: &str) -> Option<TagEntry> {
         self.tags.iter().rev().find_map(|s| s.get(name)).copied()
     }
@@ -877,6 +960,15 @@ impl<'a> Sema<'a> {
     fn insert_tag(&mut self, name: &str, entry: TagEntry) {
         if let Some(scope) = self.tags.last_mut() {
             scope.insert(name.to_owned(), entry);
+        }
+    }
+
+    /// Moves the tags a definition's parameter list declared into the scope
+    /// just pushed for its body; see [`Sema::param_tags`].
+    fn take_param_tags(&mut self) {
+        let carried = std::mem::take(&mut self.param_tags);
+        if let Some(scope) = self.tags.last_mut() {
+            scope.extend(carried);
         }
     }
 
@@ -1227,8 +1319,11 @@ impl<'a> Sema<'a> {
     /// assignment, `&x`, `x++`, subscripting and member access all keep
     /// working and every one of them is seen by the enclosing function too.
     fn object_place(&mut self, id: ObjectId, range: SourceRange) -> Place {
-        let info = self.program.object(id);
-        let (ty, is_const) = (info.ty, info.is_const);
+        let is_const = self.program.object(id).is_const;
+        // Not `object.ty`: a linked object may have been redeclared in an
+        // inner block, and the composite that gave it belongs to that block
+        // alone (6.2.7p4). See [`Scope::composites`].
+        let ty = self.visible_object_ty(id);
         let Some(ptr) = self.capture(id, range) else {
             return place_of(PlaceKind::Object(id), ty, is_const, range);
         };

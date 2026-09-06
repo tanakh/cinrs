@@ -1428,7 +1428,20 @@ impl<'a> Pp<'a> {
 
     /// Reports the problems the lexer attached to a token that survived.
     fn report_errors(&mut self, tok: &PTok) {
+        self.report_token_diags(tok, false);
+    }
+
+    /// Reports only what is wrong with a token's *spelling*, which stands
+    /// whether or not the token goes anywhere; see [`Diagnostic::lexical`].
+    fn report_lexical_errors(&mut self, tok: &PTok) {
+        self.report_token_diags(tok, true);
+    }
+
+    fn report_token_diags(&mut self, tok: &PTok, lexical_only: bool) {
         for diag in &tok.errors {
+            if lexical_only && !diag.lexical {
+                continue;
+            }
             let key = (diag.range.start, diag.range.end, diag.message.clone());
             if self.reported.insert(key) {
                 self.diags.push(diag.clone());
@@ -1702,6 +1715,16 @@ impl Pp<'_> {
                 );
                 return None;
             };
+            // An argument's tokens were formed in translation phase 3, and a
+            // universal character name that is ill formed there is ill formed
+            // whatever the macro does with it — including nothing. Every UCN
+            // in Clang's own `C99/n717.c` is written as the argument of a
+            // macro that expands to nothing, and each one still has to be
+            // diagnosed. Only what is wrong with the *spelling* travels this
+            // way; a stray `\` or `$` is a preprocessing token like any other
+            // until something tries to parse it (6.4p3). `Pp::reported` keeps
+            // it to one diagnostic if the token survives as well.
+            self.report_lexical_errors(&tok);
             if tok.is_punct(Punct::LParen) {
                 depth += 1;
             } else if tok.is_punct(Punct::RParen) {
@@ -4761,11 +4784,19 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     push("__LONG_LONG_MAX__", format!("{}LL", signed_max(llong_bits)));
 
     // Their widths, which C23 added to <limits.h> and GCC has always had.
+    // The two compilers do not spell the same set: GCC has
+    // `__LONG_LONG_WIDTH__` and `__SCHAR_WIDTH__`, Clang has `__LLONG_WIDTH__`
+    // and `__BOOL_WIDTH__`, and code in the wild tests whichever its author's
+    // compiler had — `clang/test/C/drs/dr2xx.c` `#error`s out on
+    // `__LLONG_WIDTH__` alone. So the *union* is defined, and the two
+    // spellings of one width are one value by construction.
+    push("__BOOL_WIDTH__", "1".to_owned());
     push("__SCHAR_WIDTH__", "8".to_owned());
     push("__SHRT_WIDTH__", target.short_bits.to_string());
     push("__INT_WIDTH__", int_bits.to_string());
     push("__LONG_WIDTH__", long_bits.to_string());
     push("__LONG_LONG_WIDTH__", llong_bits.to_string());
+    push("__LLONG_WIDTH__", llong_bits.to_string());
 
     // The library types, and how wide each is.
     push("__SIZE_TYPE__", ptr_unsigned.to_owned());
@@ -4794,6 +4825,7 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
         "__UINTMAX_MAX__",
         format!("{}U{max_suffix}", unsigned_max(max_bits)),
     );
+    push("__UINTMAX_WIDTH__", max_bits.to_string());
     push("__INTPTR_TYPE__", ptr_signed.to_owned());
     push(
         "__INTPTR_MAX__",
@@ -4805,6 +4837,8 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
         "__UINTPTR_MAX__",
         format!("{}U{ptr_suffix}", unsigned_max(ptr_bits)),
     );
+    push("__UINTPTR_WIDTH__", ptr_bits.to_string());
+    push("__POINTER_WIDTH__", ptr_bits.to_string());
 
     // `wchar_t` and `wint_t`, which the bundled <stddef.h> and <wchar.h>
     // typedef from these very macros. Windows makes both 16 bits, Arm makes
@@ -5010,5 +5044,24 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
             out.push((names[at + 2], smax.clone()));
             out.push((names[at + 3], umax.clone()));
         }
+    }
+
+    // How wide each of those is. The `least` widths are exact by
+    // construction; the `fast` ones follow the choice `include/stdint.h`
+    // makes for the typedefs, so the macro and a `sizeof` on the type give
+    // one answer. (`__BITINT_MAXWIDTH__` is deliberately absent: it is the
+    // signal that `_BitInt` exists, and here it does not.)
+    let fast_mid = if ptr_bits == 64 { "64" } else { "32" };
+    for (name, value) in [
+        ("__INT_LEAST8_WIDTH__", "8"),
+        ("__INT_LEAST16_WIDTH__", "16"),
+        ("__INT_LEAST32_WIDTH__", "32"),
+        ("__INT_LEAST64_WIDTH__", "64"),
+        ("__INT_FAST8_WIDTH__", "8"),
+        ("__INT_FAST16_WIDTH__", fast_mid),
+        ("__INT_FAST32_WIDTH__", fast_mid),
+        ("__INT_FAST64_WIDTH__", "64"),
+    ] {
+        out.push((name, value.to_owned()));
     }
 }

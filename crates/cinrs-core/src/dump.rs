@@ -433,6 +433,7 @@ impl<'a> Dumper<'a> {
                     ForInit::None => d.line("init: <none>"),
                     ForInit::Expr(e) => d.under("init", |dd| dd.expr(e)),
                     ForInit::Decl(decl) => d.under("init", |dd| dd.decl(decl)),
+                    ForInit::StaticAssert(sa) => d.under("init", |dd| dd.static_assert(sa)),
                 }
                 match cond {
                     Some(e) => d.under("cond", |dd| dd.expr(e)),

@@ -648,6 +648,47 @@ impl Types {
         })
     }
 
+    /// The same type with the elements of every array in it `const`.
+    ///
+    /// C99 6.7.3p9: "If the specification of an array type includes any type
+    /// qualifiers, the element type is so-qualified, not the array type."
+    /// Writing the declarator says so by itself — the qualifier in
+    /// `const int a[1]` is on `int` — but the `typedef` spelling does not:
+    ///
+    /// ```c
+    /// typedef int A[1];
+    /// const A a;      /* `const int[1]`, so `&a` is `const int (*)[1]` */
+    /// ```
+    ///
+    /// and neither does `typeof`. Anything that is not an array is returned
+    /// as it stands, because every other type carries `const` on the object
+    /// rather than in [`Ty`].
+    ///
+    /// A multidimensional array is an array *of arrays*, and the element type
+    /// the qualifier lands on is the one that is not an array — exactly where
+    /// the declarator spelling puts it, so that `const int a[2][3]` and
+    /// `typedef int A[2][3]; const A a;` are one type.
+    pub fn const_elements(&mut self, ty: Ty) -> Ty {
+        let Ty::Array(id) = ty else {
+            return ty;
+        };
+        let array = self.array_type(id);
+        if array.elem.is_array() {
+            let elem = self.const_elements(array.elem);
+            if elem == array.elem {
+                return ty;
+            }
+            return self.array_type_of(ArrayType { elem, ..array });
+        }
+        if array.elem_const {
+            return ty;
+        }
+        self.array_type_of(ArrayType {
+            elem_const: true,
+            ..array
+        })
+    }
+
     fn array_type_of(&mut self, key: ArrayType) -> Ty {
         if let Some(id) = self.array_index.get(&key) {
             return Ty::Array(*id);

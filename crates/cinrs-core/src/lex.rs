@@ -980,6 +980,13 @@ impl<'a> Lexer<'a> {
         self.pending.push(Diagnostic::error(range, message));
     }
 
+    /// Records a problem with the token's *spelling*, which stands whether or
+    /// not the token ever reaches the parser; see [`Diagnostic::lexical`].
+    fn lexical_error(&mut self, range: SourceRange, message: impl Into<String>) {
+        self.pending
+            .push(Diagnostic::error(range, message).at_lexing());
+    }
+
     /// Records an advisory remark about the token being scanned.
     fn warning(&mut self, range: SourceRange, message: impl Into<String>) {
         self.pending.push(Diagnostic::warning(range, message));
@@ -1400,10 +1407,24 @@ impl<'a> Lexer<'a> {
             } else {
                 format!("{value:08X}")
             };
-            self.error(
-                range,
-                format!("'\\{spelling}{digits}' is not a valid character in an identifier"),
-            );
+            let message =
+                format!("'\\{spelling}{digits}' is not a valid character in an identifier");
+            // Two different refusals wear the same words. Naming a character
+            // below U+00A0, or a surrogate, is what C99 6.4.3p2 forbids of the
+            // *name* — C23 puts `$`, `@` and `` ` `` in the basic character
+            // set, and Clang refuses those in every mode — so it is ill formed
+            // where it is written and is reported even where the token goes
+            // nowhere: Clang's own `C99/n717.c` is a file of them, each
+            // written as the argument of a macro that expands to nothing.
+            // Everything else here — a value outside Unicode, a character
+            // that simply is not `XID_Continue` — is about the *identifier*,
+            // and a preprocessing token that never reaches the parser is
+            // allowed to be one C has no other use for (6.4p3).
+            if value < 0xA0 || (0xD800..=0xDFFF).contains(&value) {
+                self.lexical_error(range, message);
+            } else {
+                self.error(range, message);
+            }
             return None;
         }
         if let Some(message) = self
@@ -2097,7 +2118,10 @@ impl<'a> Lexer<'a> {
                     }
                     Some(ch) => push_character(ch as u32, kind, self.options.wchar_bits, out),
                     None => {
-                        self.error(
+                        // Outside Unicode, or a surrogate: 6.4.3p2 again, and
+                        // the *literal token's* spelling is what is wrong, so
+                        // this stands wherever the token ends up.
+                        self.lexical_error(
                             range,
                             format!("'\\u{v:04X}' is not a valid universal character name"),
                         );

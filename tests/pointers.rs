@@ -572,6 +572,53 @@ fn wide_string_literals_and_pointers_to_arrays() {
 }
 
 // ---------------------------------------------------------------------------
+// `&*p`, which is neither operator at all
+// ---------------------------------------------------------------------------
+
+/// C99 6.5.3.2p3: "if the operand is the result of a unary `*` operator,
+/// neither that operator nor the `&` operator is evaluated and the result is as
+/// if both were omitted".
+///
+/// `&*p` is therefore `p`, and that is the whole of WG14 DR011's neighbour
+/// **DR012**: `&*p` is valid for a `void *p` even though `*p` on its own has
+/// no complete object type to be an lvalue of, because the indirection that
+/// would need one never happens. The same rule makes `&*fp` a function pointer
+/// again, and `&*(p + n)` a pointer into the middle of an array. The behaviour
+/// changed between C89 and C99 — C89 made it a constraint violation, which is
+/// why Clang still warns about it under `-std=c89 -pedantic` — and every entry
+/// point here takes the C99 answer, exactly as GCC and Clang do.
+#[test]
+fn address_of_a_dereference_is_the_pointer_itself() {
+    c99! {
+        /* The DR012 case: the pointee has no size and it does not matter. */
+        void *identity(void *p) { return &*p; }
+        int through_void(int *p) { void *v = p; return *(int *)&*v; }
+
+        int add(int a, int b) { return a + b; }
+        typedef int (*binop)(int, int);
+        binop unwrapped(binop f) { return &*f; }
+
+        int elem(int *p, int n) { return *&*(p + n); }
+        int (*whole(int (*a)[4]))[4] { return &**&a; }
+
+        int fourth(int (*a)[4]) { return (*whole(a))[3]; }
+    }
+
+    unsafe {
+        let mut n = 7;
+        let p = &raw mut n;
+        assert_eq!(identity(p.cast()), p.cast());
+        assert_eq!(through_void(p), 7);
+
+        assert_eq!(unwrapped(Some(add)).expect("a function pointer")(2, 3), 5);
+
+        let mut a = [10, 20, 30, 40];
+        assert_eq!(elem(a.as_mut_ptr(), 2), 30);
+        assert_eq!(fourth(&raw mut a), 40);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // pointers that differ only in the signedness of the pointee
 // ---------------------------------------------------------------------------
 

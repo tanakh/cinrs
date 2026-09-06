@@ -127,6 +127,135 @@ fn auto_infers_the_type_of_a_local() {
     assert_eq!(unsafe { inferred() }, 7);
 }
 
+/// `auto` is a storage-class specifier that stands *beside* the others.
+///
+/// C23 6.7.1p2 keeps "at most one storage-class specifier" and then makes
+/// `auto` the exception: it "may appear with all the others, except
+/// `typedef`". So `static auto c = 1UL;` is an object with static storage
+/// duration whose type is inferred, and the exception is symmetric —
+/// `auto static c = 1UL;` says the same thing. Clang's `C23/n3007.c` and
+/// `C23/n3006.c` are where the shapes come from.
+#[test]
+fn auto_may_stand_beside_another_storage_class() {
+    c23! {
+        unsigned long counter(void) {
+            static auto c = 1UL;
+            auto static d = 2UL;
+            register auto e = 3UL;
+            auto register f = 4UL;
+            c += 10;
+            return c + d + e + f;
+        }
+
+        /* `constexpr` is one of the others, and the object is still a
+         * constant of the initialiser's type. */
+        int folded(void) {
+            constexpr auto limit = 7;
+            auto constexpr other = 2;
+            return limit * other;
+        }
+
+        /* The type is the initialiser's, not `int`: 1UL is `unsigned long`,
+         * so `c` is one and `sizeof` says so. */
+        int inferred_the_wide_type(void) {
+            static auto c = 1UL;
+            return sizeof(c) == sizeof(unsigned long);
+        }
+
+        /* `_Atomic` is not a *specifier* here but a qualifier, so it applies
+         * to whatever was inferred (N3007). */
+        int atomic_type(void) {
+            _Atomic auto n = 12;
+            _Atomic auto p = "really?";
+            return _Generic(&n, _Atomic(int) *: 1, default: 0)
+                 + _Generic(&p, _Atomic(char *) *: 1, default: 0);
+        }
+    }
+
+    unsafe {
+        assert_eq!(counter(), 11 + 2 + 3 + 4);
+        // The `static` really is static: a second call sees the first's store.
+        assert_eq!(counter(), 21 + 2 + 3 + 4);
+        assert_eq!(folded(), 14);
+        assert_eq!(inferred_the_wide_type(), 1);
+        assert_eq!(atomic_type(), 2);
+    }
+}
+
+/// An array's qualifiers belong to its *elements* (C99 6.7.3p9), whichever
+/// spelling put them there.
+///
+/// `const int a[1]` writes the qualifier on `int` and there is nothing to do;
+/// `typedef int A[1]; const A a;` writes it on the array, and C moves it to
+/// the elements — so `&a` is a `const int (*)[1]` either way, and the two
+/// spellings are one type. WG14 N2607 is the paper, and Clang's
+/// `C23/n2607.c` asks the question with `_Generic`, which is the only way to
+/// see the qualifier: an ordinary controlling expression loses it to the
+/// lvalue conversion.
+#[test]
+fn an_arrays_qualifiers_are_its_elements() {
+    c23! {
+        typedef int A1[1];
+        typedef int A2[2][3];
+
+        int qualifiers_reach_the_elements(void) {
+            const int spelled_out[1] = { 0 };
+            const A1 through_a_typedef = { 0 };
+            const int md[2][3] = {{ 0 }};
+            const A2 md_typedef = {{ 0 }};
+
+            return _Generic(&spelled_out, const int (*)[1]: 1, default: 0)
+                 + _Generic(&through_a_typedef, const int (*)[1]: 1, default: 0)
+                 + _Generic(&through_a_typedef[0], const int *: 1, default: 0)
+                 + _Generic(&md, const int (*)[2][3]: 1, default: 0)
+                 + _Generic(&md_typedef, const int (*)[2][3]: 1, default: 0)
+                 + _Generic(&md_typedef[0], const int (*)[3]: 1, default: 0);
+        }
+
+        /* 6.5.15p6 qualifies the composite of a conditional with the
+         * qualifiers of *both* operands, which is not a directed question:
+         * the answer is the same whichever branch is written first. */
+        int the_composite_of_a_conditional(int c) {
+            const int konst[1] = { 0 };
+            int plain[1] = { 0 };
+            return _Generic(c ? &konst : &plain, const int (*)[1]: 1, default: 0)
+                 + _Generic(c ? &plain : &konst, const int (*)[1]: 1, default: 0);
+        }
+    }
+
+    unsafe {
+        assert_eq!(qualifiers_reach_the_elements(), 6);
+        assert_eq!(the_composite_of_a_conditional(1), 2);
+    }
+}
+
+/// The underlying type of an enumeration, repeated or asked nothing about.
+///
+/// N3030 makes every declaration of one enumeration agree about the fixed
+/// underlying type; `tests/ui/c23_enum_underlying_type.rs` is what happens
+/// when they do not. Repeating the same type is fine, and a mention that
+/// writes no type at all — `enum E x;` — asks nothing and settles nothing.
+#[test]
+fn the_fixed_underlying_type_may_be_repeated() {
+    c23! {
+        enum Repeated : short;
+        enum Repeated : short { r1 = 3 };
+        enum Repeated repeated_value = r1;
+
+        enum Plain : unsigned char { p1 = 200 };
+        enum Plain plain_value = p1;
+
+        int widths(void) {
+            return sizeof(enum Repeated) == sizeof(short)
+                && sizeof(enum Plain) == 1
+                && repeated_value == 3
+                && plain_value == 200;
+        }
+    }
+
+    assert_eq!(unsafe { widths() }, 1);
+}
+
 // ---------------------------------------------------------------------------
 // literals
 // ---------------------------------------------------------------------------

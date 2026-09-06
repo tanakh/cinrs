@@ -36,6 +36,32 @@ fn static_assertions_hold_at_every_scope() {
     assert_eq!(size_of::<Checked>(), 8);
 }
 
+/// The `for` clause is one of those scopes.
+///
+/// A static assertion is a *declaration*, so the grammar puts it where a
+/// declaration goes — and C11 6.8.5p3 then forbids it here, because the clause
+/// may only declare objects with automatic or register storage duration and a
+/// static assertion declares nothing at all. GCC and Clang both take it
+/// anyway, and Clang's `C11/n1330.c` says so in as many words ("we permit it
+/// as an extension"). It asserts exactly what it would one line higher up, and
+/// the loop is left with no initialiser.
+#[test]
+fn a_static_assertion_may_stand_in_a_for_clause() {
+    c11! {
+        int counted(void) {
+            int i = 0;
+            int n = 0;
+            for (_Static_assert(sizeof(int) == 4, "in the init clause"); i < 5; ++i) {
+                n += i;
+            }
+            return n;
+        }
+    }
+
+    // 0 + 1 + 2 + 3 + 4, which is what the loop adds up.
+    assert_eq!(unsafe { counted() }, 10);
+}
+
 // ---------------------------------------------------------------------------
 // _Generic
 // ---------------------------------------------------------------------------

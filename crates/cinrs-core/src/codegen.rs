@@ -3142,6 +3142,34 @@ impl<'a> Codegen<'a> {
         self.cast(real, from.complex_component(), to, span)
     }
 
+    /// `z == w` and `z != w` (C99 6.5.9p3: equal exactly when both parts are).
+    ///
+    /// Rust's own `==` would give the same answer — the runtime's complex type
+    /// derives `PartialEq` — and it is *not* used, because `PartialEq::eq`
+    /// takes `&self`: a reference to a field of a `#[repr(packed)]` record is
+    /// `E0793`, and a packed `__complex__ float` member compared against a
+    /// constant is exactly `gcc.c-torture/execute/20020227-1`. The runtime's
+    /// by-value equality asks for a *copy* of each operand, which a packed
+    /// field will give.
+    ///
+    /// Sema converts both operands to one complex type before this, so a
+    /// mixed real/complex comparison never arrives here.
+    fn complex_equality(&mut self, op: CmpOp, lhs: &Expr, rhs: &Expr, span: Span) -> Value {
+        self.uses_complex.set(true);
+        let name = match op {
+            CmpOp::Eq => "eq",
+            CmpOp::Ne => "ne",
+            // 6.5.8p2 gives the relational operators real operands only, and
+            // sema has already said so.
+            other => unreachable!("{other:?} does not reach a complex comparison"),
+        };
+        let func = self.rt_complex(&format!("{name}_{}", Self::complex_suffix(lhs.ty)), span);
+        let (lhs, rhs) = self.operands(lhs, rhs, BinOp::BitOr);
+        let lhs = lhs.at(prec::LOWEST, span);
+        let rhs = rhs.at(prec::LOWEST, span);
+        Value::new(quote_spanned! {span=> #func(#lhs, #rhs) }, prec::CALL)
+    }
+
     /// `z != 0` as Rust's `bool`: what an `if`, a `while` and `!z` ask of a
     /// complex value.
     fn complex_condition(&mut self, expr: &Expr, span: Span) -> Value {
@@ -4507,6 +4535,9 @@ impl<'a> Codegen<'a> {
             ExprKind::Compare { op, lhs, rhs } => {
                 if let Some(value) = self.null_test(*op, lhs, rhs, span) {
                     return value;
+                }
+                if lhs.ty.is_complex() && rhs.ty.is_complex() {
+                    return self.complex_equality(*op, lhs, rhs, span);
                 }
                 let (lhs, rhs) = self.operands(lhs, rhs, BinOp::BitOr);
                 let left_min = if *op == CmpOp::Lt && lhs.ends_with_type {

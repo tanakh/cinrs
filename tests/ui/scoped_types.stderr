@@ -1,0 +1,28 @@
+error: invalid application of 'sizeof' to an incomplete type 'int[]'
+  --> tests/ui/scoped_types.rs:25:21
+   |
+25 |         (void)sizeof(i);
+   |                     ^
+
+error: conflicting types for 'dr103'
+       note: previous declaration of 'dr103' is at line 32
+  --> tests/ui/scoped_types.rs:33:10
+   |
+33 |     void dr103(struct S { int a; } s);
+   |          ^^^^^
+
+error: variable 'after' has incomplete type 'struct Hidden'
+  --> tests/ui/scoped_types.rs:39:5
+   |
+39 |     struct Hidden after;
+   |     ^^^^^^
+
+error: passing 'struct Later *' to parameter 1 of 'consume', of incompatible type 'struct Later *'
+       note: these are two different types with the same spelling: a tag belongs to the scope it was declared in, and one written inside a parameter list belongs to that list (6.2.1p4), so nothing after the closing parenthesis can name it. Declare the type before the prototype
+  --> tests/ui/scoped_types.rs:47:42
+   |
+47 |     void call(struct Later *p) { consume(p); }
+   |                                          ^
+
+error: aborting due to 4 previous errors
+

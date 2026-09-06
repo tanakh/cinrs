@@ -162,28 +162,34 @@ broken down into the four categories
 defines.
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1500/1769 correct (84.8%) — 1396 passed, 104 rejected as the standard requires
-  errors: 269 — bug 1, unimplemented 36, not planned 185, toolchain 47
-  (7 not generated) — 4 m 19 s
+gcc.c-torture/execute through `gnu11!`: 1501/1769 correct (84.9%) — 1397 passed, 104 rejected as the standard requires
+  errors: 268 — bug 0, unimplemented 36, not planned 185, toolchain 47
+  (7 not generated) — 4 m 30 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned | toolchain |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1500/1769** | **84.8 %** | 1396 | 104 | 1 | 36 | 185 | 47 |
-| `gnu89!` | 1493/1769 | 84.4 % | 1493 | — | 1 | 39 | 189 | 47 |
+| **`gnu11!`** | **1501/1769** | **84.9 %** | 1397 | 104 | 0 | 36 | 185 | 47 |
+| `gnu89!` | 1494/1769 | 84.5 % | 1494 | — | 0 | 39 | 189 | 47 |
 
 by group:
 
 | group | `gnu11!` | `gnu89!` |
 | --- | ---: | ---: |
-| `execute` | 1436/1691 (84.9 %) | 1429/1691 (84.5 %) |
+| `execute` | 1437/1691 (85.0 %) | 1430/1691 (84.6 %) |
 | `execute/ieee` | 64/78 (82.1 %) | 64/78 (82.1 %) |
 
-**There is exactly one `[bug]` in this whole corpus**, under either entry
-point: `execute/20020227-1`, whose expansion `rustc` refuses with `E0793`
-(a reference to a field of a packed struct). Everything else that does not
-pass is a feature not implemented yet, a feature deliberately not planned, or
-the Rust 1.99 variadic gap.
+**There is no `[bug]` left in this corpus**, under either entry point.
+Everything that does not pass is a feature not implemented yet, a feature
+deliberately not planned, or the Rust 1.99 variadic gap.
+
+The last one was `execute/20020227-1`, whose expansion `rustc` refused with
+`E0793`: the case compares a `__complex__ float` member of a
+`__attribute__((packed))` record against a constant, and the runtime's complex
+type derives `PartialEq`, whose `eq` takes `&self` — a reference to a field of
+a packed record, which is exactly what `E0793` is about. Reading such a field
+*by value* is fine, so the comparison goes through a by-value
+`cinrs_rt::complex::eq_f32`/`ne_f32` instead of Rust's own `==`.
 
 ### The two entry points, and why `gnu11!` now scores higher
 
@@ -194,9 +200,9 @@ every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
-1493 cases build and run.
+1494 cases build and run.
 
-**`gnu11!` gets the same 1396 of those, refuses 104 more as the standard
+**`gnu11!` gets the same 1397 of those, refuses 104 more as the standard
 requires it to, and comes out seven ahead.** Those 104 are the cases that lean
 on a rule C99 deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R
 parameter) and an implicit function declaration (3) — and a C99-or-later entry
@@ -210,7 +216,7 @@ Ninety-seven of the 104 pass under `gnu89!`; the other seven get past the C89
 rule there and stop at a second gap — two at a computed `goto`, two at a
 nonlocal `goto` out of a nested function, one at a nested function that uses
 the enclosing function's variable length array, and two at `<setjmp.h>`. That
-is the whole of the difference: 1493 = 1396 + 97, and 1500 = 1396 + 104.
+is the whole of the difference: 1494 = 1397 + 97, and 1501 = 1397 + 104.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
@@ -219,9 +225,9 @@ because GCC's own runner would not have run them either.
 
 ### The errors, by category and cause
 
-Under `gnu11!` 264 of the 269 errors are refused at compile time, in 29
+Under `gnu11!` 263 of the 268 errors are refused at compile time, in 29
 distinct causes, and 5 are programs that built and then did the wrong thing;
-under `gnu89!`, 271 of 276 in 31. The ones worth a line each, with what the
+under `gnu89!`, 270 of 275 in 31. The ones worth a line each, with what the
 same cause costs under `gnu89!` beside it — the 104 conforming rejections
 above are *not* in this table:
 
@@ -249,7 +255,6 @@ above are *not* in this table:
 | not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
 | not planned | 2 | 2 | a `link_error()` nothing defines, which an optimiser is required to delete | `execute/medce-1` |
 | unimplemented | 2 | 2 | a pointer to a `va_list` | `execute/pr64979` |
-| bug | 1 | 1 | **`E0793`: a reference to a field of a packed struct**, in the Rust the expansion emits | `execute/20020227-1` |
 | unimplemented | 1 | — | a nested function that uses the enclosing function's **variable length array** | `execute/921017-1` |
 
 Everything below those has one case each, and the report prints all of them.
@@ -258,7 +263,12 @@ because a diagnostic raised inside an `#include`d corpus file carries the file
 name and is grouped on its own; the `vector_size` and
 address-of-a-nested-function counts are sums of two for the same reason.
 
-The last round of work — **nested functions**, lifted out of the function they
+The last round of work took each entry point up by **one**, and it was the
+corpus's last `[bug]`: `execute/20020227-1` compares a `__complex__ float`
+member of a packed record, and Rust's own `==` on the runtime's complex type
+borrows the field to do it. See [the baseline](#baseline).
+
+The round before that — **nested functions**, lifted out of the function they
 were written in — took `gnu89!` up by **15** and `gnu11!` by **14**, and
 **no case went the other way** in either:
 
@@ -283,7 +293,7 @@ reason the lifting cannot reach:
 * and a **variadic** nested function, which needs Rust 1.99 like any other
   variadic definition: `nest-stdar-1`.
 
-The round before that — `_Complex` — took both entry points up by **15**:
+The round before *those* — `_Complex` — took both entry points up by **15**:
 
 | cases | what landed |
 | ---: | --- |
@@ -292,12 +302,13 @@ The round before that — `_Complex` — took both entry points up by **15**:
 
 Seven cases that used to fail on `_Complex` still fail, on the *complex
 integer* types behind it — `_Complex int`, `__complex__ char`, `3i` — which
-are a separate GNU extension. One more, `execute/20020227-1`, now gets past
-the front end and fails on a packed-member reference that the complex
-diagnostic had been hiding. `ieee/cdivchkd` is the one case that compiles,
-runs and gives an answer GCC would not; see the section below.
+are a separate GNU extension. One more, `execute/20020227-1`, got past the
+front end and onto the packed-member reference that the complex diagnostic had
+been hiding, which is the one the round above closed. `ieee/cdivchkd` is the
+one case that compiles, runs and gives an answer GCC would not; see the
+section below.
 
-The round before *that* took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
+The round before *those* took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
 to 1367:
 
 | cases | what landed |
@@ -319,14 +330,14 @@ other. Nothing here optimises, so the call survives and the link fails. They
 would pass under `-O`, and asking `rustc` for that would change what the whole
 suite measures.
 
-**Read the table by its first column.** 232 of `gnu11!`'s 269 errors are the
+**Read the table by its first column.** 232 of `gnu11!`'s 268 errors are the
 top four `not planned` rows — inline assembly, the vector extensions, the
 `__builtin_…` forms nobody is going to write, and the `_FloatN`, complex-integer
 and `va_list`-in-a-record corners Rust has no counterpart for. 47 more are the
 Rust 1.99 variadic gap, which simply passes on a newer toolchain and is marked
 `?` in both lists. 36 are the honest list of what is not implemented yet, and
 it is dominated by two entries: computed `goto` (13) and `va_arg` with a struct
-type (14). One is a bug.
+type (14). None is a bug.
 
 The 104 C89-rule cases — implicit `int`, an implicit function declaration, a
 K&R parameter with no declaration — are not in the table at all, because under
