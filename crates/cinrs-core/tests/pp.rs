@@ -700,15 +700,18 @@ fn the_target_is_described_consistently_with_the_target_model() {
         "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
     ));
     assert!(cond("!defined(__clang__)"));
-    // The two parts of C11 this crate leaves out say so, which is what makes
-    // leaving them out conforming — and atomics and variable length arrays,
-    // which it does *not* leave out, deliberately say nothing.
-    assert!(cond(
-        "defined(__STDC_NO_THREADS__) && defined(__STDC_NO_COMPLEX__)"
-    ));
+    // The part of C11 this crate leaves out says so, which is what makes
+    // leaving it out conforming — and atomics and variable length arrays,
+    // which it does *not* leave out, deliberately say nothing. Complex
+    // arithmetic is the one that depends on a feature; see
+    // [`stdc_no_complex_follows_the_feature`].
+    assert!(cond("defined(__STDC_NO_THREADS__)"));
     assert!(cond(
         "!defined(__STDC_NO_ATOMICS__) && !defined(__STDC_NO_VLA__)"
     ));
+    // Annex G is never claimed: cinrs implements G.5.1's arithmetic and not
+    // the rest of the annex.
+    assert!(cond("!defined(__STDC_IEC_559_COMPLEX__)"));
     // The atomic builtins' own macros, which a program passes to them.
     assert!(cond(
         "__ATOMIC_RELAXED == 0 && __ATOMIC_CONSUME == 1 && __ATOMIC_ACQUIRE == 2 \
@@ -733,6 +736,29 @@ fn a_predefined_macro_may_be_redefined_without_complaint() {
         pp("#undef __STDC__\n#ifdef __STDC__\nno\n#endif\nyes"),
         "yes"
     );
+}
+
+/// `__STDC_NO_COMPLEX__` is C11 6.10.8.3's way of saying "this
+/// implementation has no complex arithmetic", so it is defined exactly when
+/// the `complex` feature is off — and never otherwise.
+#[test]
+fn stdc_no_complex_follows_the_feature() {
+    let source = "#ifdef __STDC_NO_COMPLEX__\nabsent\n#else\npresent\n#endif\n";
+    for (complex, want) in [(true, "present"), (false, "absent")] {
+        let mut options = Options::new(Standard::C99);
+        options.complex = complex;
+        let mut diags = cinrs_core::Diagnostics::new();
+        let ctx = Context::new(source, 0);
+        let tokens = lex_text(source, ctx.base, &lex_options());
+        let out = preprocess(&tokens, &ctx, &options, &mut diags);
+        let spellings: Vec<String> = out
+            .tokens
+            .iter()
+            .filter(|t| !t.is_eof())
+            .map(|t| t.kind.spelling().to_owned())
+            .collect();
+        assert_eq!(spellings, [want], "for complex = {complex}");
+    }
 }
 
 // ---------------------------------------------------------------------------

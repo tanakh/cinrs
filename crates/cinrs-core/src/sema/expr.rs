@@ -126,7 +126,20 @@ impl Sema<'_> {
             }
             ast::ExprKind::Float(lit) => {
                 let (value, ty) = float_literal(lit);
-                Some(Expr::new(ExprKind::Float(value), ty, range))
+                if !lit.imaginary {
+                    return Some(Expr::new(ExprKind::Float(value), ty, range));
+                }
+                // `2.0i` is the pure imaginary `(0, 2)`, whose type is the
+                // complex one belonging to the suffix's real type.
+                let part = |v: f64| Box::new(Expr::new(ExprKind::Float(v), ty, range));
+                Some(Expr::new(
+                    ExprKind::ComplexOf {
+                        re: part(0.0),
+                        im: part(value),
+                    },
+                    ty.complex_of(),
+                    range,
+                ))
             }
             ast::ExprKind::Char(lit) => {
                 let (value, ty) = self.char_literal(lit);
@@ -261,8 +274,9 @@ impl Sema<'_> {
                 then_expr,
                 else_expr,
             } => self.choose_expr(cond, then_expr, else_expr, range),
-            // Reported by the parser, which knows the spelling that was used.
-            ast::ExprKind::ComplexPart { .. } => None,
+            ast::ExprKind::ComplexPart { real, operand } => {
+                self.complex_part(!*real, operand, range)
+            }
             ast::ExprKind::Error => None,
         }
     }
@@ -562,6 +576,12 @@ impl Sema<'_> {
             | ast::ExprKind::Member { .. }
             | ast::ExprKind::Str(_)
             | ast::ExprKind::CompoundLiteral { .. } => true,
+            // GNU C makes `__real__ z` and `__imag__ z` lvalues exactly when
+            // `z` is one, which is what lets a program write
+            // `__imag__ z = 1.0;`. Whether the *type* allows it is settled in
+            // [`Sema::complex_part_place`], since that needs the operand
+            // checked and this does not.
+            ast::ExprKind::ComplexPart { operand, .. } => self.is_lvalue_form(operand),
             _ => false,
         }
     }
@@ -609,11 +629,167 @@ impl Sema<'_> {
             }
             ast::ExprKind::Str(lit) => Some(self.string_place(lit, range)),
             ast::ExprKind::CompoundLiteral { ty, init } => self.compound_literal(ty, init, range),
+            ast::ExprKind::ComplexPart { real, operand } => {
+                self.complex_part_place(!*real, operand, range)
+            }
             _ => {
                 self.error(range, "expression is not assignable");
                 None
             }
         }
+    }
+
+    /// `__real__ e` or `__imag__ e` as a place (GNU C).
+    ///
+    /// Both are lvalues whenever `e` is one, so `__imag__ z = 1.0;` assigns to
+    /// half of a complex object. `__real__` of a *real* lvalue is that lvalue
+    /// — GCC accepts it, and there is nothing else it could mean — while
+    /// `__imag__` of one is a zero that has no address, so it is not a place at
+    /// all.
+    fn complex_part_place(
+        &mut self,
+        imag: bool,
+        operand: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Place> {
+        let place = self.lvalue(operand)?;
+        let ty = self.types().unatomic(place.ty);
+        if ty.is_error() {
+            return None;
+        }
+        if ty.is_complex() {
+            let is_const = place.is_const;
+            return Some(place_of(
+                PlaceKind::ComplexPart {
+                    base: Box::new(place),
+                    imag,
+                },
+                ty.complex_component(),
+                is_const,
+                range,
+            ));
+        }
+        if !ty.is_arithmetic() {
+            self.error(
+                range,
+                format!(
+                    "'{}' requires an operand of arithmetic type, not '{}'",
+                    part_name(imag),
+                    self.tyname(ty)
+                ),
+            );
+            return None;
+        }
+        if imag {
+            self.error(
+                range,
+                format!(
+                    "'__imag__' of the real type '{}' is a zero, and a zero is not assignable",
+                    self.tyname(ty)
+                ),
+            );
+            return None;
+        }
+        Some(place)
+    }
+
+    /// One part of an already checked complex *value*, which is what
+    /// `__builtin_creal` and `__builtin_cimag` are.
+    ///
+    /// Reading a complex object goes straight through its place rather than
+    /// through a copy, so `creal(z)` is `z.re` and not `{ let t = z; t.re }`.
+    pub(super) fn complex_part_of(&mut self, value: Expr, imag: bool, range: SourceRange) -> Expr {
+        let ty = value.ty;
+        let component = ty.complex_component();
+        let base = match value.kind {
+            ExprKind::Load(place) => place,
+            kind => place_of(
+                PlaceKind::Temporary(Box::new(Expr::new(kind, ty, value.range))),
+                ty,
+                false,
+                range,
+            ),
+        };
+        let part = place_of(
+            PlaceKind::ComplexPart {
+                base: Box::new(base),
+                imag,
+            },
+            component,
+            false,
+            range,
+        );
+        self.load_or_decay(part, range)
+    }
+
+    /// `__real__ e` or `__imag__ e` as a value.
+    fn complex_part(
+        &mut self,
+        imag: bool,
+        operand: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        if self.is_lvalue_form(operand) {
+            // An lvalue operand is not *evaluated* by either operator — the
+            // part is simply named — so a real one's `__imag__` needs no comma.
+            let place = self.lvalue(operand)?;
+            let ty = self.types().unatomic(place.ty);
+            if ty.is_error() {
+                return None;
+            }
+            if !ty.is_complex() && ty.is_arithmetic() {
+                return Some(if imag {
+                    self.zero(ty, range)
+                } else {
+                    self.load_or_decay(place, range)
+                });
+            }
+            let part = self.complex_part_place(imag, operand, range)?;
+            return Some(self.load_or_decay(part, range));
+        }
+        let value = self.expr(operand)?;
+        let ty = value.ty;
+        if ty.is_error() {
+            return None;
+        }
+        if !ty.is_arithmetic() {
+            self.error(
+                range,
+                format!(
+                    "'{}' requires an operand of arithmetic type, not '{}'",
+                    part_name(imag),
+                    self.tyname(ty)
+                ),
+            );
+            return None;
+        }
+        if !ty.is_complex() {
+            if !imag {
+                return Some(value);
+            }
+            // The operand is still evaluated for its side effects, and the
+            // value is a zero of its type.
+            let zero = self.zero(ty, range);
+            return Some(Expr::new(
+                ExprKind::Comma {
+                    lhs: Box::new(value),
+                    rhs: Box::new(zero),
+                },
+                ty,
+                range,
+            ));
+        }
+        let base = place_of(PlaceKind::Temporary(Box::new(value)), ty, false, range);
+        let part = place_of(
+            PlaceKind::ComplexPart {
+                base: Box::new(base),
+                imag,
+            },
+            ty.complex_component(),
+            false,
+            range,
+        );
+        Some(self.load_or_decay(part, range))
     }
 
     /// Resolves an lvalue that is about to be written to.
@@ -948,6 +1124,15 @@ impl Sema<'_> {
             }
             ast::UnaryOp::BitNot => {
                 let value = self.expr(operand)?;
+                // GNU C gives `~z` a second meaning on a complex operand: the
+                // conjugate. GCC accepts it in its strict modes too — the
+                // operator is simply undefined for complex operands in ISO C
+                // rather than reserved — so it is available in every entry
+                // point here as well.
+                if value.ty.is_complex() {
+                    let ty = value.ty;
+                    return Some(Expr::new(ExprKind::BitNot(Box::new(value)), ty, range));
+                }
                 self.require_integer(&value, "~", operand.range)?;
                 let promoted = self.promoted(&value);
                 let bits = self.narrow_bits(&value);
@@ -1122,6 +1307,29 @@ impl Sema<'_> {
             }
             self.require_arithmetic(&lhs_value, op.as_str(), lhs_range)?;
             self.require_arithmetic(&rhs_value, op.as_str(), rhs.range)?;
+            // C99 6.5.8p2 gives the relational operators *real* operands only:
+            // the complex numbers are not ordered, so there is nothing `<`
+            // could mean. Equality is defined and compares both parts.
+            if (lhs_value.ty.is_complex() || rhs_value.ty.is_complex())
+                && !matches!(cmp, CmpOp::Eq | CmpOp::Ne)
+            {
+                let complex = if lhs_value.ty.is_complex() {
+                    lhs_value.ty
+                } else {
+                    rhs_value.ty
+                };
+                self.error(
+                    range,
+                    format!(
+                        "'{}' is not defined for the complex type '{}': the complex numbers \
+                         are not ordered (C99 6.5.8 requires real operands). Compare the \
+                         parts, or the magnitudes with 'cabs'",
+                        op.as_str(),
+                        self.tyname(complex)
+                    ),
+                );
+                return None;
+            }
             let (lhs_value, rhs_value, _) = self.balance(lhs_value, rhs_value);
             return Some(Expr::new(
                 ExprKind::Compare {
@@ -1175,6 +1383,10 @@ impl Sema<'_> {
             );
         }
 
+        if lhs_value.ty.is_complex() || rhs_value.ty.is_complex() {
+            return Some(self.complex_binary(bin, lhs_value, rhs_value, range));
+        }
+
         let common = Ty::usual_arithmetic(
             self.promoted(&lhs_value),
             self.promoted(&rhs_value),
@@ -1193,6 +1405,41 @@ impl Sema<'_> {
                 range,
             )
             .narrowed(bits),
+        )
+    }
+
+    /// `+`, `-`, `*` or `/` with at least one complex operand.
+    ///
+    /// The usual arithmetic conversions choose the *common real type* and make
+    /// the result complex (C99 6.3.1.8), which is what this computes — but a
+    /// real operand is left real rather than widened to a complex value with a
+    /// zero imaginary part. That is not an optimisation: it is what GCC and
+    /// Clang compute, and it is observable, because `3.0 · (−0 − 0i)` is
+    /// `(−0, −0)` componentwise and `(+0, −0)` through the full product. The
+    /// asymmetry is carried in the IR by the operands' *types*, and code
+    /// generation picks the runtime helper from them; see
+    /// `cinrs_rt::complex`.
+    fn complex_binary(&mut self, op: BinOp, lhs: Expr, rhs: Expr, range: SourceRange) -> Expr {
+        let real = Ty::usual_arithmetic(
+            self.promoted(&lhs).complex_component(),
+            self.promoted(&rhs).complex_component(),
+            &self.target,
+        );
+        let complex = real.complex_of();
+        let want = |value: &Expr| {
+            if value.ty.is_complex() { complex } else { real }
+        };
+        let (lhs_to, rhs_to) = (want(&lhs), want(&rhs));
+        let lhs = self.convert(lhs, lhs_to);
+        let rhs = self.convert(rhs, rhs_to);
+        Expr::new(
+            ExprKind::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            complex,
+            range,
         )
     }
 
@@ -1931,7 +2178,15 @@ impl Sema<'_> {
                 self.promoted(&value),
                 &self.target,
             );
-            (compute, self.convert(value, compute))
+            // A real right operand of a complex computation stays real —
+            // `z *= x` is componentwise, exactly as `z * x` is; see
+            // [`Sema::complex_binary`].
+            let to = if compute.is_complex() && !value.ty.is_complex() {
+                compute.complex_component()
+            } else {
+                compute
+            };
+            (compute, self.convert(value, to))
         };
 
         Some(Expr::new(
@@ -2503,6 +2758,20 @@ impl Sema<'_> {
         if matches!(expr.kind, ExprKind::Zeroed) && to.is_pointer() && expr.ty.is_pointer() {
             return Some(Expr::new(ExprKind::Zeroed, to, expr.range));
         }
+        // Every conversion with a complex type on either side folds through
+        // the two parts, which is exactly C99 6.3.1.6 and 6.3.1.7: real to
+        // complex is a zero imaginary part, complex to real discards it, and
+        // between the two widths each part converts on its own.
+        if to.is_complex() {
+            let parts = const_parts_of(expr)?;
+            return Some(self.const_to_expr(super::complex_value(to, parts), to, expr.range));
+        }
+        if expr.ty.is_complex() {
+            let (re, _) = const_parts_of(expr)?;
+            let real = expr.ty.complex_component();
+            let part = Expr::new(ExprKind::Float(re), real, expr.range);
+            return self.fold_conversion(&part, to);
+        }
         let value = match (&expr.kind, to) {
             (ExprKind::Int(v), t) if t.is_integer() => {
                 crate::ir::ConstValue::Int(t.wrap(*v, &self.target))
@@ -2779,12 +3048,40 @@ impl Sema<'_> {
     }
 }
 
+/// How a diagnostic names the two GNU part operators.
+fn part_name(imag: bool) -> &'static str {
+    if imag { "__imag__" } else { "__real__" }
+}
+
 /// Whether a place ultimately addresses a temporary rather than an object.
 fn rooted_in_temporary(place: &Place) -> bool {
     match &place.kind {
         PlaceKind::Temporary(_) => true,
-        PlaceKind::Field { base, .. } => rooted_in_temporary(base),
+        PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+            rooted_in_temporary(base)
+        }
         _ => false,
+    }
+}
+
+/// The two parts of an already folded arithmetic constant, for the conversions
+/// a complex type takes part in.
+///
+/// `None` for anything that is not a literal: `(double) __builtin_complex(f(),
+/// g())` still has to evaluate both calls, so it keeps its conversion node.
+fn const_parts_of(expr: &Expr) -> Option<crate::complex::Parts> {
+    match &expr.kind {
+        // An `unsigned __int128` constant is carried as its bit pattern.
+        ExprKind::Int(v) if expr.ty == Ty::UInt128 => Some((*v as u128 as f64, 0.0)),
+        ExprKind::Int(v) => Some((*v as f64, 0.0)),
+        ExprKind::Float(v) => Some((*v, 0.0)),
+        ExprKind::Zeroed if expr.ty.is_arithmetic() => Some((0.0, 0.0)),
+        ExprKind::ComplexOf { re, im } => {
+            let (re, _) = const_parts_of(re)?;
+            let (im, _) = const_parts_of(im)?;
+            Some((re, im))
+        }
+        _ => None,
     }
 }
 

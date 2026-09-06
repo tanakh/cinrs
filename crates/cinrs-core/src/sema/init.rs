@@ -1168,7 +1168,8 @@ impl Sema<'_> {
                 self.error(expr.range, "array designator index is negative");
                 None
             }
-            ConstValue::Float(_) => None,
+            // Neither can arrive: the designator was checked to be an integer.
+            ConstValue::Float(_) | ConstValue::Complex(..) => None,
         }
     }
 

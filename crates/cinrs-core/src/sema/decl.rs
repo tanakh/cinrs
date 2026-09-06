@@ -2228,7 +2228,10 @@ impl Sema<'_> {
                 !matches!(storage, Storage::Automatic) && !storage.is_thread_local()
             }
             PlaceKind::Str(_) => true,
-            PlaceKind::Field { base, .. } => self.is_static_place(base),
+            // `__real__ g` for a file-scope `g` is as static as `g` itself.
+            PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+                self.is_static_place(base)
+            }
             PlaceKind::Index { base, index } => {
                 self.is_address_constant(base) && matches!(index.kind, ExprKind::Int(_))
             }

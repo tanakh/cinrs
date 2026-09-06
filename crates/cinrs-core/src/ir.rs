@@ -176,6 +176,16 @@ pub enum Ty {
     Float,
     /// `double` (and `long double`)
     Double,
+    /// `float _Complex`, generated as `cinrs_rt::Complex<f32>`.
+    ///
+    /// C calls the complex types *floating* types and therefore arithmetic
+    /// ones, but almost nothing in this crate wants them where a `float` or a
+    /// `double` goes: [`Ty::is_floating`] is deliberately the *real* floating
+    /// types only, and [`Ty::is_complex`] is the question to ask about these.
+    ComplexFloat,
+    /// `double _Complex` (and `long double _Complex`), generated as
+    /// `cinrs_rt::Complex<f64>`.
+    ComplexDouble,
     /// A pointer, including a pointer to a function.
     Pointer(PointerId),
     /// An array of a known length.
@@ -967,6 +977,17 @@ impl Types {
                 let size = u64::from(target.int_bits).div_ceil(8);
                 Layout { size, align: size }
             }
+            // A complex type is two of its component type laid out side by
+            // side (C99 6.2.5p13), so it is twice as big and no more strictly
+            // aligned — which is what `#[repr(C)] struct Complex<T>` gives
+            // and what every ABI this crate targets says.
+            Ty::ComplexFloat | Ty::ComplexDouble => {
+                let component = ty.complex_component().size_bytes(target);
+                Layout {
+                    size: component * 2,
+                    align: component.min(target.max_scalar_align).max(1),
+                }
+            }
             // The one scalar whose alignment is not its size on every target;
             // see [`TargetModel::int128_align`].
             Ty::Int128 | Ty::UInt128 => Layout {
@@ -1078,6 +1099,8 @@ impl Ty {
             Ty::UInt128 => "unsigned __int128",
             Ty::Float => "float",
             Ty::Double => "double",
+            Ty::ComplexFloat => "float _Complex",
+            Ty::ComplexDouble => "double _Complex",
             Ty::Pointer(_) => "pointer",
             Ty::Array(_) => "array",
             Ty::Func(_) => "function",
@@ -1166,14 +1189,47 @@ impl Ty {
         matches!(self, Ty::Int128 | Ty::UInt128)
     }
 
-    /// Whether this is `float` or `double`.
+    /// Whether this is `float` or `double` — one of C's *real* floating types.
+    ///
+    /// The complex types are floating types too as far as the standard's
+    /// wording goes; [`Ty::is_complex`] is the question about those, and
+    /// keeping them out of this one is what stops every existing floating-point
+    /// path from silently treating a `Complex<f64>` as an `f64`.
     pub fn is_floating(self) -> bool {
         matches!(self, Ty::Float | Ty::Double)
     }
 
-    /// Whether this is an arithmetic type.
+    /// Whether this is one of the complex types.
+    pub fn is_complex(self) -> bool {
+        matches!(self, Ty::ComplexFloat | Ty::ComplexDouble)
+    }
+
+    /// The *corresponding real type* (C99 6.2.5p14) — the type of each part of
+    /// a complex value, and the type itself for everything else.
+    pub fn complex_component(self) -> Ty {
+        match self {
+            Ty::ComplexFloat => Ty::Float,
+            Ty::ComplexDouble => Ty::Double,
+            other => other,
+        }
+    }
+
+    /// The complex type whose parts have this real type (C99 6.2.5p13).
+    ///
+    /// Anything that is not a real floating type gets `double _Complex`, which
+    /// is what the usual arithmetic conversions give an integer operand.
+    pub fn complex_of(self) -> Ty {
+        match self {
+            Ty::Float => Ty::ComplexFloat,
+            Ty::ComplexFloat => Ty::ComplexFloat,
+            _ => Ty::ComplexDouble,
+        }
+    }
+
+    /// Whether this is an arithmetic type: an integer, a real floating type, or
+    /// a complex one (C99 6.2.5p18).
     pub fn is_arithmetic(self) -> bool {
-        self.is_integer() || self.is_floating()
+        self.is_integer() || self.is_floating() || self.is_complex()
     }
 
     /// Whether this is a scalar, i.e. something C can compare against zero.
@@ -1197,7 +1253,7 @@ impl Ty {
             Ty::Char => target.char_signed,
             Ty::SChar | Ty::Short | Ty::Int | Ty::Long | Ty::LongLong | Ty::Enum(_) => true,
             Ty::Int128 => true,
-            Ty::Float | Ty::Double => true,
+            Ty::Float | Ty::Double | Ty::ComplexFloat | Ty::ComplexDouble => true,
             _ => false,
         }
     }
@@ -1216,6 +1272,8 @@ impl Ty {
             Ty::Int128 | Ty::UInt128 => 128,
             Ty::Float => 32,
             Ty::Double => 64,
+            Ty::ComplexFloat => 64,
+            Ty::ComplexDouble => 128,
             Ty::Pointer(_) => target.ptr_bits,
             // An atomic type's width is its underlying one's, which needs the
             // arena; nothing asks this about one, because every value has
@@ -1254,6 +1312,10 @@ impl Ty {
             Ty::Int128 | Ty::UInt128 => 7,
             Ty::Float => 8,
             Ty::Double => 9,
+            // The complex types have no *conversion* rank of their own: C
+            // ranks their corresponding real types and makes the result
+            // complex, which is what `usual_arithmetic` does before this is
+            // ever consulted.
             _ => 0,
         }
     }
@@ -1408,7 +1470,18 @@ impl Ty {
 
     /// The usual arithmetic conversions (C99 6.3.1.8): the common type two
     /// arithmetic operands are converted to.
+    ///
+    /// With a complex operand the standard's rule is in two steps: the *common
+    /// real type* is worked out from the two operands' corresponding real
+    /// types, and the result is the complex type belonging to it if either
+    /// operand was complex. `float _Complex + long` is therefore
+    /// `float _Complex`, not `double _Complex`.
     pub fn usual_arithmetic(lhs: Ty, rhs: Ty, target: &TargetModel) -> Ty {
+        if lhs.is_complex() || rhs.is_complex() {
+            let real =
+                Ty::usual_arithmetic(lhs.complex_component(), rhs.complex_component(), target);
+            return real.complex_of();
+        }
         if lhs == Ty::Double || rhs == Ty::Double {
             return Ty::Double;
         }
@@ -1802,7 +1875,21 @@ pub struct Program {
     /// `::alloc::vec::Vec`. Filled in after semantic analysis, for the same
     /// reason as [`Program::link_libraries`].
     pub no_std: bool,
+    /// The Rust path of the `cinrs` facade crate, which the generated code
+    /// names when it needs the runtime: `::cinrs` unless
+    /// `#pragma cinrs crate "…"` said otherwise.
+    ///
+    /// Only a unit that uses a complex type spells it at all. Filled in after
+    /// semantic analysis, for the same reason as [`Program::link_libraries`].
+    pub crate_path: String,
 }
+
+/// The Rust path of the facade crate the generated code names, when the unit
+/// does not say.
+///
+/// A crate renamed in `Cargo.toml` — `cinrs = { package = "cinrs", … }` under
+/// another name — is reached with `#pragma cinrs crate "<path>"` instead.
+pub const DEFAULT_CRATE_PATH: &str = "::cinrs";
 
 impl Program {
     /// Looks an object up.
@@ -1864,6 +1951,14 @@ pub enum ConstValue {
     Int(i128),
     /// A floating value.
     Float(f64),
+    /// A complex value: the real part and the imaginary one, each already
+    /// rounded to the component type.
+    ///
+    /// Both parts are carried as `f64` whatever the type is, exactly as a
+    /// `float` constant is; the rounding to `f32` happens where the value is
+    /// stored, so that `(float _Complex) 0.1` is the same number here and in
+    /// the generated code.
+    Complex(f64, f64),
 }
 
 // ---------------------------------------------------------------------------
@@ -1981,6 +2076,12 @@ pub enum BuiltinOp {
     /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`: the one
     /// of the first five operands the sixth one's class selects.
     Fpclassify,
+    /// `__builtin_cproj(z)`: C99 7.3.9.5's projection onto the Riemann sphere.
+    ///
+    /// Everything is itself except a value with an infinite part, which becomes
+    /// `+∞` with the imaginary part's sign kept on a zero — so every infinity
+    /// is the *one* point at infinity.
+    ComplexProj,
 }
 
 /// The `float` bit pattern of a NaN that travels through the IR as a `double`.
@@ -2395,6 +2496,18 @@ pub enum PlaceKind {
         /// The index of the member in the record's field list.
         index: usize,
     },
+    /// `__real__ z` or `__imag__ z`: one part of a complex object, which GNU C
+    /// makes an lvalue whenever `z` is one, so `__imag__ z = 1.0;` assigns.
+    ///
+    /// The type of the place is the [corresponding real
+    /// type](Ty::complex_component); `base` is the complex object, which may be
+    /// a [`PlaceKind::Temporary`] when the operand was an rvalue.
+    ComplexPart {
+        /// The complex object the part belongs to.
+        base: Box<Place>,
+        /// Whether this is `__imag__` rather than `__real__`.
+        imag: bool,
+    },
     /// A string literal, whose type is an array of `char` (or of `wchar_t`).
     Str(StrId),
     /// A temporary holding the value of an expression, which is what makes
@@ -2483,6 +2596,18 @@ pub enum ExprKind {
     Int(i128),
     /// A floating constant.
     Float(f64),
+    /// A complex value built from its two parts, which have the
+    /// [corresponding real type](Ty::complex_component).
+    ///
+    /// It is what `__builtin_complex(x, y)` — and therefore `CMPLX` — makes,
+    /// what an imaginary constant such as `2.0i` is, and what a folded complex
+    /// constant comes back as.
+    ComplexOf {
+        /// The real part.
+        re: Box<Expr>,
+        /// The imaginary part.
+        im: Box<Expr>,
+    },
     /// The all-bits-zero value of the expression's type: `0`, `0.0`, `false`,
     /// a null pointer, or a zeroed aggregate.
     Zeroed,
@@ -3062,6 +3187,7 @@ pub fn calls_a_function(expr: &Expr) -> bool {
         | ExprKind::Logical { lhs, rhs, .. }
         | ExprKind::PtrDiff { lhs, rhs }
         | ExprKind::Comma { lhs, rhs } => calls_a_function(lhs) || calls_a_function(rhs),
+        ExprKind::ComplexOf { re, im } => calls_a_function(re) || calls_a_function(im),
         ExprKind::PtrOffset { ptr, index, .. } => calls_a_function(ptr) || calls_a_function(index),
         ExprKind::Cond {
             cond,
@@ -3086,7 +3212,9 @@ fn place_calls_a_function(place: &Place) -> bool {
         PlaceKind::Object(_) | PlaceKind::Str(_) => false,
         PlaceKind::Deref(ptr) => calls_a_function(ptr),
         PlaceKind::Index { base, index } => calls_a_function(base) || calls_a_function(index),
-        PlaceKind::Field { base, .. } => place_calls_a_function(base),
+        PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+            place_calls_a_function(base)
+        }
         PlaceKind::Temporary(expr) => calls_a_function(expr),
         PlaceKind::CompoundLiteral { init, .. } => calls_a_function(init),
     }
@@ -3127,6 +3255,9 @@ pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
         | ExprKind::PtrDiff { lhs, rhs }
         | ExprKind::Comma { lhs, rhs } => {
             mentions_object(lhs, object) || mentions_object(rhs, object)
+        }
+        ExprKind::ComplexOf { re, im } => {
+            mentions_object(re, object) || mentions_object(im, object)
         }
         ExprKind::PtrOffset { ptr, index, .. } => {
             mentions_object(ptr, object) || mentions_object(index, object)
@@ -3172,7 +3303,9 @@ fn place_mentions_object(place: &Place, object: ObjectId) -> bool {
         PlaceKind::Index { base, index } => {
             mentions_object(base, object) || mentions_object(index, object)
         }
-        PlaceKind::Field { base, .. } => place_mentions_object(base, object),
+        PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+            place_mentions_object(base, object)
+        }
         PlaceKind::Temporary(expr) => mentions_object(expr, object),
         PlaceKind::CompoundLiteral { init, .. } => mentions_object(init, object),
     }

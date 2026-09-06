@@ -732,8 +732,18 @@ const MODELS: &[&str] = &[
 /// The POSIX headers, which say so with an `#error` on a Windows target.
 const POSIX_ONLY: &[&str] = &["fcntl.h", "strings.h", "unistd.h"];
 
-/// The one header that is an `#error` everywhere, on purpose.
+/// The headers that are an `#error` on purpose.
+///
+/// `<setjmp.h>` always: `setjmp`/`longjmp` have no translation, and a header
+/// that says so is more use than a missing one. `<complex.h>` only when the
+/// `complex` feature is off, which is exactly what `__STDC_NO_COMPLEX__`
+/// promises the program.
 const REFUSED: &[(&str, &str)] = &[("setjmp.h", "setjmp")];
+
+/// The header whose refusal depends on a cargo feature; see [`REFUSED`].
+fn feature_refusal(name: &str) -> Option<&'static str> {
+    (name == "complex.h" && !cfg!(feature = "complex")).then_some("'complex' feature")
+}
 
 /// Every diagnostic including `name` alone raises, for `model`.
 fn header_errors(name: &str, model: &str) -> Vec<String> {
@@ -779,6 +789,7 @@ fn every_bundled_header_compiles_alone_for_every_model() {
                 .iter()
                 .find(|(header, _)| header == name)
                 .map(|(_, message)| *message)
+                .or_else(|| feature_refusal(name))
                 .or_else(|| (windows && POSIX_ONLY.contains(name)).then_some("POSIX"));
             if let Some(expected) = refused {
                 assert!(

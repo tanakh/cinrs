@@ -158,15 +158,15 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 ## Baseline
 
 Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
-corpus revision: **99 files, 276 RUN lines, 203 run, 124 as required (61.1 %)**,
+corpus revision: **99 files, 276 RUN lines, 203 run, 131 as required (64.5 %)**,
 73 skipped, in about ten seconds.
 
 | directory | run | as required | rate | revisions | skipped |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `C99` | 30 | 21 | **70.0 %** | 37 | 7 |
-| `C11` | 23 | 13 | 56.5 % | 30 | 7 |
+| `C99` | 30 | 23 | **76.7 %** | 37 | 7 |
+| `C11` | 23 | 15 | 65.2 % | 30 | 7 |
 | `C23` | 45 | 28 | 62.2 % | 69 | 24 |
-| `drs` | 105 | 62 | 59.0 % | 140 | 35 |
+| `drs` | 105 | 65 | 61.9 % | 140 | 35 |
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
@@ -176,18 +176,18 @@ The rate went *down* once, when the C89 revisions started running — 79 of 175
 28 revisions that joined were 6 more passes and 22 more mismatches, most of
 them a `-std=c89` RUN line using a C99 feature that Clang takes as an
 extension and `c89!` refuses on purpose. Those are `!` entries; see below.
-Trigraphs and designator lists took it back up to 96 of 203 (47.3 %), and the
-last round took it to 123: 13 of those are the directive-line rule above,
-which was the harness reading Clang's annotations wrongly rather than anything
-`cinrs` did, and the other 14 are the fixes listed at the end of this
-document.
+Trigraphs and designator lists took it back up to 96 of 203 (47.3 %), the
+round after that to 123 — 13 of those are the directive-line rule above, which
+was the harness reading Clang's annotations wrongly rather than anything
+`cinrs` did, and the other 14 are the fixes listed at the end of this document
+— and `_Complex` took it to 131.
 
 ### The mismatches, by cause
 
-79 revisions do not come out as the test asks. Every one of them is in
+72 revisions do not come out as the test asks. Every one of them is in
 `tests/clang-c/expected-failures.txt` with a one-line cause; grouped:
 
-**Deliberate refusals (34, marked `!`).** These are not gaps. Guard mode
+**Deliberate refusals (27, marked `!`).** These are not gaps. Guard mode
 asserts that the refusal is still there.
 
 * *A later revision's feature in an earlier block* (23): `_Static_assert` and
@@ -200,15 +200,15 @@ asserts that the refusal is still there.
   `-Wc11-extensions`, `-Wc23-extensions`), which these RUN lines silence or do
   not promote — an error only under `-pedantic-errors`. `cinrs` gates them on
   the entry point instead, and says which macro to write.
-* *`_Complex` and `_Imaginary`* (7). C11 6.10.8.3 makes complex arithmetic
-  optional and `cinrs` predefines `__STDC_NO_COMPLEX__`, so refusing them is
-  conforming behaviour rather than a gap. `C11/n1460.c` is the same thing seen
-  from the other side: the file's own `#error` fires *because* the macro is
-  defined.
-* *Clang-only builtins* (4): `__builtin_bit_cast`, `__builtin_complex`.
+* *`_Complex` in a `c89!` block* (1, `drs/dr206.c:0`), which is the same rule
+  as the row above: C99 added the type and the strict C89 entry point says so.
+  The other four revisions of that file, and `C99/n809_2.c`, `n809_3.c`,
+  `C11/n1460.c` and `C11/n1464.c` — `__builtin_complex`, which is the *paper*
+  N1464 is about — all came out as required once the complex types landed.
+* *Clang-only builtins* (3): `__builtin_bit_cast`.
 
 **Genuine gaps, false rejections (3).** Valid C that `cinrs` refuses. There
-are 37 false rejections in all; the other 34 are the deliberate ones above.
+are 30 false rejections in all; the other 27 are the deliberate ones above.
 
 | cause | revisions |
 | --- | ---: |
@@ -240,15 +240,25 @@ what is above.
 
 ### What the results changed in `doc/c-status.md`
 
-Fourteen rows have moved as a result of running this suite. The one from the
+Fifteen rows have moved as a result of running this suite. The one from the
 latest round:
+
+* **The complex types** (N620, N638, N657, N694, N809) and **`CMPLX`** (N1464).
+  Seven revisions were deliberate refusals resting on `__STDC_NO_COMPLEX__`
+  and are now required passes: both papers' own files, `C99/n809_2.c`,
+  `n809_3.c` and four of the five revisions of `drs/dr206.c`. The fifth is a
+  `c89!` block, where `_Complex` is still a C99 feature in an earlier entry
+  point. `C99/n809.c` itself is still a wrong-line mismatch, on the
+  `_Static_assert` it uses rather than on anything about complex.
+
+The one from the round before:
 
 * **An enumeration's fixed underlying type may be written `_Atomic`**, and the
   underlying type is then the unqualified, non-atomic one (C23 6.7.2.2p5,
   `C23/n3030_1.c`). The file used to be a deliberate refusal, because
   `_Atomic` was; now that atomics are implemented it comes out as required.
 
-The eight from the round before, each with the revision that asked for it:
+The eight from the round before that, each with the revision that asked for it:
 
 * **`restrict` is checked** against C99 6.7.3p2 — it may only qualify a
   pointer to an object type (`C99/n448.c`).

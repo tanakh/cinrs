@@ -221,10 +221,20 @@ c99! {
     const char *timestamp(void) { return __TIMESTAMP__; }
     int include_level(void) { return __INCLUDE_LEVEL__; }
 
-    #if defined(__STDC_NO_THREADS__) && defined(__STDC_NO_COMPLEX__)
+    /* Threads are left out in every build, and Annex G is never claimed
+       whether or not complex arithmetic is there. */
+    #if defined(__STDC_NO_THREADS__) && !defined(__STDC_IEC_559_COMPLEX__)
     int subsetting(void) { return 1; }
     #else
     int subsetting(void) { return 0; }
+    #endif
+
+    /* Complex arithmetic is the one optional part that depends on a cargo
+       feature, so the answer is checked against `cfg!` rather than pinned. */
+    #ifdef __STDC_NO_COMPLEX__
+    int no_complex(void) { return 1; }
+    #else
+    int no_complex(void) { return 0; }
     #endif
 
     /* Neither atomics nor variable length arrays are left out, so the macros
@@ -260,6 +270,11 @@ fn the_predefined_macros_say_what_this_implementation_is() {
     assert_eq!(unsafe { strict() }, 1);
     assert_eq!(unsafe { gnu_strict() }, 0);
     assert_eq!(unsafe { subsetting() }, 1);
+    assert_eq!(
+        unsafe { no_complex() },
+        i32::from(!cfg!(feature = "complex")),
+        "__STDC_NO_COMPLEX__ has to follow the 'complex' feature"
+    );
     assert_eq!(unsafe { has_vla() }, 1);
     assert_eq!(unsafe { has_atomics() }, 1);
 

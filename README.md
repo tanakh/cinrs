@@ -185,7 +185,10 @@ Run it with `cargo run --example fact`.
   `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
   needs from `alloc` rather than from `std`, and refuses a thread-local object,
   which needs `std` outright;
-  `#pragma cinrs module "…"` names the module the expansion goes into.
+  `#pragma cinrs module "…"` names the module the expansion goes into;
+  `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a
+  renamed dependency — the generated code names it only for complex numbers,
+  and `::cinrs` is the default.
 * **Two input forms.** C the Rust lexer accepts is written as raw tokens —
   `int café(void)` included, since Rust's identifiers are UAX #31's too; C it
   refuses (hexadecimal floating constants, `'ab'`, the prefixed literals
@@ -203,19 +206,38 @@ Run it with `cargo run --example fact`.
   turns it back into a caret.
 * **Variadic functions.** Declaring and calling one works anywhere; *defining*
   one needs Rust 1.99's `c_variadic`, and is a clear error before that.
+* **Complex numbers.** `float _Complex` and `double _Complex` are
+  `cinrs::rt::Complex<f32>` and `Complex<f64>` — which is
+  [`num_complex::Complex`](https://docs.rs/num-complex), the type the numeric
+  half of crates.io already speaks, so a complex value crosses the boundary
+  without a conversion. `long double _Complex` is `double _Complex`, the same
+  mapping `long double` has and the same ABI caveat. The arithmetic is C's,
+  Annex G.5.1's infinity recovery included, and is checked against the host's
+  own C compiler over a hundred and thirty thousand operand pairs. GNU's
+  `__real__`, `__imag__`, `~z` and the `2.0i` suffix are there, and so are
+  `<complex.h>`, `CMPLX` and `_Generic` over the complex types.
+
+  This is the one thing `cinrs` generates that names a crate rather than
+  `core`, so it lives behind the **`complex` feature**, which is on by
+  default. `default-features = false` drops the `cinrs-rt` dependency,
+  predefines `__STDC_NO_COMPLEX__` and makes `_Complex` a diagnostic naming
+  the feature. `cinrs-rt` is itself `#![no_std]`, so having it on costs a
+  `#![no_std]` crate nothing.
 
 ## Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
-  `_Complex`, `setjmp`/`longjmp`, `_BitInt`, an `_Atomic` *aggregate* (legal C,
-  and there is nothing in the generated Rust to be the lock it needs), and
+  `setjmp`/`longjmp`, `_BitInt`, `_Imaginary`, a complex *integer* type
+  (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
+  C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
   the GNU side: inline assembly, computed `goto` and the vector extensions.
-  Two of C11's four `__STDC_NO_*` macros are predefined, which is the
-  standard's own way of saying that threads and complex arithmetic are left
-  out; `__STDC_NO_THREADS__` stays defined although `_Thread_local` works,
-  because `<threads.h>` does not. `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`
-  are *not* defined: atomics and variably modified types are here. The one
+  One of C11's four `__STDC_NO_*` macros is predefined, which is the
+  standard's own way of saying that threads are left out;
+  `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
+  `<threads.h>` does not. `__STDC_NO_COMPLEX__` follows the `complex` feature
+  below and is normally *not* defined; neither are `__STDC_NO_ATOMICS__` and
+  `__STDC_NO_VLA__`, atomics and variably modified types being here. The one
   corner of the latter that is left is a bound written in a *type name* —
   `(double (*)[m])p` — where there is no declaration to keep the length in, so
   an expression that needs it is refused.
@@ -349,6 +371,10 @@ the atomic builtins, and the C library's own `abort` for `__builtin_trap` and
 `assert`. The C library is still *linked*, because the C code calls it — that
 is a link-time dependency of the program rather than a Rust one.
 
+A complex type is the one thing that names another crate — `cinrs::rt`, the
+re-export of `cinrs-rt` — and `cinrs-rt` is itself `#![no_std]`, so it changes
+nothing here. `default-features = false` drops it, and `_Complex` with it.
+
 Three constructs are the exception. Two of them are variable length arrays and
 `alloca`, whose storage is a `Vec`. Nothing in the C says which kind of crate
 the expansion is going into, so that `Vec` is `::std::vec::Vec` unless the unit
@@ -393,17 +419,17 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,463 pass (82.7 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,367 (77.3 %) under
-  `gnu11!`. What is left is inline assembly, the vector extensions, `_Complex`,
-  nested functions, computed `goto`, the handful of `__builtin_*` forms this
-  crate does not implement, and the variadic definitions that need Rust 1.99 —
-  plus four programs that built and then did the wrong thing, which the
-  document names one by one.
+  exit status zero. **1,478 pass (83.6 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,382 (78.1 %) under
+  `gnu11!`. What is left is inline assembly, the vector extensions, the complex
+  *integer* types, nested functions, computed `goto`, the handful of
+  `__builtin_*` forms this crate does not implement, and the variadic
+  definitions that need Rust 1.99 — plus five programs that built and then did
+  the wrong thing, which the document names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **124 of the 203 revisions run come out as
-  required (61.1 %)**, and this is the only suite that measures what `cinrs`
+  which lines must be diagnosed. **131 of the 203 revisions run come out as
+  required (64.5 %)**, and this is the only suite that measures what `cinrs`
   *refuses*, which is half of what a front end is for.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and

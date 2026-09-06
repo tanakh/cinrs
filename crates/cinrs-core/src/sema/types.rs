@@ -39,6 +39,7 @@
 
 use std::collections::HashSet;
 
+use crate::COMPLEX_UNSUPPORTED;
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
@@ -292,12 +293,24 @@ impl Sema<'_> {
             // `double`, which is what every other C-to-Rust translator does.
             ast::TypeKind::Float(ast::FloatSize::Float) => Ok(Ty::Float),
             ast::TypeKind::Float(_) => Ok(Ty::Double),
-            ast::TypeKind::Complex(_) => {
-                Err(TypeError::at(range, "complex types are not supported"))
+            // `long double _Complex` follows `long double` onto `double`, with
+            // the same documented loss of precision and the same ABI caveat.
+            ast::TypeKind::Complex(size) => {
+                if !self.complex {
+                    return Err(TypeError::at(range, COMPLEX_UNSUPPORTED.to_owned()));
+                }
+                Ok(match size {
+                    ast::FloatSize::Float => Ty::ComplexFloat,
+                    _ => Ty::ComplexDouble,
+                })
             }
-            ast::TypeKind::Imaginary(_) => {
-                Err(TypeError::at(range, "imaginary types are not supported"))
-            }
+            // GCC has no `_Imaginary` either: no compiler implements the
+            // imaginary types, and C99 6.7.2p2 leaves them optional.
+            ast::TypeKind::Imaginary(_) => Err(TypeError::at(
+                range,
+                "imaginary types are not supported; no compiler implements '_Imaginary', and \
+                 C99 makes it optional. Write the '_Complex' type instead",
+            )),
             ast::TypeKind::Pointer(inner) => {
                 let pointee = self.resolve_ty(inner)?;
                 // `int (*p)[n]` is a pointer to a variably modified type: the
@@ -672,10 +685,27 @@ impl Sema<'_> {
                 );
                 return ty;
             }
-            "SC" | "DC" | "XC" | "TC" | "KC" | "HC" => {
+            // The complex machine modes. `SC` and `DC` are `float _Complex`
+            // and `double _Complex`; the wider ones name formats this
+            // implementation does not have, exactly as `XF` and `TF` do.
+            "SC" | "DC" if self.complex => {
+                return if name == "SC" {
+                    Ty::ComplexFloat
+                } else {
+                    Ty::ComplexDouble
+                };
+            }
+            "SC" | "DC" => {
+                self.error(range, COMPLEX_UNSUPPORTED.to_owned());
+                return ty;
+            }
+            "XC" | "TC" | "KC" | "HC" => {
                 self.error(
                     range,
-                    format!("'mode({name})' names a complex type, which is not supported"),
+                    format!(
+                        "'mode({name})' names a complex type whose parts have a floating \
+                         format with no stable Rust type; write 'double _Complex'"
+                    ),
                 );
                 return ty;
             }

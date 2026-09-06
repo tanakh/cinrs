@@ -157,8 +157,8 @@ corpus revision, under the two entry points worth pointing at this corpus:
 
 | entry point | `execute` | `execute/ieee` | total | rate |
 | --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1401/1691 (82.9 %) | 62/78 (79.5 %) | **1463/1769** | **82.7 %** |
-| `gnu11!` | 1305/1691 (77.2 %) | 62/78 (79.5 %) | 1367/1769 | 77.3 % |
+| **`gnu89!`** | 1414/1691 (83.6 %) | 64/78 (82.1 %) | **1478/1769** | **83.6 %** |
+| `gnu11!` | 1318/1691 (77.9 %) | 64/78 (82.1 %) | 1382/1769 | 78.1 % |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -174,7 +174,7 @@ literal may not), and one is not valid UTF-8.
 
 ### The failures, by cause
 
-Under `gnu89!`, 302 of the 306 failures are refused at compile time, in 33
+Under `gnu89!`, 286 of the 291 failures are refused at compile time, in 31
 distinct causes. The ones worth a line each, with what the same cause costs
 under `gnu11!` beside it:
 
@@ -185,13 +185,13 @@ under `gnu11!` beside it:
 | 44 | 44 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
 | 38 | 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
 | 29 | 23 | `expected ';' after declaration, found '{'` — a nested function definition, which is a GNU extension this crate does not have | `execute/20000822-1` |
-| 21 | 21 | `_Complex` | `execute/20010605-2` |
 | 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
 | 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
 | 11 | 11 | `expected expression, found '&&'` — computed `goto` | `execute/20040302-1` |
 | 8 | 8 | `va_list` in a context that needs Rust 1.99 | `execute/20000519-1` |
 | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
 | 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
+| 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | 5 | 5 | a `#include` of a corpus file outside the sparse checkout (`../../gcc.dg/…`) | `execute/pr105777` |
 | 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
 | 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
@@ -201,14 +201,27 @@ under `gnu11!` beside it:
 | — | 3 | implicit declaration of a function, which `gnu89!` has | `execute/20000412-3` |
 
 The remaining causes have two cases or fewer each; the report prints all
-thirty-three. The `__builtin_…` count is the sum of two rows the report prints
+thirty-one. The `__builtin_…` count is the sum of two rows the report prints
 separately, because a diagnostic raised inside an `#include`d corpus file
 carries the file name and is grouped on its own.
 
-The last round of work took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
-to 1367 — 61 cases and 60, and **no case went the other way** in either.
-Where they came from (the `gnu89!` column; `gnu11!` gains the same set but
-`execute/20031211-2`, which needs implicit `int` as well):
+The last round of work — `_Complex` — took both entry points up by **15**, and
+**no case went the other way** in either:
+
+| cases | what landed |
+| ---: | --- |
+| 13 | the complex types themselves: `execute/20010605-2`, `20020411-1`, `20030910-1`, `20070614-1`, `960512-1`, `complex-1`, `-2`, `-4`, `-5`, `-7`, `pr38969`, `pr42248`, `pr49644` |
+| 2 | `ieee/cdivchkf` and `ieee/cdivchkld`, GCC's accuracy checks for the `float` and `long double` quotients |
+
+Seven cases that used to fail on `_Complex` still fail, on the *complex
+integer* types behind it — `_Complex int`, `__complex__ char`, `3i` — which
+are a separate GNU extension. One more, `execute/20020227-1`, now gets past
+the front end and fails on a packed-member reference that the complex
+diagnostic had been hiding. `ieee/cdivchkd` is the one case that compiles,
+runs and gives an answer GCC would not; see the section below.
+
+The round before that took `gnu89!` from 1402 to 1463 and `gnu11!` from 1307
+to 1367:
 
 | cases | what landed |
 | ---: | --- |
@@ -241,13 +254,14 @@ of what `cinrs` does not implement.
 
 ### The programs that built and then did the wrong thing
 
-**Four** cases compile, run and fail. These are the interesting ones — a
+**Five** cases compile, run and fail. These are the interesting ones — a
 miscompilation, or a semantic nothing diagnosed and nothing implemented — and
 there were fifteen of them until they were triaged one by one. Thirteen were
-bugs and are fixed; the four that are left are not bugs in the translation:
+bugs and are fixed; the five that are left are not bugs in the translation:
 
 | case | verdict |
 | --- | --- |
+| `ieee/cdivchkd` | GCC's own accuracy check for `double _Complex` division: four quotients whose operands' exponents are hundreds apart, chosen because they are where a careless implementation loses its bits. Two of the four are within what `cinrs_rt::complex::div_f64` gives; the other two need `libgcc`'s power-of-two prescaling of *both* operands, which Smith's algorithm — even with Baudin and Smith's subnormal-ratio refinement — does not do. C leaves the accuracy of complex arithmetic implementation-defined (Annex G.6), so this is a quality gap and not a conformance one. The `float` and `long double` cases beside it, `cdivchkf` and `cdivchkld`, pass: the `float` quotient is computed in the wider format, where no scaling is needed at all. |
 | `execute/20021127-1` | the case *defines* `long long llabs(long long)` as a function that aborts, and requires the compiler to expand the builtin inline rather than call it. Defining a standard library function is undefined behaviour (7.1.3p2), and `cinrs` calls what the program defined. |
 | `execute/20101011-1` | installs a `SIGFPE` handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. It reached this point only once `<signal.h>` was bundled; before that it was a compile failure. |
 | `execute/builtin-types-compatible-p` | requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous `enum`s to answer *no*. Both answer yes here, and both are documented mappings rather than bugs: `long double` **is** `double` (no portable Rust type has an x87 extended double's layout), and an untagged `enum` **is** `int`. Every other question in the file, the `int[5]` against `int[]` one included, is answered as GCC answers it. |
@@ -271,13 +285,13 @@ each has a regression test of its own next to the fix:
 | `921110-1`, `pr53084` | two `static` initialisers that needed an `unsafe` block and did not get one: a function pointer whose C type differed from another the generated Rust cannot tell apart (the transmute between them is now elided, being a no-op), and `"foo" + 1`, whose `.offset(1)` is an unsafe call however safe the string literal's address is. |
 | `pr103209` | a call through `int *h();` that a later `int *h(unsigned, int)` completed: the call was checked against the type in scope where it stands, which has no prototype, and code generation looked the *final* signature up instead and passed the arguments straight to it. The reinterpretation now compares the argument types as well as their number. |
 
-The report names all four remaining cases, so `CINRS_GCC_TORTURE_REPORT=1` is
+The report names all five remaining cases, so `CINRS_GCC_TORTURE_REPORT=1` is
 where the current list lives if this one has gone stale.
 
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 402 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 306.
+`gnu11!`'s, 387 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 291.
 One id per line, in the same format the other two suites use — see
 [`doc/c-testsuite.md`](c-testsuite.md#the-markers) for what `?` and `!` mean.
 Guard mode skips every listed case, runs it anyway, and reports one that has

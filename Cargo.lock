@@ -127,6 +127,7 @@ version = "0.1.0"
 dependencies = [
  "cinrs-core",
  "cinrs-macros",
+ "cinrs-rt",
  "proc-macro2",
  "rustversion",
  "ui_test",
@@ -152,6 +153,13 @@ version = "0.1.0"
 dependencies = [
  "cinrs-core",
  "proc-macro2",
+]
+
+[[package]]
+name = "cinrs-rt"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
 ]
 
 [[package]]
@@ -382,6 +390,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
 dependencies = [
  "adler2",
+]
+
+[[package]]
+name = "num-complex"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]

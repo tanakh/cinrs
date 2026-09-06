@@ -4,28 +4,28 @@ error: 'mode(XF)' names a floating format with no stable Rust type; `f16` and `f
 16 |     typedef double extended __attribute__((mode(XF)));
    |                                            ^^^^
 
-error: 'mode(DC)' names a complex type, which is not supported
-  --> tests/ui/gnu_mode_errors.rs:19:50
+error: 'mode(TC)' names a complex type whose parts have a floating format with no stable Rust type; write 'double _Complex'
+  --> tests/ui/gnu_mode_errors.rs:21:48
    |
-19 |     typedef double complex_double __attribute__((mode(DC)));
-   |                                                  ^^^^
+21 |     typedef double complex_quad __attribute__((mode(TC)));
+   |                                                ^^^^
 
 error: 'mode(V4SI)' names a vector type: the vector extensions need `core::simd`, which is unstable
-  --> tests/ui/gnu_mode_errors.rs:22:42
+  --> tests/ui/gnu_mode_errors.rs:24:42
    |
-22 |     typedef int four_ints __attribute__((mode(V4SI)));
+24 |     typedef int four_ints __attribute__((mode(V4SI)));
    |                                          ^^^^
 
 error: unknown machine mode 'ZZ'
-  --> tests/ui/gnu_mode_errors.rs:25:41
+  --> tests/ui/gnu_mode_errors.rs:27:41
    |
-25 |     typedef int nonsense __attribute__((mode(ZZ)));
+27 |     typedef int nonsense __attribute__((mode(ZZ)));
    |                                         ^^^^
 
 error: 'mode' applies to an arithmetic type, and 'struct s' is not one
-  --> tests/ui/gnu_mode_errors.rs:29:49
+  --> tests/ui/gnu_mode_errors.rs:31:49
    |
-29 |     typedef struct s wide_struct __attribute__((mode(DI)));
+31 |     typedef struct s wide_struct __attribute__((mode(DI)));
    |                                                 ^^^^
 
 error: aborting due to 5 previous errors

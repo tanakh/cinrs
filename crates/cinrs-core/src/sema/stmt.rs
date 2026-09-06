@@ -930,7 +930,8 @@ impl Sema<'_> {
         }
         match self.const_eval_at(&value, "'case' label")? {
             ConstValue::Int(v) => Some(ty.wrap(v, &self.target)),
-            ConstValue::Float(_) => None,
+            // Neither can arrive: the label was checked to be an integer.
+            ConstValue::Float(_) | ConstValue::Complex(..) => None,
         }
     }
 

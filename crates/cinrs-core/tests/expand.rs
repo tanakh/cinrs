@@ -718,8 +718,10 @@ fn a_diagnostic_inside_a_header_names_the_header_and_points_at_the_directive() {
 /// A header that does not parse is worse than a missing one: the program that
 /// includes it is buried in diagnostics that are not its fault. They are
 /// written in the C99 this crate itself accepts, and this is what keeps them
-/// that way — with one exception: `<stdatomic.h>` is a C11 header and is
-/// written in `_Atomic`, which a `c99!` block refuses by design.
+/// that way — with two exceptions: `<stdatomic.h>` is a C11 header and is
+/// written in `_Atomic`, which a `c99!` block refuses by design, and
+/// `<complex.h>` is an `#error` when the complex types are switched off, which
+/// is what `__STDC_NO_COMPLEX__` promises the program.
 #[test]
 fn every_bundled_header_compiles_on_its_own() {
     for (name, _) in cinrs_core::include::BUNDLED {
@@ -731,13 +733,45 @@ fn every_bundled_header_compiles_on_its_own() {
         } else {
             Standard::C99
         };
+        // Both states of the `complex` feature are exercised: with it on the
+        // header has to survive like every other one, and with it off it has
+        // to be the single `#error` and nothing else.
+        let options = Options::new(standard).with_complex(true);
         let source = format!("#include <{name}>");
-        let output = expand(stream(&source), &Options::new(standard)).to_string();
+        let output = expand(stream(&source), &options).to_string();
         assert!(
             !output.contains("compile_error"),
             "<{name}> did not survive the front end: {output}"
         );
     }
+}
+
+/// `<complex.h>` without the complex types, which is what
+/// `__STDC_NO_COMPLEX__` says will happen.
+#[test]
+fn complex_h_without_the_feature_is_one_error() {
+    let options = options().with_complex(false);
+    let errors = emitted_errors(expand(stream("#include <complex.h>"), &options));
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].message.contains("'complex' feature"),
+        "{:?}",
+        errors[0].message
+    );
+}
+
+/// `<complex.h>` in a `c89!` block, which is the one entry point that refuses
+/// it: `_Complex` is C99.
+#[test]
+fn complex_h_needs_c99() {
+    let options = Options::new(Standard::C89).with_complex(true);
+    let errors = emitted_errors(expand(stream("#include <complex.h>"), &options));
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].message.contains("this block is c89!"),
+        "{:?}",
+        errors[0].message
+    );
 }
 
 /// `<stdatomic.h>` in a `c99!` block, which is the one entry point that

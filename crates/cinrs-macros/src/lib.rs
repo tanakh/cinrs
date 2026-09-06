@@ -41,9 +41,11 @@ use cinrs_core::{Options, Standard, Subspan};
 /// `long long`, designated initializers, compound literals, variadic macros,
 /// flexible array members, hexadecimal floating constants, `__func__`,
 /// `_Pragma`, universal character names, a trailing comma in an enumerator
-/// list, `static` and `[*]` in an array parameter declarator, and `_Complex`.
+/// list, `static` and `[*]` in an array parameter declarator, `_Complex` and
+/// an imaginary constant (`2.0i`).
 /// The *library* additions are not: a bundled header is a set of declarations,
-/// and `snprintf` is one of them.
+/// and `snprintf` is one of them — with `<complex.h>` the one exception, since
+/// every declaration in it names a type C89 does not have.
 ///
 /// `__STDC_VERSION__` is **not defined** — C89 as published had no such macro
 /// — while `__STDC__` is `1`, exactly as in `gcc -std=c89`.
@@ -124,7 +126,8 @@ pub fn c99(input: TokenStream) -> TokenStream {
 /// `union`), `_Generic`, `_Noreturn`, `_Thread_local`, `_Atomic` with
 /// `<stdatomic.h>`, anonymous `struct`/`union` members, and
 /// the Unicode literals `u8"…"`, `u"…"`, `U"…"`, `u'x'` and `U'x'` with
-/// `<uchar.h>`'s `char16_t` and `char32_t`. `__STDC_VERSION__` is `201112L`.
+/// `<uchar.h>`'s `char16_t` and `char32_t`, and the `CMPLX` family in
+/// `<complex.h>`. `__STDC_VERSION__` is `201112L`.
 ///
 /// C11's threads are not here: `<threads.h>` is absent and
 /// `__STDC_NO_THREADS__` is predefined. An `_Atomic` `struct` is a clear error

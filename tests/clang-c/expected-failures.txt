@@ -39,8 +39,6 @@
 !C11/n1310.c:3         `__builtin_bit_cast`; see `C11/n1310.c:2`
 !C11/n1310.c:4         `__builtin_bit_cast`; see `C11/n1310.c:2`
 C11/n1330.c            wrong line: the `_Static_assert(0, ...)` the test asks for is not reached, because a `_Generic` in the same file is refused first
-!C11/n1460.c           the file's own `#error` fires because `__STDC_NO_COMPLEX__` is defined, which is what the standard has an implementation without complex say
-!C11/n1464.c           `__builtin_complex`, a Clang builtin for a type cinrs does not have
 C11/n1518.c:0          wrong line: cinrs takes a non-ASCII identifier character by the same rule in every revision, so the C11-only and C23-only errors land on each other's lines
 C11/n1518.c:1          see `C11/n1518.c:0`
 C23/n2322.c            the line number of a macro invocation spanning spliced lines: cinrs and Clang disagree about which physical line it is, and the paper leaves it unspecified — Clang's own comment calls its answer a FIXME
@@ -66,9 +64,7 @@ C99/n448.c:0           wrong line: `_Static_assert` in a `c99!` block is refused
 !C99/n570.c:0          `_Static_assert` in a `c99!` block; write `c11!`
 C99/n717.c:0           wrong line: every universal character name in the file is written as the argument of a macro that expands to nothing, so the diagnostic for one that names a basic-character member never reaches the output; the first error the file does produce is the out-of-range one on a later line
 C99/n717.c:1           see `C99/n717.c:0`
-C99/n809.c             wrong line: `_Imaginary` is diagnosed where `_Complex` already was, so the error lands on line 19 rather than 29
-!C99/n809_2.c          `_Complex`: C11 6.10.8.3 makes complex arithmetic optional and cinrs predefines `__STDC_NO_COMPLEX__`, so refusing it is conforming
-!C99/n809_3.c          `_Complex`; see `C99/n809_2.c`
+C99/n809.c             wrong line: every `_Imaginary` declaration the file asks about *is* diagnosed, and so is the `_Static_assert` it goes on to use — cinrs gates a later revision's feature on the entry point where Clang takes it as an extension. See `C99/n448.c:0`; the sibling files `n809_2.c` and `n809_3.c` now come out as required
 !drs/dr094.c:0         a `//` comment in a `c89!` block; see `C11/n1310.c:0`
 drs/dr0xx.c:0          see `drs/dr0xx.c:2`
 drs/dr0xx.c:2          wrong line: a block-scope `extern int i[10];` gives the object it redeclares the composite type for the whole function, where C scopes that to the inner block — so `sizeof i` after it is accepted where DR011 asks for the incomplete type's error
@@ -80,10 +76,7 @@ drs/dr1xx.c:1          wrong line: a tag declared in a *parameter list* has the 
 drs/dr1xx.c:2          see `drs/dr1xx.c:1`
 drs/dr1xx.c:3          see `drs/dr1xx.c:1`
 drs/dr1xx.c:4          wrong line: in C23 a compatible redefinition of `struct S` is legal (N3037) and cinrs refuses it
-!drs/dr206.c:0         `_Complex` in a `c89!` block, and `_Complex` at all; see `C99/n809_2.c`
-!drs/dr206.c:1         `_Complex`; see `C99/n809_2.c`
-!drs/dr206.c:2         `_Complex`; see `C99/n809_2.c`
-!drs/dr206.c:3         `_Complex`; see `C99/n809_2.c`
+!drs/dr206.c:0         `_Complex` in a `c89!` block, which is the one entry point that has neither it nor `<complex.h>`; the other four revisions of this file now come out as required
 !drs/dr253.c:0         a designated initializer in a `c89!` block; C99 added them (N494), and the other four revisions of this file — which are about designator lists — now come out as required
 drs/dr2xx.c:0          see `drs/dr2xx.c:1`
 drs/dr2xx.c:1          wrong line: `#nondirective` — an unknown directive — is accepted, and the file's own `#error` fires first

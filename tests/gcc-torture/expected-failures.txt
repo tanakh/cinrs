@@ -36,12 +36,10 @@ execute/20001009-2                    compile error: inline assembly is not supp
 execute/20010122-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20010209-1                    compile error: expected ';' after declaration, found '{'
 execute/20010605-1                    compile error: expected ';' after declaration, found '{'
-execute/20010605-2                    compile error: complex types are not supported
 execute/20010924-1                    compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20020107-1                    compile error: inline assembly is not supported
-execute/20020227-1                    compile error: complex types are not supported
+execute/20020227-1                    compile error: E0793: reference to field of packed struct is unaligned
 execute/20020314-1                    compile error: type specifier missing; C99 does not support implicit 'int'
-execute/20020411-1                    compile error: complex types are not supported
 execute/20020412-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20020819-1                    compile error: type specifier missing; C99 does not support implicit 'int'
 execute/20021127-1                    runtime: killed by signal 6 — the case *defines* `long long llabs(long long)` as a function that aborts and requires the builtin to be expanded inline rather than called. Defining a standard library function is undefined behaviour (7.1.3p2), and cinrs calls what the program defined
@@ -51,7 +49,6 @@ execute/20030222-1                    compile error: inline assembly is not supp
 execute/20030323-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030501-1                    compile error: expected ';' after declaration, found '{'
 execute/20030811-1                    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20030910-1                    compile error: complex types are not supported
 ?execute/20030914-2                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20031211-2                    compile error: implicit declaration of function 'foo' is invalid in C99
 execute/20040302-1                    compile error: expected expression, found '&&'
@@ -60,11 +57,11 @@ execute/20040423-1                    compile error: a member of a struct cannot
 execute/20040520-1                    compile error: expected ';' after declaration, found '{'
 execute/20041019-1                    compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/20041113-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/20041124-1                    compile error: complex types are not supported
-execute/20041201-1                    compile error: cannot combine 'char' with other type specifiers — `_Complex char`, which is `_Complex` and so refused
+execute/20041124-1                    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
+execute/20041201-1                    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20041214-1                    compile error: expected expression, found '&&'
 execute/20041218-2                    compile error: a member of a struct cannot have a variably modified type
-execute/20050121-1                    compile error: '__real__' is not supported; complex types are not supported
+execute/20050121-1                    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20050203-1                    compile error: inline assembly is not supported
 execute/20050316-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050316-2                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -74,7 +71,6 @@ execute/20050607-1                    compile error: 'vector_size' is not suppor
 execute/20060420-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20061031-1                    compile error: inline assembly is not supported
 execute/20061220-1                    compile error: expected ';' after declaration, found '{'
-execute/20070614-1                    compile error: complex types are not supported
 execute/20070919-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20071210-1                    compile error: expected expression, found '&&'
 execute/20071211-1                    compile error: inline assembly is not supported
@@ -182,7 +178,6 @@ execute/950621-1                      compile error: type specifier missing; C99
 execute/960218-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/960312-1                      compile error: inline assembly is not supported
 execute/960402-1                      compile error: type specifier missing; C99 does not support implicit 'int'
-execute/960512-1                      compile error: complex types are not supported
 execute/960830-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/961112-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/980205                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -209,12 +204,7 @@ execute/cmpsi-1                       compile error: type specifier missing; C99
 execute/cmpsi-2                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/comp-goto-1                   compile error: expected expression, found '&&'
 execute/comp-goto-2                   compile error: type specifier missing; C99 does not support implicit 'int'
-execute/complex-1                     compile error: complex types are not supported
-execute/complex-2                     compile error: complex types are not supported
-execute/complex-4                     compile error: complex types are not supported
-execute/complex-5                     compile error: complex types are not supported
-execute/complex-6                     compile error: invalid suffix 'i' on floating constant '2.0i': an imaginary constant needs _Complex, which is not supported
-execute/complex-7                     compile error: complex types are not supported
+execute/complex-6                     compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/dbra-1                        compile error: type specifier missing; C99 does not support implicit 'int'
 execute/divmod-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/eeprof-1                      runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
@@ -244,7 +234,7 @@ execute/nestfunc-7                    compile error: expected ';' after declarat
 execute/packed-aligned                compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/pr103376                      compile error: inline assembly is not supported
 execute/pr103405                      compile error: expected ';' after declaration, found '{'
-execute/pr104604                      compile error: complex types are not supported
+execute/pr104604                      compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr105613                      compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr105777                      compile error: "../../gcc.dg/tree-ssa/pr105777.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
 execute/pr108292                      compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -276,14 +266,12 @@ execute/pr24135                       compile error: expected ';' after declarat
 execute/pr28865                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/pr30314                       compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
 execute/pr33382                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
-execute/pr38151                       compile error: complex types are not supported
+execute/pr38151                       compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr38533                       compile error: inline assembly is not supported
-execute/pr38969                       compile error: complex types are not supported
 execute/pr40022                       compile error: inline assembly is not supported
 execute/pr40657                       compile error: inline assembly is not supported
 execute/pr41239                       compile error: inline assembly is not supported
 execute/pr41935                       compile error: a member of a struct cannot have a variably modified type
-execute/pr42248                       compile error: complex types are not supported
 execute/pr43385                       compile error: inline assembly is not supported
 execute/pr43560                       compile error: inline assembly is not supported
 execute/pr44575                       compile error: va_arg with a struct type is not supported yet
@@ -296,7 +284,6 @@ execute/pr47925                       compile error: inline assembly is not supp
 execute/pr49218                       compile error: inline assembly is not supported
 execute/pr49279                       compile error: inline assembly is not supported
 execute/pr49390                       compile error: inline assembly is not supported
-execute/pr49644                       compile error: complex types are not supported
 execute/pr51447                       compile error: expected ';' after declaration, found '{'
 execute/pr51581-1                     compile error: inline assembly is not supported
 execute/pr51581-2                     compile error: inline assembly is not supported
@@ -307,7 +294,7 @@ execute/pr53645                       compile error: 'vector_size' is not suppor
 execute/pr53645-2                     compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr55875                       compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/pr56205                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr56837                       compile error: complex types are not supported
+execute/pr56837                       compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr56866                       compile error: inline assembly is not supported
 execute/pr56982                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/pr57344-1                     compile error: inline assembly is not supported
@@ -416,9 +403,7 @@ execute/va-arg-trap-1                 compile error: va_list is only supported a
 ?execute/vprintf-chk-1                compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 ieee/bfloat16-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16b' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/builtin-issignaling-1            compile error: inline assembly is not supported
-ieee/cdivchkd                         compile error: complex types are not supported
-ieee/cdivchkf                         compile error: complex types are not supported
-ieee/cdivchkld                        compile error: complex types are not supported
+ieee/cdivchkd                         runtime: killed by signal 6 — GCC's own accuracy check for `double _Complex` division, four quotients whose operands' exponents are hundreds apart. Two of the four are within what `cinrs_rt::complex::div_f64` gives; the other two need libgcc's power-of-two prescaling of both operands, which is beyond Smith's algorithm. C leaves the accuracy of complex arithmetic implementation-defined (Annex G.6). `ieee/cdivchkf` and `ieee/cdivchkld` pass
 ieee/float128-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float128x-builtin-issignaling-1  compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float16-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared

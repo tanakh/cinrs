@@ -3,18 +3,22 @@
 //! `d`, `w`, `q` and the `_FloatN` spellings name formats wider than `double`,
 //! and every one of them **is** `double` here — the same mapping `long double`
 //! has. They are plain-spelled extensions, so a strict entry point says which
-//! GNU entry point has them. The decimal and imaginary suffixes name types
-//! this crate has no counterpart for at all, and are refused everywhere.
+//! GNU entry point has them. The decimal suffixes name types this crate has no
+//! counterpart for at all, and are refused everywhere; the imaginary ones —
+//! `i` and `j` — work, and have a test of their own in `tests/complex.rs`,
+//! except on an *integer* constant, where they would name a complex integer
+//! type nothing here can be.
 
 cinrs::gnu99! {
     double gnu_widths(void) {
         return 1.5d + 1.5w + 1.5q + 1.5f64 + 1.5f64x + 1.5f32x + 1.5F128;
     }
     float narrow(void) { return 1.5f32; }
+    double imaginary_part(void) { return __imag__ 2.0i; }
 
     double decimal(void) { return 0.5dd; } //~ ERROR: decimal floating types
     double decimal_upper(void) { return 0.5DF; } //~ ERROR: decimal floating types
-    double imaginary(void) { return 2.0i; } //~ ERROR: an imaginary constant needs _Complex
+    double complex_integer(void) { return 3i; } //~ ERROR: complex integer constant
     double half(void) { return 1.0f16; } //~ ERROR: '_Float16' is not supported
 }
 

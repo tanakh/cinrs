@@ -731,6 +731,9 @@ pub struct Preprocessed {
     pub no_std: bool,
     /// The module name `#pragma cinrs module` asked for.
     pub module: Option<String>,
+    /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate,
+    /// which the generated code names when it needs the runtime.
+    pub crate_path: Option<String>,
     /// Every `#pragma pack` the unit wrote, as `(token index, alignment)`.
     ///
     /// A pragma is not a token, so the change is recorded against the position
@@ -786,6 +789,7 @@ pub fn preprocess(
         export: pp.export,
         no_std: pp.no_std,
         module: pp.module,
+        crate_path: pp.crate_path,
         pack_events: pp.pack_events,
     }
 }
@@ -1140,6 +1144,8 @@ struct Pp<'a> {
     no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module.
     module: Option<String>,
+    /// The Rust path `#pragma cinrs crate` gave the facade crate.
+    crate_path: Option<String>,
     /// Where the data model in force came from, which is what a
     /// `#pragma cinrs target` the scan never read is reported against.
     target_source: TargetSource,
@@ -1211,6 +1217,7 @@ impl<'a> Pp<'a> {
             export: false,
             no_std: false,
             module: None,
+            crate_path: None,
             target_source: options.target_source.clone(),
             target_pragmas: ctx.target_pragmas.clone(),
             model_observed: false,
@@ -2618,7 +2625,7 @@ impl Pp<'_> {
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
     const OPTIONS: &'static str =
-        "'target', 'include_path', 'link', 'export', 'no_std' and 'module'";
+        "'target', 'include_path', 'link', 'export', 'no_std', 'module' and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2634,7 +2641,7 @@ impl Pp<'_> {
             // The scan before preprocessing already read this one and applied
             // it; all that is left is to say so when it cannot have worked.
             "target" => self.target_pragma(range),
-            "include_path" | "link" | "module" => {
+            "include_path" | "link" | "module" | "crate" => {
                 let Some(value) = self.pragma_string(&rest[1..], option.range, name) else {
                     return;
                 };
@@ -2645,6 +2652,7 @@ impl Pp<'_> {
                             self.link_libraries.push(value);
                         }
                     }
+                    "crate" => self.crate_pragma(value, rest[1].range),
                     _ => self.module_pragma(value, rest[1].range),
                 }
             }
@@ -2755,6 +2763,41 @@ impl Pp<'_> {
             return;
         }
         self.module = Some(name);
+    }
+
+    /// `#pragma cinrs crate "::my_cinrs"`, which says where the `cinrs` facade
+    /// crate is to be found.
+    ///
+    /// The generated code names it only where it needs the runtime — today
+    /// that is a complex type, and nothing else — but it has to name it in
+    /// full, because the expansion goes into a module of its own and cannot
+    /// rely on anything being in scope there. The default is `::cinrs`; a
+    /// dependency renamed in `Cargo.toml`, or one reached through a re-export,
+    /// needs this.
+    fn crate_pragma(&mut self, path: String, range: SourceRange) {
+        if !crate::codegen::is_crate_path(&path) {
+            self.diags.error(
+                range,
+                format!(
+                    "'{path}' is not usable as a Rust path to a crate; write something like \
+                     '::my_cinrs' or 'crate::vendor::cinrs'"
+                ),
+            );
+            return;
+        }
+        if let Some(previous) = &self.crate_path
+            && *previous != path
+        {
+            self.diags.error(
+                range,
+                format!(
+                    "this unit already reaches the cinrs crate as '{previous}', by an earlier \
+                     #pragma cinrs crate"
+                ),
+            );
+            return;
+        }
+        self.crate_path = Some(path);
     }
 
     /// The single string literal a `#pragma cinrs` option takes.
@@ -4393,16 +4436,23 @@ impl Pp<'_> {
         }
         self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
-        // implementation a macro to say it left each one out. `cinrs` has left
-        // two of the four out, so saying so turns them from gaps into
-        // conforming omissions — and lets a portable program take the other
-        // branch. The other two are *not* among them: `_Atomic`,
-        // `<stdatomic.h>` and the `__atomic_*` builtins are all here, and so
-        // are variable length arrays and the variably modified types built on
-        // them — `int a[n][m]`, `int (*p)[n]`, `typedef int T[n]` and the
-        // parameter forms — so neither `__STDC_NO_ATOMICS__` nor
-        // `__STDC_NO_VLA__` is defined.
-        self.define_object("__STDC_NO_COMPLEX__", "1");
+        // implementation a macro to say it left each one out. Threads are
+        // always one of them here; complex arithmetic is one only when the
+        // `complex` feature is off, in which case `_Complex` is a diagnostic
+        // and saying so turns the gap into a conforming omission that a
+        // portable program can take the other branch on. The other two are
+        // *not* among them: `_Atomic`, `<stdatomic.h>` and the `__atomic_*`
+        // builtins are all here, and so are variable length arrays and the
+        // variably modified types built on them — `int a[n][m]`, `int (*p)[n]`,
+        // `typedef int T[n]` and the parameter forms — so neither
+        // `__STDC_NO_ATOMICS__` nor `__STDC_NO_VLA__` is defined.
+        //
+        // `__STDC_IEC_559_COMPLEX__` is never defined either way: it claims
+        // the whole of Annex G, and cinrs implements G.5.1's arithmetic
+        // without claiming the rest of it.
+        if !options.complex {
+            self.define_object("__STDC_NO_COMPLEX__", "1");
+        }
         self.define_object("__STDC_NO_THREADS__", "1");
         self.define_atomic_macros(options.target.max_scalar_align.min(8));
         // C11 7.28p2: these two say that `char16_t` and `char32_t` really are

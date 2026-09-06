@@ -10,12 +10,13 @@ use proc_macro2::TokenStream;
 
 /// Analyses `source` and returns every error message, in source order.
 ///
-/// `c_variadic` is forced on: what the *language* rules say must not depend on
-/// which toolchain runs the test, and the diagnostics of an older one have a
-/// test of their own.
+/// `c_variadic` and `complex` are forced on: what the *language* rules say
+/// must not depend on which toolchain or which cargo feature the test was
+/// built with, and both switched off have tests of their own.
 fn errors(source: &str) -> Vec<String> {
     let mut options = Options::new(Standard::C99);
     options.c_variadic = true;
+    options.complex = true;
     errors_with(source, &options)
 }
 
@@ -102,10 +103,13 @@ fn typedefs_resolve_through_several_levels() {
 #[test]
 fn a_typedef_of_an_unsupported_type_is_reported_where_it_is_used() {
     // The declaration itself is harmless; only a use has to be diagnosed.
-    accepted("typedef double _Complex cplx;");
+    accepted("typedef double _Imaginary imag;");
     rejected(
-        "typedef double _Complex cplx; int f(void) { cplx z; return 0; }",
-        &["complex types are not supported"],
+        "typedef double _Imaginary imag; int f(void) { imag z; return 0; }",
+        &[
+            "imaginary types are not supported; no compiler implements '_Imaginary', and C99 \
+             makes it optional. Write the '_Complex' type instead",
+        ],
     );
 }
 
@@ -118,8 +122,108 @@ fn derived_and_tagged_types_are_accepted() {
     accepted("typedef int *intptr; int f(int *q) { intptr p = q; return *p; }");
     accepted("int f(int (*g)(int)) { return g(1); }");
     rejected(
-        "int f(void) { return 0; } int g(void) { double _Complex z; return 0; }",
-        &["complex types are not supported"],
+        "int f(void) { return 0; } int g(void) { double _Imaginary z; return 0; }",
+        &[
+            "imaginary types are not supported; no compiler implements '_Imaginary', and C99 \
+             makes it optional. Write the '_Complex' type instead",
+        ],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// complex
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_complex_types_and_their_operators_are_accepted() {
+    accepted("float _Complex a; double _Complex b; long double _Complex c;");
+    accepted("double _Complex f(double _Complex a, double _Complex b) { return a * b / a - b; }");
+    accepted("double _Complex f(double _Complex z, double x) { return z * x + x / z; }");
+    accepted("int f(double _Complex a, double _Complex b) { return a == b || a != b; }");
+    accepted("double f(double _Complex z) { return __real__ z + __imag__ z; }");
+    accepted("void f(double _Complex *z) { __imag__ *z = 1.0; __real__ *z += 2.0; }");
+    accepted("double _Complex f(double _Complex z) { return ~z; }");
+    accepted("double _Complex f(double _Complex z) { z++; --z; return z; }");
+    accepted("int f(double _Complex z) { return z ? 1 : !z; }");
+    accepted("double _Complex g = 1.0 + 2.0i; float _Complex h = 3.0if;");
+    accepted("double _Complex g = __builtin_complex(1.0, 2.0);");
+    accepted("double f(double _Complex z) { return __builtin_creal(z) + __builtin_cimag(z); }");
+    accepted("double _Complex f(double _Complex z) { return __builtin_cproj(__builtin_conj(z)); }");
+    accepted("unsigned long f(void) { return sizeof(double _Complex) + sizeof(float _Complex); }");
+    accepted("struct S { double _Complex z; int n; }; double _Complex a[4];");
+    // `__real__` and `__imag__` mean something on a real operand too.
+    accepted("double f(double x) { return __real__ x + __imag__ x; }");
+    accepted("int f(int n) { return __real__ n + __imag__ (n + 1); }");
+}
+
+#[test]
+fn the_operators_the_complex_types_do_not_have_are_refused() {
+    rejected(
+        "int f(double _Complex a, double _Complex b) { return a < b; }",
+        &[
+            "'<' is not defined for the complex type 'double _Complex': the complex numbers \
+             are not ordered (C99 6.5.8 requires real operands). Compare the parts, or the \
+             magnitudes with 'cabs'",
+        ],
+    );
+    rejected(
+        "double _Complex f(double _Complex a, double _Complex b) { return a % b; }",
+        &[
+            "operator '%' requires integer operands ('double _Complex' and 'double _Complex' \
+             given)",
+        ],
+    );
+    rejected(
+        "double _Complex f(double _Complex a, int b) { return a << b; }",
+        &["operator '<<' requires integer operands ('double _Complex' and 'int' given)"],
+    );
+    rejected(
+        "struct S { double _Complex z : 3; };",
+        &[
+            "bit-field 'z' has invalid type 'double _Complex'; only the integer types may \
+             be given a width",
+        ],
+    );
+    let mut c11 = Options::new(Standard::C11);
+    c11.complex = true;
+    assert_eq!(
+        errors_with("_Atomic double _Complex z;", &c11),
+        [
+            "'_Atomic double _Complex' is not supported yet: only the scalar types have a \
+             lock-free atomic in `core::sync::atomic`, and nothing in the generated Rust could \
+             stand for a lock"
+        ]
+    );
+    assert_eq!(
+        errors_with(
+            "double f(void) { return _Generic((double _Complex) 1.0, \
+             double _Complex: 1.0, default: 0.0); }",
+            &c11
+        ),
+        Vec::<String>::new()
+    );
+}
+
+/// With the `complex` feature off, every door is shut and each one says the
+/// same thing.
+#[test]
+fn without_the_feature_the_complex_types_are_refused() {
+    let mut options = Options::new(Standard::C99);
+    options.complex = false;
+    let hint = "complex types are not supported here: '_Complex' needs the 'complex' feature \
+                of the cinrs crate, which is on by default and supplies the runtime the \
+                generated code links against";
+    assert_eq!(
+        errors_with("int f(void) { double _Complex z; return 0; }", &options),
+        [hint]
+    );
+    assert_eq!(
+        errors_with("double f(double _Complex z) { return 0; }", &options),
+        [hint]
+    );
+    assert_eq!(
+        errors_with("double f(void) { return __builtin_creal(1.0); }", &options),
+        [hint]
     );
 }
 

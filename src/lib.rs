@@ -824,6 +824,120 @@
 //! no thread-local storage at all, so a unit that declares a thread-local
 //! object under `#pragma cinrs no_std` is a located error saying so.
 //!
+//! [Complex numbers](#complex-numbers) are the one construct whose expansion
+//! names a crate rather than `core` — `cinrs::rt`, the re-export of
+//! `cinrs-rt` —
+//! and `cinrs-rt` is `#![no_std]` too, so it changes nothing here. Switching
+//! the `complex` feature off (`default-features = false`) drops the dependency
+//! and `_Complex` with it.
+//!
+//! # Complex numbers
+//!
+//! `float _Complex` is `cinrs::rt::Complex<f32>` and
+//! `double _Complex` is `Complex<f64>` — which is
+//! [`num_complex::Complex`](https://docs.rs/num-complex), a `#[repr(C)]` pair
+//! that the numeric half of crates.io already speaks. That is the point of
+//! choosing it: a complex value crosses between C and Rust with no conversion
+//! and no wrapper type of this crate's own.
+//!
+// The one example in these docs that cannot compile without the feature it is
+// about; `doc` attributes rather than `//!` lines so that it is left out of a
+// `default-features = false` build, where `cinrs::rt` does not exist and the C
+// below is a diagnostic.
+#![cfg_attr(
+    feature = "complex",
+    doc = "```",
+    doc = "use cinrs::rt::Complex;",
+    doc = "",
+    doc = "cinrs::c99! {",
+    doc = "    #include <complex.h>",
+    doc = "",
+    doc = "    double _Complex root(double _Complex z) { return csqrt(z); }",
+    doc = "    double _Complex scale(double _Complex z, double x) { return z * x; }",
+    doc = "    double magnitude(double _Complex z) { return cabs(z); }",
+    doc = "    double _Complex unit = 1.0 + 2.0i;",
+    doc = "}",
+    doc = "",
+    doc = "assert_eq!(unsafe { root(Complex::new(-1.0, 0.0)) }, Complex::new(0.0, 1.0));",
+    doc = "assert_eq!(unsafe { scale(Complex::new(1.0, 2.0), 3.0) }, Complex::new(3.0, 6.0));",
+    doc = "assert_eq!(unsafe { magnitude(Complex::new(3.0, -4.0)) }, 5.0);",
+    doc = "assert_eq!(unsafe { unit }, Complex::new(1.0, 2.0));",
+    doc = "```"
+)]
+//!
+//! `long double _Complex` is `double _Complex`, the mapping `long double`
+//! already has and the same ABI caveat: on a target whose `long double` is
+//! wider, a value passed to or from a library compiled by the platform's C
+//! compiler is the wrong size. The complex types themselves are two components
+//! side by side, so `sizeof(double _Complex)` is 16 and its alignment is
+//! `double`'s — which is what every ABI this crate targets says, and what the
+//! [data-model assertion](#the-assertion-that-guards-it) checks for a unit
+//! that has one.
+//!
+//! ## What the operators do
+//!
+//! `+ - * /`, unary `+ -`, `==`/`!=`, compound assignment and `++`/`--` (which
+//! step the *real* part, as GCC has them). The relational operators, `%`, the
+//! bitwise operators and the shifts are refused with the reason: C gives them
+//! real operands only, and the complex numbers are not ordered.
+//!
+//! Two things about the arithmetic are worth knowing, because both are
+//! observable and neither is what a first reading of the standard suggests.
+//!
+//! * **An infinity survives.** C99 Annex G.5.1 — which GCC implements by
+//!   default — requires a product or a quotient with an infinite operand to be
+//!   infinite, even where the schoolbook formula produces NaN + iNaN out of an
+//!   `∞ − ∞`. `(∞ + 0i) · (3 − 4i)` is `∞ − ∞i`, not a NaN.
+//! * **A real operand stays real.** `3.0 * z` is computed componentwise rather
+//!   than as `(3 + 0i) · z`, which the sign of a zero can tell apart. That is
+//!   what GCC and Clang both do, and `cinrs` follows them.
+//!
+//! Both live in `cinrs::rt::complex`, so an expansion holds a
+//! call rather than a copy of the algorithm; `tests/complex.rs` checks them
+//! against the host's own C compiler over a hundred and thirty thousand
+//! operand pairs.
+//!
+//! ## The rest of it
+//!
+//! `<complex.h>` is bundled: `complex`, `I`, `_Complex_I`, C11's `CMPLX`
+//! family, and the function declarations, which link against the platform's
+//! library and pass complex values *by value* (a `Complex<f64>` and a
+//! `double _Complex` are the same two eightbytes on x86-64 System V; i386 and
+//! Windows are untested for that). `creal`, `cimag`, `conj` and `cproj` are
+//! the compiler's own builtins rather than calls. GNU's `__real__` and
+//! `__imag__` are there and are **lvalues** when their operand is one, so
+//! `__imag__ z = 1.0;` assigns; `~z` is the conjugate; and the imaginary
+//! suffixes `2.0i`, `1.0if` and `3.0jl` make a pure imaginary constant.
+//!
+//! What is refused, each with the reason: `_Imaginary` (no compiler implements
+//! it, and C99 7.3.1p3 makes it optional), a complex *integer* type
+//! (`_Complex int`, a GNU extension of its own — `3i` says to write `3.0i`),
+//! `va_arg` of a complex type, an `_Atomic` or a bit-field of one,
+//! `<tgmath.h>`, and any `printf` conversion for one, C having none.
+//! `__STDC_IEC_559_COMPLEX__` is never defined: the arithmetic of Annex G.5.1
+//! is implemented, the rest of the annex is not claimed.
+//!
+//! ## The `complex` feature
+//!
+//! All of the above needs the **`complex` feature**, which is **on by
+//! default**. It is a feature at all because this is the one thing `cinrs`
+//! generates that names a crate rather than `core`; with
+//! `default-features = false` the `cinrs-rt` dependency goes,
+//! `__STDC_NO_COMPLEX__` is predefined — C11 6.10.8.3's way of saying an
+//! implementation has no complex arithmetic — and `_Complex` becomes a
+//! diagnostic that names the feature to turn on.
+//!
+//! The generated code spells the runtime's path in full, as `::cinrs::rt`. A
+//! crate that renamed its dependency, or that reaches `cinrs` through a
+//! re-export, says so:
+//!
+//! ```text
+//! #pragma cinrs crate "crate::vendor::cinrs"
+//! ```
+//!
+//! Nothing else in an expansion mentions the path, so a unit without a complex
+//! type never needs the pragma.
+//!
 //! # Thread-local objects
 //!
 //! C11's `_Thread_local` — `thread_local` in [`c23!`], `__thread` in GNU C and
@@ -1130,7 +1244,8 @@
 //!
 //! ## The bundled standard headers
 //!
-//! `cinrs` ships its own `<assert.h>`, `<ctype.h>`, `<errno.h>`, `<float.h>`,
+//! `cinrs` ships its own `<assert.h>`, `<complex.h>`, `<ctype.h>`,
+//! `<errno.h>`, `<float.h>`,
 //! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<signal.h>`,
 //! `<stdalign.h>`, `<stdarg.h>`, `<stdatomic.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
@@ -1220,9 +1335,11 @@
 //! platform splits `PATH` and searched last. `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
-//! four `cinrs` pragmas are [`target`](#the-data-model),
-//! [`export`](#linking-two-blocks-together), [`no_std`](#no_std) and
-//! [`module`](#one-block-one-module).
+//! five `cinrs` pragmas are [`target`](#the-data-model),
+//! [`export`](#linking-two-blocks-together), [`no_std`](#no_std),
+//! [`module`](#one-block-one-module) and
+//! [`crate`](#the-complex-feature), which says where the `cinrs` crate itself
+//! is for a renamed dependency.
 //!
 //! Every user header read is named by a `const _: &str = include_str!(…);` in
 //! the expansion, so editing one rebuilds the crate that includes it. Include
@@ -1356,10 +1473,12 @@
 //!
 //! [Variably modified types](#variably-modified-types-and-alloca) are there —
 //! `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the
-//! parameter forms — emulated on the heap.
+//! parameter forms — emulated on the heap, and so are
+//! [complex numbers](#complex-numbers), with Annex G.5.1's arithmetic and
+//! `<complex.h>`.
 //!
-//! Deliberately never: `_Complex`, `setjmp`/`longjmp`, `_BitInt`, an
-//! `_Atomic` aggregate,
+//! Deliberately never: `setjmp`/`longjmp`, `_BitInt`, `_Imaginary`, a complex
+//! *integer* type, an `_Atomic` aggregate,
 //! C23's *named* universal character `\N{…}`, inline assembly, and
 //! `long double`'s extended precision (it is `double`, with the ABI that
 //! implies). Each of them is a clear, located error rather than a silent
@@ -1367,9 +1486,10 @@
 //!
 //! The other things worth knowing before reaching for this crate: everything
 //! generated is `core`-only except the storage a variably modified object or
-//! `alloca` needs, which is a `Vec`, and a [thread-local
-//! object](#thread-local-objects), which is a `std::thread_local!` — see
-//! [`no_std`](#no_std); the
+//! `alloca` needs, which is a `Vec`, a [thread-local
+//! object](#thread-local-objects), which is a `std::thread_local!`, and a
+//! [complex value](#complex-numbers), which is `cinrs-rt`'s (itself
+//! `#![no_std]`) — see [`no_std`](#no_std); the
 //! platform's include directories are never searched, so anything outside the
 //! bundled headers is declared by hand or pointed at with an include path;
 //! `va_list` is [`core::ffi::VaList`], which cannot be stored in a `struct` or
@@ -1475,3 +1595,19 @@
 #![no_std]
 
 pub use cinrs_macros::{c11, c17, c23, c89, c90, c99, gnu11, gnu17, gnu23, gnu89, gnu99};
+
+/// The runtime the generated code links against; see [`cinrs_rt`].
+///
+/// It holds one thing — [`rt::Complex`], which is
+/// [`num_complex::Complex`](https://docs.rs/num-complex), and C's arithmetic
+/// on it — and exists only because a `_Complex` value has to have a type that
+/// other crates already speak and because Annex G's multiplication and
+/// division are too big to write out per expansion. Everything else `cinrs`
+/// generates names `core` alone.
+///
+/// The generated code spells this path in full, so a renamed dependency needs
+/// `#pragma cinrs crate "<path>"` to say where to find it.
+///
+/// Present only with the `complex` feature, which is on by default.
+#[cfg(feature = "complex")]
+pub use cinrs_rt as rt;

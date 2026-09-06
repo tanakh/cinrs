@@ -1682,6 +1682,38 @@ impl Parser<'_> {
         if counts.long > 1 {
             self.require_standard(Standard::C99, "'long long'", range);
         }
+        // `_Complex int`, `_Complex char`, `__complex__ long` — GCC's complex
+        // *integer* types, which are an extension of their own and which
+        // nothing in the generated Rust could be. Saying so beats the
+        // "cannot combine 'char' with other type specifiers" the chain below
+        // would otherwise produce.
+        if (counts.complex > 0 || counts.imaginary > 0)
+            && counts.float == 0
+            && counts.double == 0
+            && counts.int
+                + counts.char
+                + counts.short
+                + counts.long
+                + counts.signed
+                + counts.unsigned
+                + counts.int128
+                + counts.bool
+                + counts.void
+                > 0
+        {
+            self.error(
+                range,
+                "a complex integer type is a GNU extension that cinrs does not support; \
+                 the complex types are 'float _Complex', 'double _Complex' and \
+                 'long double _Complex'",
+            );
+            let kind = if counts.complex > 0 {
+                TypeKind::Complex(FloatSize::Double)
+            } else {
+                TypeKind::Imaginary(FloatSize::Double)
+            };
+            return Type::new(kind, quals, range);
+        }
 
         let sign = if counts.unsigned > 0 {
             Some(Sign::Unsigned)
@@ -3167,7 +3199,19 @@ impl Parser<'_> {
     /// whether this is a cast or a compound literal rather than a
     /// parenthesised expression.
     fn at_paren_type_name(&self) -> bool {
-        self.at_punct(Punct::LParen) && self.starts_decl_specifier(1)
+        if !self.at_punct(Punct::LParen) {
+            return false;
+        }
+        // `__extension__` prefixes a declaration *and* an expression, so it
+        // says nothing about which of the two a parenthesis opens; what comes
+        // after it does. `(__extension__ 1.0iF)` — which is how GCC's own
+        // `<complex.h>` spells `_Complex_I` — is a parenthesised constant, and
+        // `(__extension__ long long)x` is a cast.
+        let mut n = 1;
+        while self.nth(n).keyword() == Some(Keyword::Extension) {
+            n += 1;
+        }
+        self.starts_decl_specifier(n)
     }
 
     fn parse_cast_expr(&mut self) -> PResult<Expr> {
@@ -3296,7 +3340,9 @@ impl Parser<'_> {
         }
 
         // `__extension__ expr` holds back the pedantic warnings there are none
-        // of, and `__real__`/`__imag__` need complex arithmetic.
+        // of. `__real__` and `__imag__` are GNU's two halves of a complex
+        // value, and sema types them: each is an lvalue whenever its operand
+        // is, and each has a meaning on a *real* operand too.
         if self.eat_keyword(Keyword::Extension).is_some() {
             return self.parse_unary_expr();
         }
@@ -3304,13 +3350,6 @@ impl Parser<'_> {
             self.advance();
             let operand = self.parse_cast_expr()?;
             let range = start.join(operand.range);
-            self.error(
-                range,
-                format!(
-                    "'{}' is not supported; complex types are not supported",
-                    k.as_str()
-                ),
-            );
             return Ok(Expr {
                 kind: ExprKind::ComplexPart {
                     real: k == Keyword::RealGnu,

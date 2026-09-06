@@ -377,6 +377,27 @@ pub fn is_module_name(name: &str) -> bool {
         && !NEVER_RAW.contains(&name)
 }
 
+/// Whether a string is usable as the Rust path of a crate:
+/// `#pragma cinrs crate "…"`.
+///
+/// A sequence of segments joined by `::`, optionally starting with one, where
+/// each segment is an identifier — with `crate`, `self` and `super` allowed as
+/// segments because a re-export is often reached through one. Deliberately
+/// strict: the value is pasted into the expansion as tokens, and anything else
+/// there would be a syntax error in generated code rather than a message about
+/// the pragma.
+pub fn is_crate_path(path: &str) -> bool {
+    /// The three keywords a path segment may be even though a module may not.
+    const PATH_KEYWORDS: &[&str] = &["crate", "self", "super"];
+
+    let body = path.strip_prefix("::").unwrap_or(path);
+    if body.is_empty() {
+        return false;
+    }
+    body.split("::")
+        .all(|segment| PATH_KEYWORDS.contains(&segment) || is_module_name(segment))
+}
+
 /// Turns a C identifier into the Rust identifier that stands for it.
 ///
 /// C names are kept as they are, because that is what makes the expansion
@@ -620,6 +641,10 @@ struct Codegen<'a> {
     /// A [`Cell`] because [`Codegen::ty`] takes `&self`; the check is built
     /// after every item, so it sees the final answer.
     uses_int128: Cell<bool>,
+    /// Set the first time a complex type reaches the output, for the same
+    /// reason and by the same route as [`Codegen::uses_int128`]: only a unit
+    /// that has one asserts the layout of `Complex<f32>` and `Complex<f64>`.
+    uses_complex: Cell<bool>,
     /// Whether anything in the unit needs the `cleanup` drop guard item.
     uses_cleanup: Cell<bool>,
 }
@@ -650,6 +675,7 @@ impl<'a> Codegen<'a> {
             in_cfg: false,
             temporaries: 0,
             uses_int128: Cell::new(false),
+            uses_complex: Cell::new(false),
             uses_cleanup: Cell::new(false),
         }
     }
@@ -747,6 +773,17 @@ impl<'a> Codegen<'a> {
             }
             Ty::Float => "c_float",
             Ty::Double => "c_double",
+            // `core::ffi` has nothing for these, and there is nothing it could
+            // have: a complex value is a pair, and the pair the ecosystem
+            // already agrees on is `num_complex::Complex`, which the runtime
+            // re-exports. See [`Codegen::rt_path`].
+            Ty::ComplexFloat | Ty::ComplexDouble => {
+                self.uses_complex.set(true);
+                let component =
+                    primitive_ty(if ty == Ty::ComplexFloat { "f32" } else { "f64" }, span);
+                let rt = self.rt_path(span);
+                return quote_spanned! {span=> #rt::Complex<#component> };
+            }
             // The lifetime is elided: `VaList` only ever appears as the type of
             // a parameter or of a local, where elision does the right thing.
             Ty::VaList => "VaList",
@@ -803,6 +840,36 @@ impl<'a> Codegen<'a> {
         };
         let ident = Ident::new(name, span);
         quote_spanned! {span=> ::core::ffi::#ident }
+    }
+
+    /// The path of the runtime module the generated code calls: `::cinrs::rt`,
+    /// or whatever `#pragma cinrs crate` said instead of `::cinrs`.
+    ///
+    /// It is the one thing an expansion names outside `core` (and outside the
+    /// `alloc`/`std` a variable length array needs), and it is named in full
+    /// because the expansion lives in a module of its own where nothing is in
+    /// scope. See [`ir::DEFAULT_CRATE_PATH`].
+    fn rt_path(&self, span: Span) -> TokenStream {
+        let path = TokenStream::from_str(&self.program.crate_path)
+            .unwrap_or_else(|_| TokenStream::from_str(ir::DEFAULT_CRATE_PATH).expect("valid"));
+        let path = respan(path, span);
+        quote_spanned! {span=> #path::rt }
+    }
+
+    /// A function of `cinrs_rt::complex`, by name.
+    fn rt_complex(&self, name: &str, span: Span) -> TokenStream {
+        let rt = self.rt_path(span);
+        let ident = Ident::new(name, span);
+        quote_spanned! {span=> #rt::complex::#ident }
+    }
+
+    /// The suffix the runtime spells a complex type's component width with.
+    fn complex_suffix(ty: Ty) -> &'static str {
+        if ty.complex_component() == Ty::Float {
+            "f32"
+        } else {
+            "f64"
+        }
     }
 
     /// `unsafe extern "C" fn(…) -> R`, the type a function pointer wraps.
@@ -1307,6 +1374,41 @@ impl<'a> Codegen<'a> {
             body.extend(quote_spanned! {span=>
                 assert!(::core::mem::align_of::<#i128>() == #align, #message);
             });
+        }
+        if self.uses_complex.get() {
+            // A complex type *is* two of its component type side by side —
+            // that is the whole reason the runtime uses a `#[repr(C)]` pair —
+            // and every `sizeof`, member offset and array stride in the unit
+            // was computed from that. A `Complex<f64>` that is not sixteen
+            // bytes would make all of them wrong, so the unit says so.
+            for (ty, name) in [
+                (Ty::ComplexFloat, "'float _Complex'"),
+                (Ty::ComplexDouble, "'double _Complex'"),
+            ] {
+                let layout = self
+                    .program
+                    .types
+                    .size_align(ty, target)
+                    .expect("a complex type has a layout");
+                let rust = self.ty(ty, span);
+                let size = usize_literal(layout.size, span);
+                let align = usize_literal(layout.align, span);
+                let message = message_literal(
+                    &format!(
+                        "cinrs: {name} is {} bytes and {}-byte aligned in the data model this \
+                         unit was translated for, and is not on this target. {chosen}",
+                        layout.size, layout.align
+                    ),
+                    span,
+                );
+                body.extend(quote_spanned! {span=>
+                    assert!(
+                        ::core::mem::size_of::<#rust>() == #size
+                            && ::core::mem::align_of::<#rust>() == #align,
+                        #message
+                    );
+                });
+            }
         }
         let block = braced(body, span);
         quote_spanned! {span=> const _: () = #block; }
@@ -2721,6 +2823,14 @@ impl<'a> Codegen<'a> {
                     )
                 }
             }
+            // The three complex shapes are one call apiece: this function is
+            // the one code generation recurses through, and every local in it
+            // costs a slice of the stack `rustc` gives macro expansion.
+            ExprKind::ComplexOf { re, im } => self.complex_literal(expr.ty, re, im, span),
+            ExprKind::Neg(operand) if expr.ty.is_complex() => self.complex_neg(operand, span),
+            ExprKind::BitNot(operand) if expr.ty.is_complex() => {
+                self.complex_conj(operand, expr.ty, span)
+            }
             ExprKind::Neg(operand) => {
                 let value = self.expr(operand);
                 if expr.ty.is_floating() {
@@ -2879,6 +2989,143 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    // -- complex ------------------------------------------------------------
+
+    /// `::cinrs::rt::Complex::<f64>::new(re, im)`.
+    ///
+    /// A call rather than a struct literal, and with the component type spelled
+    /// out: `Complex { … }` at the start of an `if` condition would be read as
+    /// the condition's block, and a bare `0.0` part would infer `f64` where the
+    /// type is `float _Complex`. `Complex::new` is a `const fn`, so this is
+    /// also what a `static` initialiser holds.
+    fn complex_new(&self, ty: Ty, re: TokenStream, im: TokenStream, span: Span) -> Value {
+        self.uses_complex.set(true);
+        let rt = self.rt_path(span);
+        let component = primitive_ty(if ty == Ty::ComplexFloat { "f32" } else { "f64" }, span);
+        Value::new(
+            quote_spanned! {span=> #rt::Complex::<#component>::new(#re, #im) },
+            prec::CALL,
+        )
+    }
+
+    /// `__builtin_complex(re, im)`, an imaginary constant, and a folded
+    /// complex constant: the two parts, side by side.
+    fn complex_literal(&mut self, ty: Ty, re: &Expr, im: &Expr, span: Span) -> Value {
+        let re = self.expr(re).at(prec::LOWEST, span);
+        let im = self.expr(im).at(prec::LOWEST, span);
+        self.complex_new(ty, re, im, span)
+    }
+
+    /// `-z`, which is `num_complex`'s own `Neg` — both parts negated exactly.
+    fn complex_neg(&mut self, operand: &Expr, span: Span) -> Value {
+        let tokens = self.expr(operand).at(prec::UNARY, span);
+        Value::new(quote_spanned! {span=> -#tokens }, prec::UNARY)
+    }
+
+    /// GNU's `~z` and `__builtin_conj(z)`: the conjugate.
+    fn complex_conj(&mut self, operand: &Expr, ty: Ty, span: Span) -> Value {
+        let tokens = self.expr(operand).at(prec::LOWEST, span);
+        let conj = self.rt_complex(&format!("conj_{}", Self::complex_suffix(ty)), span);
+        Value::new(quote_spanned! {span=> #conj(#tokens) }, prec::CALL)
+    }
+
+    /// `+`, `-`, `*` or `/` with at least one complex operand.
+    ///
+    /// Each operand arrives with the C type its tokens have, because that is
+    /// what decides which runtime function is called: C computes a *real*
+    /// operand componentwise rather than widening it — see `cinrs_rt::complex`
+    /// for what that changes and why. Two complex operands add and subtract
+    /// through `num_complex`'s own operators, which are exactly componentwise,
+    /// and multiply and divide through Annex G.
+    fn complex_binary(
+        &mut self,
+        op: BinOp,
+        (lhs, lhs_ty): (Value, Ty),
+        (rhs, rhs_ty): (Value, Ty),
+        ty: Ty,
+        span: Span,
+    ) -> Value {
+        self.uses_complex.set(true);
+        let suffix = Self::complex_suffix(ty);
+        let both = lhs_ty.is_complex() && rhs_ty.is_complex();
+        if both && matches!(op, BinOp::Add | BinOp::Sub) {
+            let (level, tokens) = match op {
+                BinOp::Add => (prec::SUM, quote_spanned! {span=> + }),
+                _ => (prec::SUM, quote_spanned! {span=> - }),
+            };
+            let mut out = lhs.at(level, span);
+            let rhs = rhs.at(level + 1, span);
+            out.extend(quote_spanned! {span=> #tokens #rhs });
+            return Value::new(out, level);
+        }
+        // `<what>_<suffix>`, with the name saying which operand is the real
+        // one: `mul_real` is `z * x` and `real_mul` is `x * z`.
+        let name = match (op, lhs_ty.is_complex(), rhs_ty.is_complex()) {
+            (BinOp::Add, true, false) => "add_real",
+            (BinOp::Add, false, true) => "real_add",
+            (BinOp::Sub, true, false) => "sub_real",
+            (BinOp::Sub, false, true) => "real_sub",
+            (BinOp::Mul, true, true) => "mul",
+            (BinOp::Mul, true, false) => "mul_real",
+            (BinOp::Mul, false, true) => "real_mul",
+            (BinOp::Div, true, true) => "div",
+            (BinOp::Div, true, false) => "div_real",
+            (BinOp::Div, false, true) => "real_div",
+            // Sema refuses every other operator on a complex operand, and one
+            // of the two always is complex.
+            _ => unreachable!("'{}' does not reach complex code generation", op.as_str()),
+        };
+        let func = self.rt_complex(&format!("{name}_{suffix}"), span);
+        let lhs = lhs.at(prec::LOWEST, span);
+        let rhs = rhs.at(prec::LOWEST, span);
+        Value::new(quote_spanned! {span=> #func(#lhs, #rhs) }, prec::CALL)
+    }
+
+    /// A conversion with a complex type on one side or the other
+    /// (C99 6.3.1.6, 6.3.1.7).
+    fn complex_cast(&mut self, value: Value, from: Ty, to: Ty, span: Span) -> Value {
+        self.uses_complex.set(true);
+        if from.is_complex() && to.is_complex() {
+            let name = if to == Ty::ComplexDouble {
+                "widen_f32"
+            } else {
+                "narrow_f64"
+            };
+            let func = self.rt_complex(name, span);
+            let tokens = value.at(prec::LOWEST, span);
+            return Value::new(quote_spanned! {span=> #func(#tokens) }, prec::CALL);
+        }
+        if to.is_complex() {
+            // A real value becomes a complex one with a zero imaginary part.
+            let component = to.complex_component();
+            let re = self
+                .cast(value, from, component, span)
+                .at(prec::LOWEST, span);
+            let zero = bare_float_literal(0.0, span);
+            return self.complex_new(to, re, zero, span);
+        }
+        // Converting a complex value to a real type discards the imaginary
+        // part — except for `_Bool`, which asks whether *either* part is
+        // non-zero (C99 6.3.1.2).
+        if to.is_bool() {
+            let func = self.rt_complex(&format!("nonzero_{}", Self::complex_suffix(from)), span);
+            let tokens = value.at(prec::LOWEST, span);
+            return Value::new(quote_spanned! {span=> #func(#tokens) }, prec::CALL);
+        }
+        let tokens = value.at(prec::CALL, span);
+        let real = Value::new(quote_spanned! {span=> #tokens.re }, prec::CALL);
+        self.cast(real, from.complex_component(), to, span)
+    }
+
+    /// `z != 0` as Rust's `bool`: what an `if`, a `while` and `!z` ask of a
+    /// complex value.
+    fn complex_condition(&mut self, expr: &Expr, span: Span) -> Value {
+        self.uses_complex.set(true);
+        let func = self.rt_complex(&format!("nonzero_{}", Self::complex_suffix(expr.ty)), span);
+        let tokens = self.expr(expr).at(prec::LOWEST, span);
+        Value::new(quote_spanned! {span=> #func(#tokens) }, prec::CALL)
+    }
+
     /// A `struct` value: one expression per member, in declaration order.
     ///
     /// Without bit-fields this is a plain Rust struct literal. With them the
@@ -3021,6 +3268,12 @@ impl<'a> Codegen<'a> {
         use ir::BuiltinOp;
         let int = self.ty(Ty::Int, span);
         match op {
+            BuiltinOp::ComplexProj => {
+                let ty = args[0].ty;
+                let func = self.rt_complex(&format!("proj_{}", Self::complex_suffix(ty)), span);
+                let value = self.expr(&args[0]).at(prec::LOWEST, span);
+                Value::new(quote_spanned! {span=> #func(#value) }, prec::CALL)
+            }
             BuiltinOp::Discard => {
                 let mut out = TokenStream::new();
                 for arg in args {
@@ -4209,6 +4462,7 @@ impl<'a> Codegen<'a> {
                 Value::atom(quote_spanned! {span=> #ident })
             }
             _ if expr.ty.is_bool() => self.expr(expr),
+            _ if expr.ty.is_complex() => self.complex_condition(expr, span),
             _ if expr.ty.is_pointer() => self.not_null(expr, span),
             _ => {
                 let ty = expr.ty;
@@ -4375,6 +4629,13 @@ impl<'a> Codegen<'a> {
                     prec::ATOM
                 },
             ),
+            // A complex constant is never *bare*: it has to name its own type,
+            // and [`constant_of`] answers `None` for one so that nothing asks.
+            ConstValue::Complex(re, im) => {
+                let re = bare_float_literal(re, span);
+                let im = bare_float_literal(im, span);
+                self.complex_new(ty, re, im, span)
+            }
         }
     }
 
@@ -4536,7 +4797,11 @@ impl<'a> Codegen<'a> {
             };
             let span = self.sp(node.range);
             let (lhs_value, rhs_value) = self.operands_with(folded, lhs, rhs, *op);
-            let value = self.binary(*op, lhs_value, rhs_value, node.ty, span);
+            let value = if node.ty.is_complex() {
+                self.complex_binary(*op, (lhs_value, lhs.ty), (rhs_value, rhs.ty), node.ty, span)
+            } else {
+                self.binary(*op, lhs_value, rhs_value, node.ty, span)
+            };
             folded = Some(self.reduce_bits(value, node));
         }
         folded.expect("the chain has at least the node it started from")
@@ -4686,18 +4951,39 @@ impl<'a> Codegen<'a> {
             };
             return Value::new(quote_spanned! {span=> #access.offset(#offset) }, prec::CALL);
         }
+        // A complex computation keeps a real operand real on *both* sides:
+        // sema left the right one alone, and the left one — the place — is
+        // widened only as far as the common real type when it is real too. See
+        // [`Codegen::complex_binary`].
+        if compute.is_complex() {
+            let lhs_ty = if place_ty.is_complex() {
+                compute
+            } else {
+                compute.complex_component()
+            };
+            let current = self.cast(current, place_ty, lhs_ty, span);
+            let rhs = self.compound_operand(value, hoisted, span);
+            let result = self.complex_binary(op, (current, lhs_ty), (rhs, value.ty), compute, span);
+            return self.cast(result, compute, place_ty, span);
+        }
         let current = self.cast(current, place_ty, compute, span);
-        // The left operand is a place and therefore always typed, so a
-        // constant right operand can stay a bare literal.
-        let rhs = match hoisted {
+        let rhs = self.compound_operand(value, hoisted, span);
+        let result = self.binary(op, current, rhs, compute, span);
+        self.cast(result, compute, place_ty, span)
+    }
+
+    /// The right operand of a compound assignment, already hoisted or not.
+    ///
+    /// The left operand is a place and therefore always typed, so a constant
+    /// right operand can stay a bare literal.
+    fn compound_operand(&mut self, value: &Expr, hoisted: Option<Value>, span: Span) -> Value {
+        match hoisted {
             Some(rhs) => rhs,
             None => match constant_of(value) {
                 Some(constant) => self.bare_value(constant, value.ty, span),
                 None => self.expr(value),
             },
-        };
-        let result = self.binary(op, current, rhs, compute, span);
-        self.cast(result, compute, place_ty, span)
+        }
     }
 
     /// Evaluates the right operand of a compound assignment ahead of the read,
@@ -4761,6 +5047,15 @@ impl<'a> Codegen<'a> {
             };
             return quote_spanned! {span=> #access #op #one };
         }
+        if ty.is_complex() {
+            // GCC's `z++` adds one to the *real* part and leaves the
+            // imaginary one alone, which is the componentwise `z + 1`.
+            let name = if dec { "sub_real" } else { "add_real" };
+            let func = self.rt_complex(&format!("{name}_{}", Self::complex_suffix(ty)), span);
+            let access = current.at(prec::LOWEST, span);
+            let one = Literal::f64_unsuffixed(1.0);
+            return quote_spanned! {span=> #func(#access, #one) };
+        }
         if ty.is_bool() {
             // `b++` is `b = b + 1 != 0`, which is `true` for `++` and the
             // negation of `b` for `--`.
@@ -4778,6 +5073,9 @@ impl<'a> Codegen<'a> {
     fn cast(&mut self, value: Value, from: Ty, to: Ty, span: Span) -> Value {
         if from == to {
             return value;
+        }
+        if from.is_complex() || to.is_complex() {
+            return self.complex_cast(value, from, to, span);
         }
         let types = &self.program.types;
         let from_fn = types.is_func_pointer(from);
@@ -4921,6 +5219,9 @@ impl<'a> Codegen<'a> {
                 self.place_align(place) < self.type_align(place.ty)
             }
             PlaceKind::Field { base, .. } => self.place_align(base) < self.type_align(base.ty),
+            // A part of a complex object reached through a packed member is
+            // no better aligned than the object is.
+            PlaceKind::ComplexPart { .. } => self.place_align(place) < self.type_align(place.ty),
             _ => false,
         }
     }
@@ -4954,6 +5255,16 @@ impl<'a> Codegen<'a> {
                     base_align
                 } else {
                     base_align.min(1 << offset.trailing_zeros())
+                }
+            }
+            // The real part sits at the object's own address and the imaginary
+            // one exactly one component later, which is a power of two.
+            PlaceKind::ComplexPart { base, imag } => {
+                let base_align = self.place_align(base);
+                if *imag {
+                    base_align.min(place.ty.size_bytes(&self.options.target).max(1))
+                } else {
+                    base_align
                 }
             }
             _ => self.type_align(place.ty),
@@ -5065,6 +5376,15 @@ impl<'a> Codegen<'a> {
                     unaligned: false,
                     atomic: None,
                 }
+            }
+            // `__real__ z` and `__imag__ z` are the two fields of the runtime's
+            // `Complex`, which is why they are assignable: the place is a Rust
+            // place expression like any member access.
+            PlaceKind::ComplexPart { base, imag } => {
+                let lowered = self.place(base, mutable);
+                let access = lowered.access;
+                let field = Ident::new(if *imag { "im" } else { "re" }, span);
+                LoweredPlace::plain(lowered.setup, quote_spanned! {span=> #access.#field })
             }
             PlaceKind::Str(id) => {
                 let pointer = self.string_pointer(*id, !mutable, span);
@@ -5408,6 +5728,11 @@ impl<'a> Codegen<'a> {
             // The zero of an `_Atomic T` is the zero of `T`: the object is
             // generated as a plain `T`, and initialising it is a plain write.
             Ty::Atomic(id) => self.zero_tokens(self.program.types.atomic_inner(id), span),
+            _ if ty.is_complex() => {
+                let zero = bare_float_literal(0.0, span);
+                self.complex_new(ty, zero.clone(), zero, span)
+                    .at(prec::LOWEST, span)
+            }
             _ if ty.is_floating() => bare_float_literal(0.0, span),
             _ if ty.is_integer() => bare_int_literal(0, ty, span),
             // A variably modified array is generated as a pointer, and the
@@ -5659,6 +5984,7 @@ fn needs_unsafe(types: &ir::Types, expr: &Expr) -> bool {
         // `static const char *p = "foo" + 1;` — `execute/pr53084` — is the
         // address of a string literal, which is safe to take, plus one.
         ExprKind::PtrOffset { .. } => true,
+        ExprKind::ComplexOf { re, im } => recurse(re) || recurse(im),
         ExprKind::RecordLit { fields, .. } => fields.iter().any(recurse),
         ExprKind::UnionLit { value, .. } => recurse(value),
         ExprKind::ArrayLit(items) => items.iter().any(recurse),
@@ -5781,6 +6107,29 @@ fn window_ty(word_bits: u32, signed: bool, span: Span) -> TokenStream {
 fn primitive_ty(name: &str, span: Span) -> TokenStream {
     let ident = Ident::new(name, span);
     quote_spanned! {span=> ::core::primitive::#ident }
+}
+
+/// Stamps every token of a stream with one span.
+///
+/// Only the crate path `#pragma cinrs crate` gives needs it: everything else
+/// the generator emits is built token by token from a span it already has,
+/// while that one is *parsed* out of a string and so arrives with call-site
+/// spans that would send `rustc`'s complaint about a bad path to the wrong
+/// place.
+fn respan(tokens: TokenStream, span: Span) -> TokenStream {
+    tokens
+        .into_iter()
+        .map(|tree| {
+            let mut tree = match tree {
+                TokenTree::Group(group) => {
+                    TokenTree::Group(Group::new(group.delimiter(), respan(group.stream(), span)))
+                }
+                other => other,
+            };
+            tree.set_span(span);
+            tree
+        })
+        .collect()
 }
 
 /// A string literal for an `assert!` message, which a `const` context needs to

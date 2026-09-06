@@ -206,6 +206,14 @@ impl Sema<'_> {
                     range,
                 ))
             }
+            // C11's `CMPLX` is built on this one, which is also how a program
+            // writes a complex value whose imaginary part is an infinity or a
+            // NaN — `x + y * I` cannot, because `y * I` multiplies.
+            "complex" => self.builtin_complex(name, args, range),
+            "creal" | "crealf" | "creall" => self.complex_part_builtin(name, false, args, range),
+            "cimag" | "cimagf" | "cimagl" => self.complex_part_builtin(name, true, args, range),
+            "conj" | "conjf" | "conjl" => self.complex_unary(name, false, args, range),
+            "cproj" | "cprojf" | "cprojl" => self.complex_unary(name, true, args, range),
             "isgreater" => self.float_order(name, FloatOrder::Greater, args, range),
             "isgreaterequal" => self.float_order(name, FloatOrder::GreaterEqual, args, range),
             "isless" => self.float_order(name, FloatOrder::Less, args, range),
@@ -297,6 +305,138 @@ impl Sema<'_> {
             }
         };
         Some(result)
+    }
+
+    /// `__builtin_complex(re, im)` — C11's `CMPLX`, and the only way to write
+    /// a complex constant whose imaginary part is an infinity or a NaN.
+    ///
+    /// `x + y * I` cannot do it: `y * I` is a multiplication, and `inf * 0` is
+    /// a NaN. GCC and Clang both require the two operands to have the same
+    /// *real* floating type, and so does this.
+    fn builtin_complex(
+        &mut self,
+        name: &str,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 2, range)?;
+        let re = self.expr(&args[0])?;
+        let im = self.expr(&args[1])?;
+        if re.ty.is_error() || im.ty.is_error() {
+            return None;
+        }
+        for (value, arg) in [(&re, &args[0]), (&im, &args[1])] {
+            if !value.ty.is_floating() {
+                self.error(
+                    arg.range,
+                    format!(
+                        "an operand of '{name}' must have a real floating type, not '{}'",
+                        self.tyname(value.ty)
+                    ),
+                );
+                return None;
+            }
+        }
+        if re.ty != im.ty {
+            self.error(
+                range,
+                format!(
+                    "the operands of '{name}' have different types, '{}' and '{}'",
+                    self.tyname(re.ty),
+                    self.tyname(im.ty)
+                ),
+            );
+            return None;
+        }
+        if !self.complex {
+            self.error(range, crate::COMPLEX_UNSUPPORTED.to_owned());
+            return None;
+        }
+        let ty = re.ty.complex_of();
+        Some(Expr::new(
+            ExprKind::ComplexOf {
+                re: Box::new(re),
+                im: Box::new(im),
+            },
+            ty,
+            range,
+        ))
+    }
+
+    /// The complex type a `__builtin_c…` name asks for: the `f` forms are
+    /// `float _Complex` and everything else — the `l` forms included, `long
+    /// double` being `double` here — is `double _Complex`.
+    fn complex_builtin_ty(rest: &str) -> Ty {
+        if rest.ends_with('f') {
+            Ty::ComplexFloat
+        } else {
+            Ty::ComplexDouble
+        }
+    }
+
+    /// `__builtin_creal(z)` and `__builtin_cimag(z)`, with their `f` and `l`
+    /// forms.
+    fn complex_part_builtin(
+        &mut self,
+        name: &str,
+        imag: bool,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 1, range)?;
+        let ty = Self::complex_builtin_ty(name.trim_start_matches("__builtin_"));
+        let value = self.complex_argument(name, &args[0], ty)?;
+        Some(self.complex_part_of(value, imag, range))
+    }
+
+    /// `__builtin_conj(z)` and `__builtin_cproj(z)`, with their `f` and `l`
+    /// forms.
+    ///
+    /// Conjugation is what GNU's `~z` already means, so it reuses that node;
+    /// projection needs one of its own.
+    fn complex_unary(
+        &mut self,
+        name: &str,
+        proj: bool,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 1, range)?;
+        let ty = Self::complex_builtin_ty(name.trim_start_matches("__builtin_"));
+        let value = self.complex_argument(name, &args[0], ty)?;
+        let kind = if proj {
+            ExprKind::Builtin {
+                op: BuiltinOp::ComplexProj,
+                args: vec![value],
+            }
+        } else {
+            ExprKind::BitNot(Box::new(value))
+        };
+        Some(Expr::new(kind, ty, range))
+    }
+
+    /// The single argument of a complex builtin, converted to the type the
+    /// name asks for.
+    fn complex_argument(&mut self, name: &str, arg: &ast::Expr, ty: Ty) -> Option<Expr> {
+        let value = self.expr(arg)?;
+        if value.ty.is_error() {
+            return None;
+        }
+        if !value.ty.is_arithmetic() {
+            self.error(
+                arg.range,
+                format!(
+                    "the argument of '{name}' must have an arithmetic type, not '{}'",
+                    self.tyname(value.ty)
+                ),
+            );
+            return None;
+        }
+        if !self.complex {
+            self.error(arg.range, crate::COMPLEX_UNSUPPORTED.to_owned());
+            return None;
+        }
+        Some(self.convert(value, ty))
     }
 
     /// `__builtin_alloca(size)` and `__builtin_alloca_with_align(size, bits)`.
@@ -570,6 +710,8 @@ impl Sema<'_> {
         let class = match ty {
             Ty::Void => 0,
             Ty::Float | Ty::Double => 8,
+            // GCC's `complex_type_class`.
+            Ty::ComplexFloat | Ty::ComplexDouble => 9,
             Ty::Pointer(_) => 5,
             Ty::Func(_) => 10,
             Ty::Array(_) => 14,

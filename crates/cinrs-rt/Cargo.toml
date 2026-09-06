@@ -1,0 +1,18 @@
+[package]
+name = "cinrs-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The tiny runtime the code cinrs generates links against"
+
+[lib]
+name = "cinrs_rt"
+
+[dependencies]
+# The complex number type. `default-features = false` drops `std`, which is
+# what keeps this crate `no_std`; `Complex<T>` is `#[repr(C)]` and `Copy`, so
+# `Complex<f64>` has exactly the layout and the calling convention of C's
+# `double _Complex` on every ABI this crate targets.
+num-complex.workspace = true

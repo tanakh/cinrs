@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 pub const BUNDLED: &[(&str, &str)] = &[
     ("alloca.h", include_str!("../include/alloca.h")),
     ("assert.h", include_str!("../include/assert.h")),
+    ("complex.h", include_str!("../include/complex.h")),
     ("ctype.h", include_str!("../include/ctype.h")),
     ("errno.h", include_str!("../include/errno.h")),
     ("fcntl.h", include_str!("../include/fcntl.h")),

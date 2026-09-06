@@ -15,8 +15,10 @@ cinrs::gnu99! {
     /* An extended or a quad floating format. */
     typedef double extended __attribute__((mode(XF))); //~ ERROR: no stable Rust type
 
-    /* A complex mode. */
-    typedef double complex_double __attribute__((mode(DC))); //~ ERROR: names a complex type
+    /* `SC` and `DC` are `float _Complex` and `double _Complex`, which do
+     * exist; the wider complex modes name a format that does not. */
+    typedef double complex_double __attribute__((mode(DC)));
+    typedef double complex_quad __attribute__((mode(TC))); //~ ERROR: names a complex type
 
     /* A vector mode. */
     typedef int four_ints __attribute__((mode(V4SI))); //~ ERROR: names a vector type

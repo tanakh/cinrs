@@ -601,6 +601,14 @@ pub struct FloatLit {
     pub value: f64,
     /// The suffix, which fixes the constant's type.
     pub suffix: FloatSuffix,
+    /// Whether the constant carried GNU's imaginary suffix, `i` or `j`.
+    ///
+    /// `2.0i` is `(0, 2)` of the complex type [`FloatLit::suffix`] names the
+    /// real part of, which is what makes `1.0 + 2.0i` read the way every C
+    /// program writes a complex constant. It is a GNU extension that C11
+    /// blessed by giving `<complex.h>` a `CMPLX` built on it; the *standard*
+    /// spelling of the same thing is `_Complex_I`.
+    pub imaginary: bool,
     /// Whether the constant was written in hexadecimal form.
     pub hex: bool,
     /// The exact source spelling.
@@ -868,6 +876,10 @@ pub struct LexOptions {
     /// what an `L'\xffff'` escape may hold and whether `L"😀"` is one element
     /// or a surrogate pair, since Windows makes `wchar_t` 16 bits.
     pub wchar_bits: u32,
+    /// Whether the complex types are available, which is what decides whether
+    /// an imaginary constant (`2.0i`) has a type; see
+    /// [`crate::Options::complex`].
+    pub complex: bool,
 }
 
 impl LexOptions {
@@ -882,6 +894,7 @@ impl LexOptions {
             dollar_in_identifiers: false,
             trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),
             wchar_bits: crate::TargetModel::host().wchar_bits,
+            complex: crate::COMPLEX_SUPPORTED,
         }
     }
 }
@@ -894,6 +907,7 @@ impl From<&Options> for LexOptions {
             dollar_in_identifiers: o.dollar_in_identifiers,
             trigraphs: trigraphs_enabled(o.standard, o.dialect),
             wchar_bits: o.target.wchar_bits,
+            complex: o.complex,
         }
     }
 }
@@ -1615,10 +1629,26 @@ impl<'a> Lexer<'a> {
         let (unsigned, long) = match parse_int_suffix(suffix) {
             Some(v) => v,
             None => {
-                self.error(
-                    range,
-                    format!("invalid suffix '{suffix}' on integer constant '{text}'"),
-                );
+                // `3i` is GCC's `_Complex int`, one of the two complex
+                // *integer* types that are a GNU extension of their own and
+                // that cinrs does not have. Saying what to write instead is
+                // more use than "invalid suffix".
+                if matches!(suffix, "i" | "j" | "I" | "J") {
+                    let digits = text.strip_suffix(suffix).unwrap_or(text);
+                    self.error(
+                        range,
+                        format!(
+                            "'{text}' is a complex integer constant, which is a GNU extension \
+                             cinrs does not support; write '{digits}.0{suffix}' for the \
+                             complex floating constant"
+                        ),
+                    );
+                } else {
+                    self.error(
+                        range,
+                        format!("invalid suffix '{suffix}' on integer constant '{text}'"),
+                    );
+                }
                 (false, LongKind::None)
             }
         };
@@ -1640,7 +1670,7 @@ impl<'a> Lexer<'a> {
         hex: bool,
     ) -> FloatLit {
         let (body, suffix) = split_float_suffix(digits, hex);
-        let suffix_kind = self.float_suffix(suffix, text, range);
+        let (suffix_kind, imaginary) = self.float_suffix(suffix, text, range);
 
         if hex
             && let Some(message) = self
@@ -1677,6 +1707,7 @@ impl<'a> Lexer<'a> {
         FloatLit {
             value,
             suffix: suffix_kind,
+            imaginary,
             hex,
             text: text.to_owned(),
         }
@@ -1695,30 +1726,68 @@ impl<'a> Lexer<'a> {
     ///   not; `doc/gnu-extensions.md` records that. `f32` is `float`.
     /// * **The decimal floating suffixes** `df`, `dd` and `dl`, whose types
     ///   are radix-10 and have no Rust counterpart at all.
-    /// * **The imaginary suffixes** `i` and `j`, which need `_Complex`.
+    /// * **The imaginary suffixes** `i` and `j`, which make the constant an
+    ///   imaginary one — `2.0i` is `(0, 2)` — and so need the complex types.
     ///
-    /// The last two are refused with the reason. A strict entry point refuses
-    /// the first group too, naming the GNU entry point that has it — the
-    /// suffixes are spelled without underscores, which is the line
+    /// The decimal ones are refused with the reason, and so are the imaginary
+    /// ones when the complex types are switched off. A strict entry point
+    /// refuses the first group too, naming the GNU entry point that has it —
+    /// the suffixes are spelled without underscores, which is the line
     /// [`crate::Dialect`] draws.
-    fn float_suffix(&mut self, suffix: &str, text: &str, range: SourceRange) -> FloatSuffix {
+    ///
+    /// The second half of the answer is whether the constant is imaginary; see
+    /// [`FloatLit::imaginary`].
+    fn float_suffix(
+        &mut self,
+        suffix: &str,
+        text: &str,
+        range: SourceRange,
+    ) -> (FloatSuffix, bool) {
         let lower = suffix.to_ascii_lowercase();
         match lower.as_str() {
-            "" => return FloatSuffix::None,
-            "f" => return FloatSuffix::Float,
-            "l" => return FloatSuffix::LongDouble,
+            "" => return (FloatSuffix::None, false),
+            "f" => return (FloatSuffix::Float, false),
+            "l" => return (FloatSuffix::LongDouble, false),
             _ => {}
         }
-        // A decimal or an imaginary constant is refused whatever the entry
-        // point: neither has a type this crate can give it.
+        // GNU's imaginary suffix, on its own or beside `f` or `l`. Both
+        // spellings are the same thing: `j` is what Fortran and engineering
+        // habit write, and GCC takes either.
+        let imaginary = match lower.as_str() {
+            "i" | "j" => Some(FloatSuffix::None),
+            "if" | "fi" | "jf" | "fj" => Some(FloatSuffix::Float),
+            "il" | "li" | "jl" | "lj" => Some(FloatSuffix::LongDouble),
+            _ => None,
+        };
+        if let Some(kind) = imaginary {
+            if !self.options.complex {
+                self.error(
+                    range,
+                    format!(
+                        "invalid suffix '{suffix}' on floating constant '{text}': an \
+                         imaginary constant needs _Complex. {}",
+                        crate::COMPLEX_UNSUPPORTED
+                    ),
+                );
+                return (FloatSuffix::None, false);
+            }
+            if let Some(message) = self
+                .options
+                .gating
+                .requires("an imaginary constant", Standard::C99)
+            {
+                self.error(range, message);
+                return (FloatSuffix::None, false);
+            }
+            return (kind, true);
+        }
+        // A decimal constant is refused whatever the entry point: it has no
+        // type this crate can give it.
         let refusal = match lower.as_str() {
             "df" | "dd" | "dl" => Some(
                 "the decimal floating types (_Decimal32, _Decimal64, _Decimal128) are not \
                  supported: they are radix-10 and no Rust type is",
             ),
-            "i" | "j" | "if" | "il" | "jf" | "jl" | "fi" | "li" | "fj" | "lj" => {
-                Some("an imaginary constant needs _Complex, which is not supported")
-            }
             "f16" | "f16x" | "bf16" => Some(
                 "'_Float16' is not supported: Rust's `f16` is unstable, and rounding the \
                  constant to a wider type would change what the program computes",
@@ -1730,7 +1799,7 @@ impl<'a> Lexer<'a> {
                 range,
                 format!("invalid suffix '{suffix}' on floating constant '{text}': {reason}"),
             );
-            return FloatSuffix::None;
+            return (FloatSuffix::None, false);
         }
         // The rest are the GNU widths. `f32` is `float`; every other one names
         // a format this implementation makes a `double`.
@@ -1743,7 +1812,7 @@ impl<'a> Lexer<'a> {
                 range,
                 format!("invalid suffix '{suffix}' on floating constant '{text}'"),
             );
-            return FloatSuffix::None;
+            return (FloatSuffix::None, false);
         }
         if !self.options.gating.dialect.is_gnu() {
             let gnu = self.options.gating.standard.macro_name_in(Dialect::Gnu);
@@ -1759,13 +1828,13 @@ impl<'a> Lexer<'a> {
                      requires a GNU dialect ({gnu}) (this block is {here})"
                 ),
             );
-            return FloatSuffix::None;
+            return (FloatSuffix::None, false);
         }
         if lower == "f32" {
-            return FloatSuffix::Float;
+            return (FloatSuffix::Float, false);
         }
         // `LongDouble` is `double`, which is what all of these come to.
-        FloatSuffix::LongDouble
+        (FloatSuffix::LongDouble, false)
     }
 
     // -- character and string constants -------------------------------------

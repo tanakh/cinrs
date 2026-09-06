@@ -31,8 +31,8 @@ clause, variable length arrays, `_Bool`, `restrict`, `inline`, `long long`,
 designated initializers, compound literals, variadic macros, flexible array
 members, hexadecimal floating constants, `__func__`, `_Pragma`, universal
 character names, a trailing comma in an enumerator list, `static` and `[*]` in
-an array parameter declarator, and `_Complex` are each `requires C99 or later
-(this block is c89!)`. The *library* additions are not gated — a bundled header
+an array parameter declarator, `_Complex` and an imaginary constant (`2.0i`)
+are each `requires C99 or later (this block is c89!)`. The *library* additions are not gated — a bundled header
 is a set of declarations, and `snprintf` is one of them; the C99 declarations
 that need a C99 *type* carry `__extension__`, which switches the gate off for
 the declaration it is written on, exactly as glibc's headers do, so
@@ -43,13 +43,22 @@ What `gnu89!` keeps of C89 is only what a later revision **deleted**: implicit
 `c23!`) old-style function definitions.
 
 One of the rows below is answered by the *entry point* rather than by the
-front end: `__STDC_NO_THREADS__` and `__STDC_NO_COMPLEX__` are predefined, so
-the two features they name are conforming omissions rather than gaps. One of
-the two is the conservative half of a feature that partly works:
-`__STDC_NO_THREADS__` stays defined although `_Thread_local` does, because
-`<threads.h>` is what the macro is about. The other two macros,
-`__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, are *not* defined: atomics and
-variably modified types are implemented.
+front end: `__STDC_NO_THREADS__` is predefined, so the feature it names is a
+conforming omission rather than a gap. It is the conservative half of a
+feature that partly works — it stays defined although `_Thread_local` does,
+because `<threads.h>` is what the macro is about. `__STDC_NO_ATOMICS__` and
+`__STDC_NO_VLA__` are *not* defined: atomics and variably modified types are
+implemented.
+
+`__STDC_NO_COMPLEX__` is the one that depends on how the crate was built. The
+complex types need a *runtime* type — `cinrs::rt::Complex`, which is
+[`num_complex::Complex`](https://docs.rs/num-complex) — so they live behind
+`cinrs`'s `complex` feature. It is **on by default**, and then the macro is not
+defined and everything in the `<complex.h>` row below is there;
+`default-features = false` drops the dependency, predefines the macro, and
+makes `_Complex` a diagnostic that says which feature to turn on.
+`__STDC_IEC_559_COMPLEX__` is never defined either way: `cinrs` implements
+Annex G.5.1's arithmetic without claiming the rest of the annex.
 
 ## The target model
 
@@ -178,8 +187,8 @@ target but the host.
 | Flexible array members | | 🟢 Yes | A `[T; 0]` tail member; `sizeof` leaves it out and indexing it is pointer arithmetic. Initialising one — which GCC allows with a warning — is refused. |
 | Incomplete array types (6.2.5p22, 6.9.2p5) | | 🟢 Yes | `int j[];` is a *type*, not a mistake, in the two places C allows an object to have one: an `extern` declaration, whose object is defined in another unit, and a file-scope tentative definition, which the end of the translation unit completes to **one element**. A later declaration with a bound completes it sooner (`extern int j[]; int j[3];` is one object of three), the composite type is what the object keeps (6.2.7p4), an incomplete array is *compatible* with every completed one of the same element type — so `__builtin_types_compatible_p(int[5], int[])` is 1 — and `sizeof` of one is a constraint violation until it is completed, exactly as GCC has it. `typedef int A[]; A a = { 1, 2 };` takes its length from the initialiser as the `int a[]` spelling does. |
 | `static` and type qualifiers in parameter array declarators | | 🟢 Accepted | Parsed; no effect on codegen. The *bound* of an array parameter is not part of its type either (6.7.5.3p7), so `void f(int n, int a[n])`, `int a[*]` and `int a[static n]` all declare an `int *` — which is what makes `sizeof a` there the size of a pointer. In a *definition* the bound is still evaluated on entry, in declaration order, because C99 6.9.1p10 says so and `void f(int n, int a[n++])` can tell: the value is thrown away, and a bound that plainly has no effect is left out of the generated code. |
-| Complex and imaginary support in `<complex.h>` | N693 | 🔴 No | `_Complex` is rejected. |
-| Type-generic math macros in `<tgmath.h>` | N693 | 🔴 No | Would be built on `_Generic`. |
+| Complex and imaginary support in `<complex.h>` | N620, N638, N657, N693, N694, N809 | 🟡 Partial | **Complex, yes; imaginary, no** — which is what every compiler does, and what 7.3.1p3 allows: `_Imaginary` is refused with the reason, and `_Imaginary_I` is absent. `float _Complex` and `double _Complex` are [`cinrs::rt::Complex<f32>`](https://docs.rs/num-complex) and `Complex<f64>`, two components side by side, so `sizeof` is 8 and 16 and the alignment the component's; `long double _Complex` is `double _Complex`, the same mapping `long double` has. `+ - * /` (with Annex G.5.1's infinity recovery, and componentwise where one operand is real, exactly as GCC computes them), unary `+ -`, `==`/`!=`, compound assignment, `++`/`--`, the conversions of 6.3.1.6 and 6.3.1.7, `_Bool` by 6.3.1.2, `sizeof`, `_Alignof`, `_Generic`, static initialisers and complex members and arrays all work; the relational operators, `%`, the bitwise operators and the shifts are refused with the reason, since C gives them real operands only. GNU's `__real__`, `__imag__` (lvalues when the operand is one), `~z` for the conjugate and the imaginary suffixes `2.0i`/`2.0j` are all there. `<complex.h>` bundles `complex`, `I`, `_Complex_I`, `CMPLX` and the function declarations, which link against the platform's library by value. The gaps: no complex *integer* types (`_Complex int` is a GNU extension of its own), no `va_arg` of a complex type, no `_Atomic` or bit-field of one, no `printf` conversion, and `__STDC_IEC_559_COMPLEX__` is not claimed. Needs the `complex` feature, which is on by default; see the note above. `tests/complex.rs` |
+| Type-generic math macros in `<tgmath.h>` | N693 | 🔴 No | Would be forty `_Generic`s over every arithmetic type. `<math.h>` and `<complex.h>` declare the `f` and `l` forms, which is what the macros dispatch to. |
 | The `long long int` type | N601 | 🟢 Yes | |
 | Increase minimum translation limits | N590 | 🟢 Yes | Every minimum in C23 5.2.5.2p1 is measured by `crates/cinrs-core/tests/limits.rs` and `tests/limits.rs`, allocation traffic and all. A left-associative chain — `a, b, c, …`, `a + b + …`, `a && b && …` — is bounded by nothing but memory, which is what lets a logical source line hold the 4095 characters the clause asks for; 4000 operands are accepted and run. *Nesting* is bounded at 200 levels, three times the 63 the clause asks for and close to Clang's own `-fbracket-depth` default of 256, and the right-associative `a ? b : c ? d : e` and `a = b = c`, and a run of postfix operators, count against it because each operator really is a level. |
 | Additional floating-point characteristics in `<float.h>` | | 🟡 Partial | The common `FLT_*`/`DBL_*` macros; `FLT_EVAL_METHOD`, `DECIMAL_DIG` unverified. |
@@ -260,7 +269,7 @@ Also standard C99 but absent from Clang's list:
 | Completeness of types | N1439 | ⚪ N/A | |
 | Generic macro facility (`_Generic`) | N1441 | 🟢 Yes | |
 | Dependency ordering for C memory model | N1444 | ⚪ N/A | `memory_order_consume` is accepted and performed as an acquire, which is what every compiler does with it and what 7.17.3 allows; Rust has no `Ordering::Consume` to map it to. |
-| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | 🟢 Yes | Two of the four are predefined as `1` in every entry point, which makes the absent features conforming omissions. `__STDC_NO_ATOMICS__` is **not** predefined: `_Atomic` and `<stdatomic.h>` are implemented ([N1485/N1526](#c11)), so saying they are absent would be false. Neither is `__STDC_NO_VLA__` any more: variable length arrays and the variably modified types built on them are translated ([N683](#c99)) — `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the parameter forms — and what is left of the feature is one corner of a *type name*, which no program guards `__STDC_NO_VLA__` for. `__STDC_NO_THREADS__` is the conservative half of a feature that partly works: it stays defined although `_Thread_local` does ([N1364](#c11)), because the macro is about `<threads.h>` and 7.26, which are not there at all. It comes off when the rest of that feature lands. |
+| Subsetting the standard (`__STDC_NO_ATOMICS__`, `__STDC_NO_THREADS__`, `__STDC_NO_VLA__`, `__STDC_NO_COMPLEX__`) | N1460 | 🟢 Yes | One of the four is predefined as `1` in every entry point, which makes the absent feature a conforming omission, and a second follows a cargo feature. `__STDC_NO_ATOMICS__` is **not** predefined: `_Atomic` and `<stdatomic.h>` are implemented ([N1485/N1526](#c11)), so saying they are absent would be false. Neither is `__STDC_NO_VLA__` any more: variable length arrays and the variably modified types built on them are translated ([N683](#c99)) — `int a[n]`, `double a[n][m]`, `int (*p)[n]`, `typedef int T[n];` and the parameter forms — and what is left of the feature is one corner of a *type name*, which no program guards `__STDC_NO_VLA__` for. `__STDC_NO_COMPLEX__` is defined only when the `complex` feature is off, which is not the default; see the [N693 row](#c99) and the note at the top. `__STDC_NO_THREADS__` is the conservative half of a feature that partly works: it stays defined although `_Thread_local` does ([N1364](#c11)), because the macro is about `<threads.h>` and 7.26, which are not there at all. It comes off when the rest of that feature lands. |
 | Assumed types in F.9.2 | N1468 | ⚪ N/A | |
 | Supporting the `noreturn` property (`_Noreturn`, `<stdnoreturn.h>`) | N1478 | 🟢 Yes | |
 | Updates to the memory model | N1480 | ⚪ N/A | |
@@ -268,8 +277,8 @@ Also standard C99 but absent from Clang's list:
 | Atomics (`_Atomic`, `<stdatomic.h>`) | N1485, N1526 | 🟡 Partial | `_Atomic` as a qualifier and as the `_Atomic(T)` specifier, over the scalar types: `_Bool`, the 1-, 2-, 4- and 8-byte integers and enumerations, `float` and `double`, and object pointers. Every read of such an object is a sequentially consistent load, every write a store, and `+=`, `++` and `--` are each one read-modify-write (6.5.16.2p3); the alignment of an atomic type is its size, so `_Alignof(_Atomic long long)` is 8. `<stdatomic.h>` is bundled — the `atomic_*` typedefs, `atomic_flag`, `memory_order`, the fences, `atomic_is_lock_free`, the `ATOMIC_*_LOCK_FREE` macros (all `2`) and the generic functions, written over Clang's `__c11_atomic_*` builtins, which scale pointer arithmetic as 7.17.7.5 requires. What is refused: an `_Atomic` `struct` or `union`, which is legal C and would need a lock nothing in the generated Rust can be; `_Atomic __int128`, for want of a stable `AtomicU128`; and an atomic function pointer, which Rust models as an `Option<fn>`. GCC's `__atomic_*` and `__sync_*` builtins are here too, in every entry point. |
 | UTF-8 string literals (`u8"…"`) | N1488 | 🟢 Yes | The elements are the UTF-8 bytes of the source, of type `char` here and `char8_t` from C23 on (see [N2653](#c23)). Rust's own lexer reserves the prefix, so a `u8"…"` has to be written in the string-literal input form; the same is true of `u"…"` and `U"…"`. |
 | Optimizing away infinite loops | N1509 | ⚪ N/A | |
-| Conditional normative status for Annex G | N1514 | ⚪ N/A | |
-| Creation of complex value (`CMPLX`) | N1464 | 🔴 No | |
+| Conditional normative status for Annex G | N1514 | ⚪ N/A | The paper is what made Annex G conditional on `__STDC_IEC_559_COMPLEX__`, and `cinrs` does not define it: the *arithmetic* of G.5.1 is implemented — an infinite operand gives an infinite product or quotient where the naive formula gives NaN + iNaN — but nothing else of the annex is claimed. See the [N693 row](#c99). |
+| Creation of complex value (`CMPLX`) | N1464 | 🟢 Yes | `CMPLX`, `CMPLXF` and `CMPLXL` are in `<complex.h>`, built on `__builtin_complex` as GCC's and Clang's are. It is the only way to write a complex value whose imaginary part is an infinity or a NaN: `x + y * I` multiplies, and `inf * 0` is a NaN. `clang/test/C/C11/n1464.c` is one of the conformance suite's cases and passes. |
 | Extended identifier characters | N1518 | 🟢 Yes | See the [N717 row](#c99): one character set — C23's — serves every entry point. |
 | Atomic bit-fields implementation defined | N1530 | ⚪ N/A | An `_Atomic` bit-field is refused: a bit-field has no address, and every atomic operation here is built on one. |
 | Alignment and struct/union type compatibility | N1532 | ⚪ N/A | |

@@ -10,6 +10,14 @@ description = "Implementation of the cinrs C front end (lexer, parser, diagnosti
 [lib]
 name = "cinrs_core"
 
+[features]
+# C's complex types. All the feature does is decide what
+# [`Options::complex`] defaults to: the front end carries the support either
+# way, so a test can ask for both states. What the feature really stands for is
+# the runtime the *generated* code needs, which the `cinrs` crate's own
+# `complex` feature supplies.
+complex = []
+
 [dependencies]
 proc-macro2.workspace = true
 quote.workspace = true

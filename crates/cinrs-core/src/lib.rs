@@ -86,6 +86,7 @@ pub mod ast;
 pub mod capture;
 pub mod cfg;
 pub mod codegen;
+pub mod complex;
 pub mod diag;
 pub mod dump;
 pub mod gnu;
@@ -238,6 +239,25 @@ pub const C_VARIADIC_SUPPORTED: bool = true;
 #[rustversion::before(1.99)]
 pub const C_VARIADIC_SUPPORTED: bool = false;
 
+/// Whether the complex types are available, which is this crate's `complex`
+/// feature.
+///
+/// The feature exists because the generated code for a `_Complex` value names
+/// a *runtime* type — `::cinrs::rt::Complex`, which is `num_complex::Complex`
+/// — and a build that does not want the dependency says
+/// `default-features = false` on the `cinrs` crate. It is only the default of
+/// [`Options::complex`]; the front end itself is compiled either way.
+pub const COMPLEX_SUPPORTED: bool = cfg!(feature = "complex");
+
+/// What every diagnostic about a complex type says when
+/// [`Options::complex`] is off.
+///
+/// One message, in one place, because the lexer (an imaginary constant), the
+/// parser (`__real__`) and sema (the type itself) all have to give it.
+pub const COMPLEX_UNSUPPORTED: &str = "complex types are not supported here: '_Complex' needs the 'complex' feature of the \
+     cinrs crate, which is on by default and supplies the runtime the generated code links \
+     against";
+
 /// Knobs for one macro expansion.
 ///
 /// Not [`Copy`], because [`Options::include_paths`] owns its list; the front
@@ -281,6 +301,15 @@ pub struct Options {
     /// older toolchain produces — or the code a newer one would generate — can
     /// set it either way.
     pub c_variadic: bool,
+    /// Whether the complex types are available.
+    ///
+    /// Defaults to [`COMPLEX_SUPPORTED`], which is this crate's `complex`
+    /// feature — the one the `cinrs` crate turns on to supply the `cinrs-rt`
+    /// runtime the generated code names. With it off, `_Complex` is a
+    /// diagnostic, `__STDC_NO_COMPLEX__` is predefined, and nothing generated
+    /// needs more than `core`. The front end carries the support either way, so
+    /// a test may set this in either direction.
+    pub complex: bool,
 }
 
 impl Default for Options {
@@ -311,7 +340,15 @@ impl Options {
             target: TargetModel::host(),
             target_source: TargetSource::Host,
             c_variadic: C_VARIADIC_SUPPORTED,
+            complex: COMPLEX_SUPPORTED,
         }
+    }
+
+    /// These options with the complex types switched on or off; see
+    /// [`Options::complex`].
+    pub fn with_complex(mut self, complex: bool) -> Self {
+        self.complex = complex;
+        self
     }
 
     /// These options with `target` set, and marked as the caller's choice so
@@ -460,6 +497,9 @@ pub struct Analysis {
     pub no_std: bool,
     /// The name `#pragma cinrs module` gave the generated module, if any.
     pub module: Option<String>,
+    /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate, if
+    /// any; see [`ir::DEFAULT_CRATE_PATH`].
+    pub crate_path: Option<String>,
     /// The options the rest of the pipeline is to run with.
     ///
     /// These are the caller's, with the target model resolved: whatever
@@ -546,6 +586,7 @@ struct FrontEndOutput {
     export: bool,
     no_std: bool,
     module: Option<String>,
+    crate_path: Option<String>,
     /// The options with the target model resolved; see [`Analysis::options`].
     options: Options,
 }
@@ -580,6 +621,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         export,
         no_std,
         module,
+        crate_path,
         pack_events,
     } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
     let packing = pp::PackMap::new(pack_events);
@@ -599,6 +641,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         export,
         no_std,
         module,
+        crate_path,
         options,
     }
 }
@@ -672,6 +715,7 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
         export: out.export,
         no_std: out.no_std,
         module: out.module,
+        crate_path: out.crate_path,
         options: out.options,
     }
 }
@@ -766,6 +810,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         export,
         no_std,
         module,
+        crate_path,
         // The target model the environment and the unit's own pragma settled
         // on; everything after the front end has to use these rather than the
         // options the caller handed in.
@@ -784,6 +829,9 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
     program.link_libraries = link_libraries;
     program.export = export;
     program.no_std = no_std;
+    if let Some(path) = crate_path {
+        program.crate_path = path;
+    }
     // The pragmas are the preprocessor's, so the two rules that depend on one
     // can only be checked now that the program and the pragmas are together.
     let mut pragma_diagnostics = sema::check_pragmas(&program);

@@ -180,6 +180,22 @@ impl Sema<'_> {
             );
             return None;
         }
+        if ty.is_complex() {
+            // `next_arg` needs `VaArgSafe`, and Rust implements it for the
+            // primitives only. A complex value is a two-field `#[repr(C)]`
+            // struct, which is the same case as any other aggregate — and on
+            // System V it is not even passed like one, being two SSE
+            // eightbytes rather than memory.
+            self.error(
+                range,
+                format!(
+                    "va_arg with '{}' is not supported: Rust's `VaArgSafe` covers the \
+                     primitive types only, and a complex value is a pair",
+                    self.tyname(ty)
+                ),
+            );
+            return None;
+        }
         if ty.is_arithmetic() {
             let promoted = ty.promote_argument(&self.target);
             if promoted == ty {

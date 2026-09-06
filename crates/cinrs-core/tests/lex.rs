@@ -388,7 +388,8 @@ fn floating_errors() {
 ///
 /// Every one of them is a `double` here, `long double` being one; a strict
 /// entry point says which GNU entry point has them instead, and the decimal
-/// and imaginary ones are refused whatever the entry point.
+/// ones are refused whatever the entry point. The imaginary suffixes are the
+/// [test below](the_imaginary_suffixes)'s.
 #[test]
 fn the_gnu_floating_suffixes() {
     let gnu = gnu_opts();
@@ -414,14 +415,82 @@ fn the_gnu_floating_suffixes() {
     for (src, reason) in [
         ("0.5dd", "decimal floating types"),
         ("0.5DF", "decimal floating types"),
-        ("2.0i", "_Complex"),
-        ("2.0j", "_Complex"),
         ("1.0f16", "'_Float16' is not supported"),
     ] {
         let errors = lex_with(src, &gnu).1;
         assert!(
             errors.iter().any(|e| e.contains(reason)),
             "{src:?} should mention {reason:?}, got {errors:?}"
+        );
+    }
+}
+
+/// GNU's `i` and `j`, which make a floating constant an imaginary one.
+///
+/// Both spellings mean the same thing, and each combines with `f` and `l` in
+/// either order. With the complex types switched off every one of them is a
+/// diagnostic that says which feature to turn on; a complex *integer*
+/// constant — `3i`, GCC's `_Complex int` — is refused either way, and says
+/// what to write instead.
+#[test]
+fn the_imaginary_suffixes() {
+    let mut on = LexOptions::new(Standard::C99);
+    on.complex = true;
+    for (src, want) in [
+        ("2.0i", FloatSuffix::None),
+        ("2.0j", FloatSuffix::None),
+        ("2.0J", FloatSuffix::None),
+        ("2.0if", FloatSuffix::Float),
+        ("2.0fi", FloatSuffix::Float),
+        ("2.0jF", FloatSuffix::Float),
+        ("2.0il", FloatSuffix::LongDouble),
+        ("2.0Li", FloatSuffix::LongDouble),
+    ] {
+        let (tokens, errors) = lex_with(src, &on);
+        assert_eq!(errors, Vec::<String>::new(), "for {src:?}");
+        match &tokens[0].kind {
+            TokenKind::Float(lit) => {
+                assert_eq!(lit.value, 2.0, "for {src:?}");
+                assert_eq!(lit.suffix, want, "for {src:?}");
+                assert!(lit.imaginary, "for {src:?}");
+            }
+            other => panic!("{src:?} is not a floating constant: {other:?}"),
+        }
+    }
+    // Without the suffix nothing is imaginary.
+    match &lex_with("2.0f", &on).0[0].kind {
+        TokenKind::Float(lit) => assert!(!lit.imaginary),
+        other => panic!("not a floating constant: {other:?}"),
+    }
+    // An imaginary constant is C99's, like `_Complex` itself.
+    let mut c89 = LexOptions::new(Standard::C89);
+    c89.complex = true;
+    assert!(
+        lex_with("2.0i", &c89).1.iter().any(|e| e
+            .contains("an imaginary constant requires C99 or later (this block is c89!)")),
+        "{:?}",
+        lex_with("2.0i", &c89).1
+    );
+
+    let mut off = LexOptions::new(Standard::C99);
+    off.complex = false;
+    for src in ["2.0i", "2.0j", "1.0if"] {
+        let errors = lex_with(src, &off).1;
+        assert!(
+            errors.iter().any(|e| e.contains("'complex' feature")),
+            "{src:?} should name the feature, got {errors:?}"
+        );
+    }
+
+    // `3i` is GCC's complex *integer* constant, which is a different
+    // extension and is refused whatever the feature says.
+    for options in [&on, &off] {
+        let errors = lex_with("3i", options).1;
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("complex integer constant") && e.contains("'3.0i'")),
+            "{errors:?}"
         );
     }
 }

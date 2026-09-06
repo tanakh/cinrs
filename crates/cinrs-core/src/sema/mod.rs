@@ -73,7 +73,7 @@ use crate::capture::SourceRange;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
     self, ConstValue, Expr, ExprKind, FuncId, INT128_TYPEDEF_NAMES, LoopId, ObjectId, Place,
-    Program, RecordId, Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
+    PlaceKind, Program, RecordId, Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
 };
 use crate::target::TargetModel;
 
@@ -317,6 +317,8 @@ struct Sema<'a> {
     gate_diags: Vec<Diagnostic>,
     /// Whether the toolchain supports `va_list` and variadic definitions.
     c_variadic: bool,
+    /// Whether the complex types are available; see [`crate::Options::complex`].
+    complex: bool,
     /// Which revision the block is written in, and whether the GNU extensions
     /// are on; an identifier another entry point would have made a keyword is
     /// reported against it.
@@ -466,11 +468,16 @@ impl<'a> Sema<'a> {
             diags: Diagnostics::new(),
             gate_diags: Vec::new(),
             c_variadic: options.c_variadic,
+            complex: options.complex,
             gating: options.gating(),
             va_list_gate_reported: false,
             target: options.target,
             program: Program {
                 unit_id,
+                // `#pragma cinrs crate` is the preprocessor's and reaches the
+                // program after this, in `crate::expand_with`; until then the
+                // default is what a diagnostic path would generate with.
+                crate_path: ir::DEFAULT_CRATE_PATH.to_owned(),
                 ..Program::default()
             },
             scopes: vec![Scope::default()],
@@ -1145,6 +1152,18 @@ impl<'a> Sema<'a> {
         match value {
             ConstValue::Int(v) => Expr::int(v, ty, range),
             ConstValue::Float(v) => Expr::new(ExprKind::Float(v), ty, range),
+            ConstValue::Complex(re, im) => {
+                let component = ty.complex_component();
+                let part = |v: f64| Box::new(Expr::new(ExprKind::Float(v), component, range));
+                Expr::new(
+                    ExprKind::ComplexOf {
+                        re: part(re),
+                        im: part(im),
+                    },
+                    ty,
+                    range,
+                )
+            }
         }
     }
 
@@ -1173,6 +1192,27 @@ impl<'a> Sema<'a> {
         match &expr.kind {
             ExprKind::Int(v) => Some(ConstValue::Int(*v)),
             ExprKind::Float(v) => Some(ConstValue::Float(*v)),
+            ExprKind::ComplexOf { re, im } => {
+                let (re, _) = as_parts(self.const_eval(re)?);
+                let (im, _) = as_parts(self.const_eval(im)?);
+                Some(complex_value(expr.ty, (re, im)))
+            }
+            // `__real__ (1.0 + 2.0i)` and `creal(…)` of a constant: the part of
+            // a *temporary* is as constant as the value it was taken from. A
+            // part of a named object is not, which is why only this shape
+            // folds.
+            ExprKind::Load(Place {
+                kind: PlaceKind::ComplexPart { base, imag },
+                ..
+            }) => {
+                let PlaceKind::Temporary(inner) = &base.kind else {
+                    return None;
+                };
+                let (re, im) = as_parts(self.const_eval(inner)?);
+                let part = if *imag { im } else { re };
+                Some(ConstValue::Float(round_to(part, expr.ty)))
+            }
+            ExprKind::Zeroed if expr.ty.is_complex() => Some(ConstValue::Complex(0.0, 0.0)),
             ExprKind::Zeroed if expr.ty.is_arithmetic() => Some(if expr.ty.is_floating() {
                 ConstValue::Float(0.0)
             } else {
@@ -1204,10 +1244,13 @@ impl<'a> Sema<'a> {
                     Some(ConstValue::Int(expr.ty.wrap(v.wrapping_neg(), &target)))
                 }
                 ConstValue::Float(v) => Some(ConstValue::Float(-v)),
+                ConstValue::Complex(re, im) => Some(ConstValue::Complex(-re, -im)),
             },
             ExprKind::BitNot(inner) => match self.const_eval(inner)? {
                 ConstValue::Int(v) => Some(ConstValue::Int(expr.ty.wrap(!v, &target))),
                 ConstValue::Float(_) => None,
+                // GNU's `~z` is the conjugate.
+                ConstValue::Complex(re, im) => Some(ConstValue::Complex(re, -im)),
             },
             ExprKind::Binary { op, lhs, rhs } => {
                 let lhs = self.const_eval(lhs)?;
@@ -1230,6 +1273,16 @@ impl<'a> Sema<'a> {
                     }
                     (ConstValue::Int(a), ConstValue::Int(b)) => compare_values(*op, &a, &b),
                     (ConstValue::Float(a), ConstValue::Float(b)) => compare_values(*op, &a, &b),
+                    // Only `==` and `!=` reach a complex operand; sema refuses
+                    // the ordering ones, and both parts have to agree.
+                    (ConstValue::Complex(ar, ai), ConstValue::Complex(br, bi)) => {
+                        let equal = ar == br && ai == bi;
+                        match op {
+                            ir::CmpOp::Eq => equal,
+                            ir::CmpOp::Ne => !equal,
+                            _ => return None,
+                        }
+                    }
                     _ => return None,
                 };
                 Some(ConstValue::Int(i128::from(result)))
@@ -1267,6 +1320,9 @@ impl<'a> Sema<'a> {
     ) -> Option<ConstValue> {
         use ir::BinOp;
         let target = self.target;
+        if expr.ty.is_complex() {
+            return self.const_complex_binary(op, lhs, rhs, expr);
+        }
         if let (ConstValue::Float(a), ConstValue::Float(b)) = (lhs, rhs) {
             let value = match op {
                 BinOp::Add => a + b,
@@ -1334,6 +1390,71 @@ impl<'a> Sema<'a> {
             }
         };
         Some(ConstValue::Int(expr.ty.wrap(value, &target)))
+    }
+
+    /// `+ - * /` on a constant with at least one complex operand.
+    ///
+    /// The folding has to give exactly what the generated code would have
+    /// computed, so it takes the same routes: componentwise for a real operand
+    /// on either side of `+`, `-` and `*` and under a complex `/` real, and
+    /// [`crate::complex`]'s Annex G arithmetic for the rest. See that module
+    /// for why the mixed forms are not simply "convert and go".
+    fn const_complex_binary(
+        &mut self,
+        op: ir::BinOp,
+        lhs: ConstValue,
+        rhs: ConstValue,
+        expr: &Expr,
+    ) -> Option<ConstValue> {
+        use ir::BinOp;
+        let ty = expr.ty;
+        let narrow = ty == Ty::ComplexFloat;
+        let (a, b) = as_parts(lhs);
+        let (c, d) = as_parts(rhs);
+        let left_complex = matches!(lhs, ConstValue::Complex(..));
+        let right_complex = matches!(rhs, ConstValue::Complex(..));
+        let parts = match op {
+            // A real operand leaves the imaginary part exactly as it was —
+            // *not* added to a zero, which would turn a negative zero
+            // positive. See `cinrs_rt::complex`.
+            BinOp::Add => match (left_complex, right_complex) {
+                (true, true) => (a + c, b + d),
+                (true, false) => (a + c, b),
+                (false, _) => (a + c, d),
+            },
+            BinOp::Sub => match (left_complex, right_complex) {
+                (true, true) => (a - c, b - d),
+                (true, false) => (a - c, b),
+                (false, _) => (a - c, -d),
+            },
+            BinOp::Mul => {
+                if left_complex && right_complex {
+                    if narrow {
+                        crate::complex::mul_f32((a, b), (c, d))
+                    } else {
+                        crate::complex::mul((a, b), (c, d))
+                    }
+                } else if left_complex {
+                    (a * c, b * c)
+                } else {
+                    (a * c, a * d)
+                }
+            }
+            BinOp::Div => {
+                if right_complex {
+                    if narrow {
+                        crate::complex::div_f32((a, b), (c, d))
+                    } else {
+                        crate::complex::div((a, b), (c, d))
+                    }
+                } else {
+                    (a / c, b / c)
+                }
+            }
+            // Sema refuses every other operator on a complex operand.
+            _ => return None,
+        };
+        Some(complex_value(ty, parts))
     }
 }
 
@@ -1433,11 +1554,41 @@ fn is_true(value: ConstValue) -> bool {
     match value {
         ConstValue::Int(v) => v != 0,
         ConstValue::Float(v) => v != 0.0,
+        // C99 6.3.1.2: a complex value is true when *either* part is non-zero.
+        ConstValue::Complex(re, im) => re != 0.0 || im != 0.0,
     }
 }
 
+/// The two parts of a constant, for the complex arithmetic in
+/// [`crate::complex`]: a real value is `(v, 0)`.
+fn as_parts(value: ConstValue) -> crate::complex::Parts {
+    match value {
+        ConstValue::Int(v) => (v as f64, 0.0),
+        ConstValue::Float(v) => (v, 0.0),
+        ConstValue::Complex(re, im) => (re, im),
+    }
+}
+
+/// A folded complex value, with both parts rounded to the component type.
+fn complex_value(ty: Ty, (re, im): crate::complex::Parts) -> ConstValue {
+    let component = ty.complex_component();
+    ConstValue::Complex(round_to(re, component), round_to(im, component))
+}
+
 fn convert_const(value: ConstValue, from: Ty, to: Ty, target: &TargetModel) -> ConstValue {
+    // Complex is its own axis: to one, from one, and between the two widths.
+    if to.is_complex() {
+        return complex_value(to, as_parts(value));
+    }
+    if let ConstValue::Complex(re, _) = value {
+        // C99 6.3.1.7: converting a complex value to a real type discards the
+        // imaginary part, and the real part converts as usual.
+        return convert_const(ConstValue::Float(re), from.complex_component(), to, target);
+    }
     match (value, to.is_floating()) {
+        // Both directions were answered above; this is what tells the compiler
+        // the match is exhaustive.
+        (ConstValue::Complex(..), _) => value,
         (ConstValue::Int(v), false) => ConstValue::Int(to.wrap(v, target)),
         // An `unsigned __int128` carried as a bit pattern is that many, not
         // the negative number the same bits read as an `i128`.

@@ -12,6 +12,10 @@ description = "Write C code inside Rust"
 [workspace.dependencies]
 cinrs-core = { path = "crates/cinrs-core", version = "0.1.0" }
 cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
+cinrs-rt = { path = "crates/cinrs-rt", version = "0.1.0" }
+# `Complex<T>` is `#[repr(C)]` and `Copy`, which is what makes it C's
+# `_Complex`; `default-features = false` is what keeps `cinrs-rt` `no_std`.
+num-complex = { version = "0.4.6", default-features = false }
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 quote = "1.0"
 rustversion = "1.0.22"
@@ -29,12 +33,27 @@ description.workspace = true
 readme = "README.md"
 
 [features]
+default = ["complex"]
+
+# C's complex types. On by default; switching it off — `default-features =
+# false` — drops the `cinrs-rt` dependency, predefines `__STDC_NO_COMPLEX__`,
+# and makes `_Complex` a diagnostic again. See the crate documentation.
+#
+# `cinrs-core` is named twice over: `cinrs-macros` is a procedural macro and is
+# therefore built for the *host*, which Cargo's feature resolver keeps apart
+# from the ordinary graph, so the copy `tests/clang_c.rs` and `tests/headers.rs`
+# drive directly needs the feature said again.
+complex = ["dep:cinrs-rt", "cinrs-macros/complex", "cinrs-core/complex"]
+
 # Exact spans inside string-literal input; see the crate documentation.
 # Needs a nightly compiler.
 nightly = ["cinrs-macros/nightly"]
 
 [dependencies]
 cinrs-macros.workspace = true
+# The runtime the generated code links against; see `cinrs_rt`. `no_std`, and
+# pulled in only by the `complex` feature.
+cinrs-rt = { workspace = true, optional = true }
 
 [dev-dependencies]
 rustversion.workspace = true
@@ -47,7 +66,7 @@ cinrs-core.workspace = true
 proc-macro2.workspace = true
 
 [package.metadata.docs.rs]
-features = ["nightly"]
+features = ["nightly", "complex"]
 
 [[test]]
 name = "ui"
