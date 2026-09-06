@@ -18,6 +18,9 @@ enum Deref {
     /// A function designator: `*fp` is `fp` again, which is why `(*fp)(x)` and
     /// `fp(x)` mean the same thing.
     Function(Expr),
+    /// `*p` on a `void *`, which is an expression of type `void`: the pointer
+    /// is evaluated and there is no object to read. See [`Sema::deref`].
+    Void(Expr),
 }
 
 /// The left operand of a node that a *chain* of operators leaves behind.
@@ -93,6 +96,7 @@ impl Sema<'_> {
     fn expr_node(&mut self, expr: &ast::Expr) -> Option<Expr> {
         let range = expr.range;
         match &expr.kind {
+            ast::ExprKind::Ident(name) if self.underspecified_use(&name.name, range) => None,
             ast::ExprKind::Ident(name) => match self.lookup(&name.name) {
                 Some(Entry::Object(_)) => {
                     let place = self.lvalue(expr)?;
@@ -225,6 +229,9 @@ impl Sema<'_> {
                 let mark = self.vm_bounds.len();
                 let target = self.ty_of(&ty.ty);
                 let supplied: Vec<_> = self.vm_bounds.drain(mark..).collect();
+                if self.reject_incomplete_enum(&ty.ty, "sizeof", ty.range) {
+                    return None;
+                }
                 self.sizeof_with(target?, supplied, ty.range, range)
             }
             ast::ExprKind::AlignofExpr(operand) => {
@@ -233,6 +240,9 @@ impl Sema<'_> {
             }
             ast::ExprKind::AlignofType(name) => {
                 let ty = self.ty_of(&name.ty)?;
+                if self.reject_incomplete_enum(&name.ty, "_Alignof", name.range) {
+                    return None;
+                }
                 self.alignof(ty, name.range, range)
             }
             ast::ExprKind::Generic {
@@ -544,10 +554,44 @@ impl Sema<'_> {
         Expr::new(ExprKind::FuncAddr(id), ty, range)
     }
 
+    /// Whether this identifier is the one an **underspecified** declaration is
+    /// declaring, which its own initialiser may not name.
+    ///
+    /// Reports the first such use and forgets the name, so that `auto a = a *
+    /// a;` is one diagnostic rather than two; see `Sema::underspecified`.
+    pub(super) fn underspecified_use(&mut self, name: &str, range: SourceRange) -> bool {
+        if self.underspecified.as_deref() != Some(name) {
+            return false;
+        }
+        self.underspecified = None;
+        self.error(
+            range,
+            format!(
+                "'{name}' is declared with a type deduced from this initializer and cannot \
+                 appear in it"
+            ),
+        );
+        true
+    }
+
     /// Reads a place, decaying an array into a pointer to its first element as
     /// C does everywhere but under `sizeof` and `&`.
     fn load_or_decay(&mut self, place: Place, range: SourceRange) -> Expr {
         if place.ty.is_array() {
+            // C11 6.7.1p6, WG14 DR116: the decay is the *implicit* `&` a
+            // `register` array may not have, which leaves `sizeof` as the only
+            // operator it can be the operand of. `a[3]` and `a + 3` are the
+            // same conversion written differently and are refused with it.
+            if let Some(name) = self.register_root(&place) {
+                self.error(
+                    range,
+                    format!(
+                        "'{name}' is declared 'register', so it cannot be converted to a \
+                         pointer to its first element; 'sizeof' is the only operator that \
+                         applies to a 'register' array (6.7.1p6)"
+                    ),
+                );
+            }
             let konst = place.is_const;
             let ty = self.program.types.decayed(place.ty, konst);
             return Expr::new(ExprKind::AddrOf(place), ty, range);
@@ -600,6 +644,7 @@ impl Sema<'_> {
     pub(super) fn lvalue(&mut self, expr: &ast::Expr) -> Option<Place> {
         let range = expr.range;
         match &expr.kind {
+            ast::ExprKind::Ident(name) if self.underspecified_use(&name.name, range) => None,
             ast::ExprKind::Ident(name) => match self.lookup(&name.name) {
                 Some(Entry::Object(id)) => {
                     // Inside a nested function this may be an object of the
@@ -627,6 +672,16 @@ impl Sema<'_> {
                 Deref::Place(place) => Some(place),
                 Deref::Function(_) => {
                     self.error(range, "a function designator is not an object");
+                    None
+                }
+                Deref::Void(_) => {
+                    // `*p` on a `void *` is an lvalue of type `void`, which
+                    // designates no object: it may be evaluated and discarded
+                    // and nothing else.
+                    self.error(
+                        range,
+                        "an lvalue of the incomplete type 'void' does not designate an object",
+                    );
                     None
                 }
             },
@@ -824,6 +879,20 @@ impl Sema<'_> {
             self.report_const_assignment(&place, expr.range);
             return None;
         }
+        // C11 6.3.2.1p1, WG14 DR131: a structure or union with a `const`
+        // member — recursively, through the aggregates it contains — is not a
+        // modifiable lvalue, however unqualified the object itself is.
+        if let Some(member) = self.types().const_member(place.ty).map(str::to_owned) {
+            let what = match &place.kind {
+                PlaceKind::Object(id) => format!("variable '{}'", self.program.object(*id).name),
+                _ => format!("a location of type '{}'", self.tyname(place.ty)),
+            };
+            self.error(
+                expr.range,
+                format!("cannot assign to {what} with the const-qualified data member '{member}'"),
+            );
+            return None;
+        }
         Some(place)
     }
 
@@ -865,6 +934,23 @@ impl Sema<'_> {
         };
         if pointee.is_func() {
             return Some(Deref::Function(ptr));
+        }
+        if pointee.is_void() {
+            // WG14 DR106. 6.5.3.2p2's only constraint on `*` is that the
+            // operand be a pointer, and p4 makes the result an lvalue of the
+            // pointed-to type — `void` here, so there is no object to read and
+            // nothing that reads one. Every context that can hold the result
+            // is a void context: `(void)*p`, `&*p` (6.5.3.2p3, which never
+            // evaluates either operator), `*p, *p`, `c ? *p : *p` and
+            // `return *p;` from a function returning void. GCC and Clang both
+            // take it with a warning that only `-pedantic-errors` promotes, so
+            // refusing it would refuse valid C; the pointer is still
+            // evaluated, which is what the cast to `void` here says.
+            return Some(Deref::Void(Expr::new(
+                ExprKind::Cast(Box::new(ptr)),
+                Ty::Void,
+                range,
+            )));
         }
         if !self.types().is_complete(pointee) {
             self.error(
@@ -1109,6 +1195,7 @@ impl Sema<'_> {
             ast::UnaryOp::Deref => match self.deref(operand, range)? {
                 Deref::Place(place) => Some(self.load_or_decay(place, range)),
                 Deref::Function(ptr) => Some(ptr),
+                Deref::Void(value) => Some(value),
             },
             ast::UnaryOp::Plus | ast::UnaryOp::Minus => {
                 let value = self.expr(operand)?;
@@ -1235,6 +1322,17 @@ impl Sema<'_> {
                     range,
                     "cannot take the address of a temporary; the object does not outlive \
                      the expression",
+                );
+                return None;
+            }
+            // C11 6.5.3.2p1: the operand of `&` shall be "an lvalue that
+            // designates an object that is not a bit-field and is not declared
+            // with the `register` storage-class specifier", and 6.7.1p6 puts
+            // *any part* of such an object out of reach too.
+            if let Some(name) = self.register_root(&place) {
+                self.error(
+                    range,
+                    format!("cannot take the address of '{name}', which is declared 'register'"),
                 );
                 return None;
             }
@@ -1592,13 +1690,14 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         // A null pointer constant on either side takes the other's type.
+        let (lhs_null, rhs_null) = (self.is_null_constant(&lhs), self.is_null_constant(&rhs));
         let (lhs, rhs) = match (lhs.ty.is_pointer(), rhs.ty.is_pointer()) {
-            (true, false) if self.is_null_constant(&rhs) => {
+            (true, false) if rhs_null => {
                 let ty = lhs.ty;
                 let range = rhs.range;
                 (lhs, Expr::new(ExprKind::Zeroed, ty, range))
             }
-            (false, true) if self.is_null_constant(&lhs) => {
+            (false, true) if lhs_null => {
                 let ty = rhs.ty;
                 let range = lhs.range;
                 (Expr::new(ExprKind::Zeroed, ty, range), rhs)
@@ -1975,6 +2074,19 @@ impl Sema<'_> {
                     values.push(value);
                 }
                 None => {
+                    // An argument with no parameter to check it against still
+                    // has to *be* something: C99 6.5.2.2p6 asks for a complete
+                    // type here, and `void` is the one an expression can have
+                    // and still have no value at all. WG14 DR252
+                    // (`drs/dr2xx.c`) writes `no_proto(returns_void())`.
+                    if value.ty.is_void() {
+                        self.error(
+                            arg.range,
+                            "an argument of type 'void' is incomplete and has no value to pass",
+                        );
+                        failed = true;
+                        continue;
+                    }
                     // The variable part of a variadic call gets the default
                     // argument promotions, and so does *every* argument of a
                     // call through a type with no prototype (C99 6.5.2.2p6):
@@ -2742,6 +2854,30 @@ impl Sema<'_> {
         self.sizeof_with(ty, Vec::new(), operand_range, range)
     }
 
+    /// Refuses `sizeof` or `_Alignof` of an enumeration whose own list is
+    /// still open, which is a size nothing has yet (C23 6.7.3.3p12).
+    ///
+    /// The type an incomplete enumeration resolves to here is `int` or the
+    /// fixed underlying type, both of which *have* a size, so the answer comes
+    /// from the occurrence rather than from the type; see
+    /// [`Sema::incomplete_enum`].
+    /// Returns whether the operand was refused.
+    fn reject_incomplete_enum(
+        &mut self,
+        ty: &ast::Type,
+        operator: &str,
+        range: SourceRange,
+    ) -> bool {
+        let Some(tag) = self.incomplete_enum(ty).map(str::to_owned) else {
+            return false;
+        };
+        self.error(
+            range,
+            format!("invalid application of '{operator}' to an incomplete type 'enum {tag}'"),
+        );
+        true
+    }
+
     /// `sizeof`, with the bounds a type name written here evaluated on the
     /// spot rather than read out of the hidden objects a declaration left
     /// behind (C99 6.5.3.4p2).
@@ -2902,17 +3038,20 @@ impl Sema<'_> {
             Some("a pointer cannot be converted to an integer without a cast")
         } else if to.is_pointer() && expr.ty.is_pointer() {
             // Two records can wear one tag and still be two types: a tag
-            // belongs to the scope it was declared in, and a `struct S` first
-            // named inside a parameter list belongs to *that list* (6.2.1p4),
-            // so the `struct S` the file scope goes on to declare is another
-            // one. "The pointee types differ" over two spellings that are
-            // letter for letter the same is a riddle; this says which riddle.
+            // belongs to the scope it was declared in, so a `struct S` first
+            // named inside a parameter list belongs to *that list* (6.2.1p4)
+            // and a `struct S;` written on its own inside a block belongs to
+            // the block (6.7.2.3p7, WG14 DR088). Either way the `struct S` the
+            // file scope declares is another one. "The pointee types differ"
+            // over two spellings that are letter for letter the same is a
+            // riddle; this says which riddle.
             if self.tyname(to) == self.tyname(expr.ty) {
                 Some(
                     "these are two different types with the same spelling: a tag belongs to \
-                     the scope it was declared in, and one written inside a parameter list \
-                     belongs to that list (6.2.1p4), so nothing after the closing \
-                     parenthesis can name it. Declare the type before the prototype",
+                     the scope it was declared in, so one written inside a parameter list \
+                     belongs to that list (6.2.1p4) and a lone 'struct S;' inside a block \
+                     declares a new type there (6.7.2.3p7). Declare the type where both \
+                     declarations can see it",
                 )
             } else {
                 Some("the pointee types differ; add a cast if the conversion is intended")
@@ -2933,6 +3072,15 @@ impl Sema<'_> {
     /// Whether a pointer of type `from` may be assigned to one of type `to`
     /// without a cast.
     fn pointer_assignable(&self, to: Ty, from: Ty) -> bool {
+        // C99 6.5.16.1p1: "both operands are pointers to qualified or
+        // unqualified versions of compatible types". `Ty` equality answers
+        // that for all but a function type written without a prototype, and
+        // this catches that one at any depth: `int (**fpp)(); int (*fp)(int);
+        // fpp = &fp;` is WG14 DR035 (`drs/dr0xx.c`), where the *pointees* are
+        // the compatible pair and the operands themselves are not equal.
+        if self.compatible(to, from) {
+            return true;
+        }
         let to_func = self.types().is_func_pointer(to);
         let from_func = self.types().is_func_pointer(from);
         if to_func || from_func {
@@ -3030,12 +3178,27 @@ impl Sema<'_> {
     }
 
     /// Whether an expression is C's null pointer constant.
-    pub(super) fn is_null_constant(&self, expr: &Expr) -> bool {
+    pub(super) fn is_null_constant(&mut self, expr: &Expr) -> bool {
         match &expr.kind {
             ExprKind::Int(v) => *v == 0 && expr.ty.is_integer(),
-            ExprKind::Zeroed => expr.ty.is_pointer(),
-            ExprKind::Cast(inner) => expr.ty.is_integer() && self.is_null_constant(inner),
-            _ => false,
+            // A pointer whose value is zero is not a null pointer *constant*
+            // unless it is the `(void *)0` form: 6.3.2.3p3 names "an integer
+            // constant expression with the value 0, or such an expression cast
+            // to type `void *`" and nothing else, so `(struct S *)0` keeps
+            // `struct S *`'s type and passing it where a `struct T *` is
+            // wanted is a constraint violation (WG14 DR088, `drs/dr0xx.c`).
+            ExprKind::Zeroed => self.types().is_void_pointer(expr.ty),
+            ExprKind::Cast(inner) => {
+                let inner = inner.clone();
+                expr.ty.is_integer() && self.is_null_constant(&inner)
+            }
+            // Any other integer constant expression that evaluates to zero:
+            // `char *p = 1 - 1;` is a null pointer constant and `char *p = i -
+            // i;` is not, which is what WG14 DR261 (`drs/dr2xx.c`) is about.
+            _ => {
+                expr.ty.is_integer()
+                    && matches!(self.const_eval(expr), Some(crate::ir::ConstValue::Int(0)))
+            }
         }
     }
 
@@ -3134,6 +3297,29 @@ fn part_name(imag: bool) -> &'static str {
 }
 
 /// Whether a place ultimately addresses a temporary rather than an object.
+impl Sema<'_> {
+    /// The name of the `register` object a place is a part of, if it is part
+    /// of one.
+    ///
+    /// C11 6.7.1p6 puts "any part of an object declared with storage-class
+    /// specifier `register`" out of reach of `&`, so a member of a `register`
+    /// structure and an element of a `register` array are no more addressable
+    /// than the object itself. Anything reached through a *pointer* is a
+    /// different object and has nothing to do with it.
+    fn register_root(&self, place: &Place) -> Option<String> {
+        match &place.kind {
+            PlaceKind::Object(id) => {
+                let object = self.program.object(*id);
+                object.is_register.then(|| object.name.clone())
+            }
+            PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+                self.register_root(base)
+            }
+            _ => None,
+        }
+    }
+}
+
 fn rooted_in_temporary(place: &Place) -> bool {
     match &place.kind {
         PlaceKind::Temporary(_) => true,

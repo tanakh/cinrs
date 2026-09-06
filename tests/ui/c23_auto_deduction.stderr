@@ -1,0 +1,38 @@
+error: 'b' is declared with a type deduced from this initializer and cannot appear in it
+  --> tests/ui/c23_auto_deduction.rs:16:22
+   |
+16 |             auto b = b * b;
+   |                      ^
+
+error: 'auto' is not allowed in a function prototype
+  --> tests/ui/c23_auto_deduction.rs:24:29
+   |
+24 |     typedef void (*handler)(auto);
+   |                             ^^^^
+
+error: 'p', of type 'auto *', has an incompatible initializer of type 'int'
+  --> tests/ui/c23_auto_deduction.rs:30:19
+   |
+30 |         auto *p = a;
+   |                   ^
+
+error: cannot combine storage class 'constexpr' with 'extern'
+  --> tests/ui/c23_auto_deduction.rs:39:12
+   |
+39 |     extern constexpr int elsewhere;
+   |            ^^^^^^^^^
+
+error: '_Thread_local' cannot be combined with 'constexpr'; a constant has no storage to give a thread a copy of
+  --> tests/ui/c23_auto_deduction.rs:40:5
+   |
+40 |     _Thread_local constexpr int per_thread = 1;
+   |     ^^^^^^^^^^^^^
+
+error: cannot combine storage class 'constexpr' with 'typedef'
+  --> tests/ui/c23_auto_deduction.rs:41:13
+   |
+41 |     typedef constexpr int Alias;
+   |             ^^^^^^^^^
+
+error: aborting due to 6 previous errors
+

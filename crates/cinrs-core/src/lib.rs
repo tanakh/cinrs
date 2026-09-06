@@ -270,6 +270,14 @@ pub struct Options {
     /// feature of a newer revision is accepted silently. See [`Dialect`].
     pub dialect: Dialect,
     /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`.
+    ///
+    /// **On by default**, which is where GCC and Clang both keep it: WG14
+    /// DR027 lets an implementation put characters outside the basic source
+    /// character set into an identifier, GCC takes `$` unconditionally, and
+    /// Clang takes it with a warning that only `-pedantic-errors` promotes.
+    /// A `$` that reaches the generated Rust — which has no such spelling —
+    /// is written `_dollar_` there, and the C name is what the symbol still
+    /// links by.
     pub dollar_in_identifiers: bool,
     /// Directories `#include` searches, after the ones the unit itself names
     /// with `#pragma cinrs include_path` and before the bundled headers.
@@ -335,7 +343,7 @@ impl Options {
         Self {
             standard,
             dialect,
-            dollar_in_identifiers: false,
+            dollar_in_identifiers: true,
             include_paths: Vec::new(),
             target: TargetModel::host(),
             target_source: TargetSource::Host,

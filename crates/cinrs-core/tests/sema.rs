@@ -444,10 +444,9 @@ fn arrays_are_checked() {
         "int n; int a[n];",
         &["array size is not an integer constant expression"],
     );
-    rejected(
-        "int f(void) { char s[2] = \"long\"; return s[0]; }",
-        &["initializer-string for char array is too long"],
-    );
+    // An over-long string initialiser is a warning for GCC and Clang alike —
+    // WG14 DR114 — and the excess characters are dropped rather than refused.
+    accepted("int f(void) { char s[2] = \"long\"; return s[0]; }");
 }
 
 #[test]

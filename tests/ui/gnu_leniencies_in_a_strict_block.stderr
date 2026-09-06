@@ -39,17 +39,11 @@ error: a cast to a union type is a GNU extension, and requires a GNU dialect (gn
 41 |     union u as_union(int n) { return (union u) n; }
    |                                       ^^^^^
 
-error: initializer-string for char array is too long
-  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:45:21
-   |
-45 |     char three[3] = "1234";
-   |                     ^^^^^^
-
 error: initializer is not a compile-time constant expression
-  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:50:33
+  --> tests/ui/gnu_leniencies_in_a_strict_block.rs:46:33
    |
-50 |     static unsigned long b_at = (unsigned long) &((struct s *) 0)->b;
+46 |     static unsigned long b_at = (unsigned long) &((struct s *) 0)->b;
    |                                 ^
 
-error: aborting due to 8 previous errors
+error: aborting due to 7 previous errors
 

@@ -413,9 +413,9 @@ plus one this entry point is *required* to refuse and did refuse — and what is
 left over is broken down into four kinds of error: a `cinrs` **bug**, something
 **unimplemented**, something **not planned** (inline assembly, the vector
 extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
-**toolchain** being older than Rust 1.99. Across all three corpora there are
-**12 tagged `[bug]`**, all of them in Clang's, and every one of them is named
-in the documents below.
+**toolchain** being older than Rust 1.99. Across all three corpora there is now
+**not one case tagged `[bug]`**: what is left is what the documents below name
+as unimplemented or not planned, case by case.
 
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
@@ -443,12 +443,14 @@ in the documents below.
   names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **160 of the 203 revisions run are correct
-  (78.8 %)** — 133 answered exactly and 27 refused because the entry point
+  which lines must be diagnosed. **165 of the 203 revisions run are correct
+  (81.3 %)** — 138 answered exactly and 27 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
-  **491 are diagnosed on the right line**. This is the only suite that measures
-  what `cinrs` *refuses*, which is half of what a front end is for, and it is
-  where all 12 bugs are: 5 root causes, listed in the document.
+  **554 are diagnosed on the right line**. This is the only suite that measures
+  what `cinrs` *refuses*, which is half of what a front end is for, and **not
+  one of its 38 errors is a bug** either: they are the features the document
+  lists as not yet implemented, and the places where `cinrs` and Clang
+  disagree on purpose — usually with GCC on `cinrs`'s side.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
 each harness skips itself with a note when its corpus is missing.

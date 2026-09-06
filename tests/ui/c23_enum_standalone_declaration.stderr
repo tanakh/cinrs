@@ -1,0 +1,38 @@
+error: a non-defining declaration of 'enum object' with a fixed underlying type is only allowed as a standalone declaration; write the list of enumerators, or declare the enumeration on a line of its own
+  --> tests/ui/c23_enum_standalone_declaration.rs:17:5
+   |
+17 |     enum object : long int z;
+   |     ^^^^
+
+error: a non-defining declaration of 'enum in_a_list' with a fixed underlying type is only allowed as a standalone declaration; write the list of enumerators, or declare the enumeration on a line of its own
+  --> tests/ui/c23_enum_standalone_declaration.rs:18:20
+   |
+18 |     void parameter(enum in_a_list : long b);
+   |                    ^^^^
+
+error: a non-defining declaration of 'enum returned' with a fixed underlying type is only allowed as a standalone declaration; write the list of enumerators, or declare the enumeration on a line of its own
+  --> tests/ui/c23_enum_standalone_declaration.rs:19:5
+   |
+19 |     enum returned : int a_function();
+   |     ^^^^
+
+error: a non-defining declaration of 'enum aliased' with a fixed underlying type is only allowed as a standalone declaration; write the list of enumerators, or declare the enumeration on a line of its own
+  --> tests/ui/c23_enum_standalone_declaration.rs:20:13
+   |
+20 |     typedef enum aliased : short Alias;
+   |             ^^^^
+
+error: a non-defining declaration of 'enum bit_field' with a fixed underlying type is only allowed as a standalone declaration; write the list of enumerators, or declare the enumeration on a line of its own
+  --> tests/ui/c23_enum_standalone_declaration.rs:24:9
+   |
+24 |         enum bit_field : int : 1;
+   |         ^^^^
+
+error: the tentative definition of 'y' has type 'enum never_completed', which is never completed
+  --> tests/ui/c23_enum_standalone_declaration.rs:35:26
+   |
+35 |     enum never_completed y;
+   |                          ^
+
+error: aborting due to 6 previous errors
+

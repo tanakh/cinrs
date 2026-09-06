@@ -67,6 +67,40 @@ fn a_gnu_dialect_has_them_as_well() {
 }
 
 // ---------------------------------------------------------------------------
+// `$`
+// ---------------------------------------------------------------------------
+
+// WG14 DR027 asks whether an implementation may take characters outside the
+// required source character set in an identifier, and the answer is yes. GCC
+// takes `$` unconditionally and Clang takes it with a warning that only
+// `-pedantic-errors` promotes, so it is an identifier character here too, in
+// every entry point.
+//
+// Rust has no spelling for it — not even a raw identifier — so a `$` that
+// reaches the generated item is written `_dollar_` there, and the C name is
+// what the symbol still links by. That is invisible from C, which is the
+// point: the name is used below exactly as it was written.
+c99! { r##"
+#define THIS$AND$THAT(a, b) ((a) + (b))
+int dollar$sum(int a, int b) { return THIS$AND$THAT(a, b); }
+
+struct has$members { int one$field; };
+int read$member(void) {
+    struct has$members s;
+    s.one$field = 41;
+    return s.one$field + 1;
+}
+"## }
+
+#[test]
+fn a_dollar_sign_is_an_identifier_character() {
+    unsafe {
+        assert_eq!(dollar_dollar_sum(2, 3), 5);
+        assert_eq!(read_dollar_member(), 42);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // what is refused
 // ---------------------------------------------------------------------------
 

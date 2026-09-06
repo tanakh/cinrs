@@ -36,8 +36,13 @@ impl Sema<'_> {
                 ast::BlockItem::Decl(decl) => {
                     if decl.declarators.is_empty() {
                         // A tag definition with nothing declared still defines
-                        // the tag.
-                        let _ = self.ty_of(&decl.specifiers.base);
+                        // the tag — and `struct S;` on its own declares a new
+                        // one *in this block* (6.7.2.3p7, WG14 DR088), which
+                        // is what `Sema::declare_sole_tag` puts in place.
+                        self.declare_sole_tag(decl);
+                        self.standalone_declaration(decl, |sema| {
+                            let _ = sema.ty_of(&decl.specifiers.base);
+                        });
                         continue;
                     }
                     for declarator in &decl.declarators {
@@ -432,31 +437,24 @@ impl Sema<'_> {
     /// nothing is how a wrapper forwards a call, and there is no value to
     /// return — and GCC has accepted that, and a non-`void` expression with
     /// it, in every mode it has, with only a pedantic warning ("ISO C forbids
-    /// 'return' with expression, in function returning void"). The GNU
-    /// dialects follow GCC; the strict ones below C23 keep the constraint
-    /// violation.
+    /// 'return' with expression, in function returning void").
+    ///
+    /// A **`void` expression** is therefore taken in every entry point, which
+    /// is WG14 DR113 (`drs/dr1xx.c`): GCC and Clang both diagnose it only
+    /// under `-pedantic`, and a procedural macro has no warning to raise. A
+    /// *value* is still a constraint violation in a strict block, and the
+    /// diagnostic names the GNU dialect that takes it.
     ///
     /// Where it is accepted the expression is still *evaluated* — it is where
     /// the call was written — and only its value is dropped.
     fn void_return(&mut self, value: Expr, expr_range: SourceRange, range: SourceRange) -> Stmt {
-        let allowed = if value.ty.is_void() {
-            self.gnu_leniency() || self.gating.standard >= crate::Standard::C23
-        } else {
-            self.gnu_leniency()
-        };
+        let allowed = value.ty.is_void() || self.gnu_leniency();
         if !allowed {
             let message = format!(
                 "void function '{}' should not return a value",
                 self.func_name
             );
-            let note = if value.ty.is_void() {
-                format!(
-                    "the expression has type 'void', which C23 allows here (6.8.6.4p1); {}",
-                    self.gnu_note()
-                )
-            } else {
-                self.gnu_note()
-            };
+            let note = self.gnu_note();
             self.diags
                 .push(crate::diag::Diagnostic::error(expr_range, message).with_note(note));
             return Stmt::Return { value: None, range };

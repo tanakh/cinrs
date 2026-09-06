@@ -96,6 +96,25 @@ enum ArrayLen {
     Unspecified,
 }
 
+/// How complete the type of a declared object has to be where it is written.
+///
+/// C11 6.7p7 asks for a complete type only for an identifier "declared with no
+/// linkage"; the two places an incomplete one may stand are a file-scope
+/// *tentative* definition, which the end of the translation unit completes to
+/// one element when it is still an incomplete array (6.9.2p5), and an `extern`
+/// declaration, whose object is defined in another unit and whose size is
+/// therefore none of this one's business (6.2.5p22). WG14 DR047 is the second
+/// of those (`extern struct incomplete es1;`, `drs/dr0xx.c`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Completeness {
+    /// The type has to be complete here.
+    Required,
+    /// `T x[];` is allowed, and nothing else incomplete is.
+    TentativeArray,
+    /// Any incomplete type is allowed.
+    Any,
+}
+
 /// Where a member ends up.
 enum Spot {
     /// A byte offset from the start of the record.
@@ -341,7 +360,10 @@ impl Sema<'_> {
                 self.check_element_type(element, elem.range)?;
                 let konst = elem.qualifiers.is_const;
                 Ok(match self.array_len(size, range)? {
-                    ArrayLen::Fixed(len) => self.program.types.array(element, len, konst),
+                    ArrayLen::Fixed(len) => {
+                        self.check_array_size(element, len, range)?;
+                        self.program.types.array(element, len, konst)
+                    }
                     ArrayLen::Variable(len) => self.program.types.vla_array(element, konst, len),
                     ArrayLen::Unspecified => self.program.types.incomplete_array(element, konst),
                 })
@@ -521,6 +543,12 @@ impl Sema<'_> {
             // to a variably modified `double[m]`, whose bound a definition
             // gives an object of its own on entry (C99 6.9.1p10).
             let element = self.resolve_ty(elem)?;
+            // The adjustment to a pointer does not excuse the element type:
+            // C11 6.7.6.2p1's "the element type shall not be an incomplete or
+            // function type" is a constraint on the declarator as written, and
+            // both GCC and Clang answer `struct incomplete a[]` with an error
+            // (WG14 DR047, `drs/dr0xx.c`).
+            self.check_element_type(element, elem.range)?;
             return Ok(self.ptr_to(element, elem.qualifiers.is_const));
         }
         let resolved = self.resolve_ty(ty)?;
@@ -788,6 +816,35 @@ impl Sema<'_> {
         }
     }
 
+    /// Rejects an array whose elements will not fit in the address space.
+    ///
+    /// C leaves the maximum size of an object implementation-defined, and what
+    /// every implementation can actually say is `size_t`: `sizeof` has that
+    /// type, so an object whose size does not fit it has no size at all. GCC
+    /// ("size of array 'a' is too large") and Clang ("array is too large (N
+    /// elements)") both refuse it, and `drs/dr2xx.c` writes
+    /// `sizeof(int[SIZE_MAX/2][SIZE_MAX/2])` to check that they do.
+    fn check_array_size(
+        &mut self,
+        elem: Ty,
+        len: u64,
+        range: SourceRange,
+    ) -> Result<(), TypeError> {
+        let stride = self
+            .types()
+            .size_align(elem, &self.target)
+            .map_or(1, |layout| layout.size)
+            .max(1);
+        let limit = u64::MAX >> (64 - self.target.ptr_bits.min(64));
+        if len > limit / stride {
+            return Err(TypeError::at(
+                range,
+                format!("array is too large ({len} elements)"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Rejects the element types an array cannot have.
     fn check_element_type(&mut self, elem: Ty, range: SourceRange) -> Result<(), TypeError> {
         if elem.is_func() {
@@ -828,19 +885,13 @@ impl Sema<'_> {
         }
     }
 
-    /// Resolves a type that must name an object type, with
-    /// `incomplete_array` saying whether `T x[]` is allowed here.
-    ///
-    /// It is in exactly two places (C99 6.9.2p3, 6.2.5p22): an `extern`
-    /// declaration, whose object is defined in another unit and whose size is
-    /// therefore none of this one's business, and a file-scope *tentative*
-    /// definition, which the end of the translation unit completes to one
-    /// element. Everywhere else an object needs a complete type.
+    /// Resolves a type that must name an object type, with `completeness`
+    /// saying how complete it has to be here.
     pub(super) fn declared_object_ty_of(
         &mut self,
         ty: &ast::Type,
         name: &str,
-        incomplete_array: bool,
+        completeness: Completeness,
     ) -> Option<Ty> {
         let resolved = match self.resolve_declared_ty(ty, name) {
             Ok(resolved) => resolved,
@@ -856,7 +907,12 @@ impl Sema<'_> {
             );
             return None;
         }
-        if incomplete_array && self.types().is_incomplete_array(resolved) {
+        if completeness == Completeness::Any {
+            return Some(resolved);
+        }
+        if completeness == Completeness::TentativeArray
+            && self.types().is_incomplete_array(resolved)
+        {
             return Some(resolved);
         }
         if !self.types().is_complete(resolved) {
@@ -974,7 +1030,7 @@ impl Sema<'_> {
     }
 
     /// Creates an incomplete tag and reserves the Rust name it will use.
-    fn declare_record(
+    pub(super) fn declare_record(
         &mut self,
         kind: RecordKind,
         tag: Option<String>,
@@ -2039,13 +2095,37 @@ impl Sema<'_> {
 
         let Some(enumerators) = &spec.enumerators else {
             let name = spec.name.as_ref().expect("the parser requires a tag here");
+            // C23 (N3030): a non-defining declaration of an enumeration with a
+            // fixed underlying type is only permitted as a standalone
+            // declaration, so `enum E : long;` is the whole of what may be
+            // written — not `enum E : long x;`, not a parameter, a return
+            // type, a `typedef` or a member. See [`Sema::standalone_enum`].
+            if underlying.is_some() && self.standalone_enum != Some(spec_id) {
+                self.error(
+                    spec.range,
+                    format!(
+                        "a non-defining declaration of 'enum {}' with a fixed underlying type \
+                         is only allowed as a standalone declaration; write the list of \
+                         enumerators, or declare the enumeration on a line of its own",
+                        name.name
+                    ),
+                );
+            }
             return match self.lookup_tag(&name.name) {
                 Some(TagEntry::Enum {
                     ty,
                     unsigned,
                     fixed,
-                    ..
+                    complete,
                 }) => {
+                    // A mention of a tag whose list has not been seen: it has
+                    // a size all the same when a fixed underlying type gave it
+                    // one (N3030), and none at all otherwise — which is what
+                    // `sizeof` of an enumeration inside its own list asks
+                    // about (WG14 DR118).
+                    if !complete && !fixed {
+                        self.enum_incomplete[spec_id.index()] = Some(name.name.clone());
+                    }
                     // `enum E : long;` after an `enum E : short;` or an
                     // `enum E { … }` *in the same scope*. A mention with no
                     // underlying type of its own — `enum E x;` — asks nothing
@@ -2090,6 +2170,13 @@ impl Sema<'_> {
                             complete: false,
                         },
                     );
+                    // `enum E : short;` names a type with a *size* — N3030
+                    // settles it where the underlying type is written — even
+                    // though its list has not been seen; `enum E;` is GNU's
+                    // forward reference, and that one has no size until it is.
+                    if underlying.is_none() {
+                        self.enum_incomplete[spec_id.index()] = Some(name.name.clone());
+                    }
                     self.enum_by_spec[spec_id.index()] = Some(ty);
                     self.enum_unsigned[spec_id.index()] = Some(unsigned);
                     Ok(ty)
@@ -2182,13 +2269,23 @@ impl Sema<'_> {
             _ => Ty::Int,
         };
         if let Some(name) = &spec.name {
+            // C23 6.7.3.3p12: "the enumerated type is incomplete until
+            // immediately after the `}` that terminates the list" — *unless*
+            // it has a fixed underlying type (N3030), which settles its size
+            // and alignment where it is written. The tag is in scope for its
+            // own list either way, which is what lets an enumerator name it,
+            // so it goes in now with `complete` saying only that the list has
+            // not been seen yet: `enum E { m = sizeof(enum E) }` is the
+            // constraint violation WG14 DR118 (`drs/dr1xx.c`) is about, and
+            // `enum E : unsigned long long { m = sizeof(enum E) }` is the
+            // valid form `C23/n3030.c` writes beside it.
             self.insert_tag(
                 &name.name,
                 TagEntry::Enum {
                     ty,
                     unsigned: false,
                     fixed: underlying.is_some(),
-                    complete: true,
+                    complete: false,
                 },
             );
         }

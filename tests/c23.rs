@@ -79,6 +79,32 @@ fn constexpr_objects_are_constants() {
     }
 }
 
+/// C23 6.7.1p2's second exception to "at most one storage-class specifier":
+/// `constexpr` "may appear with `auto`, `register` or `static`".
+///
+/// The three of them say where the object would live and `constexpr` says it
+/// is a constant instead, so the pair means what `constexpr` alone means —
+/// which is what GCC and Clang both make of it. `extern constexpr` and
+/// `thread_local constexpr` are still refused, and `tests/ui/` has those.
+#[test]
+fn constexpr_may_stand_beside_static_register_or_auto() {
+    c23! {
+        static constexpr int FILE_SCOPE = 3;
+        constexpr static int EITHER_ORDER = 4;
+
+        int inside(void) {
+            static constexpr int a = 5;
+            register constexpr int b = 6;
+            constexpr auto c = 7;
+            auto constexpr d = 8;
+            int sized[FILE_SCOPE + EITHER_ORDER];
+            return a + b + c + d + (int) (sizeof sized / sizeof sized[0]);
+        }
+    }
+
+    assert_eq!(unsafe { inside() }, 5 + 6 + 7 + 8 + 7);
+}
+
 #[test]
 fn typeof_names_the_type_of_an_expression() {
     c23! {
@@ -125,6 +151,40 @@ fn auto_infers_the_type_of_a_local() {
     }
 
     assert_eq!(unsafe { inferred() }, 7);
+}
+
+/// `auto *p = e;` — inference through a declarator that is not a plain
+/// identifier.
+///
+/// C23 asks the declarator of an inferred declaration to be a plain identifier
+/// and GCC says so; Clang takes the pointer forms as a documented extension,
+/// and this crate takes them too, exactly as it takes GCC's own extensions in
+/// every entry point. What is deduced is what is left under the `*`s, so the
+/// object's type is the initialiser's own — and an initialiser without enough
+/// of them to peel is refused, which `tests/ui/c23_auto_deduction.rs` checks.
+#[test]
+fn auto_infers_through_a_pointer_declarator() {
+    c23! {
+        int deduced(void) {
+            int n = 5;
+            int *q = &n;
+            auto *p = &n;
+            auto **pp = &q;
+            *p += 1;
+            return n + **pp;
+        }
+
+        long through_a_qualifier(void) {
+            const long v = 4;
+            auto *p = &v;
+            return *p;
+        }
+    }
+
+    unsafe {
+        assert_eq!(deduced(), 12);
+        assert_eq!(through_a_qualifier(), 4);
+    }
 }
 
 /// `auto` is a storage-class specifier that stands *beside* the others.
@@ -334,6 +394,39 @@ fn an_enum_can_fix_its_underlying_type() {
         // The tag is a Rust alias for the underlying type.
         let c: Colour = RED;
         assert_eq!(c, 0u8);
+    }
+}
+
+/// N3030: an enumeration with a fixed underlying type is **complete** where
+/// that type is written, and not only after the `}` of its list.
+///
+/// The size and alignment follow from the underlying type alone, so
+/// `enum E : short;` names something `sizeof` can measure and an enumerator
+/// may ask for the size of its own enumeration. Without a fixed type the
+/// enumeration is incomplete until the closing brace, which is WG14 DR118 and
+/// what `tests/ui/c23_enum_standalone_declaration.rs` checks.
+#[test]
+fn a_fixed_underlying_type_completes_the_enumeration_at_once() {
+    c23! {
+        enum Ahead : unsigned short;
+
+        unsigned long ahead_width(void) { return sizeof(enum Ahead); }
+
+        enum Ahead : unsigned short { AHEAD_ONE = 1 };
+
+        enum SelfMeasuring : unsigned int {
+            OWN_SIZE = sizeof(enum SelfMeasuring),
+            NEXT
+        };
+
+        int own_size(void) { return OWN_SIZE; }
+        int next(void) { return NEXT; }
+    }
+
+    unsafe {
+        assert_eq!(ahead_width(), 2);
+        assert_eq!(own_size(), 4);
+        assert_eq!(next(), 5);
     }
 }
 

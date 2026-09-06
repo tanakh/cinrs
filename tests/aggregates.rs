@@ -352,6 +352,70 @@ fn typedefs_of_aggregates() {
 // initialisers
 // ---------------------------------------------------------------------------
 
+/// The two initialisers 6.7.9 makes constraint violations and every
+/// implementation answers with a warning, keeping the part that fits.
+///
+/// A string literal with no room for its terminator is WG14 **DR114**
+/// (`char array[2][5] = { "defghi" }`), and 6.7.9p14 already lets the NUL fall
+/// off the end when the array is exactly as long as the text; anything more is
+/// dropped, which is what GCC and Clang both do and what `gcc.c-torture`'s
+/// `pr86714` was written to check. Braces around a *scalar* hold "a single
+/// expression" (6.7.9p11), and the values after the first are dropped the same
+/// way.
+#[test]
+fn an_initializer_with_more_than_fits_keeps_what_does() {
+    c99! {
+        char exactly[2] = "hi";
+        char too_long[3] = "abcde";
+        char rows[2][5] = { "defghi", "jk" };
+
+        int scalar = { 1, 2 };
+
+        int exact_at(int i) { return exactly[i]; }
+        int long_at(int i) { return too_long[i]; }
+        int row_at(int r, int i) { return rows[r][i]; }
+        int the_scalar(void) { return scalar; }
+
+        unsigned long sizes(int which) {
+            return which ? sizeof exactly : sizeof too_long;
+        }
+
+        int local_scalar(void) { int n = { 3, 4 }; return n; }
+        int local_string(void) { char s[2] = "long"; return s[1]; }
+
+        /* WG14 DR032/DR035: a comma operator is not part of a constant
+           expression (6.6p3), and both compilers take one in a static
+           initialiser all the same, keeping the value of the right operand. */
+        int comma_at_file_scope = (1, 2);
+        int the_comma(void) { return comma_at_file_scope; }
+    }
+
+    unsafe {
+        // No room for the terminator, so it is left out (6.7.9p14); the
+        // characters past the end of the array are simply not part of the
+        // value, and the object keeps its declared size.
+        assert_eq!(
+            (exact_at(0), exact_at(1)),
+            (i32::from(b'h'), i32::from(b'i'))
+        );
+        assert_eq!(sizes(1), 2);
+        assert_eq!(
+            (long_at(0), long_at(1), long_at(2)),
+            (i32::from(b'a'), i32::from(b'b'), i32::from(b'c'))
+        );
+        assert_eq!(sizes(0), 3);
+        assert_eq!(
+            (row_at(0, 0), row_at(0, 4)),
+            (i32::from(b'd'), i32::from(b'h'))
+        );
+        assert_eq!((row_at(1, 0), row_at(1, 2)), (i32::from(b'j'), 0));
+        assert_eq!(the_scalar(), 1);
+        assert_eq!(local_scalar(), 3);
+        assert_eq!(local_string(), i32::from(b'o'));
+        assert_eq!(the_comma(), 2);
+    }
+}
+
 #[test]
 fn designated_and_partial_initializers() {
     c99! {

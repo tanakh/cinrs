@@ -256,17 +256,27 @@ error: void function 'f' should not return a value
        note: GCC accepts this with a warning; write gnu11! for the same leniency
 ```
 
+The **bold** rows are taken in *every* entry point rather than only the GNU
+ones. The line between the two is what the two compilers do by default and
+what the program then means: where GCC and Clang both accept a construct and
+both produce the same value from it, refusing it would be refusing valid C for
+a severity — a warning — that a procedural macro has no way to raise. Where
+they disagree, or where accepting would mean *choosing* a meaning (a macro
+redefined with a different replacement list, say, where the last definition
+wins and only the compiler knows which that is), the diagnostic stays.
+
 | Leniency | Example | ISO C | cinrs |
 | --- | --- | --- | --- |
 | **Pointer targets that differ only in signedness** | `strlen((unsigned char *) s)`, `long *p = ulp;`, `unsigned char *p = charp;` | 6.5.16.1p1 constraint violation; GCC and Clang warn (`-Wpointer-sign`) and only `-pedantic-errors` promotes it | 🟢 **accepted in every entry point**, silently. Plain `char` counts as differing in sign from both `signed char` and `unsigned char`, which is the rule both compilers use. There is too much real C behind this one for a dialect switch to be the honest answer |
-| `return expr;` in a `void` function | `void f(void) { return g(); }` | 6.8.6.4p1 constraint violation, *except* in C23 when the expression has type `void` | 🟢 accepted in `c23!` (void expression) and in every GNU dialect (any expression); the expression is evaluated and its value dropped |
+| **`return expr;` in a `void` function, where `expr` has type `void`** | `void f(void) { return g(); }` | 6.8.6.4p1 constraint violation until C23, which allows it; GCC and Clang both answer it with a warning that only `-pedantic-errors` promotes (WG14 DR113) | 🟢 **accepted in every entry point**; the expression is evaluated and there is no value to drop. A `return` with a *value* is still a constraint violation outside the GNU dialects, which take any expression and drop it |
 | Comparing two function pointers of incompatible types | `int (*a)(int); long (*b)(void); a == b` | 6.5.9p2; GCC warns (`-Wcompare-distinct-pointer-types`) and compares the addresses | 🟢 GNU dialects. A *compatible* pair needs no leniency: `double (*)()` and `double (*)(double)` are compatible (6.7.6.3p15) and compare everywhere, and `void *` against a function pointer follows the conversion rule above it in the table |
 | `sizeof (void)`, `__alignof__ (void)` | `p + 1` with `void *p` | `void` is an incomplete type that can never be completed (6.2.5p19) | 🟢 GNU dialects, both 1 — which is what makes the `void *` arithmetic above mean anything |
 | A stray `;` at file scope | `int f(void) { … };` | 6.9p1 has no empty external declaration, and C23 did not add one | 🟢 GNU dialects |
 | An enumerator that will not fit `int` | `enum e { big = ULLONG_MAX };` | 6.7.2.2p2 constraint violation until C23 (N3029), which widens the enumeration instead | 🟢 `c23!` and the GNU dialects widen; the strict pre-C23 entry points keep the error. The widened type is the narrowest of `int`, `unsigned int`, `long`, … that holds every value, and every enumerator of the enumeration has it |
 | A parameter of a *definition* with no name | `int f(int, int b) { … }` | C23 (N2480) allows it; before that 6.9.1p5 required a name | 🟢 `c23!` and the GNU dialects |
 | An undeclared `alloca` | `void *p = alloca(n);` | no ISO header declares it | 🟢 GNU dialects, where the call is `__builtin_alloca` and so returns `void *`, exactly as GCC's `gnu` modes do. A strict entry point leaves it to the C89 implicit-declaration rule, which types it `int()` |
-| An over-long string initialiser | `char a[3] = "1234";` | 6.7.8p2 constraint violation — no initializer may provide a value for something outside the object. GCC warns and drops the excess | 🟢 GNU dialects, which drop the excess characters too. `execute/pr86714` is the case, and its whole point is that they are not part of the value |
+| **An over-long string initialiser, and a braced *scalar* with more than one value** | `char a[3] = "1234";`, `int n = { 1, 2 };` | 6.7.9p2 constraint violation — no initializer may provide a value for something outside the object — and 6.7.9p11 for the scalar. GCC and Clang both warn and drop the excess (WG14 DR114) | 🟢 **accepted in every entry point**, with the excess dropped, which is the value both compilers produce. `execute/pr86714` is the array case and its whole point is that the excess is not part of the value; an *aggregate* with too many initialisers is still refused, since the shape of the braces is the whole of what says which member each value belongs to |
+| **A comma operator in a static initialiser** | `int i = (1, 2);` | 6.6p3 keeps the comma operator out of a constant expression, and 6.7.9p4 asks a static initialiser to be one (WG14 DR032/DR035) | 🟢 **accepted in every entry point** when the left operand is itself constant: GCC and Clang both take it, and only `-pedantic-errors` refuses it. Where C asks for an *integer constant expression* — an enumerator, an array bound, a `case` label, `_Static_assert` — the comma is still refused, which is what GCC does there too |
 | **Folding the address of a member of a constant pointer** | `#define offsetof(T, m) ((size_t) &((T *) 0)->m)` | 6.6 has no such constant expression; GCC folds it, calls the folding an extension, and rejects it under `-pedantic-errors` | 🟢 GNU dialects, wherever an integer constant expression is required — an array bound, a `case` label, a static initialiser. This is the `offsetof` every C program wrote before `<stddef.h>` had one, and it takes `.member` and `[constant]` steps. The address of a *named object* is still not one: the linker decides it |
 | A cast to a union type | `(union u) x` | not in ISO C at all | 🟢 GNU dialects; see the language table above |
 

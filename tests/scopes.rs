@@ -161,3 +161,52 @@ fn a_tag_declared_before_the_prototype_is_the_one_the_prototype_means() {
         assert_eq!(round_trip(41), 41);
     }
 }
+
+// ---------------------------------------------------------------------------
+// DR088: `struct S;` on its own declares a tag of *this* scope
+// ---------------------------------------------------------------------------
+
+/// C11 6.7.2.3p7: "a declaration of the form `struct-or-union identifier ;`
+/// specifies a structure or union type and declares the identifier as a tag of
+/// that type" — of the scope it is written in, so a block that writes it gets
+/// a *new*, incomplete type even where an enclosing scope has one under the
+/// same spelling.
+///
+/// Only the sole declaration does that; `struct S *p;` is p8's "no other
+/// declaration of the identifier as a tag is visible" and names the visible
+/// one. The two are only told apart by what they refuse — passing a pointer to
+/// the inner type where the outer one is wanted, which
+/// `tests/ui/wg14_defect_reports.rs` checks — so what this asserts is that the
+/// *outer* type still works either side of the block.
+#[test]
+fn a_sole_tag_declaration_belongs_to_the_block_it_is_written_in() {
+    c11! {
+        struct dr088_t { int value; };
+
+        int outer(struct dr088_t *p) { return p->value; }
+
+        int shadows(int v) {
+            struct dr088_t outer_object = { 0 };
+            outer_object.value = v;
+            {
+                /* A second, incomplete `struct dr088_t`, which nothing in
+                 * this block can complete or take the size of. */
+                struct dr088_t;
+                struct dr088_t *inner = 0;
+                if (inner) { return -1; }
+            }
+            /* The file scope's type again, unchanged. */
+            return outer(&outer_object);
+        }
+
+        unsigned long outer_size(void) { return sizeof(struct dr088_t); }
+    }
+
+    unsafe {
+        assert_eq!(shadows(42), 42);
+        assert_eq!(
+            usize::try_from(outer_size()).expect("a size"),
+            core::mem::size_of::<core::ffi::c_int>()
+        );
+    }
+}

@@ -971,6 +971,45 @@ impl Types {
         }
     }
 
+    /// The name of a `const`-qualified member of `ty`, if it has one.
+    ///
+    /// C11 6.3.2.1p1 makes a structure or union with such a member — "any
+    /// member (including, recursively, any member or element of all contained
+    /// aggregates or unions)" — something other than a modifiable lvalue, so
+    /// the whole object cannot be assigned to even though nothing about the
+    /// object itself was declared `const`. WG14 DR131 is that rule, and
+    /// `drs/dr1xx.c` is where it is checked.
+    ///
+    /// The walk terminates: a record cannot contain itself by value.
+    pub fn const_member(&self, ty: Ty) -> Option<&str> {
+        match ty {
+            Ty::Record(id) => self.record(id).fields.iter().find_map(|field| {
+                if field.is_const || self.has_const_elements(field.ty) {
+                    Some(field.name.as_str())
+                } else {
+                    self.const_member(field.ty)
+                }
+            }),
+            Ty::Array(id) => self.const_member(self.array_type(id).elem),
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is an array whose elements are `const`-qualified.
+    ///
+    /// An array type is never itself qualified — 6.7.3p9 puts the qualifiers
+    /// on the elements — so `const int a[3];` as a member is a `const` member
+    /// with `is_const` clear.
+    fn has_const_elements(&self, ty: Ty) -> bool {
+        match ty {
+            Ty::Array(id) => {
+                let array = self.array_type(id);
+                array.elem_const || self.has_const_elements(array.elem)
+            }
+            _ => false,
+        }
+    }
+
     /// The size and alignment of `ty`, or `None` when it is incomplete.
     pub fn size_align(&self, ty: Ty, target: &TargetModel) -> Option<Layout> {
         Some(match ty {
@@ -1706,6 +1745,17 @@ pub struct Object {
     pub storage: Storage,
     /// Whether the object's type is `const`-qualified.
     pub is_const: bool,
+    /// Whether the declaration said `register`.
+    ///
+    /// The specifier is a hint about speed that this crate has nothing to do
+    /// with — Rust decides where a local lives — but it has one rule with
+    /// teeth: C11 6.7.1p6 says the address of such an object "cannot be
+    /// computed, either explicitly (by use of the unary `&` operator as
+    /// discussed in 6.5.3.2) or implicitly (by converting an array name to a
+    /// pointer as discussed in 6.3.2.1)", so `sizeof` is the only operator an
+    /// array declared `register` can be the operand of. WG14 DR116 is that
+    /// rule; `drs/dr1xx.c` is where it is checked.
+    pub is_register: bool,
     /// Set when this is the hidden `Vec` a [variable length array](Stmt::Vla)
     /// keeps its elements in, in which case [`Object::ty`] is the *element*
     /// type and the generated binding has type `Vec<T>`.
@@ -2016,8 +2066,16 @@ impl Program {
     /// prettier still, but a module cannot see the `struct` items of the block
     /// it is written in, which an `extern` declaration taking a `struct`
     /// needs.
+    ///
+    /// A `$` in the C name — an identifier character here, and one Rust has no
+    /// spelling for — is written [`crate::codegen::DOLLAR`]; the symbol the
+    /// declaration links by is a `#[link_name]` string and keeps the `$`.
     pub fn extern_name(&self, symbol: &str) -> String {
-        format!("__cinrs_{:08x}_{symbol}", self.unit_id as u32)
+        format!(
+            "__cinrs_{:08x}_{}",
+            self.unit_id as u32,
+            symbol.replace('$', crate::codegen::DOLLAR)
+        )
     }
 
     /// Whether anything at all has to go into the `extern` block.

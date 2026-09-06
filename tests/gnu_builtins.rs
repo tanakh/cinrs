@@ -1,6 +1,6 @@
 //! The `__builtin_*` forms.
 
-use cinrs::c99;
+use cinrs::{c11, c99};
 
 // ---------------------------------------------------------------------------
 // branch hints and the ones that end a function
@@ -156,6 +156,45 @@ fn the_bit_builtins_agree_with_rusts_integer_methods() {
         unsafe { bswap64(0x0123_4567_89ab_cdef) },
         0xefcd_ab89_6745_2301
     );
+}
+
+/// The same builtins over a constant operand are *constants*, which is what
+/// lets them stand where C asks for an integer constant expression.
+///
+/// GCC and Clang both fold them; WG14 DR263 as Clang tests it (`drs/dr2xx.c`)
+/// writes `_Static_assert(__builtin_popcount(0) < 1, …)`, and the width the
+/// answer depends on is the one the builtin's suffix chose. `clz` and `ctz`
+/// are undefined for a zero operand and are left to the generated code there,
+/// exactly as they are at run time.
+#[test]
+fn the_bit_builtins_fold_to_constants() {
+    c11! {
+        _Static_assert(__builtin_popcount(0) < 1, "zero is not all zero bits");
+        _Static_assert(__builtin_popcount(0xffu) == 8, "");
+        _Static_assert(__builtin_popcountll(~0ull) == 64, "");
+        _Static_assert(__builtin_clz(1u) == 31, "");
+        _Static_assert(__builtin_clzll(1ull) == 63, "");
+        _Static_assert(__builtin_ctz(0x8000u) == 15, "");
+        _Static_assert(__builtin_ffs(0) == 0, "");
+        _Static_assert(__builtin_ffs(8) == 4, "");
+        _Static_assert(__builtin_parity(7) == 1, "");
+        _Static_assert(__builtin_clrsb(1) == 30, "");
+        _Static_assert(__builtin_bswap16(0x1234) == 0x3412, "");
+        _Static_assert(__builtin_bswap32(1) == 0x1000000, "");
+
+        /* An array bound and an enumerator are the other two places a
+           constant expression has to be one. */
+        int sized[__builtin_popcount(11) + 1];
+        enum Bits { LOW = __builtin_ctz(0x40u) };
+
+        unsigned long how_many(void) { return sizeof sized / sizeof sized[0]; }
+        int low(void) { return LOW; }
+    }
+
+    unsafe {
+        assert_eq!(how_many(), 4);
+        assert_eq!(low(), 6);
+    }
 }
 
 // ---------------------------------------------------------------------------

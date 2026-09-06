@@ -1,0 +1,63 @@
+error: array has incomplete element type 'struct dr047_t'
+  --> tests/ui/wg14_defect_reports.rs:12:30
+   |
+12 |     struct dr047_t *by_value(struct dr047_t a[]);
+   |                              ^^^^^^
+
+error: passing 'struct dr088_t *' to parameter 1 of 'takes_outer', of incompatible type 'struct dr088_t *'
+       note: these are two different types with the same spelling: a tag belongs to the scope it was declared in, so one written inside a parameter list belongs to that list (6.2.1p4) and a lone 'struct S;' inside a block declares a new type there (6.7.2.3p7). Declare the type where both declarations can see it
+  --> tests/ui/wg14_defect_reports.rs:21:21
+   |
+21 |         takes_outer((struct dr088_t *) 0);
+   |                     ^
+
+error: 'array' is declared 'register', so it cannot be converted to a pointer to its first element; 'sizeof' is the only operator that applies to a 'register' array (6.7.1p6)
+  --> tests/ui/wg14_defect_reports.rs:29:16
+   |
+29 |         (void) array;
+   |                ^^^^^
+
+error: 'array' is declared 'register', so it cannot be converted to a pointer to its first element; 'sizeof' is the only operator that applies to a 'register' array (6.7.1p6)
+  --> tests/ui/wg14_defect_reports.rs:30:16
+   |
+30 |         (void) array[3];
+   |                ^^^^^
+
+error: 'array' is declared 'register', so it cannot be converted to a pointer to its first element; 'sizeof' is the only operator that applies to a 'register' array (6.7.1p6)
+  --> tests/ui/wg14_defect_reports.rs:31:17
+   |
+31 |         (void) (array + 3);
+   |                 ^^^^^
+
+error: cannot take the address of 'scalar', which is declared 'register'
+  --> tests/ui/wg14_defect_reports.rs:32:16
+   |
+32 |         (void) &scalar;
+   |                ^
+
+error: invalid application of 'sizeof' to an incomplete type 'enum E'
+  --> tests/ui/wg14_defect_reports.rs:39:26
+   |
+39 |             Val = sizeof(enum E)
+   |                          ^^^^
+
+error: cannot assign to variable 'a' with the const-qualified data member 'i'
+  --> tests/ui/wg14_defect_reports.rs:49:9
+   |
+49 |         a = b;
+   |         ^
+
+error: an argument of type 'void' is incomplete and has no value to pass
+  --> tests/ui/wg14_defect_reports.rs:57:22
+   |
+57 |         no_prototype(returns_nothing());
+   |                      ^^^^^^^^^^^^^^^
+
+error: array is too large (9223372036854775807 elements)
+  --> tests/ui/wg14_defect_reports.rs:62:26
+   |
+62 |         return sizeof(int[__SIZE_MAX__ / 2]);
+   |                          ^
+
+error: aborting due to 10 previous errors
+

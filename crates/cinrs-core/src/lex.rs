@@ -864,7 +864,8 @@ pub struct LexOptions {
     pub standard: Standard,
     /// How a constant form a newer revision introduced is gated.
     pub gating: crate::Gating,
-    /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`.
+    /// Accept `$` in identifiers, like GCC's `-fdollars-in-identifiers`, which
+    /// is on by default; see [`crate::Options::dollar_in_identifiers`].
     pub dollar_in_identifiers: bool,
     /// Whether translation phase 1 replaces the nine trigraphs.
     ///
@@ -891,7 +892,7 @@ impl LexOptions {
                 standard,
                 dialect: crate::Dialect::Iso,
             },
-            dollar_in_identifiers: false,
+            dollar_in_identifiers: true,
             trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),
             wchar_bits: crate::TargetModel::host().wchar_bits,
             complex: crate::COMPLEX_SUPPORTED,

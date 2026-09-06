@@ -69,13 +69,14 @@ refusal, exactly as `_Static_assert` in a `c99!` block already was.
 
 What else is honoured: `-verify` and `-verify=<prefixes>`, `-D` (as `#define`
 lines in front of the case), `-I` (as `#pragma cinrs include_path`, with `%S`
-substituted) and `-triple`. The case's **own directory** goes on that path
-too, ahead of any `-I`: a quoted `#include` is looked for beside the file the
-directive is written in, and the file this harness compiles is a generated one
-under `target/`. What is ignored, because it changes nothing about
-what is *accepted*: `-fsyntax-only`, `-pedantic`, `-pedantic-errors`, every
-`-W…` and `-O…`, `-emit-llvm`, `-ast-dump`, `-E`, `-w`,
-`-fno-dollars-in-identifiers`.
+substituted), `-triple` and `-fno-dollars-in-identifiers`, which switches off
+the `$` this crate takes in an identifier by default exactly as GCC and Clang
+do. The case's **own directory** goes on the include path too, ahead of any
+`-I`: a quoted `#include` is looked for beside the file the directive is
+written in, and the file this harness compiles is a generated one under
+`target/`. What is ignored, because it changes nothing about what is
+*accepted*: `-fsyntax-only`, `-pedantic`, `-pedantic-errors`, every `-W…` and
+`-O…`, `-emit-llvm`, `-ast-dump`, `-E`, `-w`.
 
 ### The oracle
 
@@ -162,9 +163,9 @@ corpus revision: **99 files, 276 RUN lines, 203 run, 73 skipped**, in about ten
 seconds.
 
 ```
-clang/test/C: 160/203 correct (78.8%) — 133 passed, 27 rejected as the standard requires
-  errors: 43 — bug 12, unimplemented 8, not planned 23, toolchain 0
-  (73 skipped) — 9.6 s
+clang/test/C: 165/203 correct (81.3%) — 138 passed, 27 rejected as the standard requires
+  errors: 38 — bug 0, unimplemented 8, not planned 30, toolchain 0
+  (73 skipped) — 9.5 s
 ```
 
 **Correct** is a revision that came out as the test asks, plus one `cinrs`
@@ -178,15 +179,19 @@ is where the rule and the four error categories are set out.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `C99` | 30 | 28 | **93.3 %** | 0 | 0 | 2 | 37 | 7 |
 | `C11` | 23 | 20 | **87.0 %** | 0 | 2 | 1 | 30 | 7 |
-| `C23` | 45 | 32 | **71.1 %** | 2 | 5 | 6 | 69 | 24 |
-| `drs` | 105 | 80 | **76.2 %** | 10 | 1 | 14 | 140 | 35 |
+| `C23` | 45 | 33 | **73.3 %** | 0 | 5 | 7 | 69 | 24 |
+| `drs` | 105 | 84 | **80.0 %** | 0 | 1 | 20 | 140 | 35 |
+
+**There is no `[bug]` column left to fill.** Every revision that does not come
+out as the test asks is either a feature this crate has not got to yet or a
+place where it and Clang disagree on purpose, and the list says which.
 
 The C23 row is the honest one: `c23!` implements the parts of C23 the README
 lists and not the rest, and this directory is one file per C23 paper.
 
 ### Why the revision number is the lowest of the three suites
 
-**78.8 % here does not mean 21 % of the C is wrong.** Three things compress it,
+**81.3 % here does not mean 19 % of the C is wrong.** Three things compress it,
 and none of them is a translation error:
 
 1. **A revision is all-or-nothing.** One error on one line, out of the forty
@@ -195,13 +200,13 @@ and none of them is a translation error:
    the same run measured per *line*, and it is much higher.
 2. **A file is five revisions.** `drs/dr0xx.c`, `dr1xx.c`, `dr2xx.c`,
    `dr3xx.c` and `dr4xx.c` are compiled once per revision of C, so a single
-   cause is counted five times. Collapsing the cascades leaves **43 distinct
-   root causes** behind the 70 listed revisions — 21 of them conforming
+   cause is counted five times. Collapsing the cascades leaves **41 distinct
+   root causes** behind the 65 listed revisions — 21 of them conforming
    refusals — and the report prints them with their counts.
-3. **27 of the 70 are conforming refusals**, which the correct rate above
+3. **27 of the 65 are conforming refusals**, which the correct rate above
    already counts as correct rather than as gaps.
 
-Put together: 43 errors in **22 root causes**, of which 5 are bugs.
+Put together: 38 errors in **20 root causes**, none of which is a bug.
 
 ### Annotations: the other half of the picture
 
@@ -210,37 +215,30 @@ The report counts the `expected-error` *lines* as well as the revisions:
 ```
   annotations, over the 203 revisions run
       620  lines carry a required `expected-error`
-      491  of them were diagnosed (79.2%)
-      129  were not
-      517  errors landed on a line no directive names
+      554  of them were diagnosed (89.4%)
+       66  were not
+      450  errors landed on a line no directive names
            162 of those are on the 27 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
-620 lines are asked about and **491 are answered on the right line**. The last
+620 lines are asked about and **554 are answered on the right line**. The last
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
-of them. 162 of the 517 are on the 27 revisions that are conforming refusals
-outright; the other 355 are on the 43 error revisions, where the same effect
+of them. 162 of the 450 are on the 27 revisions that are conforming refusals
+outright; the other 288 are on the 38 error revisions, where the same effect
 piles up behind whichever refusal came first.
 
 ### The errors, by category
 
-43 revisions do not come out as the test asks and are not deliberate refusals.
+38 revisions do not come out as the test asks and are not deliberate refusals.
 Every one is in `tests/clang-c/expected-failures.txt` with a category and a
 one-line cause, and a note of the form ``see `<id>`` says "same reason as that
 one", which is how the report collapses the cascades.
 
-**`[bug]` — 12 revisions, 5 root causes.** These are the work items:
-
-| root cause | revisions |
-| --- | ---: |
-| DR106: `*p` on a `void *` written on its own, and a string initializer with no room for the terminator, are warnings for GCC and Clang and errors here; and "address of register variable requested" (DR116), `sizeof` of an enumeration whose list is still open, and the assignment of a structure with a `const` member are not diagnosed at all (`drs/dr1xx.c`) | 4 |
-| `$` in an identifier: DR027 allows an implementation to take it, GCC and Clang do, and `cinrs` has it behind a lexer option that is off — so `drs/dr0xx.c`'s `#define THIS$AND$THAT` is refused. Behind it: an array of a `struct` with an incomplete element type, and `++`/`--` on an object of function type, are constraint violations `cinrs` accepts | 3 |
-| the constant folding `drs/dr2xx.c` leans on: an enumerator that overflows, `(1 - 1)` as a null pointer constant, `__builtin_popcount(0)` in a static assertion — plus `#nondirective` inside a macro argument and an array too large to have a size, neither of which is diagnosed | 3 |
-| the C23 `auto` corners `C23/n3007.c` ends on: inference through a declarator that is not a plain identifier (a Clang extension), `auto` in a function prototype, and an `auto` object that appears in its own initializer | 1 |
-| the rest of N3030: a non-defining declaration of an enumeration with a fixed underlying type only stands alone, and `sizeof` of an enumeration whose own list is open (`C23/n3030.c`) | 1 |
+**`[bug]` — none.** The twelve that used to be here are
+[the latest round](#how-the-number-has-moved).
 
 **`[unimplemented]` — 8 revisions, 6 root causes.** C23 tag compatibility
 (N3037, 2 revisions: `C23/n3037_1.c` and `drs/dr1xx.c:4`); the C11 and C23
@@ -250,7 +248,7 @@ initializer for a variable length array (1); and a `constexpr` object of an
 array type (1, `C23/n3018.c:0`) or of a structure type (1, `C23/n3006.c`),
 which are the same gap — only the arithmetic types are supported.
 
-**`[not-planned]` — 23 revisions, 11 root causes.** Nothing here is a to-do:
+**`[not-planned]` — 30 revisions, 14 root causes.** Nothing here is a to-do:
 
 * `drs/dr4xx.c` (5): a compound literal as the operand of `_Static_assert`.
   Clang folds it as a documented GNU extension and *warns*; ISO C does not
@@ -259,20 +257,38 @@ which are the same gap — only the arithmetic types are supported.
   type on line 226, which `cinrs` diagnoses and Clang's own comment calls a
   FIXME for not diagnosing — plus the C99 features its `c89!` and `c99!`
   revisions meet first.
+* `drs/dr2xx.c` (3, and 2 more for the `_Generic` gate its `c89!` and `c99!`
+  revisions meet first): `enum e2 { ex2 = __INT_MAX__ + (0, 1) }` on line
+  290. A constant expression may not hold a comma operator (6.6p3), **GCC
+  refuses it too** ("enumerator value for 'ex2' is not an integer
+  constant"), and Clang folds it as a GNU extension — the same disagreement
+  as `drs/dr4xx.c`. Behind it, `#nondirective` written *between the
+  parentheses of a macro invocation* is taken for argument tokens here and
+  not diagnosed.
+* `drs/dr0xx.c` (3, and 2 more for the `_Static_assert` gate): DR089's
+  differing macro redefinition on line 478. 6.10.3p2 makes it a constraint
+  violation, `cinrs` reports it, and GCC and Clang answer it with a warning
+  that only `-pedantic-errors` promotes — but accepting it would mean
+  *choosing* which of the two definitions wins, which is not the kind of
+  leniency this crate takes. Behind it, `func_type fp;` — a function
+  declared through a `typedef` of a function type — is read as an object.
 * `C99/n448.c` and `C99/n809.c` (2): a `_Static_assert` gate, and a
   `-verify` directive inside an `#if __STDC_VERSION__ >= 202311L` that the
   revision does not compile. Clang's `-verify` never sees a directive in a
   skipped conditional; this harness, which reads them out of the raw text,
-  does.
-* `drs/dr0xx.c` (2) and `drs/dr2xx.c` (2): the same `_Static_assert` and
-  `_Generic` gates, in the `c89!` and `c99!` revisions of two files whose
-  later revisions are bugs. DR011, DR012 and `__LLONG_WIDTH__` used to stop
-  these two before the gate did.
+  does. `drs/dr0xx.c:5` meets the same thing.
 * `C23/n2607.c` (2): the file's one `expected-error` records a *Clang* bug
   that its own comment calls a FIXME — 6.5.15p6 makes the composite of
   `const int (*)[1]` and `int (*)[1]` a `const int (*)[1]`, which is what
   `cinrs` computes, and Clang produces `void *`. What the paper is about
   works.
+* `C23/n3030.c` (1): the rest of N3030 is answered, and what is left on line
+  95 is a *Clang* diagnostic rather than a C one. C23 6.7.2.2p5 makes the
+  underlying type of `enum e : _Atomic(short)` the unqualified, non-atomic
+  version of what was written — which is exactly what Clang's own
+  `C23/n3030_1.c` asserts, and what `cinrs` computes; Clang answers the
+  spelling with a default-error warning that its other file has to switch
+  off, and GCC accepts it silently.
 * one each: `_BitInt`'s `wb` constants (🔴 in
   [`doc/c-status.md`](c-status.md)); the line number of a macro invocation
   spanning spliced lines, which the paper leaves unspecified and Clang's own
@@ -314,7 +330,17 @@ them a `-std=c89` RUN line using a C99 feature that Clang takes as an extension
 and `c89!` refuses on purpose. Those are the `!` entries above, and counting
 them as correct is what took the headline from 64.5 % to 77.8 % without
 changing a line of the compiler; the round that answered six of the eight
-`[bug]` root causes took it to 78.8 %. Before that, trigraphs and designator
+`[bug]` root causes took it to 78.8 %, and **the round that took the `[bug]`
+count to zero** took it to 81.3 % — five more revisions, and sixty-three more
+annotations answered on the line the test names (79.2 % of them to 89.4 %).
+That last round is the list at the end of this document. It began with five
+`[bug]` root causes: two of them — `drs/dr1xx.c` and `C23/n3007.c` — came out
+as required, and the other three were reclassified with the reason, which is
+what the phrase is *for*. `drs/dr2xx.c` and `drs/dr0xx.c` are left on a
+constraint violation `cinrs` reports and Clang folds or warns about, with GCC
+on `cinrs`'s side in the first and no way to accept without choosing a meaning
+in the second; `C23/n3030.c` is left on a diagnostic that Clang's own second
+file about the same paper switches off. Before that, trigraphs and designator
 lists took it from 41.9 % to 47.3 %, the round after that to 123 of 203 — 13 of
 those are the directive-line rule above, which was the harness reading Clang's
 annotations wrongly rather than anything `cinrs` did, and the other 14 are the
@@ -329,8 +355,45 @@ five revisions have moved on to a later refusal apiece.
 
 ### What the results changed in `doc/c-status.md`
 
-Nineteen rows have moved as a result of running this suite. The four from the
-latest round, which answered six of the eight `[bug]` root causes above:
+Twenty-four rows have moved as a result of running this suite. The five from
+the latest round, which took the `[bug]` count to zero:
+
+* **`$` is an identifier character** (WG14 DR027, N2701's row), in every entry
+  point: GCC takes it unconditionally and Clang by default, and
+  `Options::dollar_in_identifiers` is now on. Rust has no spelling for it, so
+  a `$` that reaches the generated item is written `_dollar_` there and the C
+  name stays in `#[link_name]` / `#[unsafe(export_name)]`.
+* **Six WG14 defect reports are answered**, three of them by diagnosing what
+  was accepted: DR047 (an array's element type may not be incomplete, as a
+  parameter too), DR088 (a lone `struct S;` inside a block declares a tag of
+  *that* block, so its pointers are a different type from the file scope's),
+  DR116 (the address of a `register` object cannot be computed, and an array
+  decaying to a pointer is that address), DR118 (an enumeration is incomplete
+  until the `}` of its own list), DR131 (a structure with a `const` member is
+  not a modifiable lvalue) and DR252 (an argument of type `void` has no value
+  to pass). `drs/dr0xx.c`, `drs/dr1xx.c` and `drs/dr2xx.c`.
+* **Three constraint violations both compilers merely warn about are taken**,
+  because a procedural macro has no warning to raise and the value either way
+  is the same: `*p` on a `void *` in a void context (DR106), a string
+  initializer with no room for its terminator (DR114) and the excess values of
+  a braced *scalar* initializer, and `return e;` from a `void` function when
+  `e` has type `void` (DR113, which C23 made legal outright).
+* **Null pointer constants are folded** (6.3.2.3p3, DR261): `char *p = 1 - 1;`
+  is one and `char *p = (42, 1 - 1);` is not, and neither is a null pointer of
+  some *other* pointer type — `(struct S *)0` keeps `struct S *`. The
+  bit-counting builtins fold too (`__builtin_popcount(0)` in a static
+  assertion, DR263), and an array whose bytes will not fit `size_t` is
+  refused.
+* **The rest of N3030 and N3007.** A non-defining declaration of an
+  enumeration with a fixed underlying type only stands alone; such an
+  enumeration is complete where the type is written, while one without is not;
+  a tentative definition of an enumeration nobody completes is a definition of
+  nothing. And C23 `auto`: `auto` is refused in a function prototype, an
+  underspecified declaration may not name itself in its own initialiser, and
+  `auto *p = &a;` — Clang's extension for a declarator that is not a plain
+  identifier — is taken. `C23/n3007.c` went from a bug to a pass.
+
+The four from the round before:
 
 * **An array's qualifiers are its elements'** (N2607, 6.7.3p9), whichever
   spelling put them there — `const int a[1]` writes them on `int` already,
@@ -356,7 +419,7 @@ latest round, which answered six of the eight `[bug]` root causes above:
   6.5.3.2p3) and the `__LLONG_WIDTH__` half of the predefined macros went
   with them.
 
-The one from the round before:
+The one from the round before that:
 
 * **The complex types** (N620, N638, N657, N694, N809) and **`CMPLX`** (N1464).
   Seven revisions were deliberate refusals resting on `__STDC_NO_COMPLEX__`
@@ -366,7 +429,7 @@ The one from the round before:
   point. `C99/n809.c` itself is still a wrong-line mismatch, on the
   `_Static_assert` it uses rather than on anything about complex.
 
-And the one before that:
+And the one before *that*:
 
 * **An enumeration's fixed underlying type may be written `_Atomic`**, and the
   underlying type is then the unqualified, non-atomic one (C23 6.7.2.2p5,

@@ -660,3 +660,85 @@ fn a_pointee_that_differs_only_in_signedness_needs_no_cast() {
         assert_eq!(as_int(&raw mut narrow), 9);
     }
 }
+
+// ---------------------------------------------------------------------------
+// `*p` on a `void *`, which is an expression of type `void`
+// ---------------------------------------------------------------------------
+
+/// WG14 **DR106**: 6.5.3.2p2 asks only that the operand of `*` be a pointer,
+/// and p4 makes the result an lvalue of the pointed-to type — `void` here, so
+/// there is no object to read and nothing that reads one.
+///
+/// Every context that can hold the result is a void context, and each of them
+/// is written below. GCC and Clang answer all of them with a warning that only
+/// `-pedantic-errors` promotes, so refusing them would be refusing valid C;
+/// what is left of the expression is the evaluation of the pointer itself,
+/// which is why the counter here moves once per `*p`.
+#[test]
+fn indirection_on_a_void_pointer_is_a_void_expression() {
+    c99! {
+        static int calls;
+        static char storage;
+
+        void *bump(void) { calls++; return &storage; }
+
+        int discarded(void) { (void)*bump(); return calls; }
+        int through_the_address(void) { (void)&*bump(); return calls; }
+        int in_a_conditional(int c) { (void)(c ? *bump() : *bump()); return calls; }
+        int in_a_comma(void) { (void)(*bump(), *bump()); return calls; }
+        void forwarded(const void *p) { return *p; }
+
+        void reset(void) { calls = 0; }
+    }
+
+    unsafe {
+        reset();
+        assert_eq!(discarded(), 1);
+        reset();
+        assert_eq!(through_the_address(), 1);
+        reset();
+        // Only the branch taken is evaluated.
+        assert_eq!(in_a_conditional(1), 1);
+        reset();
+        assert_eq!(in_a_comma(), 2);
+        let n = 0u8;
+        forwarded((&raw const n).cast());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// null pointer constants
+// ---------------------------------------------------------------------------
+
+/// C11 6.3.2.3p3: "an integer constant expression with the value 0, or such an
+/// expression cast to type `void *`, is called a null pointer constant".
+///
+/// It is the *expression* that has to be constant and zero, not the literal:
+/// `1 - 1` is one and `(char)0` is one, which is WG14 **DR261**
+/// (`drs/dr2xx.c`). A zero that is not a constant expression is not one, and
+/// neither is a null pointer of some *other* pointer type — `(struct S *)0`
+/// keeps `struct S *`, which is what makes it a type error where a
+/// `struct T *` is wanted.
+#[test]
+fn a_null_pointer_constant_is_any_constant_zero() {
+    c99! {
+        char *from_a_difference(void) { return 1 - 1; }
+        char *from_a_cast(void) { return (char)0; }
+        char *from_a_conditional(void) { return 1 ? 0 : 0; }
+        char *from_a_shift(void) { return 4 >> 3; }
+
+        int is_null(char *p) { return p == 1 - 1; }
+        int assigned(void) { char *p = "x"; p = 3 * 0; return p == 0; }
+        char *chosen(int c, char *p) { return c ? p : 1 - 1; }
+    }
+
+    unsafe {
+        assert!(from_a_difference().is_null());
+        assert!(from_a_cast().is_null());
+        assert!(from_a_conditional().is_null());
+        assert!(from_a_shift().is_null());
+        assert_eq!(is_null(core::ptr::null_mut()), 1);
+        assert_eq!(assigned(), 1);
+        assert!(chosen(0, core::ptr::null_mut()).is_null());
+    }
+}

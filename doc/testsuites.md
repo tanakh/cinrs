@@ -7,7 +7,7 @@ questions, which is why there are three of them and not one:
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`) | 4: 3 unimplemented, 1 toolchain |
 | [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **84.9 %** (`gnu11!`), 84.5 % (`gnu89!`) | 268: 0 bug, 36 unimplemented, 185 not planned, 47 toolchain |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **78.8 %** of the 203 run | 43: 12 bug, 8 unimplemented, 23 not planned |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **81.3 %** of the 203 run | 38: 0 bug, 8 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
@@ -16,10 +16,9 @@ they are about 2,270 cases and about ten minutes.
 **Correct** is not the same as *passing*: a case that the entry point is
 *required* to refuse, and does refuse, is correct too. The
 [section below](#what-correct-means-and-the-four-kinds-of-error) says what that
-means and what the four kinds of error are; between the three suites there are
-**12 tagged `[bug]`** — none in the torture corpus and none in c-testsuite, and
-12 revisions in 5 root causes in Clang's — and they are named one by one in the
-three documents.
+means and what the four kinds of error are; between the three suites there is
+now **not one case tagged `[bug]`**. What is left is what each document lists
+as unimplemented or not planned, case by case.
 
 Each suite has a document of its own with its baseline, its failures by cause
 and how to reproduce the numbers. What follows is what they have in common.

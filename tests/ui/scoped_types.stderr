@@ -18,7 +18,7 @@ error: variable 'after' has incomplete type 'struct Hidden'
    |     ^^^^^^
 
 error: passing 'struct Later *' to parameter 1 of 'consume', of incompatible type 'struct Later *'
-       note: these are two different types with the same spelling: a tag belongs to the scope it was declared in, and one written inside a parameter list belongs to that list (6.2.1p4), so nothing after the closing parenthesis can name it. Declare the type before the prototype
+       note: these are two different types with the same spelling: a tag belongs to the scope it was declared in, so one written inside a parameter list belongs to that list (6.2.1p4) and a lone 'struct S;' inside a block declares a new type there (6.7.2.3p7). Declare the type where both declarations can see it
   --> tests/ui/scoped_types.rs:47:42
    |
 47 |     void call(struct Later *p) { consume(p); }

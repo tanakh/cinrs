@@ -40,10 +40,6 @@ cinrs::c99! {
     union u { int i; float f; };
     union u as_union(int n) { return (union u) n; } //~ ERROR: cast to a union type is a GNU extension
 
-    /* An over-long string initialiser: 6.7.8p2 says no initializer may
-     * provide a value for something outside the object, and GCC warns. */
-    char three[3] = "1234"; //~ ERROR: initializer-string for char array is too long
-
     /* Folding the address of a member of a null pointer — the hand-written
      * `offsetof` — to an integer constant. */
     struct s { int a; int b; };

@@ -9,6 +9,7 @@ use crate::ir::{
     Storage, Ty, TypedefItem,
 };
 
+use super::types::Completeness;
 use super::{ConvContext, Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
 
 /// What a declaration's `_Thread_local` specifier came to.
@@ -65,12 +66,74 @@ impl Sema<'_> {
         if decl.declarators.is_empty() {
             // `struct S { … };` and friends: a tag definition with nothing
             // declared. Resolving the specifier is what defines the tag.
-            let _ = self.ty_of(&decl.specifiers.base);
+            self.declare_sole_tag(decl);
+            self.standalone_declaration(decl, |sema| {
+                let _ = sema.ty_of(&decl.specifiers.base);
+            });
             return;
         }
         for declarator in &decl.declarators {
             self.declarator(decl, declarator, true);
         }
+    }
+
+    /// C11 6.7.2.3p7: `struct S;` **on its own** declares the tag in the scope
+    /// it is written in, and therefore a *new* type, even where an enclosing
+    /// scope has a `struct S` of its own.
+    ///
+    /// Only the sole declaration does that. `struct S *p;` is 6.7.2.3p8 —
+    /// "and no other declaration of the identifier as a tag is visible" — and
+    /// names the visible tag. WG14 DR088 is the difference: a `struct S;`
+    /// written inside a block makes the file scope's `struct S *` and this
+    /// block's two incompatible pointer types, and `drs/dr0xx.c` checks both
+    /// halves of it.
+    ///
+    /// The tag goes in before the specifier is resolved, which is what makes
+    /// [`Sema::record_ty`] find it in *this* scope and stop looking outward.
+    /// A definition (`struct S { … };`) already declares a new type and needs
+    /// nothing here, and neither does `enum`, which has no such form —
+    /// footnote 130's "a similar construction with `enum` does not exist".
+    /// Marks a declaration that declares nothing but its specifier, which is
+    /// the one place C23 lets a non-defining `enum E : T` stand.
+    ///
+    /// See [`Sema::standalone_enum`].
+    pub(super) fn standalone_declaration(&mut self, decl: &ast::Decl, f: impl FnOnce(&mut Self)) {
+        let outer = match &decl.specifiers.base.kind {
+            ast::TypeKind::Enum(id) => self.standalone_enum.replace(*id),
+            _ => self.standalone_enum.take(),
+        };
+        f(self);
+        self.standalone_enum = outer;
+    }
+
+    pub(super) fn declare_sole_tag(&mut self, decl: &ast::Decl) {
+        let ast::TypeKind::Record(spec_id) = &decl.specifiers.base.kind else {
+            return;
+        };
+        if self.record_by_spec[spec_id.index()].is_some() {
+            return;
+        }
+        let spec = self.record_spec(*spec_id);
+        if spec.fields.is_some() {
+            return;
+        }
+        let Some(name) = spec.name.as_ref().map(|n| n.name.clone()) else {
+            return;
+        };
+        // A tag this scope already has — as a record or as an enumeration — is
+        // this declaration's subject, or its diagnostic; either way there is
+        // nothing new to declare.
+        if self.tag_here(&name).is_some() {
+            return;
+        }
+        let kind = match spec.kind {
+            ast::RecordKind::Struct => crate::ir::RecordKind::Struct,
+            ast::RecordKind::Union => crate::ir::RecordKind::Union,
+        };
+        let range = spec.range;
+        let id = self.declare_record(kind, Some(name.clone()), range);
+        self.insert_tag(&name, super::TagEntry::Record(id));
+        self.record_by_spec[spec_id.index()] = Some(id);
     }
 
     /// Handles one declarator of a declaration, at file or block scope.
@@ -214,9 +277,22 @@ impl Sema<'_> {
             // definition, and one of the two places an incomplete array type
             // may be the type of an object (6.9.2p3); `extern` is the other,
             // and went through `declare_extern_object` above.
+            let completeness = if file_scope {
+                Completeness::TentativeArray
+            } else {
+                Completeness::Required
+            };
             let ty = self
-                .declared_object_ty_of(&declarator.ty, &name.name, file_scope)
+                .declared_object_ty_of(&declarator.ty, &name.name, completeness)
                 .unwrap_or(Ty::Error);
+            // A tentative definition of an enumeration that has no list yet:
+            // the tag may still be completed later in the unit, so the answer
+            // waits for `Sema::check_tentative_enums`.
+            if file_scope && let Some(tag) = self.incomplete_enum(&declarator.ty).map(str::to_owned)
+            {
+                self.incomplete_enum_objects
+                    .push((name.name.clone(), tag, declarator.range));
+            }
             (self.apply_mode(ty, &attrs), None)
         };
         // `typedef int A[]; A a = { 1, 2 };` — an incomplete array type reached
@@ -320,6 +396,11 @@ impl Sema<'_> {
         }
         self.check_redefinition(name);
         let id = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
+        // C11 6.7.1p6: the address of a `register` object cannot be computed,
+        // explicitly or by an array decaying to a pointer. See
+        // [`ir::Object::is_register`].
+        self.program.objects[id.0 as usize].is_register =
+            storage == Some(ast::StorageClass::Register);
         self.insert(&name.name, Entry::Object(id));
         if ty.is_error() {
             return Vec::new();
@@ -772,11 +853,77 @@ impl Sema<'_> {
     /// from the initialiser, and the initialiser needs the element type. Only
     /// the [`type_from_initializer`] forms come here; everything else resolves
     /// its type first, so that the object is in scope for its own initialiser.
+    /// `auto *ptr = &a;` — Clang's extension, where the deduction happens
+    /// through a run of pointer derivations.
+    ///
+    /// The type the declarator asks for is `T` under `depth` pointers, so the
+    /// object's type is simply the initialiser's *own* type as long as it has
+    /// that many levels to peel; what is deduced is what is left under them.
+    /// See [`auto_pointer_depth`].
+    fn auto_through_pointers(
+        &mut self,
+        declarator: &ast::InitDeclarator,
+        name: &str,
+        depth: usize,
+    ) -> Option<(Ty, Option<Expr>)> {
+        let init = declarator.init.as_ref()?;
+        let ast::InitializerKind::Expr(expr) = &init.kind else {
+            self.error(
+                init.range,
+                format!("the type of '{name}' cannot be inferred from a braced initializer"),
+            );
+            return None;
+        };
+        let stars = "*".repeat(depth);
+        let value = self.underspecified(name, |sema| sema.expr(expr))?;
+        let mut peeled = value.ty;
+        for _ in 0..depth {
+            match self.pointee(peeled) {
+                Some(inner) => peeled = inner,
+                None => {
+                    self.error(
+                        expr.range,
+                        format!(
+                            "'{name}', of type 'auto {stars}', has an incompatible initializer \
+                             of type '{}'",
+                            self.tyname(value.ty)
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+        if peeled.is_error() {
+            return None;
+        }
+        Some((value.ty, Some(value)))
+    }
+
+    /// Checks something with the name of an **underspecified** declaration —
+    /// C23's `auto x = e;` — recorded, so that naming it inside its own
+    /// initialiser is refused rather than resolving to whatever an enclosing
+    /// scope had.
+    ///
+    /// The identifier is in scope for its own initialiser (6.2.1p7), and for
+    /// an inferred type there is nothing for it to name: `double b = 9; {
+    /// auto b = b * b; }` is a constraint violation and not a use of the outer
+    /// `b`, which is what `C23/n3007.c` checks and what GCC calls
+    /// "underspecified 'b' referenced in its initializer".
+    fn underspecified<T>(&mut self, name: &str, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = self.underspecified.replace(name.to_owned());
+        let out = f(self);
+        self.underspecified = outer;
+        out
+    }
+
     fn typed_initializer(
         &mut self,
         declarator: &ast::InitDeclarator,
         name: &str,
     ) -> Option<(Ty, Option<Expr>)> {
+        if let Some(depth) = auto_pointer_depth(&declarator.ty) {
+            return self.auto_through_pointers(declarator, name, depth);
+        }
         // C23's `auto x = e;`: the type is whatever the initialiser has after
         // the lvalue conversion, which is exactly what checking it gives.
         if matches!(declarator.ty.kind, ast::TypeKind::Auto) {
@@ -794,7 +941,7 @@ impl Sema<'_> {
                 );
                 return None;
             };
-            let value = self.expr(expr)?;
+            let value = self.underspecified(name, |sema| sema.expr(expr))?;
             if value.ty.is_void() || value.ty.is_error() {
                 self.error(
                     expr.range,
@@ -1092,10 +1239,13 @@ impl Sema<'_> {
 
     /// Declares an object defined outside the translation unit.
     fn declare_extern_object(&mut self, name: &ast::Ident, declarator: &ast::InitDeclarator) {
-        // `extern int j[];` is the canonical incomplete array type: the object
-        // is defined in another unit, so its size is none of this one's
-        // business (6.2.5p22).
-        let Some(ty) = self.declared_object_ty_of(&declarator.ty, &name.name, true) else {
+        // `extern int j[];` is the canonical incomplete array type, and
+        // `extern struct incomplete es;` (WG14 DR047) is the same rule for a
+        // tag: the object is defined in another unit, so neither its size nor
+        // the completeness of its type is any of this one's business
+        // (6.2.5p22), and only its address is ever taken here.
+        let Some(ty) = self.declared_object_ty_of(&declarator.ty, &name.name, Completeness::Any)
+        else {
             return;
         };
         if self.types().is_vm(ty) {
@@ -1171,6 +1321,14 @@ impl Sema<'_> {
     ) -> Vec<Stmt> {
         if let Some(init) = init {
             self.error(init.range, "a 'typedef' cannot have an initializer");
+        }
+        // A `typedef` *stores* the reason its type would not resolve and
+        // reports it where the name is used, which is right for a type that is
+        // merely unavailable here. `auto` in a parameter is a mistake in the
+        // declaration itself and has no use to wait for, so it is reported
+        // where it stands — `C23/n3007.c`'s `typedef void (*fp)(auto);`.
+        if let Some(range) = auto_in_prototype(ty) {
+            self.error(range, "'auto' is not allowed in a function prototype");
         }
         let file_scope = self.at_file_scope();
         // `typedef int A[n];` is a variably modified type, and C99 6.7.7p4
@@ -2240,6 +2398,22 @@ impl Sema<'_> {
     pub(super) fn static_init(&mut self, expr: Expr, what: &str) -> Option<Expr> {
         let (ty, range) = (expr.ty, expr.range);
         match expr.kind {
+            // `int i = (1, 2);` — a comma operator is not part of a *constant
+            // expression* (6.6p3), and the initialiser of an object with
+            // static storage duration is supposed to be one. Both GCC and
+            // Clang take it all the same, and only `-pedantic-errors` refuses
+            // it, so the value of the right operand is the initialiser here
+            // too — as long as the left one is itself a constant, since
+            // nothing here could evaluate a call. WG14 DR035 (`drs/dr0xx.c`).
+            //
+            // Where C asks for an *integer constant expression* — an
+            // enumerator, an array bound, a `case` label, `_Static_assert` —
+            // the comma is still refused, which is what GCC does there
+            // ("enumerator value for 'e' is not an integer constant") and what
+            // this crate's strict entry points do everywhere.
+            ExprKind::Comma { lhs, rhs } if self.const_eval(&lhs).is_some() => {
+                self.static_init(*rhs, what)
+            }
             ExprKind::RecordLit { record, fields } => {
                 let fields: Option<Vec<Expr>> = fields
                     .into_iter()
@@ -2490,6 +2664,11 @@ impl Sema<'_> {
 fn type_from_initializer(declarator: &ast::InitDeclarator) -> bool {
     match &declarator.ty.kind {
         ast::TypeKind::Auto => true,
+        // `auto *p = &a;` — the deduction happens through the declarator; see
+        // [`auto_pointer_depth`].
+        ast::TypeKind::Pointer(_) => {
+            auto_pointer_depth(&declarator.ty).is_some() && declarator.init.is_some()
+        }
         // `T x[] = { … }` takes its length from the list; `T x[];` with no
         // list at all is an *incomplete* array type, which is a declaration
         // rather than a mistake in the two places C99 6.9.2 allows it.
@@ -2498,6 +2677,55 @@ fn type_from_initializer(declarator: &ast::InitDeclarator) -> bool {
             ..
         } => declarator.init.is_some(),
         _ => false,
+    }
+}
+
+/// How many `*` stand between `auto` and the identifier, when the declarator
+/// is nothing but a run of them.
+///
+/// C23 6.7.1p? asks the declarator of an inferred declaration to be "a plain
+/// identifier, possibly with attributes", and GCC says so ("'auto' requires a
+/// plain identifier ... as declarator"). Clang takes the pointer forms as a
+/// documented extension — `auto *ptr = &a;` deduces `int` from an `int *`
+/// initialiser and gives `ptr` the initialiser's own type — and `cinrs` takes
+/// them too, exactly as it takes GCC's own extensions in every entry point.
+/// `C23/n3007.c` is where both halves are checked: the deduction has to work,
+/// and `auto *ptr2 = a;` with an `int` initialiser has to be refused.
+///
+/// `None` for anything that is not `auto` under a run of pointer derivations,
+/// including a plain `auto` (which is [`ast::TypeKind::Auto`] and needs none
+/// of this) and an array or function declarator, which C23 refuses outright.
+fn auto_pointer_depth(ty: &ast::Type) -> Option<usize> {
+    match &ty.kind {
+        ast::TypeKind::Pointer(inner) => match &inner.kind {
+            ast::TypeKind::Auto => Some(1),
+            _ => auto_pointer_depth(inner).map(|depth| depth + 1),
+        },
+        _ => None,
+    }
+}
+
+/// Where `auto` was written inside a function prototype, if it was.
+///
+/// C23 has it only on a declaration with an initialiser, so a parameter cannot
+/// have it; a `typedef` stores the failure to resolve its type rather than
+/// reporting it — the diagnostic belongs where the name is *used* — and this
+/// is the one shape whose mistake is in the declaration itself, which is what
+/// `C23/n3007.c`'s `typedef void (*fp)(auto);` asks about.
+fn auto_in_prototype(ty: &ast::Type) -> Option<SourceRange> {
+    match &ty.kind {
+        ast::TypeKind::Pointer(inner) => auto_in_prototype(inner),
+        ast::TypeKind::Array { elem, .. } => auto_in_prototype(elem),
+        ast::TypeKind::Function(func) => func
+            .params
+            .iter()
+            .find_map(|param| {
+                matches!(param.ty.kind, ast::TypeKind::Auto)
+                    .then_some(param.ty.range)
+                    .or_else(|| auto_in_prototype(&param.ty))
+            })
+            .or_else(|| auto_in_prototype(&func.ret)),
+        _ => None,
     }
 }
 

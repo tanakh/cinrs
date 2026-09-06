@@ -201,3 +201,62 @@ fn c23_reads_an_empty_list_as_void() {
 
     assert_eq!(unsafe { call() }, 5);
 }
+
+// ---------------------------------------------------------------------------
+// compatibility, at any depth
+// ---------------------------------------------------------------------------
+
+/// C99 6.7.5.3p15 makes a function type with no prototype compatible with a
+/// prototyped one whose parameters are their own promoted forms, and
+/// 6.5.16.1p1 lets one pointer be assigned to another when they point at
+/// "qualified or unqualified versions of compatible types".
+///
+/// Putting the two together is WG14 **DR035** (`drs/dr0xx.c`): `int (**fpp)();
+/// int (*fp)(int); fpp = &fp;` is the pair one level further down, where the
+/// *pointees* are the compatible types and the operands themselves are not the
+/// same type at all.
+#[test]
+fn compatibility_reaches_through_a_pointer_to_a_function_pointer() {
+    c99! {
+        int add_one(int n) { return n + 1; }
+
+        int through_two_levels(int n) {
+            int (*fp)(int) = add_one;
+            int (**fpp)();
+            int (*plain)();
+            plain = fp;
+            fpp = &fp;
+            return (**fpp)(n) + (*plain)(n);
+        }
+    }
+
+    assert_eq!(unsafe { through_two_levels(4) }, 10);
+}
+
+/// A `return` whose expression has type `void`, in a function returning void.
+///
+/// C99 and C11 6.8.6.4p1 forbid it, C23 allows it, and GCC and Clang both take
+/// it in every mode with a warning that only `-pedantic-errors` promotes — so
+/// it is taken here in every entry point too. WG14 **DR113** (`drs/dr1xx.c`)
+/// is the shape with a qualified `void` on both ends; the everyday one is a
+/// wrapper forwarding a call it has nothing to return.
+#[test]
+fn a_void_expression_may_be_returned_from_a_void_function() {
+    c99! {
+        static int calls;
+
+        void inner(void) { calls++; }
+        void forwards(void) { return inner(); }
+        void through_a_pointer(void *p) { return *p; }
+
+        int how_many(void) { return calls; }
+    }
+
+    unsafe {
+        forwards();
+        forwards();
+        assert_eq!(how_many(), 2);
+        let n = 0u8;
+        through_a_pointer((&raw const n).cast_mut().cast());
+    }
+}

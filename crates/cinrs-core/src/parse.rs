@@ -1582,6 +1582,28 @@ impl Parser<'_> {
                                 ..
                             })
                         );
+                    // 6.7.1p2's other exception, in the same clause:
+                    // `constexpr` "may appear with `auto`, `register` or
+                    // `static`" — and with nothing else, so `extern
+                    // constexpr` and `typedef constexpr` stay violations, and
+                    // `thread_local` is refused where it is checked. The three
+                    // it pairs with say where the object would *live* and
+                    // `constexpr` says it is a constant instead, which is what
+                    // decides the declaration here, so `constexpr` takes the
+                    // slot from whichever side it was written.
+                    let pairs_with_constexpr = |s: StorageClass| {
+                        matches!(
+                            s,
+                            StorageClass::Static | StorageClass::Register | StorageClass::Auto
+                        )
+                    };
+                    let c23_constexpr = allow_storage
+                        && self.standard >= Standard::C23
+                        && match (sc, storage.as_ref().map(|s| s.node)) {
+                            (StorageClass::Constexpr, Some(prev)) => pairs_with_constexpr(prev),
+                            (other, Some(StorageClass::Constexpr)) => pairs_with_constexpr(other),
+                            _ => false,
+                        };
                     if sc == StorageClass::Auto {
                         auto_kw = auto_kw.or(Some(range));
                     }
@@ -1590,6 +1612,10 @@ impl Parser<'_> {
                             range,
                             format!("storage class '{}' is not allowed here", sc.as_str()),
                         );
+                    } else if c23_constexpr {
+                        if sc == StorageClass::Constexpr {
+                            storage = Some(Spanned::new(sc, range));
+                        }
                     } else if c23_auto {
                         // A specifier that is *not* `auto` takes the slot, so
                         // `auto` written first gives way and `auto` written

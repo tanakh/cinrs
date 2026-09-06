@@ -404,8 +404,11 @@ pub fn is_crate_path(path: &str) -> bool {
 /// readable and what lets Rust call the functions by the names their author
 /// gave them. A name that collides with a Rust keyword becomes a raw
 /// identifier (`match` → `r#match`); the five names that cannot even be raw
-/// get an underscore appended instead.
+/// get an underscore appended instead. A `$` — which C takes as an identifier
+/// character and Rust has no spelling for — is written [`DOLLAR`].
 fn c_ident(name: &str, span: Span) -> Ident {
+    let spelled = rust_spelling(name);
+    let name = spelled.as_ref();
     if NEVER_RAW.contains(&name) {
         return Ident::new(&format!("{name}_"), span);
     }
@@ -413,6 +416,26 @@ fn c_ident(name: &str, span: Span) -> Ident {
         return Ident::new_raw(name, span);
     }
     Ident::new(name, span)
+}
+
+/// What a `$` in a C identifier is written as in the generated Rust.
+///
+/// `$` is an identifier character here — GCC takes it unconditionally and
+/// Clang by default, which is what WG14 DR027 allows and what
+/// [`crate::Options::dollar_in_identifiers`] switches on — and Rust has no
+/// spelling for it at all, not even a raw identifier. The C name is still what
+/// the symbol links by: an object or function that is not defined here carries
+/// it in `#[link_name]`, and one that is carries it in `#[unsafe(export_name)]`.
+pub const DOLLAR: &str = "_dollar_";
+
+/// A C identifier as Rust can spell it, which is the same string unless a `$`
+/// is in it.
+fn rust_spelling(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.contains('$') {
+        std::borrow::Cow::Owned(name.replace('$', DOLLAR))
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
 }
 
 /// The lint exemptions every generated item carries.

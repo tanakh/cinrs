@@ -118,7 +118,15 @@ impl Sema<'_> {
             ast::InitializerKind::List(items) => {
                 let mut cursor = Cursor::new(items);
                 let value = self.fill(ty, &mut cursor, name, init.range, false)?;
-                if let Some(extra) = cursor.peek() {
+                // `int x = { 0, 1 };` — 6.7.9p11 asks a scalar's initialiser
+                // to be "a single expression, optionally enclosed in braces",
+                // and GCC and Clang both answer the extra ones with a warning
+                // and drop them, which is what happens here. An *aggregate*
+                // with too many is still refused: the shape of the braces is
+                // the whole of what says which member each value belongs to.
+                if let Some(extra) = cursor.peek()
+                    && !ty.is_scalar()
+                {
                     self.error(extra.range, "excess elements in initializer");
                 }
                 Some(value)
@@ -1205,14 +1213,14 @@ impl Sema<'_> {
             } else {
                 // Anything more is a constraint violation (6.7.8p2: no
                 // initializer may provide a value for something outside the
-                // object), and a strict entry point says so. GCC's is a
-                // warning and the extra characters are dropped, so a GNU
-                // dialect drops them too — `execute/pr86714` is `const char
-                // a[2][3] = { "1234", "xyz" }`, and its whole point is that
-                // the excess is not part of the value.
-                if !self.gating.dialect.is_gnu() {
-                    self.error(range, "initializer-string for char array is too long");
-                }
+                // object), and both GCC and Clang answer it with a warning and
+                // drop the excess — an error only under `-pedantic-errors`,
+                // which is a severity a procedural macro has no way to write.
+                // So the characters are dropped here in every entry point:
+                // `execute/pr86714` is `const char a[2][3] = { "1234", "xyz" }`
+                // and its whole point is that the excess is not part of the
+                // value, and WG14 DR114 (`drs/dr1xx.c`, `char array[2][5] = {
+                // "defghi" }`) is the same shape written the other way up.
                 values.truncate(array.len as usize);
             }
         }

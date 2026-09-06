@@ -462,6 +462,16 @@ struct Sema<'a> {
     /// It decides whether a bit-field of the type sign-extends when it is read,
     /// which is the only place the choice shows; see `Sema::bit_field_signed`.
     enum_unsigned: Vec<Option<bool>>,
+    /// The tag of the enumeration a specifier names, when that enumeration was
+    /// still **incomplete** where the specifier was written — indexed the same
+    /// way as `enum_by_spec`.
+    ///
+    /// An enumeration is incomplete until the `}` of its own list (C23
+    /// 6.7.3.3p12), so `enum E { m = sizeof(enum E) }` asks for the size of
+    /// something that has none; a tag that is only ever declared is incomplete
+    /// for good. `Ty` cannot carry the answer — a block-scope enumeration is
+    /// `int` here, and `int` is complete — so the *occurrence* records it.
+    enum_incomplete: Vec<Option<String>>,
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
@@ -495,6 +505,32 @@ struct Sema<'a> {
     /// The name the hidden bound objects of the declarator being resolved are
     /// derived from; empty for a type name or an abstract declarator.
     vm_name: String,
+    /// The file-scope tentative definitions whose type was an enumeration that
+    /// had no list yet, with the tag they are waiting for.
+    ///
+    /// C99 6.9.2p2 makes a tentative definition a definition at the end of the
+    /// translation unit, and there is nothing to define while the type is
+    /// incomplete. The enumeration may be completed anywhere between here and
+    /// there, so the answer is only known at the end; `C23/n3030.c` writes
+    /// `enum E5 y;` for a tag it never completes.
+    incomplete_enum_objects: Vec<(String, String, SourceRange)>,
+    /// The `enum` specifier of the declaration being resolved, when that
+    /// declaration is nothing but the specifier.
+    ///
+    /// C23 (N3030) lets a *non-defining* declaration of an enumeration with a
+    /// fixed underlying type stand only on its own — `enum E : short;` and
+    /// nothing else — so `enum E : short x;`, a parameter, a return type, a
+    /// `typedef` and a member are all constraint violations. Which of those a
+    /// specifier is in is not something [`Sema::enum_ty`] can see, so the two
+    /// places a declaration has no declarators say so here.
+    standalone_enum: Option<ast::EnumSpecId>,
+    /// The name of the **underspecified** declaration whose initialiser is
+    /// being checked — C23's `auto x = e;` — which may not appear in it.
+    ///
+    /// It is cleared by the first use that is reported, so that `auto a = a *
+    /// a;` is one diagnostic and the recovery reads whatever an enclosing
+    /// scope had. See `Sema::underspecified`.
+    underspecified: Option<String>,
     /// How many of [`Sema::scopes`] are [prototype
     /// scopes](Sema::push_prototype_scope), which are not blocks.
     proto_depth: usize,
@@ -642,6 +678,7 @@ impl<'a> Sema<'a> {
             record_by_spec: vec![None; unit.records.len()],
             enum_by_spec: vec![None; unit.enums.len()],
             enum_unsigned: vec![None; unit.enums.len()],
+            enum_incomplete: vec![None; unit.enums.len()],
             defined_functions: HashSet::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
@@ -649,6 +686,9 @@ impl<'a> Sema<'a> {
             vm_bounds: Vec::new(),
             bound_mode: BoundMode::Expression,
             vm_name: String::new(),
+            incomplete_enum_objects: Vec::new(),
+            standalone_enum: None,
+            underspecified: None,
             proto_depth: 0,
             param_tags: HashMap::new(),
             in_param_type: false,
@@ -721,6 +761,7 @@ impl<'a> Sema<'a> {
             }
         }
         self.complete_tentative_arrays();
+        self.check_tentative_enums();
         // What a nested function captures is only final once every call to it
         // has been seen, and what may be done with its address follows from
         // that.
@@ -747,6 +788,31 @@ impl<'a> Sema<'a> {
             self.program.objects[id.0 as usize].ty = completed;
             let range = self.program.object(id).range;
             self.program.statics[index].init = self.zero(completed, range);
+        }
+    }
+
+    /// C99 6.9.2p2: a tentative definition is a definition at the end of the
+    /// translation unit, and an enumeration whose list was never written has
+    /// nothing to define.
+    ///
+    /// The tag may be completed anywhere after the declaration, so this is the
+    /// first moment the answer is known. See
+    /// [`Sema::incomplete_enum_objects`].
+    fn check_tentative_enums(&mut self) {
+        for (name, tag, range) in std::mem::take(&mut self.incomplete_enum_objects) {
+            if matches!(
+                self.tags.first().and_then(|scope| scope.get(&tag)),
+                Some(TagEntry::Enum { complete: true, .. })
+            ) {
+                continue;
+            }
+            self.error(
+                range,
+                format!(
+                    "the tentative definition of '{name}' has type 'enum {tag}', which is \
+                     never completed"
+                ),
+            );
         }
     }
 
@@ -990,6 +1056,19 @@ impl<'a> Sema<'a> {
     /// The operand of a `typeof` specifier.
     fn typeof_operand(&self, id: ast::TypeofId) -> &'a ast::TypeofOperand {
         self.unit.typeof_operand(id)
+    }
+
+    /// The tag of the enumeration a type name is nothing but a mention of,
+    /// when that enumeration was incomplete where the mention was written.
+    ///
+    /// The type has to be resolved first — the answer is what
+    /// [`Sema::enum_incomplete`] recorded — and only a bare `enum E` is asked
+    /// about: `enum E *p` is a pointer, which needs no size at all.
+    fn incomplete_enum(&self, ty: &ast::Type) -> Option<&str> {
+        let ast::TypeKind::Enum(id) = &ty.kind else {
+            return None;
+        };
+        self.enum_incomplete[id.index()].as_deref()
     }
 
     // -- convenience over the type arena ------------------------------------
@@ -1293,6 +1372,7 @@ impl<'a> Sema<'a> {
             ty,
             storage,
             is_const,
+            is_register: false,
             vla_storage: false,
             asm_label: None,
             section: None,
@@ -1781,8 +1861,81 @@ impl<'a> Sema<'a> {
                     self.const_eval(else_expr)
                 }
             }
+            ExprKind::Builtin { op, args } => self.const_bit_builtin(*op, args, expr),
             _ => None,
         }
+    }
+
+    /// The bit-counting builtins, folded when their operand is a constant.
+    ///
+    /// GCC and Clang both make these constant expressions — `_Static_assert(
+    /// __builtin_popcount(0) < 1, …)` is WG14 DR263 as Clang tests it
+    /// (`drs/dr2xx.c`) — and the answer depends on the *width* of the operand,
+    /// which the suffix of the builtin's name chose. `clz` and `ctz` are
+    /// undefined for a zero operand and are left alone there, exactly as the
+    /// generated code leaves them to Rust.
+    fn const_bit_builtin(
+        &mut self,
+        op: ir::BuiltinOp,
+        args: &[Expr],
+        expr: &Expr,
+    ) -> Option<ConstValue> {
+        use ir::BuiltinOp;
+        let [arg] = args else {
+            return None;
+        };
+        let bits = u32::try_from(arg.ty.size_bytes(&self.target) * 8).ok()?;
+        if bits == 0 || bits > 128 {
+            return None;
+        }
+        let ConstValue::Int(value) = self.const_eval(arg)? else {
+            return None;
+        };
+        // The operand as the unsigned bit pattern of its own width, which is
+        // what every one of these counts over.
+        let mask = if bits == 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits) - 1
+        };
+        let bitpattern = (value as u128) & mask;
+        let result = match op {
+            BuiltinOp::Popcount => i128::from(bitpattern.count_ones()),
+            BuiltinOp::Parity => i128::from(bitpattern.count_ones() % 2),
+            BuiltinOp::Ffs => match bitpattern {
+                0 => 0,
+                _ => i128::from(bitpattern.trailing_zeros() + 1),
+            },
+            BuiltinOp::Clz if bitpattern != 0 => {
+                i128::from(bitpattern.leading_zeros() - (128 - bits))
+            }
+            BuiltinOp::Ctz if bitpattern != 0 => i128::from(bitpattern.trailing_zeros()),
+            // The number of leading bits that repeat the sign bit, less the
+            // sign bit itself, which is what GCC documents `clrsb` as.
+            BuiltinOp::Clrsb => {
+                let top = bitpattern >> (bits - 1);
+                let folded = if top == 1 {
+                    !bitpattern & mask
+                } else {
+                    bitpattern
+                };
+                i128::from(if folded == 0 {
+                    bits - 1
+                } else {
+                    folded.leading_zeros() - (128 - bits) - 1
+                })
+            }
+            BuiltinOp::Bswap => {
+                let bytes = bits / 8;
+                let mut swapped = 0u128;
+                for byte in 0..bytes {
+                    swapped |= ((bitpattern >> (byte * 8)) & 0xff) << ((bytes - 1 - byte) * 8);
+                }
+                swapped as i128
+            }
+            _ => return None,
+        };
+        Some(ConstValue::Int(expr.ty.wrap(result, &self.target)))
     }
 
     fn const_binary(

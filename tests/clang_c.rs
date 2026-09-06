@@ -133,6 +133,15 @@ impl EntryPoint {
     }
 }
 
+impl Plan {
+    /// The front end's knobs for this revision.
+    fn options(&self) -> Options {
+        let mut options = self.entry.options();
+        options.dollar_in_identifiers = self.dollars;
+        options
+    }
+}
+
 /// What a `-std=` on a RUN line means here.
 ///
 /// * The five ISO revisions and the five GNU ones map straight across;
@@ -196,6 +205,13 @@ struct Plan {
     /// The case's own directory, then every `-I` on the command line, as the
     /// `#pragma cinrs include_path` lines they become.
     includes: Vec<PathBuf>,
+    /// Whether `$` is an identifier character, which
+    /// `-fno-dollars-in-identifiers` switches off.
+    ///
+    /// It is on by default here as it is for GCC and Clang; `C99/n717.c` is
+    /// the one file in the corpus that turns it off, and it writes `M($)` on
+    /// both of its RUN lines to check that the answer differs.
+    dollars: bool,
 }
 
 impl Plan {
@@ -264,16 +280,17 @@ impl Revision {
     /// # What is honoured
     ///
     /// `-std=`, `-verify` and `-verify=<prefixes>`, `-D`, `-I` (with `%S`
-    /// substituted for the file's directory) and `-triple`.
+    /// substituted for the file's directory), `-triple` and
+    /// `-fno-dollars-in-identifiers`, which switches off the `$` this crate
+    /// takes in an identifier by default exactly as GCC and Clang do.
     ///
     /// # What is ignored
     ///
     /// `-fsyntax-only` (everything here is a syntax-only check anyway),
-    /// `-pedantic`, `-pedantic-errors`, every `-W…`, `-O…`,
-    /// `-fno-dollars-in-identifiers` (which is what `cinrs` does by default),
-    /// and `-Wno-…`. Whether `-pedantic-errors` is passed makes no difference
-    /// to the oracle: an `expected-error` is an error either way, and the
-    /// warnings the flag would promote are the ones that are ignored.
+    /// `-pedantic`, `-pedantic-errors`, every `-W…`, `-O…` and `-Wno-…`.
+    /// Whether `-pedantic-errors` is passed makes no difference to the oracle:
+    /// an `expected-error` is an error either way, and the warnings the flag
+    /// would promote are the ones that are ignored.
     ///
     /// # What causes the revision to be skipped
     ///
@@ -314,6 +331,7 @@ impl Revision {
             // harness puts in front of every case, for the same reason.
             includes: vec![dir.to_path_buf()],
             defines: Vec::new(),
+            dollars: true,
         };
         let mut standard: Option<String> = None;
         let mut skip: Option<String> = None;
@@ -407,12 +425,12 @@ impl Revision {
                 | "-E"
                 | "-o"
                 | "-w"
-                | "-disable-llvm-passes"
-                | "-fno-dollars-in-identifiers" => {
+                | "-disable-llvm-passes" => {
                     if word == "-o" {
                         it.next();
                     }
                 }
+                "-fno-dollars-in-identifiers" => plan.dollars = false,
                 _ if word.starts_with("-W") || word.starts_with("-O") => {}
                 _ if word.starts_with("-f") || word.starts_with("-m") => {
                     fail(format!("`{word}` is a Clang-only flag"));
@@ -1284,7 +1302,7 @@ fn main() -> Result<()> {
                 continue;
             }
             let (unit, prelude_lines) = unit_text(file, plan);
-            let errors = front_end_errors(unit, plan.entry.options(), prelude_lines)?;
+            let errors = front_end_errors(unit, plan.options(), prelude_lines)?;
             let annotations = Annotations::read(&oracle, &errors);
             let class = match classify(file, plan, &oracle, &errors) {
                 Ok(class) => class,

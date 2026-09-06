@@ -188,18 +188,20 @@ fn later_keywords_are_recognised_where_they_belong() {
 fn identifiers() {
     assert_eq!(one("_foo9"), TokenKind::Ident("_foo9".to_owned()));
     assert_eq!(one("Int"), TokenKind::Ident("Int".to_owned()));
-    // `$` is off by default.
-    assert!(!errors("a$b").is_empty());
-    let tokens = lex_text(
+    // `$` is an identifier character by default, as it is for GCC and Clang
+    // both; WG14 DR027 is what lets an implementation take it.
+    let tokens = lex_text("a$b", 0, &opts());
+    assert!(tokens.iter().all(|t| t.errors.is_empty()));
+    assert_eq!(tokens[0].kind, TokenKind::Ident("a$b".to_owned()));
+    // Switching it off makes it a stray character again.
+    let (_, errors) = lex_with(
         "a$b",
-        0,
         &LexOptions {
-            dollar_in_identifiers: true,
+            dollar_in_identifiers: false,
             ..opts()
         },
     );
-    assert!(tokens.iter().all(|t| t.errors.is_empty()));
-    assert_eq!(tokens[0].kind, TokenKind::Ident("a$b".to_owned()));
+    assert!(!errors.is_empty());
 }
 
 // ---------------------------------------------------------------------------
