@@ -17,6 +17,12 @@
 //! it wants. `doc/c-testsuite.md` has the licence note and the recorded
 //! baseline.
 //!
+//! The expected-failure list measures `cinrs` as its **default features** build
+//! it, so a build with `complex` off — where `_Complex` is a diagnostic again
+//! and the cases that use one stop compiling — skips the suite the same way,
+//! under `CINRS_TESTSUITES_REQUIRED=1`; see
+//! [`conformance::skip_unless_measured_build`].
+//!
 //! Everything this harness has in common with the [GCC torture](gcc_torture)
 //! and [Clang](clang_c) ones — the modes, the expected-failure list and its
 //! markers, the result collector, the timeouts — lives in
@@ -96,6 +102,8 @@
 //!
 //! * `CINRS_CTESTSUITE_REQUIRED=1` — fail rather than skip when the corpus is
 //!   missing.
+//! * `CINRS_TESTSUITES_REQUIRED=1` — fail rather than skip when this build is
+//!   not the default-feature one the list describes.
 //! * `CINRS_CTESTSUITE_STANDARD=c89|c99|c11|c23|gnu89|gnu99|gnu11|gnu23` —
 //!   which entry point to translate with, and which cases are eligible.
 //!   Default `c99`.
@@ -738,6 +746,9 @@ impl Run<'_> {
 
 fn main() -> Result<()> {
     conformance::start_memory_watchdog("c-testsuite");
+    if let Some(result) = conformance::skip_unless_measured_build("c-testsuite") {
+        return result;
+    }
     let suite = Path::new(SUITE_DIR);
     if !suite.is_dir() {
         let message = format!(

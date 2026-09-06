@@ -26,6 +26,10 @@
 //!   suffixes on its own environment-variable prefix: guard (the default),
 //!   `…_REPORT=1` and `…_REPORT=1 …_UPDATE_EXPECTED=1`. [`flag`] and [`var`]
 //!   read them.
+//! * **Which build is being measured.** The lists describe `cinrs` as its
+//!   *default features* build it, so a harness asks
+//!   [`skip_unless_measured_build`] before it starts and skips itself, exactly
+//!   as it does without a corpus, when it is not that build.
 //! * **The expected-failure list.** One id per line with a note, and a marker
 //!   in front of the id saying what kind of claim the line makes — see
 //!   [`EntryKind`]. [`read_list`] and [`write_list`] are the two ends of it.
@@ -120,6 +124,56 @@ pub fn timeout_var(name: &str, default: u64) -> Result<u64> {
 /// build, and a macro that is merely slow should be seen as slow rather than
 /// mistaken for one that has hung.
 pub const COMPILE_TIMEOUT: u64 = 300;
+
+// ---------------------------------------------------------------------------
+// which build the lists describe
+// ---------------------------------------------------------------------------
+
+/// Whether this harness was built with the features the corpora are measured
+/// with.
+///
+/// A test target of the `cinrs` package sees the package's own features, so
+/// `cfg!(feature = "complex")` asked here is exactly the question "was the
+/// crate under test built with its defaults".
+pub const MEASURED_BUILD: bool = cfg!(feature = "complex");
+
+/// Why a build with the wrong features is not measured against the lists.
+const WRONG_FEATURES: &str = "the conformance corpora are measured with cinrs's default features; \
+     this build has `complex` off (use `--features complex` or the defaults)";
+
+/// Stops a harness whose build is not the one the lists describe.
+///
+/// The three expected-failure lists are checked-in measurements of `cinrs` as
+/// **its default features build it**, and `complex` is one of those: with the
+/// feature off, `_Complex` is a diagnostic again, so every case that uses one
+/// comes out as a false rejection — seven revisions in `clang/test/C` alone,
+/// and cases in the other two corpora — against a list that says nothing of
+/// the kind. That is a different question rather than a regression, so such a
+/// build skips the suite exactly as a missing corpus does, prints why, and
+/// exits successfully; `CINRS_TESTSUITES_REQUIRED=1` turns the skip into a
+/// failure, which is what a CI job that means to run the suite wants.
+///
+/// `None` when the run should go ahead, and otherwise what the harness's
+/// `main` should return.
+///
+/// ```ignore
+/// if let Some(result) = conformance::skip_unless_measured_build("clang-c") {
+///     return result;
+/// }
+/// ```
+pub fn skip_unless_measured_build(label: &str) -> Option<Result<()>> {
+    if MEASURED_BUILD {
+        return None;
+    }
+    if flag("CINRS_TESTSUITES_REQUIRED") {
+        return Some(Err(eyre!(
+            "{label}: {WRONG_FEATURES}\n\
+             (CINRS_TESTSUITES_REQUIRED=1, so this is a failure and not a skip.)"
+        )));
+    }
+    println!("{label}: skipped — {WRONG_FEATURES}");
+    Some(Ok(()))
+}
 
 // ---------------------------------------------------------------------------
 // memory — see the module documentation

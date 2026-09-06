@@ -12,6 +12,12 @@
 //! without it the harness prints how to get it and exits successfully, unless
 //! `CINRS_TESTSUITES_REQUIRED=1`. `doc/clang-c-tests.md` has the results.
 //!
+//! The expected-failure list measures `cinrs` as its **default features**
+//! build it, so a build with `complex` off — where `_Complex` is a diagnostic
+//! again, which by itself turns seven revisions into false rejections — skips
+//! the suite the same way and under the same variable; see
+//! [`conformance::skip_unless_measured_build`].
+//!
 //! # One RUN line is one revision
 //!
 //! A file may be compiled several ways — `drs/dr0xx.c` has six RUN lines, one
@@ -48,7 +54,8 @@
 //! # Environment
 //!
 //! * `CINRS_TESTSUITES_REQUIRED=1` — fail rather than skip when the corpus is
-//!   missing.
+//!   missing, or when this build is not the default-feature one the list
+//!   describes.
 //! * `CINRS_CLANG_C_FILTER=<substring>` — only revisions whose id contains it.
 //! * `CINRS_CLANG_C_REPORT=1` — report mode.
 //! * `CINRS_CLANG_C_STRICT=1` — a stale expected-failure entry is a failure.
@@ -1136,6 +1143,9 @@ fn check_pass_stem(file: &TestFile, revision: &Revision) -> String {
 
 fn main() -> Result<()> {
     conformance::start_memory_watchdog("clang-c");
+    if let Some(result) = conformance::skip_unless_measured_build("clang-c") {
+        return result;
+    }
     let corpus = Path::new(CORPUS);
     if !corpus.is_dir() {
         let message = format!(

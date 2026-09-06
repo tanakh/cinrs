@@ -16,6 +16,12 @@
 //! successfully; `CINRS_TESTSUITES_REQUIRED=1` turns that skip into a failure.
 //! `doc/gcc-torture.md` has the results and the licence note.
 //!
+//! The expected-failure lists measure `cinrs` as its **default features** build
+//! it, so a build with `complex` off — where `_Complex` is a diagnostic again
+//! and the cases that use one stop compiling — skips the suite the same way and
+//! under the same variable; see
+//! [`conformance::skip_unless_measured_build`].
+//!
 //! Everything shared with the [c-testsuite](c_testsuite) and [Clang](clang_c)
 //! harnesses — the three modes, the expected-failure list and its markers, the
 //! result collector, the timeouts — is in
@@ -66,7 +72,8 @@
 //! # Environment
 //!
 //! * `CINRS_TESTSUITES_REQUIRED=1` — fail rather than skip when the corpus is
-//!   missing.
+//!   missing, or when this build is not the default-feature one the lists
+//!   describe.
 //! * `CINRS_GCC_TORTURE_STANDARD=gnu89|gnu99|gnu11|gnu17|gnu23|c89|c99|c11|c17|c23`
 //!   — which entry point to translate with. Default `gnu11`, which is closest
 //!   to the `-std=gnu17 -w` GCC compiles these with; `gnu89!` is the one these
@@ -1185,6 +1192,9 @@ impl Run<'_> {
 
 fn main() -> Result<()> {
     conformance::start_memory_watchdog("gcc-torture");
+    if let Some(result) = conformance::skip_unless_measured_build("gcc-torture") {
+        return result;
+    }
     let corpus = Path::new(CORPUS);
     if !corpus.is_dir() {
         let message = format!(

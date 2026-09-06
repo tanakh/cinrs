@@ -45,6 +45,23 @@ so a fresh checkout still has a green `cargo test`.
 submodule) turns the skip into a failure, which is what a CI job that means to
 run a suite wants.
 
+## The features the numbers are measured with
+
+All three lists describe `cinrs` **as its default features build it**, and
+`complex` is one of those, so a harness that is not that build skips itself
+exactly as one without its corpus does — it says that the corpora are measured
+with the default features and that this build has `complex` off, and exits
+successfully, which is what keeps `cargo test -p cinrs --no-default-features`
+green. The reason is that with the feature off `_Complex` is a diagnostic
+again, so every case that uses one stops compiling: seven `clang/test/C`
+revisions come out as false rejections against a list that says nothing of the
+kind, and the other two corpora have the same latent problem. That is a
+different question rather than a regression, and the answer is to run the suite
+with the defaults or with `--features complex`. The check is
+`conformance::skip_unless_measured_build`, beside the corpus check in
+[`tests/support/conformance.rs`](../tests/support/conformance.rs), and
+`CINRS_TESTSUITES_REQUIRED=1` turns this skip into a failure too.
+
 ## The safety rules
 
 **Read this before running any of them.** A conformance run is a thousand
