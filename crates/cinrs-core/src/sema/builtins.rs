@@ -25,7 +25,9 @@
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::gnu;
-use crate::ir::{self, BinOp, BuiltinOp, Expr, ExprKind, FuncId, Function, Signature, Ty};
+use crate::ir::{
+    self, BinOp, BuiltinOp, Expr, ExprKind, FloatClass, FloatOrder, FuncId, Function, Signature, Ty,
+};
 
 use super::{Entry, Sema};
 
@@ -36,6 +38,30 @@ use super::{Entry, Sema};
 /// a front end that does not track object sizes has to give exactly those.
 fn object_size_answer(mode: i128) -> i128 {
     if mode & 2 == 0 { -1 } else { 0 }
+}
+
+/// The payload `__builtin_nan("…")`'s string names.
+///
+/// GCC reads it with `strtoull` in base 0 — so `"0x123"`, `"0123"` and `"291"`
+/// are the same payload — and answers 0 for anything it cannot read, which is
+/// what makes `__builtin_nan("")` the default quiet NaN.
+fn parse_nan_payload(text: &str) -> u64 {
+    let text = text.trim_start();
+    let (radix, digits) = match text.as_bytes() {
+        [b'0', b'x' | b'X', rest @ ..] => (16, rest),
+        [b'0', rest @ ..] if !rest.is_empty() => (8, rest),
+        _ => (10, text.as_bytes()),
+    };
+    let mut value = 0u64;
+    for byte in digits {
+        let Some(digit) = char::from(*byte).to_digit(radix) else {
+            break;
+        };
+        value = value
+            .wrapping_mul(u64::from(radix))
+            .wrapping_add(digit.into());
+    }
+    value
 }
 
 /// Whether `__builtin_constant_p` says yes to something that is not a number.
@@ -131,7 +157,10 @@ impl Sema<'_> {
             "add_overflow_p" => self.overflow(name, BinOp::Add, args, false, range),
             "sub_overflow_p" => self.overflow(name, BinOp::Sub, args, false, range),
             "mul_overflow_p" => self.overflow(name, BinOp::Mul, args, false, range),
-            "huge_val" | "inf" => {
+            // `long double` is `double` here, so the `l` forms are the plain
+            // ones; `huge_val` and `inf` differ only in that the first is
+            // `<math.h>`'s spelling of the second.
+            "huge_val" | "huge_vall" | "inf" | "infl" => {
                 self.builtin_arity(name, args, 0, range)?;
                 Some(Expr::new(ExprKind::Float(f64::INFINITY), Ty::Double, range))
             }
@@ -139,15 +168,61 @@ impl Sema<'_> {
                 self.builtin_arity(name, args, 0, range)?;
                 Some(Expr::new(ExprKind::Float(f64::INFINITY), Ty::Float, range))
             }
-            // The payload string is ignored: a quiet NaN is a quiet NaN, and
-            // Rust has no way to build one with a chosen payload.
-            "nan" | "nanf" => {
-                for arg in args {
-                    self.expr(arg);
-                }
-                let ty = if rest == "nan" { Ty::Double } else { Ty::Float };
-                Some(Expr::new(ExprKind::Float(f64::NAN), ty, range))
+            "nan" | "nanl" | "nanf" | "nans" | "nansl" | "nansf" => {
+                self.nan_builtin(name, rest, args, range)
             }
+            "fabs" | "fabsl" | "fabsf" => {
+                let ty = if rest == "fabsf" {
+                    Ty::Float
+                } else {
+                    Ty::Double
+                };
+                self.builtin_arity(name, args, 1, range)?;
+                let value = self.float_conversion(name, &args[0], ty)?;
+                Some(Expr::new(
+                    ExprKind::Builtin {
+                        op: BuiltinOp::Fabs,
+                        args: vec![value],
+                    },
+                    ty,
+                    range,
+                ))
+            }
+            "copysign" | "copysignl" | "copysignf" => {
+                let ty = if rest == "copysignf" {
+                    Ty::Float
+                } else {
+                    Ty::Double
+                };
+                self.builtin_arity(name, args, 2, range)?;
+                let magnitude = self.float_conversion(name, &args[0], ty)?;
+                let sign = self.float_conversion(name, &args[1], ty)?;
+                Some(Expr::new(
+                    ExprKind::Builtin {
+                        op: BuiltinOp::Copysign,
+                        args: vec![magnitude, sign],
+                    },
+                    ty,
+                    range,
+                ))
+            }
+            "isgreater" => self.float_order(name, FloatOrder::Greater, args, range),
+            "isgreaterequal" => self.float_order(name, FloatOrder::GreaterEqual, args, range),
+            "isless" => self.float_order(name, FloatOrder::Less, args, range),
+            "islessequal" => self.float_order(name, FloatOrder::LessEqual, args, range),
+            "islessgreater" => self.float_order(name, FloatOrder::LessGreater, args, range),
+            "isunordered" => self.float_order(name, FloatOrder::Unordered, args, range),
+            "isnan" | "isnanl" | "isnanf" => self.float_class(name, FloatClass::IsNan, args, range),
+            "isinf" | "isinfl" | "isinff" => self.float_class(name, FloatClass::IsInf, args, range),
+            "isinf_sign" => self.float_class(name, FloatClass::IsInfSign, args, range),
+            "isfinite" => self.float_class(name, FloatClass::IsFinite, args, range),
+            "isnormal" => self.float_class(name, FloatClass::IsNormal, args, range),
+            "issignaling" => self.float_class(name, FloatClass::IsSignaling, args, range),
+            "signbit" | "signbitl" | "signbitf" => {
+                self.float_class(name, FloatClass::SignBit, args, range)
+            }
+            "fpclassify" => self.fpclassify(name, args, range),
+            "classify_type" => self.classify_type(name, args, range),
             // Hints with nowhere to go. The operands are still evaluated,
             // because C says they are.
             "prefetch" | "assume" | "speculation_safe_value" => {
@@ -212,9 +287,14 @@ impl Sema<'_> {
                 Some(Expr::int(answer, size_ty, range))
             }
             "alloca" | "alloca_with_align" => self.alloca(name, args, range),
-            // `__builtin_X` for a library function X is a call to X.
+            // `__builtin_X` for a library function X is a call to X — and
+            // `__builtin_Xl`, the `long double` form, is a call to the same
+            // one, `long double` being `double` here.
             _ if gnu::LIBRARY_BUILTINS.contains(&rest) => self.library_call(rest, args, range),
-            _ => return None,
+            _ => {
+                let base = gnu::long_double_math(rest)?;
+                self.library_call(base, args, range)
+            }
         };
         Some(result)
     }
@@ -291,6 +371,218 @@ impl Sema<'_> {
             void_ptr,
             range,
         ))
+    }
+
+    /// `__builtin_nan(s)`, `__builtin_nans(s)` and their `f` and `l` forms.
+    ///
+    /// The string names the NaN's *payload*, in the base `strtoull` would read
+    /// it in, and an empty one asks for the default: no payload at all for a
+    /// quiet NaN, and the leading payload bit for a signalling one, which is
+    /// what GCC produces. A payload is part of the value, so the constant is
+    /// carried — and written out — bit for bit; see [`ir::narrow_nan_bits`].
+    fn nan_builtin(
+        &mut self,
+        name: &str,
+        rest: &str,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 1, range)?;
+        let signalling = rest.starts_with("nans");
+        let ty = if rest.ends_with('f') {
+            Ty::Float
+        } else {
+            Ty::Double
+        };
+        let Some(text) = self.string_argument(name, &args[0]) else {
+            // The operand still has to be checked, and an error is already out.
+            self.expr(&args[0]);
+            return None;
+        };
+        // The mantissa is 23 bits wide in a `float` and 52 in a `double`; the
+        // top one of them is the quiet bit, and a signalling NaN with no
+        // payload at all would be an infinity, so GCC gives it the next bit
+        // down.
+        let quiet = if ty == Ty::Float { 1 << 22 } else { 1 << 51 };
+        let mut payload = parse_nan_payload(&text) & (quiet - 1);
+        if signalling && payload == 0 {
+            payload = quiet >> 1;
+        }
+        let mantissa = if signalling { payload } else { quiet | payload };
+        let bits = if ty == Ty::Float {
+            ir::widen_nan_bits(0x7f80_0000 | mantissa as u32)
+        } else {
+            0x7ff0_0000_0000_0000 | mantissa
+        };
+        Some(Expr::new(ExprKind::Float(f64::from_bits(bits)), ty, range))
+    }
+
+    /// The text of a string-literal argument, which is all `__builtin_nan`
+    /// accepts.
+    fn string_argument(&mut self, name: &str, arg: &ast::Expr) -> Option<String> {
+        if let ast::ExprKind::Str(literal) = &arg.kind
+            && let Some(bytes) = literal.as_bytes()
+        {
+            return Some(bytes.iter().map(|b| char::from(*b)).collect());
+        }
+        self.error(
+            arg.range,
+            format!("the argument of '{name}' must be a string literal naming the payload"),
+        );
+        None
+    }
+
+    /// An operand of a builtin with a fixed floating prototype, converted to
+    /// the type that prototype gives it.
+    fn float_conversion(&mut self, name: &str, arg: &ast::Expr, ty: Ty) -> Option<Expr> {
+        let value = self.expr(arg)?;
+        if !value.ty.is_arithmetic() {
+            self.error(
+                arg.range,
+                format!(
+                    "the arguments of '{name}' must have arithmetic types, not '{}'",
+                    self.tyname(value.ty)
+                ),
+            );
+            return None;
+        }
+        Some(self.convert(value, ty))
+    }
+
+    /// `__builtin_isgreater` and the other five quiet comparisons.
+    ///
+    /// The operands go through the usual arithmetic conversions, and the
+    /// result must be a real floating type: these say nothing about integers,
+    /// which have no unordered pair.
+    fn float_order(
+        &mut self,
+        name: &str,
+        order: FloatOrder,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 2, range)?;
+        let lhs = self.expr(&args[0])?;
+        let rhs = self.expr(&args[1])?;
+        if !lhs.ty.is_arithmetic() || !rhs.ty.is_arithmetic() {
+            self.error(
+                range,
+                format!("the arguments of '{name}' must have real floating types"),
+            );
+            return None;
+        }
+        let (lhs, rhs, common) = self.balance(lhs, rhs);
+        if !common.is_floating() {
+            self.error(
+                range,
+                format!("non-floating-point arguments in call to '{name}'"),
+            );
+            return None;
+        }
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::FloatOrder(order),
+                args: vec![lhs, rhs],
+            },
+            Ty::Int,
+            range,
+        ))
+    }
+
+    /// `__builtin_isnan` and the other classifications, which GCC overloads on
+    /// the argument's own type rather than giving them a prototype.
+    fn float_class(
+        &mut self,
+        name: &str,
+        class: FloatClass,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 1, range)?;
+        let value = self.float_operand(name, &args[0])?;
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::FloatClass(class),
+                args: vec![value],
+            },
+            Ty::Int,
+            range,
+        ))
+    }
+
+    /// The operand of a type-generic floating builtin: a `float` stays one and
+    /// a `double` or `long double` is a `double`, which is what the two
+    /// widths of the generated code can inspect.
+    fn float_operand(&mut self, name: &str, arg: &ast::Expr) -> Option<Expr> {
+        let value = self.expr(arg)?;
+        if !value.ty.is_floating() {
+            self.error(
+                arg.range,
+                format!("non-floating-point argument in call to '{name}'"),
+            );
+            return None;
+        }
+        Some(value)
+    }
+
+    /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`, which is
+    /// how `<math.h>`'s `fpclassify` names its own five answers.
+    fn fpclassify(&mut self, name: &str, args: &[ast::Expr], range: SourceRange) -> Option<Expr> {
+        self.builtin_arity(name, args, 6, range)?;
+        let mut values = Vec::with_capacity(6);
+        for arg in &args[..5] {
+            let value = self.expr(arg)?;
+            if !value.ty.is_integer() {
+                self.error(
+                    arg.range,
+                    format!("the first five arguments of '{name}' must have integer types"),
+                );
+                return None;
+            }
+            values.push(self.convert(value, Ty::Int));
+        }
+        values.push(self.float_operand(name, &args[5])?);
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::Fpclassify,
+                args: values,
+            },
+            Ty::Int,
+            range,
+        ))
+    }
+
+    /// `__builtin_classify_type(e)`: GCC's number for the class of `e`'s type.
+    ///
+    /// The operand is not evaluated — the whole thing is an integer constant
+    /// expression — and the type it is classified by is the one the default
+    /// argument promotions give it, which is why `char`, `_Bool` and an
+    /// enumeration all answer `1` and an array answers `5`.
+    fn classify_type(
+        &mut self,
+        name: &str,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        self.builtin_arity(name, args, 1, range)?;
+        let value = self.expr(&args[0])?;
+        let ty = self.promoted_argument(&value);
+        let class = match ty {
+            Ty::Void => 0,
+            Ty::Float | Ty::Double => 8,
+            Ty::Pointer(_) => 5,
+            Ty::Func(_) => 10,
+            Ty::Array(_) => 14,
+            Ty::Record(id) => {
+                if self.types().record(id).kind == ir::RecordKind::Union {
+                    13
+                } else {
+                    12
+                }
+            }
+            _ => 1,
+        };
+        Some(Expr::int(class, Ty::Int, range))
     }
 
     /// Checks a builtin's argument count.
@@ -568,57 +860,124 @@ impl Sema<'_> {
 
     /// The prototype of a library function the unit did not declare.
     ///
-    /// Only the ones a `__builtin_` name is really used for are here; anything
-    /// else has to be declared by including its header, which is what the
-    /// diagnostic above says.
+    /// GCC knows the prototype of every function it has a builtin for, and
+    /// declares it on the spot rather than making the program include the
+    /// header first; this is that table, and every entry is the declaration
+    /// the bundled header writes, so a `#include` that arrives later
+    /// redeclares it compatibly. What is *not* here is the handful whose
+    /// prototype mentions a type only a header can introduce — `FILE` and
+    /// `va_list` — where the diagnostic above is the right answer.
     fn library_signature(&mut self, name: &str) -> Option<Signature> {
         let size_t = self.size_ty();
+        let intmax = self.intmax_ty();
         let void_ptr = self.ptr_to(Ty::Void, false);
         let const_void_ptr = self.ptr_to(Ty::Void, true);
         let char_ptr = self.ptr_to(Ty::Char, false);
         let const_char_ptr = self.ptr_to(Ty::Char, true);
+        let char_ptr_ptr = self.ptr_to(char_ptr, false);
+        let int_ptr = self.ptr_to(Ty::Int, false);
+        let double_ptr = self.ptr_to(Ty::Double, false);
+        let float_ptr = self.ptr_to(Ty::Float, false);
         let sig = |ret: Ty, params: Vec<Ty>| Signature {
             ret,
             params,
             variadic: false,
             prototyped: true,
         };
+        let variadic = |ret: Ty, params: Vec<Ty>| Signature {
+            ret,
+            params,
+            variadic: true,
+            prototyped: true,
+        };
         Some(match name {
-            "memcpy" | "memmove" => sig(void_ptr, vec![void_ptr, const_void_ptr, size_t]),
+            // <string.h> and the GNU functions that live beside them.
+            "memcpy" | "memmove" | "mempcpy" => {
+                sig(void_ptr, vec![void_ptr, const_void_ptr, size_t])
+            }
             "memset" => sig(void_ptr, vec![void_ptr, Ty::Int, size_t]),
-            "memcmp" => sig(Ty::Int, vec![const_void_ptr, const_void_ptr, size_t]),
+            "memcmp" | "bcmp" => sig(Ty::Int, vec![const_void_ptr, const_void_ptr, size_t]),
             "memchr" => sig(void_ptr, vec![const_void_ptr, Ty::Int, size_t]),
+            "bzero" => sig(Ty::Void, vec![void_ptr, size_t]),
+            "bcopy" => sig(Ty::Void, vec![const_void_ptr, void_ptr, size_t]),
             "strlen" => sig(size_t, vec![const_char_ptr]),
-            "strcpy" | "strcat" => sig(char_ptr, vec![char_ptr, const_char_ptr]),
-            "strncpy" | "strncat" => sig(char_ptr, vec![char_ptr, const_char_ptr, size_t]),
-            "strcmp" => sig(Ty::Int, vec![const_char_ptr, const_char_ptr]),
-            "strncmp" => sig(Ty::Int, vec![const_char_ptr, const_char_ptr, size_t]),
-            "strchr" | "strrchr" => sig(char_ptr, vec![const_char_ptr, Ty::Int]),
+            "strcpy" | "strcat" | "stpcpy" => sig(char_ptr, vec![char_ptr, const_char_ptr]),
+            "strncpy" | "strncat" | "stpncpy" => {
+                sig(char_ptr, vec![char_ptr, const_char_ptr, size_t])
+            }
+            "strcmp" | "strcoll" | "strcasecmp" => {
+                sig(Ty::Int, vec![const_char_ptr, const_char_ptr])
+            }
+            "strncmp" | "strncasecmp" => sig(Ty::Int, vec![const_char_ptr, const_char_ptr, size_t]),
+            "strchr" | "strrchr" | "index" | "rindex" => {
+                sig(char_ptr, vec![const_char_ptr, Ty::Int])
+            }
             "strstr" | "strpbrk" => sig(char_ptr, vec![const_char_ptr, const_char_ptr]),
             "strspn" | "strcspn" => sig(size_t, vec![const_char_ptr, const_char_ptr]),
+            "strdup" => sig(char_ptr, vec![const_char_ptr]),
+            // <stdlib.h>
             "abs" => sig(Ty::Int, vec![Ty::Int]),
             "labs" => sig(Ty::Long, vec![Ty::Long]),
             "llabs" => sig(Ty::LongLong, vec![Ty::LongLong]),
+            "imaxabs" => sig(intmax, vec![intmax]),
             "abort" => sig(Ty::Void, vec![]),
-            "exit" => sig(Ty::Void, vec![Ty::Int]),
+            "exit" | "_Exit" => sig(Ty::Void, vec![Ty::Int]),
             "malloc" => sig(void_ptr, vec![size_t]),
             "calloc" => sig(void_ptr, vec![size_t, size_t]),
             "realloc" => sig(void_ptr, vec![void_ptr, size_t]),
             "free" => sig(Ty::Void, vec![void_ptr]),
+            "atoi" => sig(Ty::Int, vec![const_char_ptr]),
+            "atol" => sig(Ty::Long, vec![const_char_ptr]),
+            "atoll" => sig(Ty::LongLong, vec![const_char_ptr]),
+            "atof" => sig(Ty::Double, vec![const_char_ptr]),
+            "strtol" => sig(Ty::Long, vec![const_char_ptr, char_ptr_ptr, Ty::Int]),
+            "strtoul" => sig(Ty::ULong, vec![const_char_ptr, char_ptr_ptr, Ty::Int]),
+            "strtoll" => sig(Ty::LongLong, vec![const_char_ptr, char_ptr_ptr, Ty::Int]),
+            "strtoull" => sig(Ty::ULongLong, vec![const_char_ptr, char_ptr_ptr, Ty::Int]),
+            "strtod" => sig(Ty::Double, vec![const_char_ptr, char_ptr_ptr]),
+            "strtof" => sig(Ty::Float, vec![const_char_ptr, char_ptr_ptr]),
+            // <stdio.h>, as far as it can be written without `FILE`.
+            "printf" => variadic(Ty::Int, vec![const_char_ptr]),
+            "sprintf" => variadic(Ty::Int, vec![char_ptr, const_char_ptr]),
+            "snprintf" => variadic(Ty::Int, vec![char_ptr, size_t, const_char_ptr]),
             "putchar" => sig(Ty::Int, vec![Ty::Int]),
             "puts" => sig(Ty::Int, vec![const_char_ptr]),
-            "tolower" | "toupper" | "isalnum" | "isalpha" | "isdigit" | "islower" | "isprint"
-            | "isspace" | "isupper" => sig(Ty::Int, vec![Ty::Int]),
-            "fabs" | "sqrt" | "floor" | "ceil" | "sin" | "cos" | "tan" | "sinh" | "cosh"
-            | "tanh" | "exp" | "log" | "log10" | "log2" | "round" | "trunc" | "asin" | "acos"
-            | "atan" => sig(Ty::Double, vec![Ty::Double]),
-            "fabsf" | "sqrtf" | "floorf" | "ceilf" | "sinf" | "cosf" | "tanf" | "expf" | "logf"
-            | "roundf" | "truncf" => sig(Ty::Float, vec![Ty::Float]),
-            "pow" | "fmod" | "atan2" | "fmax" | "fmin" => {
-                sig(Ty::Double, vec![Ty::Double, Ty::Double])
-            }
-            "powf" => sig(Ty::Float, vec![Ty::Float, Ty::Float]),
+            // <ctype.h>
+            "tolower" | "toupper" | "isalnum" | "isalpha" | "isblank" | "iscntrl" | "isdigit"
+            | "isgraph" | "islower" | "isprint" | "ispunct" | "isspace" | "isupper"
+            | "isxdigit" => sig(Ty::Int, vec![Ty::Int]),
+            // <math.h>. `long double` is `double` here, so `sqrtl` and its
+            // relatives are the unsuffixed function; see `gnu::LONG_DOUBLE_MATH`.
+            "acos" | "asin" | "atan" | "cbrt" | "ceil" | "cos" | "cosh" | "erf" | "erfc"
+            | "exp" | "exp2" | "expm1" | "fabs" | "floor" | "lgamma" | "log" | "log10"
+            | "log1p" | "log2" | "nearbyint" | "rint" | "round" | "sin" | "sinh" | "sqrt"
+            | "tan" | "tanh" | "tgamma" | "trunc" => sig(Ty::Double, vec![Ty::Double]),
+            "acosf" | "asinf" | "atanf" | "cbrtf" | "ceilf" | "cosf" | "coshf" | "expf"
+            | "exp2f" | "expm1f" | "fabsf" | "floorf" | "logf" | "log10f" | "log1pf" | "log2f"
+            | "nearbyintf" | "rintf" | "roundf" | "sinf" | "sinhf" | "sqrtf" | "tanf" | "tanhf"
+            | "truncf" => sig(Ty::Float, vec![Ty::Float]),
+            "atan2" | "copysign" | "fdim" | "fmax" | "fmin" | "fmod" | "hypot" | "nextafter"
+            | "pow" | "remainder" => sig(Ty::Double, vec![Ty::Double, Ty::Double]),
+            "atan2f" | "copysignf" | "fdimf" | "fmaxf" | "fminf" | "fmodf" | "hypotf"
+            | "nextafterf" | "powf" | "remainderf" => sig(Ty::Float, vec![Ty::Float, Ty::Float]),
+            "fma" => sig(Ty::Double, vec![Ty::Double, Ty::Double, Ty::Double]),
+            "fmaf" => sig(Ty::Float, vec![Ty::Float, Ty::Float, Ty::Float]),
+            "ldexp" | "scalbn" => sig(Ty::Double, vec![Ty::Double, Ty::Int]),
+            "ldexpf" | "scalbnf" => sig(Ty::Float, vec![Ty::Float, Ty::Int]),
+            "frexp" => sig(Ty::Double, vec![Ty::Double, int_ptr]),
+            "frexpf" => sig(Ty::Float, vec![Ty::Float, int_ptr]),
+            "modf" => sig(Ty::Double, vec![Ty::Double, double_ptr]),
+            "modff" => sig(Ty::Float, vec![Ty::Float, float_ptr]),
             _ => return None,
         })
+    }
+
+    /// `intmax_t`, which is the widest signed integer the model has.
+    fn intmax_ty(&self) -> Ty {
+        if Ty::Long.bits(&self.target) >= Ty::LongLong.bits(&self.target) {
+            Ty::Long
+        } else {
+            Ty::LongLong
+        }
     }
 }

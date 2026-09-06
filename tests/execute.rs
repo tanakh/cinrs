@@ -496,6 +496,50 @@ fn shifts() {
     assert_eq!(unsafe { shift_long(1, 40) }, 1 << 40);
 }
 
+/// A shift by a count the shifted type cannot hold.
+///
+/// `x << -64` and `x >> 100` are undefined behaviour in C (6.5.7p3), and no
+/// two compilations need agree: GCC answers `4` for `4 << -64` at `-O0`, where
+/// the hardware masks the count, and `0` at `-O2`, where it folds the
+/// undefined shift away. So there is nothing here to match GCC against, and
+/// what is asserted is only what the *generated Rust* defines —
+/// `wrapping_shl` and `wrapping_shr` take the count modulo the width, which is
+/// what the hardware does and so what `-O0` GCC agrees with.
+///
+/// It is a test at all because such a shift used not to compile. A constant
+/// count is written out as the `u32` the shift methods take, and `-64 as u32`
+/// is read by `rustc` as the negation of a `u32` — `E0600` — however it is
+/// bracketed, so the count is reduced to that `u32` before it is emitted.
+/// `execute/pr98681` in the GCC torture suite is the case that found it.
+#[test]
+fn shifts_by_a_count_the_type_cannot_hold() {
+    c99! {
+        int left_negative(int x) { return x << -64; }
+        int right_over(int x) { return x >> 100; }
+        unsigned long long uleft_negative(unsigned long long x) { return x << -64; }
+        unsigned long long uright_over(unsigned long long x) { return x >> 100; }
+
+        /* The shape `execute/pr98681` has: the shift is behind a branch the
+         * two calls below do not take, so the program itself is defined. */
+        int pr98681(int x) {
+            if (x > 32) return (x << -64) & 255;
+            return x;
+        }
+    }
+
+    // -64 converted to `u32` is 4294967232, which is zero modulo 32 and
+    // modulo 64 alike: the value comes back unshifted.
+    assert_eq!(unsafe { left_negative(4) }, 4);
+    assert_eq!(unsafe { uleft_negative(1) }, 1);
+    // 100 modulo 32 is 4; modulo 64 it is 36.
+    assert_eq!(unsafe { right_over(0x1234) }, 0x123);
+    assert_eq!(unsafe { right_over(-1) }, -1);
+    assert_eq!(unsafe { uright_over(u64::MAX) }, u64::MAX >> 36);
+
+    assert_eq!(unsafe { pr98681(32) }, 32);
+    assert_eq!(unsafe { pr98681(-150) }, -150);
+}
+
 #[test]
 fn bitwise_operators() {
     c99! {

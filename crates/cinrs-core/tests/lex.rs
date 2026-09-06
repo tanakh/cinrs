@@ -23,9 +23,21 @@ fn messages(tokens: &[Token], level: Level) -> Vec<String> {
         .collect()
 }
 
+/// The same lexical rules in the GNU dialect, which is what the plain-spelled
+/// extensions — the floating suffixes, among others — are gated on.
+fn gnu_opts() -> LexOptions {
+    let mut options = LexOptions::new(Standard::C99);
+    options.gating.dialect = cinrs_core::Dialect::Gnu;
+    options
+}
+
 /// Lexes `src`, returning the tokens (without EOF) and the error messages.
 fn lex(src: &str) -> (Vec<Token>, Vec<String>) {
-    let mut tokens = lex_text(src, 0, &opts());
+    lex_with(src, &opts())
+}
+
+fn lex_with(src: &str, options: &LexOptions) -> (Vec<Token>, Vec<String>) {
+    let mut tokens = lex_text(src, 0, options);
     assert!(
         tokens.last().is_some_and(Token::is_eof),
         "the token list must end with EOF"
@@ -360,11 +372,58 @@ fn floating_errors() {
         "got {:?}",
         errors("0x1.8")
     );
+    assert!(
+        errors("1.0q")[0].contains("is a GNU extension"),
+        "got {:?}",
+        errors("1.0q")
+    );
     assert_eq!(
-        errors("1.0q"),
-        ["invalid suffix 'q' on floating constant '1.0q'".to_owned()]
+        errors("1.0z"),
+        ["invalid suffix 'z' on floating constant '1.0z'".to_owned()]
     );
     assert!(!errors("1e").is_empty());
+}
+
+/// The GNU suffixes that name a format wider than `double`.
+///
+/// Every one of them is a `double` here, `long double` being one; a strict
+/// entry point says which GNU entry point has them instead, and the decimal
+/// and imaginary ones are refused whatever the entry point.
+#[test]
+fn the_gnu_floating_suffixes() {
+    let gnu = gnu_opts();
+    for suffix in [
+        "d", "w", "q", "f64", "f64x", "f32x", "f128", "D", "Q", "F128",
+    ] {
+        let src = format!("1.5{suffix}");
+        let (tokens, errors) = lex_with(&src, &gnu);
+        assert_eq!(errors, Vec::<String>::new(), "for {src:?}");
+        match &tokens[0].kind {
+            TokenKind::Float(lit) => {
+                assert_eq!(lit.value, 1.5, "for {src:?}");
+                assert_eq!(lit.suffix, FloatSuffix::LongDouble, "for {src:?}");
+            }
+            other => panic!("{src:?} is not a floating constant: {other:?}"),
+        }
+    }
+    // `_Float32` is `float`.
+    match &lex_with("1.5f32", &gnu).0[0].kind {
+        TokenKind::Float(lit) => assert_eq!(lit.suffix, FloatSuffix::Float),
+        other => panic!("not a floating constant: {other:?}"),
+    }
+    for (src, reason) in [
+        ("0.5dd", "decimal floating types"),
+        ("0.5DF", "decimal floating types"),
+        ("2.0i", "_Complex"),
+        ("2.0j", "_Complex"),
+        ("1.0f16", "'_Float16' is not supported"),
+    ] {
+        let errors = lex_with(src, &gnu).1;
+        assert!(
+            errors.iter().any(|e| e.contains(reason)),
+            "{src:?} should mention {reason:?}, got {errors:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

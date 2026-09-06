@@ -1202,7 +1202,16 @@ impl Sema<'_> {
             if values.len() as u64 == array.len + 1 {
                 values.pop();
             } else {
-                self.error(range, "initializer-string for char array is too long");
+                // Anything more is a constraint violation (6.7.8p2: no
+                // initializer may provide a value for something outside the
+                // object), and a strict entry point says so. GCC's is a
+                // warning and the extra characters are dropped, so a GNU
+                // dialect drops them too — `execute/pr86714` is `const char
+                // a[2][3] = { "1234", "xyz" }`, and its whole point is that
+                // the excess is not part of the value.
+                if !self.gating.dialect.is_gnu() {
+                    self.error(range, "initializer-string for char array is too long");
+                }
                 values.truncate(array.len as usize);
             }
         }

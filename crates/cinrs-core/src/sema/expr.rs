@@ -2011,6 +2011,9 @@ impl Sema<'_> {
             if self.compatible(value.ty, target) {
                 return Some(value);
             }
+            if let Some(cast) = self.cast_to_union(target, value.clone(), type_name, range) {
+                return cast;
+            }
             self.error(
                 type_name.range,
                 format!(
@@ -2052,6 +2055,72 @@ impl Sema<'_> {
             return Some(Expr::new(converted.kind, target, range));
         }
         Some(Expr::new(ExprKind::Cast(Box::new(value)), target, range))
+    }
+
+    /// GNU's cast to a union type: `(union u) x` is the union whose member of
+    /// `x`'s type holds `x`.
+    ///
+    /// `None` means the target is not a union at all and the caller's own
+    /// diagnostic is the right one; `Some(None)` that it was one and something
+    /// was wrong. The result is an *rvalue*, unlike the compound literal
+    /// `(union u){ x }` it is otherwise the same as — which is why it is built
+    /// here rather than desugared into one.
+    fn cast_to_union(
+        &mut self,
+        target: Ty,
+        value: Expr,
+        type_name: &ast::TypeName,
+        range: SourceRange,
+    ) -> Option<Option<Expr>> {
+        let Ty::Record(record) = target else {
+            return None;
+        };
+        let def = self.types().record(record);
+        if def.kind != crate::ir::RecordKind::Union {
+            return None;
+        }
+        if !def.complete {
+            return None;
+        }
+        if !self.gating.dialect.is_gnu() {
+            let gnu = self.gating.standard.macro_name_in(crate::Dialect::Gnu);
+            let here = self.gating.standard.macro_name_in(self.gating.dialect);
+            self.error(
+                type_name.range,
+                format!(
+                    "a cast to a union type is a GNU extension, and requires a GNU dialect \
+                     ({gnu}) (this block is {here})"
+                ),
+            );
+            return Some(None);
+        }
+        // The member types are copied out first: `compatible` borrows sema,
+        // and the arena the definition lives in is part of it.
+        let members: Vec<Ty> = def.fields.iter().map(|field| field.ty).collect();
+        let Some(index) = members
+            .iter()
+            .position(|member| self.compatible(*member, value.ty))
+        else {
+            self.error(
+                type_name.range,
+                format!(
+                    "no member of '{}' has type '{}', so the value has nowhere to go",
+                    self.tyname(target),
+                    self.tyname(value.ty)
+                ),
+            );
+            return Some(None);
+        };
+        let value = self.convert(value, members[index]);
+        Some(Some(Expr::new(
+            ExprKind::UnionLit {
+                record,
+                index,
+                value: Box::new(value),
+            },
+            target,
+            range,
+        )))
     }
 
     /// Checks `__builtin_offsetof(T, member)`, which `offsetof` expands to.

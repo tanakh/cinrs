@@ -1179,6 +1179,18 @@ impl<'a> Sema<'a> {
                 ConstValue::Int(0)
             }),
             ExprKind::Cast(inner) => {
+                // A pointer that is itself a constant converts to a constant
+                // integer, which is what makes the hand-written `offsetof` —
+                // `((size_t) &((struct s *) 0)->m)` — an array bound, a `case`
+                // label and a static initialiser. GCC calls the folding an
+                // extension and so is this: see [`Sema::place_offset`], which
+                // is where the GNU dialects are required.
+                if expr.ty.is_integer()
+                    && inner.ty.is_pointer()
+                    && let Some(address) = self.integer_pointer_value(inner)
+                {
+                    return Some(ConstValue::Int(expr.ty.wrap(address, &target)));
+                }
                 let value = self.const_eval(inner)?;
                 expr.ty
                     .is_arithmetic()
@@ -1450,11 +1462,16 @@ fn convert_const(value: ConstValue, from: Ty, to: Ty, target: &TargetModel) -> C
 
 /// Rounds a value to the precision of `ty`.
 fn round_to(value: f64, ty: Ty) -> f64 {
-    if ty == Ty::Float {
-        value as f32 as f64
-    } else {
-        value
+    if ty != Ty::Float {
+        return value;
     }
+    // A NaN is narrowed bit for bit rather than with `as`, which is free to
+    // quiet a signalling NaN and to choose the payload; see
+    // [`ir::narrow_nan_bits`].
+    if value.is_nan() {
+        return f64::from_bits(ir::widen_nan_bits(ir::narrow_nan_bits(value.to_bits())));
+    }
+    value as f32 as f64
 }
 
 /// Renders a `case` value the way it should read in a diagnostic.

@@ -69,7 +69,10 @@ refusal, exactly as `_Static_assert` in a `c99!` block already was.
 
 What else is honoured: `-verify` and `-verify=<prefixes>`, `-D` (as `#define`
 lines in front of the case), `-I` (as `#pragma cinrs include_path`, with `%S`
-substituted) and `-triple`. What is ignored, because it changes nothing about
+substituted) and `-triple`. The case's **own directory** goes on that path
+too, ahead of any `-I`: a quoted `#include` is looked for beside the file the
+directive is written in, and the file this harness compiles is a generated one
+under `target/`. What is ignored, because it changes nothing about
 what is *accepted*: `-fsyntax-only`, `-pedantic`, `-pedantic-errors`, every
 `-W…` and `-O…`, `-emit-llvm`, `-ast-dump`, `-E`, `-w`,
 `-fno-dollars-in-identifiers`.
@@ -221,6 +224,12 @@ worth naming as their own bug are both about *scope*: a tag declared in a
 parameter list has the scope of that list (DR103, `drs/dr1xx.c`), and the
 composite type a block-scope `extern int i[10];` gives an object is scoped to
 that block (DR011, `drs/dr0xx.c`); `cinrs` puts both in the enclosing scope.
+`drs/dr3xx.c` used to be a harness one and is not any more: the file writes
+`#include "./abc_123.h"`, which is looked for beside the file the directive is
+written in, and the file this harness compiles is a *generated* one under
+`target/`. Every case's own directory now goes on the search path, exactly as
+the gcc-torture harness has always done, so the header is found and the file's
+five revisions have moved on to a later refusal apiece.
 `C99/n448.c:0` is a harness one: its last `expected-error` is inside
 `#if __STDC_VERSION__ >= 202311L`, which the `c99!` revision does not compile —
 Clang's `-verify` never sees a directive in a skipped conditional and this

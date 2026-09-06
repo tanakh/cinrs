@@ -301,11 +301,26 @@
 //! how common it is, and whether it is supported, accepted and ignored, refused
 //! with a reason, or still to come. The short version of what is *refused* —
 //! recognised and reported rather than mistranslated — is inline assembly,
-//! `__attribute__((weak))`, `alias`, `vector_size`, `mode`,
+//! `__attribute__((weak))`, `alias`, `vector_size`,
 //! `__complex__` and `#include_next`. Neither `alloca` nor `cleanup` is on
 //! that list any more: see [Variably modified types and
 //! `alloca`](#variably-modified-types-and-alloca) and
-//! [`cleanup`](#the-cleanup-attribute).
+//! [`cleanup`](#the-cleanup-attribute), and nor is
+//! `__attribute__((mode(M)))`, which now names the width of the type it is
+//! written on — `QI`, `HI`, `SI`, `DI`, `TI`, `byte`, `word`, `pointer`, `SF`
+//! and `DF`, with the modes that name a type this crate does not have refused
+//! individually.
+//!
+//! The `__builtin_*` family reaches as far as `<math.h>`: the classification
+//! and quiet-comparison builtins `__builtin_isnan`, `isinf`, `isfinite`,
+//! `isnormal`, `signbit`, `fpclassify`, `isunordered`, `isgreater` and their
+//! relatives are answered in `core` with no maths library involved, and
+//! `__builtin_fabs` and `__builtin_copysign` are the bit manipulations they
+//! are defined as. A `__builtin_X` for a library function X is a call to X,
+//! declared on the spot with the prototype GCC knows for it, so
+//! `__builtin_printf("%d\n", n)` works without `<stdio.h>` — and a
+//! `long double` maths builtin is the `double` one, `long double` being
+//! `double` here.
 //!
 //! `unreachable()` becomes [`core::hint::unreachable_unchecked`], which is
 //! exactly the promise C attaches to it: reaching it is undefined behaviour.
@@ -1116,8 +1131,8 @@
 //! ## The bundled standard headers
 //!
 //! `cinrs` ships its own `<assert.h>`, `<ctype.h>`, `<errno.h>`, `<float.h>`,
-//! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<stdalign.h>`,
-//! `<stdarg.h>`, `<stdatomic.h>`,
+//! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<signal.h>`,
+//! `<stdalign.h>`, `<stdarg.h>`, `<stdatomic.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
 //! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>` and
 //! `<wctype.h>`,
@@ -1128,6 +1143,24 @@
 //! C library really exports, in plain C99, and the calls link against the real
 //! implementation. `<setjmp.h>` is there too, as a header that says
 //! `setjmp`/`longjmp` are not supported.
+//!
+//! Five headers that are not C's are bundled beside them, because a small
+//! program reaches for them and none of the five needs a type with a layout:
+//! `<alloca.h>`, `<sys/types.h>` (the system's `typedef` names — `ssize_t`,
+//! `off_t`, `pid_t`, `mode_t` and the rest, each spelled the way the target's
+//! own library spells it), `<unistd.h>` (`read`, `write`, `close`, `lseek`,
+//! the process identity, `sleep`, `_exit`), `<fcntl.h>` (`open` and the `O_*`
+//! flags, at the target's own values) and `<strings.h>` (`strcasecmp`,
+//! `bzero`, `bcopy`, `index`, `ffs`). The last three are POSIX and say so with
+//! an `#error` when the target is Windows, whose C runtime has no header of
+//! any of those names. Anything with a layout — `struct stat`, `sigset_t`,
+//! `fd_set`, `pthread_t` — is deliberately absent: a header that guessed at
+//! one of those would corrupt memory rather than fail to compile.
+//!
+//! `<signal.h>` is C's, and its signal *numbers* are the platform's: the six
+//! the standard requires plus the POSIX ones, at Linux's or the BSD/Apple
+//! values, or the small set the Microsoft C runtime has. `sigaction` and
+//! `sigset_t` are absent for the layout reason above.
 //!
 //! Three of them depend on which entry point read them, exactly as the
 //! standard says they should: `<stdbool.h>` defines `bool`, `true` and `false`

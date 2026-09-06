@@ -1968,6 +1968,83 @@ pub enum BuiltinOp {
     /// top of the function, so it is freed by the `return` — which is
     /// `alloca`'s own lifetime.
     Alloca,
+    /// `__builtin_fabs…`: the sign bit cleared, which is what C's `fabs` is
+    /// defined as and what makes it exact for a NaN and for a zero.
+    Fabs,
+    /// `__builtin_copysign…`: the first operand's magnitude with the second
+    /// operand's sign bit.
+    Copysign,
+    /// One of the quiet comparison macros' builtins, whose value is an `int`.
+    FloatOrder(FloatOrder),
+    /// One of the classification builtins, whose value is an `int`.
+    FloatClass(FloatClass),
+    /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`: the one
+    /// of the first five operands the sixth one's class selects.
+    Fpclassify,
+}
+
+/// The `float` bit pattern of a NaN that travels through the IR as a `double`.
+///
+/// A NaN's payload and its sign are part of its value — `__builtin_nanf
+/// ("0x123")` asks for one in particular — and [`ExprKind::Float`] carries
+/// every floating constant as an `f64`, so a `float` NaN is carried as the
+/// `double` whose sign, quiet bit and payload are the same. Widening with `as`
+/// would not do: it may quiet a signalling NaN and is free to choose the
+/// payload. This and [`widen_nan_bits`] are exact inverses.
+pub fn narrow_nan_bits(bits: u64) -> u32 {
+    let sign = ((bits >> 63) as u32) << 31;
+    let payload = ((bits >> 29) & 0x7f_ffff) as u32;
+    sign | 0x7f80_0000 | payload
+}
+
+/// The `double` bit pattern a `float` NaN is carried as; see
+/// [`narrow_nan_bits`].
+pub fn widen_nan_bits(bits: u32) -> u64 {
+    let sign = u64::from(bits >> 31) << 63;
+    let payload = u64::from(bits & 0x7f_ffff) << 29;
+    sign | 0x7ff0_0000_0000_0000 | payload
+}
+
+/// A quiet floating-point comparison: `__builtin_isgreater` and its relatives.
+///
+/// "Quiet" is the whole point of them — C99 7.12.14 defines each as the
+/// comparison it names *without* raising the invalid exception on a NaN, which
+/// `<` and friends would. Rust's floating comparison operators are the quiet
+/// ones, so each is written out as the operator it stands for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatOrder {
+    /// `__builtin_isgreater`
+    Greater,
+    /// `__builtin_isgreaterequal`
+    GreaterEqual,
+    /// `__builtin_isless`
+    Less,
+    /// `__builtin_islessequal`
+    LessEqual,
+    /// `__builtin_islessgreater`: `x < y || x > y`, which is `x != y` without
+    /// the NaN case.
+    LessGreater,
+    /// `__builtin_isunordered`: either operand is a NaN.
+    Unordered,
+}
+
+/// A floating-point classification: `__builtin_isnan` and its relatives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FloatClass {
+    /// `__builtin_isnan…`
+    IsNan,
+    /// `__builtin_isinf…`
+    IsInf,
+    /// `__builtin_isinf_sign`, whose value is -1, 0 or 1.
+    IsInfSign,
+    /// `__builtin_isfinite`
+    IsFinite,
+    /// `__builtin_isnormal`
+    IsNormal,
+    /// `__builtin_issignaling`: a NaN whose quiet bit is clear.
+    IsSignaling,
+    /// `__builtin_signbit…`, which is 1 for a negative zero too.
+    SignBit,
 }
 
 // ---------------------------------------------------------------------------

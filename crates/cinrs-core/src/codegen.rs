@@ -308,6 +308,18 @@ fn parenthesize(tokens: TokenStream, span: Span) -> TokenStream {
     TokenStream::from(TokenTree::Group(group))
 }
 
+/// Whether an emitted expression opens with a unary minus.
+///
+/// `as` is the one operator in front of which that matters: `rustc` reads
+/// `-1 as u32` as the negation of a `u32` rather than as a cast of `-1`, and
+/// refuses it with `E0600`.
+fn starts_with_minus(tokens: &TokenStream) -> bool {
+    matches!(
+        tokens.clone().into_iter().next(),
+        Some(TokenTree::Punct(punct)) if punct.as_char() == '-'
+    )
+}
+
 fn braced(tokens: TokenStream, span: Span) -> TokenStream {
     let mut group = Group::new(Delimiter::Brace, tokens);
     group.set_span(span);
@@ -1522,7 +1534,7 @@ impl<'a> Codegen<'a> {
     /// be (`mem::zeroed`, or the address of another `static mut`).
     fn static_init(&mut self, expr: &Expr, ty: Ty, span: Span) -> TokenStream {
         let tokens = self.expr_at(expr, ty);
-        if needs_unsafe(expr) {
+        if needs_unsafe(&self.program.types, expr) {
             let block = braced(tokens, span);
             return quote_spanned! {span=> unsafe #block };
         }
@@ -3127,7 +3139,127 @@ impl<'a> Codegen<'a> {
                 };
                 self.overflow_builtin(bin, args, store, result_ty, span)
             }
+            BuiltinOp::Fabs => {
+                let bits = self.float_bits_of(&args[0], span);
+                let (float_ty, mask) = float_bit_ty(args[0].ty, span);
+                Value::new(
+                    quote_spanned! {span=> <#float_ty>::from_bits(#bits & #mask) },
+                    prec::CALL,
+                )
+            }
+            BuiltinOp::Copysign => {
+                let magnitude = self.float_bits_of(&args[0], span);
+                let sign = self.float_bits_of(&args[1], span);
+                let (float_ty, mask) = float_bit_ty(args[0].ty, span);
+                Value::new(
+                    quote_spanned! {span=>
+                        <#float_ty>::from_bits((#magnitude & #mask) | (#sign & !#mask))
+                    },
+                    prec::CALL,
+                )
+            }
+            BuiltinOp::FloatOrder(order) => self.float_order(order, args, span),
+            BuiltinOp::FloatClass(class) => self.float_class(class, &args[0], span),
+            BuiltinOp::Fpclassify => {
+                let value = self.expr(&args[5]).at(prec::CALL, span);
+                let arms = ["Nan", "Infinite", "Normal", "Subnormal", "Zero"]
+                    .iter()
+                    .zip(args)
+                    .map(|(name, answer)| {
+                        let variant = Ident::new(name, span);
+                        let answer = self.expr_at(answer, Ty::Int);
+                        quote_spanned! {span=>
+                            ::core::num::FpCategory::#variant => #answer,
+                        }
+                    })
+                    .collect::<TokenStream>();
+                Value::new(
+                    quote_spanned! {span=> match #value.classify() { #arms } },
+                    prec::BLOCK,
+                )
+            }
         }
+    }
+
+    /// A floating operand as the unsigned integer of its own width.
+    fn float_bits_of(&mut self, arg: &Expr, span: Span) -> TokenStream {
+        let value = self.expr(arg).at(prec::CALL, span);
+        parenthesize(quote_spanned! {span=> #value.to_bits() }, span)
+    }
+
+    /// `__builtin_isgreater` and its relatives.
+    ///
+    /// Rust's floating comparisons are the quiet ones, which is exactly what
+    /// C99 7.12.14 asks these for; the operands go into temporaries because
+    /// two of the six mention each of them twice.
+    fn float_order(&mut self, order: ir::FloatOrder, args: &[Expr], span: Span) -> Value {
+        use ir::FloatOrder;
+        let int = self.ty(Ty::Int, span);
+        let lhs = self.expr(&args[0]).at(prec::LOWEST, span);
+        let rhs = self.expr(&args[1]).at(prec::LOWEST, span);
+        let (a, b) = (self.temporary(), self.temporary());
+        let test = match order {
+            FloatOrder::Greater => quote_spanned! {span=> #a > #b },
+            FloatOrder::GreaterEqual => quote_spanned! {span=> #a >= #b },
+            FloatOrder::Less => quote_spanned! {span=> #a < #b },
+            FloatOrder::LessEqual => quote_spanned! {span=> #a <= #b },
+            FloatOrder::LessGreater => quote_spanned! {span=> #a < #b || #a > #b },
+            FloatOrder::Unordered => quote_spanned! {span=> #a.is_nan() || #b.is_nan() },
+        };
+        Value::new(
+            quote_spanned! {span=>
+                { let #a = #lhs; let #b = #rhs; (#test) as #int }
+            },
+            prec::BLOCK,
+        )
+    }
+
+    /// `__builtin_isnan` and its relatives.
+    ///
+    /// The predicates are `core`'s own, which are pure inspections of the bit
+    /// pattern and so need nothing of the maths library; `issignaling` is the
+    /// one that has no method, and is a NaN whose leading mantissa bit — the
+    /// quiet bit — is clear.
+    fn float_class(&mut self, class: ir::FloatClass, arg: &Expr, span: Span) -> Value {
+        use ir::FloatClass;
+        let int = self.ty(Ty::Int, span);
+        let method = |name: &str| Ident::new(name, span);
+        let test = match class {
+            FloatClass::IsNan => Some(method("is_nan")),
+            FloatClass::IsInf => Some(method("is_infinite")),
+            FloatClass::IsFinite => Some(method("is_finite")),
+            FloatClass::IsNormal => Some(method("is_normal")),
+            FloatClass::SignBit => Some(method("is_sign_negative")),
+            FloatClass::IsInfSign | FloatClass::IsSignaling => None,
+        };
+        if let Some(test) = test {
+            let value = self.expr(arg).at(prec::CALL, span);
+            return Value::new(quote_spanned! {span=> #value.#test() as #int }, prec::CAST)
+                .type_end(true);
+        }
+        let tmp = self.temporary();
+        let value = self.expr(arg).at(prec::LOWEST, span);
+        if class == FloatClass::IsInfSign {
+            return Value::new(
+                quote_spanned! {span=>
+                    { let #tmp = #value;
+                      if #tmp.is_infinite() {
+                          if #tmp.is_sign_negative() { -1 as #int } else { 1 as #int }
+                      } else { 0 as #int } }
+                },
+                prec::BLOCK,
+            );
+        }
+        // A signalling NaN is a NaN with the quiet bit clear: bit 51 of a
+        // `double` and bit 22 of a `float`.
+        let quiet = quiet_bit_literal(arg.ty, span);
+        Value::new(
+            quote_spanned! {span=>
+                { let #tmp = #value;
+                  (#tmp.is_nan() && (#tmp.to_bits() & #quiet) == 0) as #int }
+            },
+            prec::BLOCK,
+        )
     }
 
     // -- atomics ------------------------------------------------------------
@@ -3857,8 +3989,18 @@ impl<'a> Codegen<'a> {
 
     fn offset_argument(&mut self, index: &Expr, sub: bool, span: Span) -> TokenStream {
         if let ExprKind::Int(value) = &index.kind {
-            let value = if sub { -*value } else { *value };
-            return int_literal_token(value, span);
+            let value = if sub { value.wrapping_neg() } else { *value };
+            let literal = int_literal_token(value, span);
+            // A small literal is left bare, and Rust infers the `isize`
+            // `offset` wants. A larger one carries a suffix of its own —
+            // `u64`, or `i128` — which is then the wrong type rather than an
+            // open one, so it is converted. (`int a[2]; a[1L << 40]` is
+            // undefined in C, and this is what `as` makes of it.)
+            if value.unsigned_abs() > UNSUFFIXED_LIMIT as u128 {
+                let isize_ty = primitive_ty("isize", span);
+                return quote_spanned! {span=> (#literal as #isize_ty) };
+            }
+            return literal;
         }
         let tokens = self.expr(index).at(prec::CAST, span);
         let isize_ty = primitive_ty("isize", span);
@@ -3884,7 +4026,22 @@ impl<'a> Codegen<'a> {
         // a function pointer transmuted this way is the same address. Sema has
         // already applied the promotions, so `arg.ty` is the parameter type to
         // write.
-        let reinterpreted = !sig.variadic && args.len() != sig.params.len();
+        //
+        // The argument *types* are compared as well as their number, because a
+        // declaration with no prototype may be completed by a definition that
+        // has one after the call was written: `int *h(); … h(j(), n); … int
+        // *h(unsigned, int) { … }` — `execute/pr103209` — leaves the call
+        // holding arguments the definition's parameters do not have. The call
+        // was checked against the type in scope where it stands, which is the
+        // one with no prototype, so the reinterpretation is what C says
+        // happens there too. Where the prototype *was* in scope, sema has
+        // already converted every argument to its parameter's type and the
+        // comparison is an equality that holds.
+        let reinterpreted = !sig.variadic
+            && (args.len() != sig.params.len()
+                || args.iter().zip(&sig.params).any(|(arg, param)| {
+                    arg.ty != *param && !arg.ty.is_error() && !param.is_error()
+                }));
         let promoted: Vec<Ty> = if reinterpreted {
             args.iter().map(|arg| arg.ty).collect()
         } else {
@@ -4178,7 +4335,21 @@ impl<'a> Codegen<'a> {
         };
         let rhs_value = match rhs_constant {
             // The shift amount is converted to `u32` whatever its C type is,
-            // so a constant there never needs the other operand's help.
+            // so a constant there never needs the other operand's help — and
+            // it is reduced to *that* `u32` here rather than left as the C
+            // value. Every count a program may legitimately write is under
+            // the width and so unchanged; the ones that are not are undefined
+            // in C, and writing them out as they stand is what `rustc`
+            // refuses. A negative one is `-64 as u32`, which it reads as the
+            // negation of a `u32` (`E0600`, `execute/pr98681`) even
+            // parenthesised, and one above `u32::MAX` is a literal out of
+            // range. `wrapping_shl` masks the count by the width, exactly as
+            // the hardware does.
+            Some(ConstValue::Int(value)) if op.is_shift() => self.bare_value(
+                ConstValue::Int(i128::from(value as u32)),
+                Ty::UInt,
+                self.sp(rhs.range),
+            ),
             Some(value) if op.is_shift() => self.bare_value(value, rhs.ty, self.sp(rhs.range)),
             Some(value) if !lhs_bare => self.bare_value(value, rhs.ty, self.sp(rhs.range)),
             _ => self.expr(rhs),
@@ -4448,6 +4619,17 @@ impl<'a> Codegen<'a> {
                 // `wrapping_shl` takes the shift amount as a `u32` whatever the
                 // shifted type is; a bare literal simply is one already.
                 let amount = rhs.at(prec::CAST, span);
+                // Belt and braces: nothing that reaches here opens with a
+                // unary minus — a constant count was reduced to its `u32` in
+                // [`Codegen::operands_with`] and `-x` is written
+                // `x.wrapping_neg()` — and if one ever did, `rustc` would read
+                // `-e as u32` as the negation of a `u32` and refuse it
+                // (`E0600`) however it is bracketed by precedence.
+                let amount = if starts_with_minus(&amount) {
+                    parenthesize(amount, span)
+                } else {
+                    amount
+                };
                 let u32_ty = primitive_ty("u32", span);
                 quote_spanned! {span=> #amount as #u32_ty }
             } else {
@@ -4627,6 +4809,15 @@ impl<'a> Codegen<'a> {
             // integer amounts to.
             let target = self.ty(to, span);
             let source = self.ty(from, span);
+            // Two C function types the generated Rust cannot tell apart need
+            // no transmute at all: `void (*)()` and `void (*)(void)` are
+            // distinct types in C and one `Option<unsafe extern "C" fn()>`
+            // here. Writing the transmute anyway would be a no-op that still
+            // has to be inside an `unsafe` block, which a `static` initialiser
+            // then has to grow.
+            if from_fn && to_fn && source.to_string() == target.to_string() {
+                return value;
+            }
             let usize_ty = primitive_ty("usize", span);
             if to_fn && !from.is_pointer() {
                 let tokens = value.at(prec::CAST, span);
@@ -5182,11 +5373,27 @@ impl<'a> Codegen<'a> {
     }
 
     /// An infinity or a NaN, which no Rust literal can spell.
+    ///
+    /// A NaN that is not the default quiet one — `__builtin_nan("0x123")`, and
+    /// the negative NaN `-__builtin_nan("")` is — is written out bit for bit.
+    /// `f64::NAN` is *one* NaN, and a payload and a sign are part of the value
+    /// a program asked for; `as` between the two widths is free to lose both.
     fn non_finite_literal(&self, value: f64, ty: Ty, span: Span) -> TokenStream {
         let target = self.ty(ty, span);
         let f64_ty = primitive_ty("f64", span);
         if value.is_nan() {
-            return quote_spanned! {span=> <#f64_ty>::NAN as #target };
+            let bits = value.to_bits();
+            if bits == f64::NAN.to_bits() {
+                return quote_spanned! {span=> <#f64_ty>::NAN as #target };
+            }
+            if ty == Ty::Float {
+                let f32_ty = primitive_ty("f32", span);
+                let literal =
+                    unsigned_hex_literal(u64::from(ir::narrow_nan_bits(bits)), "u32", span);
+                return quote_spanned! {span=> <#f32_ty>::from_bits(#literal) };
+            }
+            let literal = unsigned_hex_literal(bits, "u64", span);
+            return quote_spanned! {span=> <#f64_ty>::from_bits(#literal) as #target };
         }
         if value.is_sign_negative() {
             quote_spanned! {span=> -<#f64_ty>::INFINITY as #target }
@@ -5431,19 +5638,31 @@ fn export_attr(symbol: &str, item: &Ident, span: Span) -> TokenStream {
 }
 
 /// Whether a static initialiser has to be wrapped in `unsafe`.
-fn needs_unsafe(expr: &Expr) -> bool {
+///
+/// `types` is the arena, because one of the answers depends on it: a cast to
+/// or from a function pointer is written out as a `transmute`, and that is an
+/// unsafe call wherever it stands. `frob f[] = { abort };` with `typedef void
+/// (*frob)();` is the shape — `execute/921110-1`.
+fn needs_unsafe(types: &ir::Types, expr: &Expr) -> bool {
+    let recurse = |inner| needs_unsafe(types, inner);
     match &expr.kind {
         // `mem::zeroed` is unsafe, and so is naming a `static mut`.
         ExprKind::Zeroed => !expr.ty.is_scalar(),
         // A string literal's address is safe to take; anything else with static
         // storage duration is a `static mut`.
         ExprKind::AddrOf(place) => !matches!(place.kind, PlaceKind::Str(_)),
-        ExprKind::Cast(inner) => needs_unsafe(inner),
-        ExprKind::PtrOffset { ptr, .. } => needs_unsafe(ptr),
-        ExprKind::RecordLit { fields, .. } => fields.iter().any(needs_unsafe),
-        ExprKind::UnionLit { value, .. } => needs_unsafe(value),
-        ExprKind::ArrayLit(items) => items.iter().any(needs_unsafe),
-        ExprKind::ArrayRepeat { value, .. } => needs_unsafe(value),
+        ExprKind::Cast(inner) => {
+            let transmuted = types.is_func_pointer(expr.ty) || types.is_func_pointer(inner.ty);
+            transmuted || recurse(inner)
+        }
+        // `<*mut T>::offset` is an unsafe call however safe its operand is:
+        // `static const char *p = "foo" + 1;` — `execute/pr53084` — is the
+        // address of a string literal, which is safe to take, plus one.
+        ExprKind::PtrOffset { .. } => true,
+        ExprKind::RecordLit { fields, .. } => fields.iter().any(recurse),
+        ExprKind::UnionLit { value, .. } => recurse(value),
+        ExprKind::ArrayLit(items) => items.iter().any(recurse),
+        ExprKind::ArrayRepeat { value, .. } => recurse(value),
         _ => false,
     }
 }
@@ -5575,6 +5794,40 @@ fn message_literal(text: &str, span: Span) -> TokenStream {
 /// An array length, which Rust counts in `usize`.
 fn usize_literal(value: u64, span: Span) -> TokenStream {
     let mut literal = Literal::usize_unsuffixed(value as usize);
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
+}
+
+/// The Rust floating type of a C floating type, and the mask that clears the
+/// sign bit of its bit pattern.
+///
+/// `long double` is `double` here, so only the two widths exist.
+fn float_bit_ty(ty: Ty, span: Span) -> (TokenStream, TokenStream) {
+    if ty == Ty::Float {
+        return (
+            primitive_ty("f32", span),
+            unsigned_hex_literal(0x7fff_ffff, "u32", span),
+        );
+    }
+    (
+        primitive_ty("f64", span),
+        unsigned_hex_literal(0x7fff_ffff_ffff_ffff, "u64", span),
+    )
+}
+
+/// The quiet bit of a floating type: the leading bit of the mantissa, which is
+/// set in a quiet NaN and clear in a signalling one.
+fn quiet_bit_literal(ty: Ty, span: Span) -> TokenStream {
+    if ty == Ty::Float {
+        return unsigned_hex_literal(1 << 22, "u32", span);
+    }
+    unsigned_hex_literal(1 << 51, "u64", span)
+}
+
+/// A hexadecimal literal with an explicit unsigned suffix.
+fn unsigned_hex_literal(value: u64, suffix: &str, span: Span) -> TokenStream {
+    let mut literal = Literal::from_str(&format!("0x{value:x}{suffix}"))
+        .expect("a hexadecimal literal followed by a suffix is a token");
     literal.set_span(span);
     TokenStream::from(TokenTree::Literal(literal))
 }

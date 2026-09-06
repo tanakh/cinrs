@@ -530,6 +530,9 @@ pub struct Attributes {
     pub destructor: Option<SourceRange>,
     /// `cleanup(f)`, on a variable with automatic storage duration.
     pub cleanup: Option<Cleanup>,
+    /// `mode(M)`, which replaces the declared type with the one the machine
+    /// mode names, keeping its signedness.
+    pub mode: Option<Spanned<String>>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -564,6 +567,7 @@ impl Attributes {
         self.constructor = self.constructor.or(other.constructor);
         self.destructor = self.destructor.or(other.destructor);
         self.cleanup = self.cleanup.take().or(other.cleanup);
+        self.mode = self.mode.take().or(other.mode);
     }
 }
 

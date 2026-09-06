@@ -578,6 +578,17 @@ impl Parser<'_> {
                 attrs.cleanup = Some(Cleanup { func, range });
                 return Ok(());
             }
+            Some(gnu::Attribute::Mode) => {
+                // The argument names a machine mode — `QI`, `DI`, `word` —
+                // and GCC accepts the `__QI__` spelling of each as well.
+                let mode = self.attribute_identifier()?;
+                let range = self.span_to_here(start);
+                match mode {
+                    Some(mode) => attrs.mode = Some(Spanned::new(mode.name, range)),
+                    None => self.error(range, "'mode' takes one machine mode name"),
+                }
+                return Ok(());
+            }
             Some(gnu::Attribute::Section) => {
                 let name = self.attribute_string()?;
                 let range = self.span_to_here(start);

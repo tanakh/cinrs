@@ -301,3 +301,308 @@ c99! {
 fn trap_is_reachable_only_when_asked_for() {
     unsafe { die(0) };
 }
+
+// ---------------------------------------------------------------------------
+// the quiet comparisons (C99 7.12.14)
+// ---------------------------------------------------------------------------
+
+c99! {
+    int unordered(double x, double y) { return __builtin_isunordered(x, y); }
+    int greater(double x, double y) { return __builtin_isgreater(x, y); }
+    int greater_equal(double x, double y) { return __builtin_isgreaterequal(x, y); }
+    int less(double x, double y) { return __builtin_isless(x, y); }
+    int less_equal(double x, double y) { return __builtin_islessequal(x, y); }
+    int less_greater(double x, double y) { return __builtin_islessgreater(x, y); }
+
+    /* Mixed widths go through the usual arithmetic conversions. */
+    int mixed(float x, double y) { return __builtin_isless(x, y); }
+}
+
+#[test]
+fn the_quiet_comparisons_answer_no_to_every_nan() {
+    let nan = f64::NAN;
+    unsafe {
+        assert_eq!(unordered(nan, 1.0), 1);
+        assert_eq!(unordered(1.0, nan), 1);
+        assert_eq!(unordered(1.0, 2.0), 0);
+
+        assert_eq!(greater(2.0, 1.0), 1);
+        assert_eq!(greater(1.0, 2.0), 0);
+        assert_eq!(greater(nan, 1.0), 0);
+        assert_eq!(greater_equal(1.0, 1.0), 1);
+        assert_eq!(greater_equal(nan, nan), 0);
+        assert_eq!(less(1.0, 2.0), 1);
+        assert_eq!(less(nan, 2.0), 0);
+        assert_eq!(less_equal(1.0, 1.0), 1);
+        assert_eq!(less_equal(1.0, nan), 0);
+
+        // `x < y || x > y`, which is `!=` without the NaN case.
+        assert_eq!(less_greater(1.0, 2.0), 1);
+        assert_eq!(less_greater(1.0, 1.0), 0);
+        assert_eq!(less_greater(nan, 1.0), 0);
+
+        assert_eq!(mixed(1.0, 2.0), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// classification, sign and magnitude
+// ---------------------------------------------------------------------------
+
+c99! {
+    int nan_p(double x) { return __builtin_isnan(x); }
+    int nan_pf(float x) { return __builtin_isnanf(x); }
+    int inf_p(double x) { return __builtin_isinf(x); }
+    int inf_sign(double x) { return __builtin_isinf_sign(x); }
+    int finite_p(double x) { return __builtin_isfinite(x); }
+    int normal_p(double x) { return __builtin_isnormal(x); }
+    int signalling_p(double x) { return __builtin_issignaling(x); }
+    int sign_bit(double x) { return __builtin_signbit(x); }
+    int sign_bitf(float x) { return __builtin_signbitf(x); }
+
+    /* The five answers are the operands, which is how <math.h>'s own
+     * `fpclassify` names its `FP_*` macros. */
+    int classify_fp(double x) { return __builtin_fpclassify(0, 1, 2, 3, 4, x); }
+
+    double magnitude_d(double x) { return __builtin_fabs(x); }
+    float magnitude_f(float x) { return __builtin_fabsf(x); }
+    /* `long double` is `double`, so the `l` form is the plain one. */
+    double magnitude_l(double x) { return __builtin_fabsl(x); }
+    double with_sign(double x, double y) { return __builtin_copysign(x, y); }
+    float with_signf(float x, float y) { return __builtin_copysignf(x, y); }
+
+    double signalling(void) { return __builtin_nans(""); }
+    double payload(void) { return __builtin_nan("0x123"); }
+    double payload_decimal(void) { return __builtin_nan("291"); }
+    float payloadf(void) { return __builtin_nansf("0x123"); }
+    double infinity_l(void) { return __builtin_infl(); }
+    double huge_l(void) { return __builtin_huge_vall(); }
+
+    /* A payload NaN is a constant, so it may initialise an object with static
+     * storage duration. */
+    static double static_payload = __builtin_nan("0x1");
+    double read_static_payload(void) { return static_payload; }
+}
+
+#[test]
+fn the_classification_builtins() {
+    let nan = f64::NAN;
+    let inf = f64::INFINITY;
+    unsafe {
+        assert_eq!(nan_p(nan), 1);
+        assert_eq!(nan_p(1.0), 0);
+        assert_eq!(nan_pf(f32::NAN), 1);
+        assert_eq!(inf_p(inf), 1);
+        assert_eq!(inf_p(-inf), 1);
+        assert_eq!(inf_p(1.0), 0);
+        assert_eq!(inf_sign(inf), 1);
+        assert_eq!(inf_sign(-inf), -1);
+        assert_eq!(inf_sign(1.0), 0);
+        assert_eq!(finite_p(1.0), 1);
+        assert_eq!(finite_p(inf), 0);
+        assert_eq!(normal_p(1.0), 1);
+        assert_eq!(normal_p(0.0), 0);
+        assert_eq!(normal_p(f64::from_bits(1)), 0); // subnormal
+        assert_eq!(sign_bit(-0.0), 1);
+        assert_eq!(sign_bit(-1.0), 1);
+        assert_eq!(sign_bit(1.0), 0);
+        assert_eq!(sign_bitf(-0.0), 1);
+
+        assert_eq!(classify_fp(nan), 0);
+        assert_eq!(classify_fp(inf), 1);
+        assert_eq!(classify_fp(1.0), 2);
+        assert_eq!(classify_fp(f64::from_bits(1)), 3);
+        assert_eq!(classify_fp(0.0), 4);
+    }
+}
+
+#[test]
+fn magnitude_sign_and_the_named_nans() {
+    unsafe {
+        assert_eq!(magnitude_d(-3.5), 3.5);
+        assert_eq!(magnitude_f(-3.5), 3.5);
+        assert_eq!(magnitude_l(-3.5), 3.5);
+        // `fabs` clears the sign bit, which is exact for a zero and a NaN.
+        assert!(magnitude_d(-0.0).is_sign_positive());
+        assert!(magnitude_d(f64::NAN).is_nan());
+
+        assert_eq!(with_sign(3.5, -1.0), -3.5);
+        assert_eq!(with_sign(-3.5, 1.0), 3.5);
+        assert!(with_sign(0.0, -1.0).is_sign_negative());
+        assert_eq!(with_signf(3.5, -1.0), -3.5);
+
+        // The payload is part of the value, so the bits are what GCC's are.
+        assert_eq!(signalling().to_bits(), 0x7ff4_0000_0000_0000);
+        assert_eq!(payload().to_bits(), 0x7ff8_0000_0000_0123);
+        // The string is read the way `strtoull` reads it, in base 0.
+        assert_eq!(payload_decimal().to_bits(), payload().to_bits());
+        assert_eq!(payloadf().to_bits(), 0x7f80_0123);
+        assert!(signalling().is_nan());
+        assert_eq!(signalling_p(signalling()), 1);
+        assert_eq!(signalling_p(f64::NAN), 0);
+
+        assert!(infinity_l().is_infinite());
+        assert!(huge_l().is_infinite());
+        assert_eq!(read_static_payload().to_bits(), 0x7ff8_0000_0000_0001);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `__builtin_classify_type`
+// ---------------------------------------------------------------------------
+
+c99! {
+    struct point { int x; };
+    union thing { int i; };
+    enum colour { red };
+
+    /* The operand is not evaluated, and the type it is classified by is the
+     * one the default argument promotions give it — which is why `char`, an
+     * enumeration and an array answer as `int` and as a pointer. */
+    int class_of_int(void) { int x = 0; return __builtin_classify_type(x); }
+    int class_of_char(void) { char c = 0; return __builtin_classify_type(c); }
+    int class_of_enum(void) { enum colour e = red; return __builtin_classify_type(e); }
+    int class_of_double(void) { return __builtin_classify_type(1.0); }
+    int class_of_float(void) { return __builtin_classify_type(1.0f); }
+    int class_of_pointer(void) { char *p = 0; return __builtin_classify_type(p); }
+    int class_of_array(void) { char a[4]; return __builtin_classify_type(a); }
+    int class_of_struct(void) { struct point p; return __builtin_classify_type(p); }
+    int class_of_union(void) { union thing u; return __builtin_classify_type(u); }
+    int class_of_function(void) {
+        return __builtin_classify_type(class_of_function);
+    }
+
+    /* An integer constant expression, so it may be an array bound. */
+    int class_is_constant(void) {
+        int a[__builtin_classify_type(1.0) == 8 ? 3 : 1];
+        return sizeof a / sizeof a[0];
+    }
+}
+
+#[test]
+fn classify_type_answers_gccs_numbers() {
+    unsafe {
+        assert_eq!(class_of_int(), 1);
+        assert_eq!(class_of_char(), 1);
+        assert_eq!(class_of_enum(), 1);
+        assert_eq!(class_of_double(), 8);
+        assert_eq!(class_of_float(), 8);
+        assert_eq!(class_of_pointer(), 5);
+        assert_eq!(class_of_array(), 5);
+        assert_eq!(class_of_struct(), 12);
+        assert_eq!(class_of_union(), 13);
+        assert_eq!(class_of_function(), 5);
+        assert_eq!(class_is_constant(), 3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the library builtins that declare the function themselves
+// ---------------------------------------------------------------------------
+
+c99! {
+    /* No `#include <stdio.h>`: GCC knows the prototype of every function it
+     * has a builtin for, and declares it on the spot. A `#include` that
+     * arrives later redeclares it compatibly. */
+    int say(const char *text) { return __builtin_printf("%s", text); }
+    int into(char *buf, const char *text) { return __builtin_sprintf(buf, "[%s]", text); }
+    int into_n(char *buf, unsigned long n, int value) {
+        return __builtin_snprintf(buf, n, "%d", value);
+    }
+
+    /* The GNU string functions, which `<string.h>` does not declare. */
+    void *after(void *dst, const void *src, unsigned long n) {
+        return __builtin_mempcpy(dst, src, n);
+    }
+    char *end_of(char *dst, const char *src) { return __builtin_stpcpy(dst, src); }
+    void zero(void *p, unsigned long n) { __builtin_bzero(p, n); }
+    char *first(const char *s, int c) { return __builtin_index(s, c); }
+
+    /* A `long double` maths builtin is the `double` one: `long double` *is*
+     * `double` here, and calling the platform's `sqrtl` would pass it an
+     * eighty-bit value the generated Rust cannot make. */
+    double root_l(double x) { return __builtin_sqrtl(x); }
+    double power_l(double x, double y) { return __builtin_powl(x, y); }
+    double biggest(double x, double y) { return __builtin_fmaxl(x, y); }
+
+    /* And the ones that were simply missing a prototype. */
+    double cube_root(double x) { return __builtin_cbrt(x); }
+    double scaled(double x, int n) { return __builtin_ldexp(x, n); }
+    double fused(double x, double y, double z) { return __builtin_fma(x, y, z); }
+    double rounded(double x) { return __builtin_nearbyint(x); }
+    long widest_abs(long n) { return __builtin_imaxabs(n); }
+}
+
+#[test]
+fn a_library_builtin_declares_its_own_function() {
+    let mut buf = [0u8; 32];
+    unsafe {
+        assert_eq!(say(c"".as_ptr()), 0);
+        assert_eq!(into(buf.as_mut_ptr().cast(), c"hi".as_ptr()), 4);
+        assert_eq!(&buf[..4], b"[hi]");
+        assert_eq!(into_n(buf.as_mut_ptr().cast(), buf.len() as _, 42), 2);
+        assert_eq!(&buf[..2], b"42");
+
+        let src = [1u8, 2, 3, 4];
+        let mut dst = [0u8; 4];
+        let end = after(dst.as_mut_ptr().cast(), src.as_ptr().cast(), 4);
+        assert_eq!(end, dst.as_mut_ptr().wrapping_add(4).cast());
+        assert_eq!(dst, [1, 2, 3, 4]);
+
+        let mut text = [0u8; 8];
+        let end = end_of(text.as_mut_ptr().cast(), c"abc".as_ptr());
+        assert_eq!(end, text.as_mut_ptr().wrapping_add(3).cast());
+        zero(dst.as_mut_ptr().cast(), 4);
+        assert_eq!(dst, [0, 0, 0, 0]);
+        assert_eq!(
+            first(c"abc".as_ptr(), b'b' as _),
+            c"abc".as_ptr().add(1) as _
+        );
+
+        assert_eq!(root_l(16.0), 4.0);
+        assert_eq!(power_l(2.0, 10.0), 1024.0);
+        assert_eq!(biggest(1.0, 2.0), 2.0);
+        assert_eq!(cube_root(27.0), 3.0);
+        assert_eq!(scaled(1.5, 3), 12.0);
+        assert_eq!(fused(2.0, 3.0, 4.0), 10.0);
+        assert_eq!(rounded(2.5), 2.0);
+        assert_eq!(widest_abs(-9), 9);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `__has_builtin` answers about *this* implementation
+// ---------------------------------------------------------------------------
+
+c99! {
+    int knows_isunordered(void) {
+    #if __has_builtin(__builtin_isunordered)
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    int knows_sqrtl(void) {
+    #if __has_builtin(__builtin_sqrtl)
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    int knows_return_address(void) {
+    #if __has_builtin(__builtin_return_address)
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+}
+
+#[test]
+fn has_builtin_follows_what_is_implemented() {
+    unsafe {
+        assert_eq!(knows_isunordered(), 1);
+        assert_eq!(knows_sqrtl(), 1);
+        assert_eq!(knows_return_address(), 0);
+    }
+}

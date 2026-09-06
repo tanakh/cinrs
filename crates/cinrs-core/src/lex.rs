@@ -35,7 +35,7 @@
 
 use crate::capture::{Pos, Source, SourceRange};
 use crate::diag::Diagnostic;
-use crate::{Options, Standard};
+use crate::{Dialect, Options, Standard};
 
 /// A C99 keyword.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -1639,19 +1639,8 @@ impl<'a> Lexer<'a> {
         range: SourceRange,
         hex: bool,
     ) -> FloatLit {
-        let (body, suffix) = split_float_suffix(digits);
-        let suffix_kind = match suffix {
-            "" => FloatSuffix::None,
-            "f" | "F" => FloatSuffix::Float,
-            "l" | "L" => FloatSuffix::LongDouble,
-            _ => {
-                self.error(
-                    range,
-                    format!("invalid suffix '{suffix}' on floating constant '{text}'"),
-                );
-                FloatSuffix::None
-            }
-        };
+        let (body, suffix) = split_float_suffix(digits, hex);
+        let suffix_kind = self.float_suffix(suffix, text, range);
 
         if hex
             && let Some(message) = self
@@ -1691,6 +1680,92 @@ impl<'a> Lexer<'a> {
             hex,
             text: text.to_owned(),
         }
+    }
+
+    /// The type a floating constant's suffix gives it.
+    ///
+    /// C has three: none, `f` and `l`. GCC has a dozen more, and they fall
+    /// into three groups here.
+    ///
+    /// * **The ones that name a format wider than `double`** — `d`, `w`
+    ///   (`__float80`), `q` (`__float128`), and the `_FloatN` and `_FloatNx`
+    ///   suffixes `f64`, `f64x`, `f32x` and `f128`. Every one of them is
+    ///   `double` in this implementation, exactly as `long double` is, so each
+    ///   is accepted in a GNU dialect and **loses precision** where GCC would
+    ///   not; `doc/gnu-extensions.md` records that. `f32` is `float`.
+    /// * **The decimal floating suffixes** `df`, `dd` and `dl`, whose types
+    ///   are radix-10 and have no Rust counterpart at all.
+    /// * **The imaginary suffixes** `i` and `j`, which need `_Complex`.
+    ///
+    /// The last two are refused with the reason. A strict entry point refuses
+    /// the first group too, naming the GNU entry point that has it — the
+    /// suffixes are spelled without underscores, which is the line
+    /// [`crate::Dialect`] draws.
+    fn float_suffix(&mut self, suffix: &str, text: &str, range: SourceRange) -> FloatSuffix {
+        let lower = suffix.to_ascii_lowercase();
+        match lower.as_str() {
+            "" => return FloatSuffix::None,
+            "f" => return FloatSuffix::Float,
+            "l" => return FloatSuffix::LongDouble,
+            _ => {}
+        }
+        // A decimal or an imaginary constant is refused whatever the entry
+        // point: neither has a type this crate can give it.
+        let refusal = match lower.as_str() {
+            "df" | "dd" | "dl" => Some(
+                "the decimal floating types (_Decimal32, _Decimal64, _Decimal128) are not \
+                 supported: they are radix-10 and no Rust type is",
+            ),
+            "i" | "j" | "if" | "il" | "jf" | "jl" | "fi" | "li" | "fj" | "lj" => {
+                Some("an imaginary constant needs _Complex, which is not supported")
+            }
+            "f16" | "f16x" | "bf16" => Some(
+                "'_Float16' is not supported: Rust's `f16` is unstable, and rounding the \
+                 constant to a wider type would change what the program computes",
+            ),
+            _ => None,
+        };
+        if let Some(reason) = refusal {
+            self.error(
+                range,
+                format!("invalid suffix '{suffix}' on floating constant '{text}': {reason}"),
+            );
+            return FloatSuffix::None;
+        }
+        // The rest are the GNU widths. `f32` is `float`; every other one names
+        // a format this implementation makes a `double`.
+        let wider = matches!(
+            lower.as_str(),
+            "d" | "w" | "q" | "f64" | "f64x" | "f32x" | "f128" | "f128x"
+        );
+        if !wider && lower != "f32" {
+            self.error(
+                range,
+                format!("invalid suffix '{suffix}' on floating constant '{text}'"),
+            );
+            return FloatSuffix::None;
+        }
+        if !self.options.gating.dialect.is_gnu() {
+            let gnu = self.options.gating.standard.macro_name_in(Dialect::Gnu);
+            let here = self
+                .options
+                .gating
+                .standard
+                .macro_name_in(self.options.gating.dialect);
+            self.error(
+                range,
+                format!(
+                    "the suffix '{suffix}' on a floating constant is a GNU extension, and \
+                     requires a GNU dialect ({gnu}) (this block is {here})"
+                ),
+            );
+            return FloatSuffix::None;
+        }
+        if lower == "f32" {
+            return FloatSuffix::Float;
+        }
+        // `LongDouble` is `double`, which is what all of these come to.
+        FloatSuffix::LongDouble
     }
 
     // -- character and string constants -------------------------------------
@@ -2075,19 +2150,33 @@ fn parse_int_suffix(s: &str) -> Option<(bool, LongKind)> {
 }
 
 /// Splits a floating constant into its numeric body and its suffix.
-fn split_float_suffix(text: &str) -> (&str, &str) {
+///
+/// The *body* is scanned forward rather than the suffix backwards, because a
+/// suffix may hold digits of its own: `1.0f128` names `_Float128` and the
+/// `128` is no part of the number. What is left after the digits, the point
+/// and the exponent is the suffix, whatever it looks like; naming it is
+/// [`Lexer::float_suffix`]'s business.
+fn split_float_suffix(text: &str, hex: bool) -> (&str, &str) {
     let b = text.as_bytes();
-    let mut i = b.len();
-    while i > 0 && b[i - 1].is_ascii_alphabetic() {
-        // The `p`/`e` of an exponent is part of the body, not the suffix.
-        let c = b[i - 1] | 0x20;
-        if (c == b'p' || c == b'e') && i < b.len() {
-            break;
-        }
-        i -= 1;
+    let mut i = 0;
+    let (exponent, digit): (u8, fn(u8) -> bool) = if hex {
+        i = 2; // the `0x` the caller has already recognised
+        (b'p', |c| c.is_ascii_hexdigit())
+    } else {
+        (b'e', |c| c.is_ascii_digit())
+    };
+    while i < b.len() && (digit(b[i]) || b[i] == b'.') {
+        i += 1;
     }
-    // Only ever treat a trailing `f`/`l` (one character) as a suffix; anything
-    // longer is reported as an invalid suffix by the caller.
+    if i < b.len() && b[i] | 0x20 == exponent {
+        i += 1;
+        if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+            i += 1;
+        }
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
     (&text[..i], &text[i..])
 }
 
@@ -2096,9 +2185,11 @@ fn parse_decimal_float(body: &str) -> Option<f64> {
     if body.is_empty() {
         return None;
     }
+    // `None` is "no exponent at all", which is a different thing from an `e`
+    // with nothing after it — `1e` is not a constant.
     let (mantissa, exponent) = match body.find(['e', 'E']) {
-        Some(i) => (&body[..i], &body[i + 1..]),
-        None => (body, ""),
+        Some(i) => (&body[..i], Some(&body[i + 1..])),
+        None => (body, None),
     };
     let (int_part, frac_part) = match mantissa.find('.') {
         Some(i) => (&mantissa[..i], &mantissa[i + 1..]),
@@ -2112,19 +2203,20 @@ fn parse_decimal_float(body: &str) -> Option<f64> {
     {
         return None;
     }
-    let exponent = if exponent.is_empty() {
-        0i32
-    } else {
-        let (sign, digits) = match exponent.as_bytes()[0] {
-            b'+' => (1, &exponent[1..]),
-            b'-' => (-1, &exponent[1..]),
-            _ => (1, exponent),
-        };
-        if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
-            return None;
+    let exponent = match exponent {
+        None => 0i32,
+        Some(exponent) => {
+            let (sign, digits) = match exponent.as_bytes().first() {
+                Some(b'+') => (1, &exponent[1..]),
+                Some(b'-') => (-1, &exponent[1..]),
+                _ => (1, exponent),
+            };
+            if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            // Saturate: an absurd exponent simply becomes 0 or infinity.
+            sign * digits.parse::<i32>().unwrap_or(i32::MAX / 2)
         }
-        // Saturate: an absurd exponent simply becomes 0 or infinity.
-        sign * digits.parse::<i32>().unwrap_or(i32::MAX / 2)
     };
     let normalized = format!(
         "{}.{}e{}",

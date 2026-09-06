@@ -193,7 +193,7 @@ impl Sema<'_> {
             let ty = self
                 .declared_object_ty_of(&declarator.ty, &name.name, file_scope)
                 .unwrap_or(Ty::Error);
-            (ty, None)
+            (self.apply_mode(ty, &attrs), None)
         };
         // `typedef int A[]; A a = { 1, 2 };` — an incomplete array type reached
         // through a `typedef` takes its length from the initialiser too
@@ -1114,7 +1114,7 @@ impl Sema<'_> {
         // what `BoundMode::Object` asks for; at file scope there is no moment
         // at which the bound could be evaluated at all.
         let resolved = match self.resolve_declared_ty(ty, &name.name) {
-            Ok(ty) => Ok(ty),
+            Ok(ty) => Ok(self.apply_mode(ty, attrs)),
             Err(err) if err.message.is_empty() => return Vec::new(),
             Err(err) => Err(err.message),
         };
@@ -2114,11 +2114,21 @@ impl Sema<'_> {
     }
 
     /// The address an all-integer pointer expression names, in bytes.
-    fn integer_pointer_value(&mut self, expr: &Expr) -> Option<i128> {
+    ///
+    /// The address of a *place* is one of these when the place is reached from
+    /// a constant pointer rather than from an object: `&((struct s *)0)->m` is
+    /// the hand-written `offsetof` half the world's C still defines, and GCC
+    /// folds it to the member's offset. See [`Sema::place_offset`].
+    pub(super) fn integer_pointer_value(&mut self, expr: &Expr) -> Option<i128> {
         match &expr.kind {
             ExprKind::Int(v) => Some(*v),
+            ExprKind::Zeroed if expr.ty.is_pointer() => Some(0),
             ExprKind::Cast(inner) if inner.ty.is_integer() || inner.ty.is_pointer() => {
                 self.integer_pointer_value(inner)
+            }
+            ExprKind::AddrOf(place) if self.gating.dialect.is_gnu() => {
+                let place = place.clone();
+                self.place_offset(&place)
             }
             ExprKind::PtrOffset { ptr, index, sub } => {
                 // The base has to be an integer, or this is an ordinary
@@ -2135,6 +2145,51 @@ impl Sema<'_> {
                 } else {
                     base.checked_add(delta)
                 }
+            }
+            _ => None,
+        }
+    }
+
+    /// The constant address of a *place*, in bytes, when it has one.
+    ///
+    /// A place has one only when it is reached from a pointer that is itself a
+    /// constant — which is exactly the shape of the `offsetof` every C program
+    /// wrote before `<stddef.h>` had one:
+    ///
+    /// ```c
+    /// #define offsetof(T, m) ((size_t) &((T *) 0)->m)
+    /// ```
+    ///
+    /// GCC folds it, calls the folding an extension, and rejects it under
+    /// `-pedantic-errors`; the GNU dialects do the same here and the strict
+    /// entry points keep the "not a compile-time constant expression" error.
+    /// A named object is deliberately absent — its address is the linker's
+    /// answer, not one this can give — and so is a bit-field, which has no
+    /// address at all.
+    fn place_offset(&mut self, place: &Place) -> Option<i128> {
+        match &place.kind {
+            PlaceKind::Deref(ptr) => self.integer_pointer_value(ptr),
+            PlaceKind::Field {
+                base,
+                record,
+                index,
+            } => {
+                let field = self.types().record(*record).fields.get(*index)?;
+                if field.bits.is_some() {
+                    return None;
+                }
+                let offset = i128::from(field.offset);
+                let base = base.as_ref().clone();
+                self.place_offset(&base)?.checked_add(offset)
+            }
+            PlaceKind::Index { base, index } => {
+                let ExprKind::Int(count) = index.kind else {
+                    return None;
+                };
+                let pointee = self.pointee(base.ty)?;
+                let size = i128::from(self.size_of(pointee).unwrap_or(1));
+                let base = self.integer_pointer_value(base)?;
+                base.checked_add(count.checked_mul(size)?)
             }
             _ => None,
         }

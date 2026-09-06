@@ -39,15 +39,12 @@ execute/20010605-1                    compile error: expected ';' after declarat
 execute/20010605-2                    compile error: complex types are not supported
 execute/20010924-1                    compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20020107-1                    compile error: inline assembly is not supported
-execute/20020108-1                    compile error: 'mode' is not supported: write the type the mode names instead
 execute/20020227-1                    compile error: complex types are not supported
 execute/20020314-1                    compile error: type specifier missing; C99 does not support implicit 'int'
-execute/20020406-1                    compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 execute/20020411-1                    compile error: complex types are not supported
 execute/20020412-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20020819-1                    compile error: type specifier missing; C99 does not support implicit 'int'
-execute/20021120-3                    compile error: '__builtin_sprintf' needs 'sprintf' to be declared; include the header that declares it
-execute/20021127-1                    runtime: killed by signal 6
+execute/20021127-1                    runtime: killed by signal 6 — the case *defines* `long long llabs(long long)` as a function that aborts and requires the builtin to be expanded inline rather than called. Defining a standard library function is undefined behaviour (7.1.3p2), and cinrs calls what the program defined
 execute/20030109-1                    compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20030125-1                    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
 execute/20030222-1                    compile error: inline assembly is not supported
@@ -61,18 +58,12 @@ execute/20040302-1                    compile error: expected expression, found 
 execute/20040308-1                    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/20040423-1                    compile error: a member of a struct cannot have a variably modified type
 execute/20040520-1                    compile error: expected ';' after declaration, found '{'
-execute/20040709-1                    compile error: '__builtin_classify_type' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20040709-2                    compile error: '__builtin_classify_type' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20040709-3                    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/20040709-2.c:92:63: '__builtin_classify_type' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20041019-1                    compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/20041113-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20041124-1                    compile error: complex types are not supported
-execute/20041201-1                    compile error: cannot combine 'char' with other type specifiers
+execute/20041201-1                    compile error: cannot combine 'char' with other type specifiers — `_Complex char`, which is `_Complex` and so refused
 execute/20041214-1                    compile error: expected expression, found '&&'
 execute/20041218-2                    compile error: a member of a struct cannot have a variably modified type
-execute/20050107-1                    compile error: 'mode' is not supported: write the type the mode names instead
-execute/20050119-1                    compile error: 'mode' is not supported: write the type the mode names instead
-execute/20050119-2                    compile error: 'mode' is not supported: write the type the mode names instead
 execute/20050121-1                    compile error: '__real__' is not supported; complex types are not supported
 execute/20050203-1                    compile error: inline assembly is not supported
 execute/20050316-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -91,13 +82,10 @@ execute/20071211-1                    compile error: inline assembly is not supp
 execute/20071220-1                    compile error: inline assembly is not supported
 execute/20071220-2                    compile error: inline assembly is not supported
 execute/20080122-1                    compile error: inline assembly is not supported
-execute/20080502-1                    compile error: '__builtin_signbit' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20090219-1                    compile error: expected ';' after declaration, found '{'
-execute/20101011-1                    compile error: <signal.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
+execute/20101011-1                    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
 execute/20120427-1                    compile error: type specifier missing; C99 does not support implicit 'int'
 execute/20120427-2                    compile error: type specifier missing; C99 does not support implicit 'int'
-execute/20121108-1                    compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/20141022-1                    compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 ?execute/20180921-1                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20210505-1                    compile error: type specifier missing; C99 does not support implicit 'int'
 execute/20230630-2                    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
@@ -133,7 +121,6 @@ execute/920908-2                      compile error: type specifier missing; C99
 execute/920909-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/921013-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/921017-1                      compile error: type specifier missing; C99 does not support implicit 'int'
-execute/921110-1                      compile error: E0133: call to unsafe function `std::intrinsics::transmute` is unsafe and requires unsafe function or block
 execute/921123-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/921124-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/921202-1                      compile error: type specifier missing; C99 does not support implicit 'int'
@@ -195,7 +182,6 @@ execute/950621-1                      compile error: type specifier missing; C99
 execute/960218-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/960312-1                      compile error: inline assembly is not supported
 execute/960402-1                      compile error: type specifier missing; C99 does not support implicit 'int'
-execute/960416-1                      compile error: a cast to 'union t_be' is not allowed; only scalar types can be cast to
 execute/960512-1                      compile error: complex types are not supported
 execute/960830-1                      compile error: type specifier missing; C99 does not support implicit 'int'
 execute/961112-1                      compile error: type specifier missing; C99 does not support implicit 'int'
@@ -207,7 +193,7 @@ execute/990106-1                      compile error: type specifier missing; C99
 execute/990130-1                      compile error: inline assembly is not supported
 execute/990208-1                      compile error: expected expression, found '&&'
 execute/990413-2                      compile error: inline assembly is not supported
-execute/991014-1                      compile error: values of the type `[i16; 4611686018427387648]` are too big for the target architecture
+execute/991014-1                      compile error: values of the type `[i16; 4611686018427387648]` are too big for the target architecture — the case asks only for `sizeof` of a quarter-of-the-address-space array, and `rustc` will not name the type at all
 ?execute/991216-2                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/alias-2                       compile error: 'alias' is not supported: write a function that forwards to the other one instead
 execute/alias-3                       compile error: 'alias' is not supported: write a function that forwards to the other one instead
@@ -217,7 +203,6 @@ execute/align-nest                    compile error: a record cannot be both pac
 execute/bitfld-5                      compile error: inline assembly is not supported
 execute/built-in-setjmp               compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/builtin-types-compatible-p    runtime: killed by signal 6 — it requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous enums to answer no; `long double` is `double` here and an untagged `enum` is `int`, both documented mappings
-execute/cbrt                          compile error: 'mode' is not supported: write the type the mode names instead
 execute/cmpdi-1                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/cmpsf-1                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/cmpsi-1                       compile error: type specifier missing; C99 does not support implicit 'int'
@@ -228,25 +213,24 @@ execute/complex-1                     compile error: complex types are not suppo
 execute/complex-2                     compile error: complex types are not supported
 execute/complex-4                     compile error: complex types are not supported
 execute/complex-5                     compile error: complex types are not supported
-execute/complex-6                     compile error: invalid suffix 'i' on floating constant '2.0i'
+execute/complex-6                     compile error: invalid suffix 'i' on floating constant '2.0i': an imaginary constant needs _Complex, which is not supported
 execute/complex-7                     compile error: complex types are not supported
 execute/dbra-1                        compile error: type specifier missing; C99 does not support implicit 'int'
 execute/divmod-1                      compile error: type specifier missing; C99 does not support implicit 'int'
-execute/eeprof-1                      runtime: killed by signal 6
+execute/eeprof-1                      runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
 ?execute/fprintf-chk-1                compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/frame-address                 compile error: '__builtin_frame_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/inst-check                    compile error: type specifier missing; C99 does not support implicit 'int'
 execute/int-compare                   compile error: type specifier missing; C99 does not support implicit 'int'
 execute/loop-2                        compile error: type specifier missing; C99 does not support implicit 'int'
 execute/loop-2d                       compile error: type specifier missing; C99 does not support implicit 'int'
-execute/loop-2f                       compile error: <sys/types.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
-execute/loop-2g                       compile error: <sys/types.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
+execute/loop-2f                       compile error: <sys/mman.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
+execute/loop-2g                       compile error: <sys/mman.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
 execute/loop-3                        compile error: type specifier missing; C99 does not support implicit 'int'
 execute/loop-3b                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/loop-3c                       compile error: type specifier missing; C99 does not support implicit 'int'
 execute/medce-1                       compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and requires the optimiser to delete the call, which nothing here does
-execute/memchr-1                      compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/misalign                      compile error: 'mode' is not supported: write the type the mode names instead
+execute/misalign                      compile error: inline assembly is not supported
 execute/mod-1                         compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/multi-ix                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/nest-align-1                  compile error: expected ';' after declaration, found '{'
@@ -258,7 +242,6 @@ execute/nestfunc-5                    compile error: expected ';' after declarat
 execute/nestfunc-6                    compile error: expected ';' after declaration, found '{'
 execute/nestfunc-7                    compile error: expected ';' after declaration, found '{'
 execute/packed-aligned                compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
-execute/pr103209                      compile error: E0308: mismatched types
 execute/pr103376                      compile error: inline assembly is not supported
 execute/pr103405                      compile error: expected ';' after declaration, found '{'
 execute/pr104604                      compile error: complex types are not supported
@@ -273,7 +256,6 @@ execute/pr110252-2                    compile error: inline assembly is not supp
 execute/pr110817-1                    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-2                    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-3                    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr111863-1                    compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 execute/pr114552                      compile error: inline assembly is not supported
 ?execute/pr117432                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/pr120630                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -286,19 +268,17 @@ execute/pr126405                      compile error: 'vector_size' is not suppor
 execute/pr126405-2                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr126405-3                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr17377                       compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr22061-1                     compile error: implicit declaration of function '…' is invalid in C99
+execute/pr22061-1                     compile error: implicit declaration of function 'memset' is invalid in C99
 execute/pr22061-3                     compile error: expected ';' after declaration, found '{'
 execute/pr22061-4                     compile error: expected ';' after declaration, found '{'
-execute/pr23135                       compile error: 'mode' is not supported: write the type the mode names instead
+execute/pr23135                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr24135                       compile error: expected ';' after declaration, found '{'
 execute/pr28865                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/pr30314                       compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
 execute/pr33382                       compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
-execute/pr35456                       compile error: '__builtin_signbit' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr38151                       compile error: complex types are not supported
 execute/pr38533                       compile error: inline assembly is not supported
 execute/pr38969                       compile error: complex types are not supported
-execute/pr39228                       compile error: '__builtin_isinff' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr40022                       compile error: inline assembly is not supported
 execute/pr40657                       compile error: inline assembly is not supported
 execute/pr41239                       compile error: inline assembly is not supported
@@ -307,7 +287,6 @@ execute/pr42248                       compile error: complex types are not suppo
 execute/pr43385                       compile error: inline assembly is not supported
 execute/pr43560                       compile error: inline assembly is not supported
 execute/pr44575                       compile error: va_arg with a struct type is not supported yet
-execute/pr44683                       compile error: '__builtin_copysign' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr44852                       compile error: inline assembly is not supported
 ?execute/pr44942                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr45695                       compile error: inline assembly is not supported
@@ -324,7 +303,6 @@ execute/pr51581-2                     compile error: inline assembly is not supp
 execute/pr51877                       compile error: inline assembly is not supported
 execute/pr51933                       compile error: inline assembly is not supported
 execute/pr52286                       compile error: inline assembly is not supported
-execute/pr53084                       compile error: E0133: call to unsafe function `std::ptr::mut_ptr::<impl *mut T>::offset` is unsafe and requires unsafe function or block
 execute/pr53645                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr53645-2                     compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr55875                       compile error: type specifier missing; C99 does not support implicit 'int'
@@ -352,23 +330,18 @@ execute/pr68328                       compile error: inline assembly is not supp
 ?execute/pr68390                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr68532                       compile error: an alignment specifier on an object is not supported yet; '_Alignas' and '__attribute__((aligned))' are honoured on the members of a struct or union, where the generated Rust type can carry the alignment
 execute/pr69320-2                     compile error: inline assembly is not supported
-execute/pr69691                       compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
+execute/pr69691                       compile error: inline assembly is not supported
 execute/pr70460                       compile error: expected expression, found '&&'
 execute/pr70903                       compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71494                       compile error: expected expression, found '&&'
-execute/pr71550                       compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 execute/pr71626-1                     compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-2                     compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr78438                       compile error: inline assembly is not supported
-execute/pr78586                       compile error: '__builtin_sprintf' needs 'sprintf' to be declared; include the header that declares it
-execute/pr78622                       compile error: '__builtin_snprintf' needs 'snprintf' to be declared; include the header that declares it
 execute/pr78726                       compile error: inline assembly is not supported
-execute/pr79286                       compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/pr79327                       compile error: '__builtin_sprintf' needs 'sprintf' to be declared; include the header that declares it
 execute/pr79354                       compile error: inline assembly is not supported
 execute/pr79737-2                     compile error: inline assembly is not supported
 ?execute/pr80421                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr80692                       compile error: expected ';' after expression, found identifier 'd64'
+execute/pr80692                       compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
 execute/pr81588                       compile error: inline assembly is not supported
 execute/pr82210                       compile error: a member of a struct cannot have a variably modified type
 execute/pr82954                       compile error: inline assembly is not supported
@@ -381,7 +354,6 @@ execute/pr85331                       compile error: 'vector_size' is not suppor
 execute/pr85756                       compile error: inline assembly is not supported
 execute/pr86659-1                     compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr86659-2                     compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
-execute/pr86714                       compile error: initializer-string for char array is too long
 execute/pr87623                       compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr88904                       compile error: inline assembly is not supported
 execute/pr92618                       compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -393,13 +365,11 @@ execute/pr94524-1                     compile error: '__vector_size__' is not su
 execute/pr94524-2                     compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr94591                       compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr98304-2                     compile error: "../../gcc.dg/pr98304-1.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs>
-execute/pr98681                       compile error: E0600: cannot apply unary operator `-` to type `u32`
 ?execute/printf-chk-1                 compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/return-addr                   compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 execute/scal-to-vec1                  compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/scal-to-vec2                  compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/scal-to-vec3                  compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-1                        compile error: 'mode' is not supported: write the type the mode names instead
+execute/simd-1                        compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/simd-2                        compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/simd-4                        compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/simd-5                        compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -412,10 +382,6 @@ execute/stkalign                      compile error: inline assembly is not supp
 execute/strct-pack-3                  compile error: type specifier missing; C99 does not support implicit 'int'
 execute/strct-stdarg-1                compile error: va_arg with a struct type is not supported yet
 execute/strct-varg-1                  compile error: va_arg with a struct type is not supported yet
-execute/strlen-2                      compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/strlen-3                      compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/strlen-5                      compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
-execute/strlen-6                      compile error: '__builtin_printf' needs 'printf' to be declared; include the header that declares it
 execute/tstdi-1                       compile error: type specifier missing; C99 does not support implicit 'int'
 ?execute/user-printf                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-1                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -448,45 +414,19 @@ execute/va-arg-trap-1                 compile error: va_list is only supported a
 ?execute/vfprintf-chk-1               compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 ?execute/vprintf-1                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/vprintf-chk-1                compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/zerolen-2                     compile error: 'mode' is not supported: write the type the mode names instead
-ieee/bfloat16-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/builtin-issignaling-1            compile error: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/bfloat16-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16b' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/builtin-issignaling-1            compile error: inline assembly is not supported
 ieee/cdivchkd                         compile error: complex types are not supported
 ieee/cdivchkf                         compile error: complex types are not supported
 ieee/cdivchkld                        compile error: complex types are not supported
-ieee/compare-fp-1                     compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/compare-fp-3                     compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/compare-fp-4                     compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/copysign1                        compile error: '__builtin_copysignf' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/copysign2                        compile error: '__builtin_copysignf' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float128-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float128x-builtin-issignaling-1  compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float16-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float32-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float32x-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float64-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/float64x-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:10: '__builtin_issignaling' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-1                         compile error: <signal.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
-ieee/fp-cmp-2                         compile error: <signal.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
-ieee/fp-cmp-3                         compile error: <signal.h> file not found; searched: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, <cinrs>
-ieee/fp-cmp-4                         compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-4f                        compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/fp-cmp-4.c:14:7: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-4l                        compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/fp-cmp-4.c:14:7: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-5                         compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float128-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float128x-builtin-issignaling-1  compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float16-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float32-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf32' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float32x-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf32x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float64-builtin-issignaling-1    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf64' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/float64x-builtin-issignaling-1   compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf64x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/fp-cmp-7                         compile error: linking with `cc` failed: exit status: 1 — see `execute/medce-1`: `if (x > __builtin_inf()) link_error();` with `x` a parameter the optimiser is expected to fold
-ieee/fp-cmp-8                         compile error: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-8f                        compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/fp-cmp-8.c:14:10: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-8l                        compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/fp-cmp-8.c:14:10: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/fp-cmp-cond-1                    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-ieee/inf-1                            compile error: '__builtin_infl' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/inf-2                            compile error: '__builtin_infl' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/inf-3                            compile error: '__builtin_huge_vall' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/inf-4                            compile error: '__builtin_isfinite' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/mzero6                           compile error: '__builtin_copysign' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr108540-1                       compile error: '__builtin_isinf' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr109386                         compile error: '__builtin_isinf' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr36332                          compile error: '__builtin_infl' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr38016                          compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/fp-cmp-8.c:14:10: '__builtin_isunordered' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr50310                          compile error: '__builtin_isgreater' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/pr72824                          compile error: '__builtin_copysignf' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+ieee/pr50310                          compile error: inline assembly is not supported
 ieee/pr72824-2                        compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable

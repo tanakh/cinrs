@@ -105,11 +105,15 @@ Run it with `cargo run --example fact`.
   `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
   the C token that was really written.
 * **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
-  `<string.h>`, `<math.h>`, `<wchar.h>`, `<uchar.h>`, `<iso646.h>`, C11's
-  `<stdatomic.h>`, C23's `<stdckdint.h>` and the rest) are bundled with the
-  crate, written in plain C99 rather than read from the platform, and the calls
-  link against the real C library. Your own headers are found next to the `.rs` file that includes
-  them, and editing one rebuilds the crate. `#embed "logo.png"` puts the bytes
+  `<string.h>`, `<math.h>`, `<signal.h>`, `<wchar.h>`, `<uchar.h>`,
+  `<iso646.h>`, C11's `<stdatomic.h>`, C23's `<stdckdint.h>` and the rest) are
+  bundled with the crate, written in plain C99 rather than read from the
+  platform, and the calls link against the real C library. So are five POSIX
+  ones a small program actually reaches for — `<sys/types.h>`, `<unistd.h>`,
+  `<fcntl.h>`, `<strings.h>` and `<alloca.h>` — whose types and constants come
+  from the same target model everything else does. Your own headers are found
+  next to the `.rs` file that includes them, and editing one rebuilds the
+  crate. `#embed "logo.png"` puts the bytes
   of a file into the program — with `limit`, `prefix`, `suffix`, `if_empty`
   and `__has_embed` — and editing *that* rebuilds the crate too.
 * **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
@@ -117,9 +121,14 @@ Run it with `cargo run --example fact`.
   `__attribute__((cleanup(f)))` — `f(&x)` on every way out of the scope, which
   is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
-  `asm` labels, `constructor`/`destructor`, `__func__`, the `__builtin_*`
+  `asm` labels, `constructor`/`destructor`, `__func__`, casts to a union type,
+  `__attribute__((mode(DI)))`, the `__builtin_*`
   family — bit counting, checked overflow, `__builtin_expect`,
-  `__builtin_types_compatible_p` — `, ## __VA_ARGS__`, `__COUNTER__`,
+  `__builtin_types_compatible_p`, the floating classifications
+  (`__builtin_isnan`, `signbit`, `fpclassify`, `isunordered` and the rest,
+  answered in `core` with no maths library involved), and a `__builtin_X` for
+  a library function X that declares X itself, so `__builtin_printf` works
+  without `<stdio.h>` — `, ## __VA_ARGS__`, `__COUNTER__`,
   `__has_include`, `__has_attribute` and the rest. Everything spelled with a
   leading double underscore works in `c99!` too, exactly as it does in GCC's
   own `-std=c99`; only the plain spellings `typeof` and `asm`, and the features
@@ -384,13 +393,13 @@ to be given**, which are not optional.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,769 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,402 pass (79.3 %)** under `gnu89!`, which is the
-  language these C89-era programs were written in, and 1,307 (73.9 %) under
-  `gnu11!`. What is left is inline assembly, the vector extensions, the
-  `__builtin_*` forms this crate does not implement, `_Complex`, nested
-  functions, and the variadic definitions that need Rust 1.99 — plus three
-  programs that built and then did the wrong thing, which the document names
-  one by one.
+  exit status zero. **1,463 pass (82.7 %)** under `gnu89!`, which is the
+  language these C89-era programs were written in, and 1,367 (77.3 %) under
+  `gnu11!`. What is left is inline assembly, the vector extensions, `_Complex`,
+  nested functions, computed `goto`, the handful of `__builtin_*` forms this
+  crate does not implement, and the variadic definitions that need Rust 1.99 —
+  plus four programs that built and then did the wrong thing, which the
+  document names one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **124 of the 203 revisions run come out as

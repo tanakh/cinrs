@@ -93,7 +93,7 @@ drs/dr2xx.c:5          see `drs/dr2xx.c:1`
 !drs/dr335.c:0         `_Bool` in a `c89!` block; C99 added it and Clang takes it as an extension in `-std=c89`
 !drs/dr335.c:1         `_Bool` in a `c89!` block; see `drs/dr335.c:0`
 drs/dr3xx.c:0          see `drs/dr3xx.c:1`
-drs/dr3xx.c:1          wrong line: the test includes a sibling header the harness does not put on the search path, so the first error is the `#include` rather than the file-scope VLA
+drs/dr3xx.c:1          wrong line: the file's one `expected-error` is the file-scope VLA of DR320 on line 139, and something earlier is refused first in every revision — a variable length array (line 82) in `c89!`, which does not have them, and a `_Static_assert` (line 104) in `c99!`, which does not either; from `c11!` on the file reaches line 226, where a compound literal of variably modified type at file scope is refused and Clang's own comment calls not diagnosing it a FIXME
 drs/dr3xx.c:2          see `drs/dr3xx.c:1`
 drs/dr3xx.c:3          see `drs/dr3xx.c:1`
 drs/dr3xx.c:4          see `drs/dr3xx.c:1`

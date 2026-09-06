@@ -588,6 +588,79 @@ fn a_stray_semicolon_at_file_scope_is_an_empty_declaration() {
 }
 
 #[test]
+fn a_value_can_be_cast_to_a_union_type() {
+    // GNU's cast to a union: the value becomes the member whose type it has.
+    // `(union u) x` is `(union u){ x }` without the lvalue, and the classic
+    // use is punning a scalar into the union that names its representation —
+    // which is what `execute/960416-1` does with a 64-bit integer.
+    gnu99! {
+        struct halves { unsigned int l, h; };
+        union bits { unsigned long long d; struct halves s; };
+
+        unsigned int high_half(unsigned long long value) {
+            union bits b = (union bits) value;
+            return b.s.h;
+        }
+
+        /* The member may be a record too, and the cast is an rvalue: it can
+         * be read straight through. */
+        unsigned long long from_halves(unsigned int low, unsigned int high) {
+            struct halves h;
+            h.l = low;
+            h.h = high;
+            return ((union bits) h).d;
+        }
+    }
+
+    unsafe {
+        assert_eq!(high_half(0x1234_5678_9abc_def0), 0x1234_5678);
+        assert_eq!(from_halves(0xdead_beef, 1), 0x1_dead_beef);
+    }
+}
+
+#[test]
+fn the_hand_written_offsetof_folds_to_a_constant() {
+    // `((size_t) &((T *) 0)->m)` is the `offsetof` every C program wrote
+    // before `<stddef.h>` had one, and GCC folds it wherever an integer
+    // constant expression is required. A strict entry point keeps the error;
+    // see `tests/ui/gnu_leniencies_in_a_strict_block.rs`.
+    gnu99! {
+        struct record { int a; double b; char c[4]; };
+        #define my_offsetof(T, m) ((unsigned long) &((T *) 0)->m)
+
+        static unsigned long b_at = my_offsetof(struct record, b);
+        unsigned long read_b_at(void) { return b_at; }
+
+        /* An array bound, and one reached through a subscript. */
+        unsigned long as_a_bound(void) {
+            char probe[my_offsetof(struct record, c) + 1];
+            return sizeof probe;
+        }
+
+        int as_a_case(int x) {
+            switch (x) {
+            case (int) my_offsetof(struct record, c[2]): return 1;
+            default: return 0;
+            }
+        }
+
+        /* The address of a real object is *not* a constant: the linker
+         * decides it. */
+        int object_address_is_not_constant(void) {
+            return __builtin_constant_p((unsigned long) &b_at);
+        }
+    }
+
+    unsafe {
+        assert_eq!(read_b_at(), 8);
+        assert_eq!(as_a_bound(), 17);
+        assert_eq!(as_a_case(18), 1);
+        assert_eq!(as_a_case(0), 0);
+        assert_eq!(object_address_is_not_constant(), 0);
+    }
+}
+
+#[test]
 fn an_undeclared_alloca_is_the_builtin() {
     // No ISO header declares `alloca`, and GCC answers a call to an undeclared
     // one with `__builtin_alloca` in its `gnu` modes. Without that the C89

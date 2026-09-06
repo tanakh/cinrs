@@ -185,7 +185,8 @@ struct Plan {
     prefixes: Vec<String>,
     /// `-D` on the command line, as the `#define` lines they become.
     defines: Vec<String>,
-    /// `-I` on the command line, as the `#pragma cinrs include_path` lines.
+    /// The case's own directory, then every `-I` on the command line, as the
+    /// `#pragma cinrs include_path` lines they become.
     includes: Vec<PathBuf>,
 }
 
@@ -296,8 +297,15 @@ impl Revision {
                 dialect: Dialect::Gnu,
             },
             prefixes: Vec::new(),
+            // The case's own directory, always. A quoted `#include` is
+            // looked for beside the file it is written in, and the file this
+            // harness compiles is a generated one under `target/` — so
+            // without this the `#include "./abc_123.h"` in `drs/dr3xx.c`
+            // resolves against the wrong directory and the first error is one
+            // Clang never sees. It is the same two lines the gcc-torture
+            // harness puts in front of every case, for the same reason.
+            includes: vec![dir.to_path_buf()],
             defines: Vec::new(),
-            includes: Vec::new(),
         };
         let mut standard: Option<String> = None;
         let mut skip: Option<String> = None;

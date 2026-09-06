@@ -705,3 +705,232 @@ fn the_wide_character_limits_survive_both_headers() {
         assert_eq!(wchar_first(), 1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// every bundled header, on its own, for every target model
+// ---------------------------------------------------------------------------
+
+use std::str::FromStr;
+
+use cinrs_core::{Level, Options, Standard, TargetModel, analyze, include, sema};
+use proc_macro2::TokenStream;
+
+/// The models the branches inside the headers choose between.
+///
+/// Two data models per family, so that a `#if __SIZEOF_POINTER__ == 8` branch
+/// and its `#else` are both compiled: LP64 and ILP32 for Linux, 64-bit Apple,
+/// and LLP64 for Windows, where `long` is 32 bits under a 64-bit pointer.
+const MODELS: &[&str] = &[
+    "x86_64-unknown-linux-gnu",
+    "i686-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "wasm32-unknown-unknown",
+];
+
+/// The POSIX headers, which say so with an `#error` on a Windows target.
+const POSIX_ONLY: &[&str] = &["fcntl.h", "strings.h", "unistd.h"];
+
+/// The one header that is an `#error` everywhere, on purpose.
+const REFUSED: &[(&str, &str)] = &[("setjmp.h", "setjmp")];
+
+/// Every diagnostic including `name` alone raises, for `model`.
+fn header_errors(name: &str, model: &str) -> Vec<String> {
+    let target = TargetModel::from_triple(model).expect("a model this crate knows");
+    let options = Options::gnu(Standard::C23).for_target(target);
+    let source = format!("#include <{name}>\n");
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, &options);
+    let mut out: Vec<String> = analysis
+        .diagnostics
+        .sorted()
+        .into_iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    let (_program, diagnostics) =
+        sema::analyze(&analysis.unit, &options, analysis.source.unit_id());
+    out.extend(
+        diagnostics
+            .sorted()
+            .into_iter()
+            .filter(|d| d.level == Level::Error)
+            .map(|d| d.message.clone()),
+    );
+    out
+}
+
+/// Including one bundled header and nothing else must be silent — for every
+/// data model, since half of them branch on one.
+///
+/// It is the cheapest test there is of a header nothing else exercises, and
+/// the only one that compiles the Apple and Windows branches at all on a Linux
+/// machine: a `typedef` that names a type the model does not have, or a
+/// `#define` whose replacement does not parse, is an error here.
+#[test]
+fn every_bundled_header_compiles_alone_for_every_model() {
+    for (name, _) in include::BUNDLED {
+        for model in MODELS {
+            let windows = model.contains("windows");
+            let errors = header_errors(name, model);
+            let refused = REFUSED
+                .iter()
+                .find(|(header, _)| header == name)
+                .map(|(_, message)| *message)
+                .or_else(|| (windows && POSIX_ONLY.contains(name)).then_some("POSIX"));
+            if let Some(expected) = refused {
+                assert!(
+                    errors.iter().any(|e| e.contains(expected)),
+                    "<{name}> for {model} should refuse with {expected:?}, got {errors:?}"
+                );
+                continue;
+            }
+            assert!(errors.is_empty(), "<{name}> alone for {model}: {errors:?}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// <signal.h>
+// ---------------------------------------------------------------------------
+
+#[test]
+fn signal_numbers_and_handlers() {
+    c99! {
+        #include <signal.h>
+
+        static volatile sig_atomic_t caught = 0;
+
+        static void handler(int sig) { caught = sig; }
+
+        int install_and_raise(void) {
+            void (*previous)(int) = signal(SIGUSR1, handler);
+            if (previous == SIG_ERR) return -1;
+            if (raise(SIGUSR1) != 0) return -2;
+            signal(SIGUSR1, previous);
+            return caught;
+        }
+
+        int ignoring(void) {
+            void (*previous)(int) = signal(SIGUSR2, SIG_IGN);
+            if (previous == SIG_ERR) return -1;
+            raise(SIGUSR2);
+            signal(SIGUSR2, SIG_DFL);
+            return 1;
+        }
+
+        int the_standard_six(void) {
+            return SIGABRT == 6 && SIGFPE == 8 && SIGILL == 4
+                && SIGINT == 2 && SIGSEGV == 11 && SIGTERM == 15;
+        }
+    }
+
+    unsafe {
+        assert_eq!(the_standard_six(), 1);
+        assert_eq!(install_and_raise(), 10); // SIGUSR1 on Linux
+        assert_eq!(ignoring(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// <sys/types.h>, <unistd.h>, <fcntl.h> and <strings.h>
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_system_typedefs_have_the_platform_widths() {
+    c99! {
+        #include <sys/types.h>
+        #include <stddef.h>
+
+        int widths(void) {
+            return sizeof(ssize_t) == sizeof(size_t)
+                && sizeof(off_t) == 8
+                && sizeof(pid_t) == 4
+                && sizeof(uid_t) == 4 && sizeof(gid_t) == 4
+                && sizeof(mode_t) == 4
+                && sizeof(time_t) == sizeof(long)
+                && sizeof(caddr_t) == sizeof(char *);
+        }
+
+        /* Signed, which is what makes `read` able to report -1. */
+        int ssize_is_signed(void) { return (ssize_t)-1 < 0; }
+    }
+
+    unsafe {
+        assert_eq!(widths(), 1);
+        assert_eq!(ssize_is_signed(), 1);
+    }
+}
+
+#[test]
+fn unistd_and_fcntl_reach_the_real_system_calls() {
+    c99! {
+        #include <fcntl.h>
+        #include <unistd.h>
+        #include <string.h>
+
+        long read_own_source(const char *path, char *buf, unsigned long n) {
+            int fd = open(path, O_RDONLY);
+            if (fd < 0) return -1;
+            ssize_t got = read(fd, buf, n);
+            close(fd);
+            return (long)got;
+        }
+
+        int say_nothing(void) {
+            /* Zero bytes to the real standard output: the call happens, and
+             * the test output stays clean. */
+            return (int)write(STDOUT_FILENO, "", 0);
+        }
+
+        int identity(void) { return getpid() > 0 && getpid() == getpid(); }
+    }
+
+    let mut buf = [0u8; 16];
+    unsafe {
+        let n = read_own_source(
+            c"Cargo.toml".as_ptr(),
+            buf.as_mut_ptr().cast(),
+            buf.len() as _,
+        );
+        assert_eq!(n, 16);
+        assert_eq!(&buf[..10], b"[workspace");
+        assert_eq!(say_nothing(), 0);
+        assert_eq!(identity(), 1);
+    }
+}
+
+#[test]
+fn the_bsd_string_functions() {
+    c99! {
+        #include <strings.h>
+
+        int case_insensitive(void) {
+            return strcasecmp("HeLLo", "hello") == 0
+                && strncasecmp("HeLLo", "help", 3) == 0
+                && strcasecmp("a", "b") < 0;
+        }
+
+        int older_spellings(void) {
+            char buf[8];
+            bzero(buf, sizeof buf);
+            if (buf[0] != 0 || buf[7] != 0) return 0;
+            bcopy("abc", buf, 4);
+            return index(buf, 'b') == buf + 1
+                && rindex(buf, 'c') == buf + 2
+                && bcmp(buf, "abc", 4) == 0;
+        }
+
+        int lowest_set_bit(void) {
+            return ffs(0) == 0 && ffs(1) == 1 && ffs(8) == 4;
+        }
+    }
+
+    unsafe {
+        assert_eq!(case_insensitive(), 1);
+        assert_eq!(older_spellings(), 1);
+        assert_eq!(lowest_set_bit(), 1);
+    }
+}

@@ -1,0 +1,20 @@
+error: <cinrs>/unistd.h:24:1: #error "<unistd.h> is a POSIX header; the Microsoft C runtime has no such header. Its nearest equivalents are _read, _write, _close and _getpid, in <io.h> and <process.h>."
+  --> tests/ui/posix_headers_on_windows.rs:10:5
+   |
+10 |     #include <unistd.h>
+   |     ^
+
+error: <cinrs>/fcntl.h:23:1: #error "This <fcntl.h> is the POSIX one; the Microsoft C runtime's has _O_-prefixed flags and an _open with a different signature. Point `#pragma cinrs include_path` at the platform's own header instead."
+  --> tests/ui/posix_headers_on_windows.rs:11:5
+   |
+11 |     #include <fcntl.h>
+   |     ^
+
+error: <cinrs>/strings.h:21:1: #error "<strings.h> is a POSIX header; the Microsoft C runtime has no such header, and none of its functions. Use <string.h>, or _stricmp / _strnicmp."
+  --> tests/ui/posix_headers_on_windows.rs:12:5
+   |
+12 |     #include <strings.h>
+   |     ^
+
+error: aborting due to 3 previous errors
+

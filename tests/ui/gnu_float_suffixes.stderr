@@ -1,0 +1,38 @@
+error: invalid suffix 'dd' on floating constant '0.5dd': the decimal floating types (_Decimal32, _Decimal64, _Decimal128) are not supported: they are radix-10 and no Rust type is
+  --> tests/ui/gnu_float_suffixes.rs:15:35
+   |
+15 |     double decimal(void) { return 0.5dd; }
+   |                                   ^^^^^
+
+error: invalid suffix 'DF' on floating constant '0.5DF': the decimal floating types (_Decimal32, _Decimal64, _Decimal128) are not supported: they are radix-10 and no Rust type is
+  --> tests/ui/gnu_float_suffixes.rs:16:41
+   |
+16 |     double decimal_upper(void) { return 0.5DF; }
+   |                                         ^^^^^
+
+error: invalid suffix 'i' on floating constant '2.0i': an imaginary constant needs _Complex, which is not supported
+  --> tests/ui/gnu_float_suffixes.rs:17:37
+   |
+17 |     double imaginary(void) { return 2.0i; }
+   |                                     ^^^^
+
+error: invalid suffix 'f16' on floating constant '1.0f16': '_Float16' is not supported: Rust's `f16` is unstable, and rounding the constant to a wider type would change what the program computes
+  --> tests/ui/gnu_float_suffixes.rs:18:32
+   |
+18 |     double half(void) { return 1.0f16; }
+   |                                ^^^^^^
+
+error: the suffix 'q' on a floating constant is a GNU extension, and requires a GNU dialect (gnu99!) (this block is c99!)
+  --> tests/ui/gnu_float_suffixes.rs:24:34
+   |
+24 |     double strict(void) { return 1.5q; }
+   |                                  ^^^^
+
+error: invalid suffix 'z' on floating constant '1.5z'
+  --> tests/ui/gnu_float_suffixes.rs:25:41
+   |
+25 |     double still_invalid(void) { return 1.5z; }
+   |                                         ^^^^
+
+error: aborting due to 6 previous errors
+

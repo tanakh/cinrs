@@ -620,6 +620,135 @@ impl Sema<'_> {
             .map_err(|_| TypeError::at(expr.range, "array size is too large"))
     }
 
+    /// `__attribute__((mode(M)))`, which replaces the declared type.
+    ///
+    /// GCC's machine modes name a *width* rather than a type, and the
+    /// declaration says the rest: `typedef unsigned int u8
+    /// __attribute__((mode(QI)))` is the unsigned integer one byte wide, and
+    /// `typedef int word __attribute__((mode(word)))` the signed one as wide
+    /// as a machine word. So the width comes from the mode, the signedness
+    /// from the type that was written, and the answer is whichever of this
+    /// model's types has both.
+    ///
+    /// Only the modes that name a type this crate has are accepted. The
+    /// floating ones are `SF` and `DF`; `XF` and `TF` are the extended and
+    /// quad formats, the `V…` ones are vectors and the `…C` ones complex, and
+    /// each of those is refused with the reason rather than rounded to
+    /// something else.
+    pub(super) fn apply_mode(&mut self, ty: Ty, attrs: &ast::Attributes) -> Ty {
+        let Some(mode) = &attrs.mode else {
+            return ty;
+        };
+        let range = mode.range;
+        let spelling = mode.node.clone();
+        let name = spelling
+            .strip_prefix("__")
+            .and_then(|rest| rest.strip_suffix("__"))
+            .unwrap_or(&spelling);
+        if ty.is_error() {
+            return ty;
+        }
+        if !ty.is_arithmetic() {
+            self.error(
+                range,
+                format!(
+                    "'mode' applies to an arithmetic type, and '{}' is not one",
+                    self.tyname(ty)
+                ),
+            );
+            return ty;
+        }
+        match name {
+            "SF" => return Ty::Float,
+            "DF" => return Ty::Double,
+            "XF" | "TF" | "KF" | "IF" | "HF" | "BF" => {
+                self.error(
+                    range,
+                    format!(
+                        "'mode({name})' names a floating format with no stable Rust type; \
+                         `f16` and `f128` are unstable and x87's extended double has no \
+                         Rust counterpart"
+                    ),
+                );
+                return ty;
+            }
+            "SC" | "DC" | "XC" | "TC" | "KC" | "HC" => {
+                self.error(
+                    range,
+                    format!("'mode({name})' names a complex type, which is not supported"),
+                );
+                return ty;
+            }
+            _ if name.starts_with('V') && name[1..].starts_with(|c: char| c.is_ascii_digit()) => {
+                self.error(
+                    range,
+                    format!(
+                        "'mode({name})' names a vector type: the vector extensions need \
+                         `core::simd`, which is unstable"
+                    ),
+                );
+                return ty;
+            }
+            _ => {}
+        }
+        let word = Ty::size_ty(&self.target).size_bytes(&self.target);
+        let bytes: u64 = match name {
+            "QI" | "byte" => 1,
+            "HI" => 2,
+            "SI" => 4,
+            "DI" => 8,
+            "TI" => 16,
+            "word" | "pointer" | "unwind_word" => word,
+            _ => {
+                self.error(range, format!("unknown machine mode '{spelling}'"));
+                return ty;
+            }
+        };
+        if bytes == 16 && !self.target.has_int128 {
+            self.error(
+                range,
+                "'mode(TI)' asks for a 128-bit integer, which this target model does not \
+                 have; see the data model in `doc/c-status.md`",
+            );
+            return ty;
+        }
+        let signed = ty.is_signed(&self.target);
+        let candidates: &[Ty] = if signed {
+            &[
+                Ty::SChar,
+                Ty::Short,
+                Ty::Int,
+                Ty::Long,
+                Ty::LongLong,
+                Ty::Int128,
+            ]
+        } else {
+            &[
+                Ty::UChar,
+                Ty::UShort,
+                Ty::UInt,
+                Ty::ULong,
+                Ty::ULongLong,
+                Ty::UInt128,
+            ]
+        };
+        let target = self.target;
+        match candidates
+            .iter()
+            .copied()
+            .find(|candidate| candidate.size_bytes(&target) == bytes)
+        {
+            Some(found) => found,
+            None => {
+                self.error(
+                    range,
+                    format!("no integer type of this target model is {bytes} bytes wide"),
+                );
+                ty
+            }
+        }
+    }
+
     /// Rejects the element types an array cannot have.
     fn check_element_type(&mut self, elem: Ty, range: SourceRange) -> Result<(), TypeError> {
         if elem.is_func() {
@@ -876,7 +1005,7 @@ impl Sema<'_> {
                 }
             } else {
                 match self.ty_of(&field.ty) {
-                    Some(ty) => ty,
+                    Some(ty) => self.apply_mode(ty, &field.attrs),
                     None => continue,
                 }
             };
