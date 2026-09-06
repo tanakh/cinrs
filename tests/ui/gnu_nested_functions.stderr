@@ -1,0 +1,33 @@
+error: nested function definitions are a GNU extension cinrs does not support; move 'add' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+  --> tests/ui/gnu_nested_functions.rs:14:13
+   |
+14 |         int add(int x, int y)
+   |             ^^^
+
+error: nested function definitions are a GNU extension cinrs does not support; move 'bumped' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+  --> tests/ui/gnu_nested_functions.rs:26:13
+   |
+26 |         int bumped(int x)
+   |             ^^^^^^
+
+error: nested function definitions are a GNU extension cinrs does not support; move 'inner' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+  --> tests/ui/gnu_nested_functions.rs:36:13
+   |
+36 |         int inner(int x)
+   |             ^^^^^
+
+error: too many arguments to function call, expected 1, have 2
+       note: 'inner' is declared at line 36
+  --> tests/ui/gnu_nested_functions.rs:40:16
+   |
+40 |         return inner(1, 2);
+   |                ^^^^^
+
+error: nested function definitions are a GNU extension cinrs does not support; move 'older' to file scope (if it uses the enclosing function's locals, pass them as parameters)
+  --> tests/ui/gnu_nested_functions.rs:47:13
+   |
+47 |         int older(x)
+   |             ^^^^^
+
+error: aborting due to 5 previous errors
+

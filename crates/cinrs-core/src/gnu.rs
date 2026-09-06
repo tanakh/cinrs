@@ -223,9 +223,13 @@ pub fn has_builtin(name: &str) -> bool {
 /// Whether `__has_feature(name)` / `__has_extension(name)` answers yes.
 ///
 /// Clang's vocabulary, answered for what this crate really has:
-/// `c_thread_local` and `blocks` are deliberately absent, because the
-/// constructs behind them are diagnosed rather than translated. `c_atomic` is
-/// *not* absent any more: `_Atomic` and `<stdatomic.h>` are here.
+/// `c_thread_local`, `blocks` and `nested_functions` are deliberately absent,
+/// because the constructs behind them are diagnosed rather than translated —
+/// a nested function definition is refused where it stands, in
+/// [the parser](crate::parse), so a program that guards one with
+/// `#if __has_extension(nested_functions)` takes the other branch and never
+/// reaches the diagnostic. `c_atomic` is *not* absent any more:
+/// `_Atomic` and `<stdatomic.h>` are here.
 pub fn has_feature(name: &str) -> bool {
     SUPPORTED_FEATURES.contains(&name)
 }

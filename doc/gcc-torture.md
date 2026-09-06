@@ -155,10 +155,10 @@ corpus revision, under the two entry points worth pointing at this corpus:
 `gnu11!`, the harness default and the closest thing here to the
 `-std=gnu17 -w` GCC compiles them with.
 
-| entry point | `execute` | `execute/ieee` | total | rate |
-| --- | ---: | ---: | ---: | ---: |
-| **`gnu89!`** | 1414/1691 (83.6 %) | 64/78 (82.1 %) | **1478/1769** | **83.6 %** |
-| `gnu11!` | 1318/1691 (77.9 %) | 64/78 (82.1 %) | 1382/1769 | 78.1 % |
+| entry point | `execute` | `execute/ieee` | passed | rejected as required | failed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **`gnu89!`** | 1414/1691 (83.6 %) | 64/78 (82.1 %) | **1478/1769 (83.6 %)** | — | 291 |
+| `gnu11!` | 1318/1691 (77.9 %) | 64/78 (82.1 %) | 1382/1769 (78.1 %) | 104 | 283 |
 
 **`gnu89!` is what this corpus should be measured with**, and what to reach
 for when compiling C of that era: it is `gnu99!` plus the three rules a later
@@ -168,6 +168,19 @@ set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it.
 
+**104 of `gnu11!`'s non-passes are not gaps**, which is why they are counted
+apart from the failures: they are the cases that lean on one of the rules C99
+deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R parameter) and
+an implicit function declaration (3) — and a C99-or-later entry point is
+*required* to refuse them. `gcc -std=gnu11` refuses them too, and has since
+GCC 14 made both constraint violations errors. Each is an `!` line in
+`tests/gcc-torture/expected-failures.txt` naming the diagnostic it must be
+refused with, so guard mode asserts the refusal rather than tolerating a
+failure: a case that started *compiling* would be the news. Ninety-six of the
+104 pass under `gnu89!`; the other eight get past the C89 rule there and stop
+at a second gap — six at a nested function definition, two at a later
+declaration.
+
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
 literal may not), and one is not valid UTF-8.
@@ -175,16 +188,16 @@ literal may not), and one is not valid UTF-8.
 ### The failures, by cause
 
 Under `gnu89!`, 286 of the 291 failures are refused at compile time, in 31
-distinct causes. The ones worth a line each, with what the same cause costs
-under `gnu11!` beside it:
+distinct causes; under `gnu11!`, 278 of 283, in 30. The ones worth a line
+each, with what the same cause costs under `gnu11!` beside it — the 104
+conforming rejections above are *not* in this table:
 
 | `gnu89!` | `gnu11!` | cause | e.g. |
 | ---: | ---: | --- | --- |
-| — | 98 | `type specifier missing` — implicit `int`, which `gnu89!` has | `execute/20000717-3` |
 | 67 | 67 | inline assembly is not supported | `execute/20001009-2` |
 | 44 | 44 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
 | 38 | 38 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
-| 29 | 23 | `expected ';' after declaration, found '{'` — a nested function definition, which is a GNU extension this crate does not have | `execute/20000822-1` |
+| 29 | 23 | `nested function definitions are a GNU extension cinrs does not support; move 'f2' to file scope (if it uses the enclosing function's locals, pass them as parameters)` | `execute/20000822-1` |
 | 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
 | 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
 | 11 | 11 | `expected expression, found '&&'` — computed `goto` | `execute/20040302-1` |
@@ -197,8 +210,6 @@ under `gnu11!` beside it:
 | 4 | 4 | an initialised flexible array member | `execute/20010924-1` |
 | 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
 | 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
-| — | 3 | a K&R parameter with no declaration, which is implicit `int` again | `execute/930429-2` |
-| — | 3 | implicit declaration of a function, which `gnu89!` has | `execute/20000412-3` |
 
 The remaining causes have two cases or fewer each; the report prints all
 thirty-one. The `__builtin_…` count is the sum of two rows the report prints
