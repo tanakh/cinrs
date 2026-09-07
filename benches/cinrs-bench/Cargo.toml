@@ -1,0 +1,31 @@
+[package]
+name = "cinrs-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Speed of cinrs-translated C against gcc -O2 and clang -O2"
+publish = false
+
+# A binary, not a `[[bench]]` target: the programs are whole C programs with a
+# `main`, each built three times and run as a process, which is a job for a
+# driver rather than for `cargo bench`. Nothing here runs under
+# `cargo test --workspace` but the one smoke test in `src/main.rs`, which is
+# skipped unless a C compiler is on the PATH.
+[[bin]]
+name = "cinrs-bench"
+path = "src/main.rs"
+
+# One, and only for `kill(2)`. A run is timed by handing the `Child` to a
+# thread that blocks in `wait()`, so that the elapsed time is read the instant
+# the process ends rather than at the next turn of a polling loop — and that
+# thread then owns the `&mut Child`, so `Child::kill` is not available to the
+# side holding the timer. Killing an overrunning run therefore goes by pid.
+# Everything else here — spawning `cargo`, `rustc`, `gcc` and `clang`, and the
+# timing itself — is `std`.
+#
+# This crate is `publish = false` and is not in `cinrs`'s dependency graph, so
+# nothing a user of the library builds is affected.
+[dependencies]
+libc = "0.2"

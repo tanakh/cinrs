@@ -134,6 +134,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cinrs-bench"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "cinrs-core"
 version = "0.1.0"
 dependencies = [

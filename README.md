@@ -650,6 +650,25 @@ then compiles and runs ordinary programs against those declarations, comparing
 `sizeof(struct stat)` and its like against the host's own `cc`.
 [`doc/system-headers.md`](doc/system-headers.md) is the table.
 
+## Speed
+
+Getting C right is half of it; running at the speed a C compiler would is the
+other half. [`doc/benchmarks.md`](doc/benchmarks.md) is the measurement: 39
+whole C programs — the single-threaded C entries from [The Computer Language
+Benchmarks Game][bg], Dhrystone 2.1 and Whetstone, and two dozen kernels
+written to isolate one construct each (bit-fields, heap-emulated variable
+length arrays, `goto` lowering, `switch` against computed `goto`, `_Complex`,
+wrapping arithmetic, division) — built three times over, as `gcc -O2`, as
+`clang -O2`, and as a `cinrs` block compiled by `rustc -C opt-level=3`, and
+timed. Every program's output is compared byte for byte across the three
+builds, so the suite is a differential test as well as a benchmark.
+
+`benches/cinrs-bench` is the harness; its
+[README](benches/cinrs-bench/README.md) says how to run it and how to add a
+program.
+
+[bg]: https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+
 ## How it works
 
 The macro recovers the C source text of its own invocation (by slicing the
