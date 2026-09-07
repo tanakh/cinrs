@@ -105,6 +105,7 @@ pub mod ir;
 pub mod lex;
 pub mod parse;
 pub mod pp;
+pub mod regions;
 pub mod sema;
 pub mod target;
 

@@ -1,6 +1,6 @@
 //! Declarations: objects, `typedef`s, functions and the `extern` block.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast;
 use crate::capture::SourceRange;
@@ -2417,8 +2417,11 @@ impl Sema<'_> {
         // knowing whose function it came from.
         //
         // Whether the body can keep Rust's own control flow is decided before
-        // it is checked, because it changes how `switch` is lowered.
-        self.cfg_mode = Self::needs_cfg(def);
+        // it is checked, because it changes how `switch` is lowered and which
+        // labels the statements keep.
+        let lowering = Self::lowering(def);
+        self.cfg_mode = lowering.is_none();
+        self.region_labels = lowering.unwrap_or_default();
         self.collect_labels(&def.body);
         // A `goto` in a function nested inside this one that names one of
         // these labels is GNU's nonlocal goto, which is refused by name rather
@@ -2551,6 +2554,29 @@ impl Sema<'_> {
         // A forward `goto` names a label the walk above had not reached yet, so
         // the jumps are checked now that every label's scope is known.
         self.check_goto_vla_scopes();
+        // Outside CFG mode every `goto` left in the body is an outward jump,
+        // which becomes a `break` or a `continue` of the labelled region built
+        // here; see [`crate::regions`].
+        if !self.region_labels.is_empty() {
+            let names: HashMap<ir::LabelId, String> = self
+                .labels
+                .iter()
+                .map(|(name, label)| (label.id, name.clone()))
+                .collect();
+            let planned = crate::regions::restructure(&mut body, &names, &self.program.functions);
+            // The walk that chose this lowering and the walk that built it
+            // agree by construction. They can only disagree about a `goto`
+            // sema left out because it named a label that is not there, which
+            // has been reported already — and if they ever disagree otherwise,
+            // saying so is better than generating a jump that does nothing.
+            if !planned && !self.diags.has_errors() {
+                self.error(
+                    def.body.range,
+                    "internal error in cinrs: this function's jumps were taken for ones Rust \
+                     can express and then could not be. Please report it",
+                );
+            }
+        }
         let ret = self.ret_ty;
         // A C function may fall off its end; the value is then whatever the ABI
         // left behind. Returning a zero is the honest, safe translation —
@@ -2632,6 +2658,7 @@ impl Sema<'_> {
             func_params: std::mem::take(&mut self.func_params),
             va_param: self.va_param.take(),
             cfg_mode: self.cfg_mode,
+            region_labels: std::mem::take(&mut self.region_labels),
             labels: std::mem::take(&mut self.labels),
             breakables: std::mem::take(&mut self.breakables),
             switch_stack: std::mem::take(&mut self.switch_stack),
@@ -2656,6 +2683,7 @@ impl Sema<'_> {
         self.func_params = saved.func_params;
         self.va_param = saved.va_param;
         self.cfg_mode = saved.cfg_mode;
+        self.region_labels = saved.region_labels;
         self.labels = saved.labels;
         self.breakables = saved.breakables;
         self.switch_stack = saved.switch_stack;

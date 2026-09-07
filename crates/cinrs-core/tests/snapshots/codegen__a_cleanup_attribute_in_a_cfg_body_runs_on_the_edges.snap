@@ -1,13 +1,13 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-expression: "generate(r#\"\n        static void note(int *p);\n\n        int jumping(int c) {\n            int a __attribute__((cleanup(note))) = 1;\n            while (c) {\n                int b __attribute__((cleanup(note))) = 2;\n                if (b) {\n                    continue;\n                }\n                goto out;\n            }\n            return a;\n        out:\n            return 0;\n        }\n        \"#)"
+expression: "generate(r#\"\n        static void note(int *p);\n\n        int jumping(int c) {\n            int a __attribute__((cleanup(note))) = 1;\n            if (c < 0) goto inside;\n            while (c) {\n                int b __attribute__((cleanup(note))) = 2;\n                if (b) {\n                    continue;\n                }\n            inside:\n                goto out;\n            }\n            return a;\n        out:\n            return 0;\n        }\n        \"#)"
 ---
-mod __cinrs_unit_b809857c {
+mod __cinrs_unit_ed73c93d {
     const _: () = { /* the data-model check */ };
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "note"]
-        pub fn __cinrs_b809857c_note(p: *mut ::core::ffi::c_int);
+        pub fn __cinrs_ed73c93d_note(p: *mut ::core::ffi::c_int);
     }
     #[allow(…)]
     pub unsafe extern "C" fn jumping(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -20,7 +20,11 @@ mod __cinrs_unit_b809857c {
                 match __cinrs_state {
                     0 => {
                         a = 1;
-                        __cinrs_state = 1;
+                        if c < 0 {
+                            __cinrs_state = 4;
+                        } else {
+                            __cinrs_state = 1;
+                        }
                         continue 'cfg;
                     }
                     1 => {
@@ -41,18 +45,18 @@ mod __cinrs_unit_b809857c {
                         continue 'cfg;
                     }
                     3 => {
-                        __cinrs_b809857c_note((&raw mut b));
+                        __cinrs_ed73c93d_note((&raw mut b));
                         __cinrs_state = 1;
                         continue 'cfg;
                     }
                     4 => {
-                        __cinrs_b809857c_note((&raw mut b));
-                        __cinrs_b809857c_note((&raw mut a));
+                        __cinrs_ed73c93d_note((&raw mut b));
+                        __cinrs_ed73c93d_note((&raw mut a));
                         return 0;
                     }
                     5 => {
                         __cinrs_ret = a;
-                        __cinrs_b809857c_note((&raw mut a));
+                        __cinrs_ed73c93d_note((&raw mut a));
                         return __cinrs_ret;
                     }
                     _ => ::core::unreachable!(),
@@ -62,4 +66,4 @@ mod __cinrs_unit_b809857c {
     }
 }
 #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
-pub use __cinrs_unit_b809857c::*;
+pub use __cinrs_unit_ed73c93d::*;

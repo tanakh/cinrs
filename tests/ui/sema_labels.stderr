@@ -1,27 +1,45 @@
 error: use of undeclared label 'dnoe'
- --> tests/ui/sema_labels.rs:9:18
-  |
-9 |             goto dnoe;
-  |                  ^^^^
+  --> tests/ui/sema_labels.rs:11:18
+   |
+11 |             goto dnoe;
+   |                  ^^^^
 
 error: redefinition of label 'again'
-       note: previous definition of label 'again' is at line 17
-  --> tests/ui/sema_labels.rs:20:5
+       note: previous definition of label 'again' is at line 19
+  --> tests/ui/sema_labels.rs:22:5
    |
-20 |     again:
+22 |     again:
    |     ^^^^^
 
 error: use of undeclared label 'nowhere'
-  --> tests/ui/sema_labels.rs:25:18
+  --> tests/ui/sema_labels.rs:27:18
    |
-25 |         return &&nowhere;
+27 |         return &&nowhere;
    |                  ^^^^^^^
 
 error: the operand of a computed 'goto' must be a pointer, not 'int'
-  --> tests/ui/sema_labels.rs:29:15
+  --> tests/ui/sema_labels.rs:31:15
    |
-29 |         goto *n;
+31 |         goto *n;
    |               ^
 
-error: aborting due to 4 previous errors
+error: a 'goto' cannot appear inside a statement expression; nothing outside the expression can jump to it
+  --> tests/ui/sema_labels.rs:39:27
+   |
+39 |         int v = ({ if (n) goto out;
+   |                           ^^^^
+
+error: a label cannot appear inside a statement expression; nothing outside the expression can jump to it
+  --> tests/ui/sema_labels.rs:47:28
+   |
+47 |         return ({ if (n) { skip: n++; } n; });
+   |                            ^^^^
+
+error: a 'break' inside a statement expression is not supported in a function whose jumps Rust cannot express: the function is lowered into a state machine, and there is no enclosing loop left to leave
+  --> tests/ui/sema_labels.rs:57:32
+   |
+57 |             n -= ({ if (n > 5) break;
+   |                                ^^^^^
+
+error: aborting due to 7 previous errors
 

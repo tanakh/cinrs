@@ -816,8 +816,8 @@
 //! exactly as it does in C, and nothing about the emulation makes a defined
 //! program behave differently.
 //!
-//! In a function that also uses `goto`, where [every local is hoisted to the
-//! top](#control-flow), the hidden `Vec` is hoisted with them: it is created
+//! In a function lowered into a [state machine](#goto), where every local is
+//! hoisted to the top, the hidden `Vec` is hoisted with them: it is created
 //! empty, filled where the declaration was written, and dropped when the
 //! function returns rather than when the block ends. A C program can only
 //! observe that as memory it expected to have been given back sooner.
@@ -918,8 +918,8 @@
 //!
 //! Whatever passes Rust's own checks, which is more C than it sounds: integer
 //! and floating arithmetic and comparisons, all the control flow (`if`,
-//! `while`, `do`, `for`, `switch` with fallthrough, and `goto`, whose [state
-//! machine](#control-flow) is safe code too), locals and parameters, `struct`,
+//! `while`, `do`, `for`, `switch` with fallthrough, and `goto`, whose labelled
+//! blocks and [state machine](#goto) are safe code too), locals and parameters, `struct`,
 //! `union` and `enum` values passed and returned **by value**, `_Bool`,
 //! bit-field accessors on a local, the [complex](#complex-numbers) arithmetic,
 //! pointer *values* (holding one, comparing it, returning it), string literals,
@@ -1049,7 +1049,7 @@
 //! **Everything generated is [`core`]-only**, with three exceptions. A C
 //! function becomes a `pub unsafe extern "C" fn` over [`core::ffi`] types;
 //! records are `#[repr(C)]` items; pointers are raw pointers; a string literal
-//! is a byte string; `goto` is a state machine; `unreachable()` is
+//! is a byte string; `goto` is a labelled block or a state machine; `unreachable()` is
 //! [`core::hint::unreachable_unchecked`]; `offsetof` is
 //! [`core::mem::offset_of!`]; `__builtin_trap` and `assert` call the C
 //! library's `abort`; [atomics](#atomics) are [`core::sync::atomic`]; a
@@ -1455,12 +1455,54 @@
 //!
 //! `if`, `while`, `do`/`while`, `for`, `break`, `continue` and `switch` — with
 //! fallthrough — become Rust's own control flow, so the expansion reads like
-//! the C it came from. A function that jumps cannot: one containing a `goto`,
-//! or a `case` label that is not a direct child of its `switch` body (Duff's
-//! device), is lowered into a state machine over basic blocks instead, with
-//! every local of the function hoisted to the top and renamed apart. Both
-//! forms compute exactly what the C did; only the second is unpleasant to
-//! read, and only the functions that need it get it.
+//! the C it came from.
+//!
+//! ## goto
+//!
+//! Most `goto`s go **outwards**, and those keep Rust's own control flow too.
+//! A jump *forwards* to a label later in a block it is inside becomes a
+//! `break` out of a labelled block that ends where the label stands; a jump
+//! *backwards* to a label that block begins with becomes a `continue` of a
+//! labelled loop that starts there. The blocks are named after the C labels,
+//! so `goto done` reads as `break 'done` and `goto retry` as `continue
+//! 'retry`, and they nest.
+//!
+//! ```
+//! cinrs::c99! {
+//!     int find_pair(const int *values, int n, int target) {
+//!         int found = -1;
+//!         for (int i = 0; i < n; i++) {
+//!             for (int j = i + 1; j < n; j++) {
+//!                 if (values[i] + values[j] == target) {
+//!                     found = i * 100 + j;
+//!                     goto done;                  /* break 'done */
+//!                 }
+//!             }
+//!         }
+//!     done:
+//!         return found;
+//!     }
+//! }
+//!
+//! let values = [1, 2, 3, 9];
+//! assert_eq!(unsafe { find_pair(values.as_ptr(), 4, 5) }, 102);
+//! ```
+//!
+//! A scope left on the way out is left in full: the `break` runs the drops of
+//! everything the blocks it leaves hold, which is what frees a
+//! [variable length array](#variable-length-arrays) and runs a
+//! [`cleanup`](#attributes) attribute exactly where C says they run.
+//!
+//! What is left over is lowered into a **state machine** over basic blocks
+//! instead, with every local of the function hoisted to the top and renamed
+//! apart: a jump *into* a block — a label inside a loop body, an `if` branch
+//! or a `switch` group, named from outside it — a computed `goto` (below), a
+//! `case` label that is not a direct child of its `switch` body (Duff's
+//! device), two labels whose regions would have to overlap without nesting,
+//! which is what a hand-written state machine looks like, and a declaration
+//! between a jump and the label it names, which no Rust block may hold without
+//! ending its scope early. Both forms compute exactly what the C did; only the
+//! second is unpleasant to read, and only the functions that need it get it.
 //!
 //! ## Labels as values
 //!

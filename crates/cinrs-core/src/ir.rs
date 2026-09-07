@@ -3180,6 +3180,12 @@ pub enum Stmt {
         /// Where the label was written.
         range: SourceRange,
     },
+    /// A labelled region a `goto` leaves, in the structured lowering.
+    ///
+    /// Only produced by [`regions`](crate::regions), which is where the shape
+    /// and the two kinds are described. A [`Stmt::Goto`] inside one names its
+    /// label and becomes `break` or `continue` accordingly.
+    Region(Box<Region>),
     /// `goto label;`
     Goto {
         /// The label jumped to.
@@ -3316,6 +3322,47 @@ pub struct Switch {
     pub default_group: Option<usize>,
     /// Where the statement was written.
     pub range: SourceRange,
+}
+
+/// A labelled region a `goto` leaves or restarts.
+///
+/// The statements a C label divides are wrapped in one of these when every
+/// `goto` to that label is a jump Rust can make on its own; see
+/// [`regions`](crate::regions) for which jumps those are and how the
+/// boundaries are chosen. Code generation emits a labelled block or a labelled
+/// loop, named after the C label:
+///
+/// ```text
+/// 'done: { … break 'done; … }        'retry: loop { … continue 'retry; … break 'retry; }
+/// ```
+#[derive(Clone, Debug)]
+pub struct Region {
+    /// The label the region belongs to, which the `goto`s inside it name.
+    pub label: LabelId,
+    /// The label's name in C, which the generated Rust label is built from.
+    pub name: String,
+    /// Whether a `goto` to it leaves the region or restarts it.
+    pub kind: RegionKind,
+    /// The statements inside.
+    pub body: Vec<Stmt>,
+    /// Whether control can reach the end of `body`, so that a
+    /// [loop](RegionKind::Loop) needs a `break` there to leave it. A loop
+    /// without one is a Rust `loop` that never finishes, which is what makes a
+    /// function ending in it need no `return`.
+    pub falls_out: bool,
+    /// Where the label was written.
+    pub range: SourceRange,
+}
+
+/// Which way a [`Region`]'s label is entered.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RegionKind {
+    /// The label stands *after* the region: a `goto` to it is `break 'l`, and
+    /// the statements the label introduces follow the block.
+    Block,
+    /// The label stands at the *start* of the region: a `goto` to it is
+    /// `continue 'l`, and control leaves by falling off the end.
+    Loop,
 }
 
 /// A `switch` whose body has been left as a statement tree.
@@ -3587,6 +3634,19 @@ fn stmt_always_terminates(stmt: &Stmt, functions: &[Function]) -> bool {
         Stmt::Expr(expr) => expr_never_returns(expr, functions),
         Stmt::Block(items) => always_terminates(items, functions),
         Stmt::Label { body, .. } => terminates(body),
+        // Control does not continue into the next statement: the jump is a
+        // `break` or a `continue` of a region that encloses it.
+        Stmt::Goto { .. } => true,
+        // A block is left by falling off its end or by a `break` to its label,
+        // and both continue at the label the region ends before; a loop is
+        // left only by the `break` that stands at the end of its body, so one
+        // that needs none never finishes.
+        Stmt::Region(region) => match region.kind {
+            RegionKind::Block => {
+                always_terminates(&region.body, functions) && !jumps_to(&region.body, region.label)
+            }
+            RegionKind::Loop => !region.falls_out,
+        },
         Stmt::If {
             then_branch,
             else_branch: Some(else_branch),
@@ -3636,6 +3696,43 @@ pub fn is_always_true(expr: &Expr) -> bool {
     }
 }
 
+/// Whether any `goto` inside `stmts` names `label`.
+///
+/// Every `goto` left in a structured body is a jump to a [`Region`] enclosing
+/// it, so this is what says whether control can leave a [block](
+/// RegionKind::Block) other than by falling off its end.
+fn jumps_to(stmts: &[Stmt], label: LabelId) -> bool {
+    stmts.iter().any(|stmt| stmt_jumps_to(stmt, label))
+}
+
+fn stmt_jumps_to(stmt: &Stmt, label: LabelId) -> bool {
+    let jumps = |stmt: &Stmt| stmt_jumps_to(stmt, label);
+    match stmt {
+        Stmt::Goto { id, .. } => *id == label,
+        Stmt::Block(items) => items.iter().any(jumps),
+        Stmt::Region(region) => region.body.iter().any(jumps),
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => jumps(then_branch) || else_branch.as_ref().is_some_and(|s| jumps(s)),
+        Stmt::While { body, .. }
+        | Stmt::DoWhile { body, .. }
+        | Stmt::For { body, .. }
+        | Stmt::Label { body, .. }
+        | Stmt::Case { body, .. } => jumps(body),
+        Stmt::Switch(switch) => {
+            switch.prelude.iter().any(jumps)
+                || switch
+                    .groups
+                    .iter()
+                    .any(|group| group.body.iter().any(jumps))
+        }
+        Stmt::SwitchTree(switch) => jumps(&switch.body),
+        _ => false,
+    }
+}
+
 /// Whether any `break` inside `stmt` leaves `target`.
 ///
 /// Every `break` names what it leaves, so this never has to reason about
@@ -3645,6 +3742,7 @@ fn breaks_to(stmt: &Stmt, target: BreakTarget) -> bool {
     match stmt {
         Stmt::Break { target: found, .. } => *found == target,
         Stmt::Block(items) => items.iter().any(breaks),
+        Stmt::Region(region) => region.body.iter().any(breaks),
         Stmt::If {
             then_branch,
             else_branch,

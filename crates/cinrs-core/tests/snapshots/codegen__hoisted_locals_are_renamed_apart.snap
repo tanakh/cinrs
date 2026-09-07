@@ -1,8 +1,8 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-expression: "generate(r\"\n        int shadowing(int n) {\n            int total = 0;\n            { int x = 1; total += x; }\n            { int x = 20; { int x = 300; total += x; } total += x; }\n            if (n) goto out;\n            total = -1;\n        out:\n            return total;\n        }\n        \")"
+expression: "generate(r\"\n        int shadowing(int n) {\n            int total = 0;\n            { int x = 1; total += x; }\n            { int x = 20; { int x = 300; total += x; } total += x; }\n            if (n) goto inside;\n            while (n < 0) {\n            inside:\n                total = -1;\n                n++;\n            }\n            return total;\n        }\n        \")"
 ---
-mod __cinrs_unit_50c08a5c {
+mod __cinrs_unit_386f1989 {
     const _: () = { /* the data-model check */ };
     #[allow(…)]
     pub unsafe extern "C" fn shadowing(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -30,11 +30,20 @@ mod __cinrs_unit_50c08a5c {
                         continue 'cfg;
                     }
                     1 => {
-                        total = -1;
-                        __cinrs_state = 2;
+                        if n < 0 {
+                            __cinrs_state = 2;
+                        } else {
+                            __cinrs_state = 3;
+                        }
                         continue 'cfg;
                     }
                     2 => {
+                        total = -1;
+                        n = n.wrapping_add(1);
+                        __cinrs_state = 1;
+                        continue 'cfg;
+                    }
+                    3 => {
                         return total;
                     }
                     _ => ::core::unreachable!(),
@@ -44,4 +53,4 @@ mod __cinrs_unit_50c08a5c {
     }
 }
 #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
-pub use __cinrs_unit_50c08a5c::*;
+pub use __cinrs_unit_386f1989::*;

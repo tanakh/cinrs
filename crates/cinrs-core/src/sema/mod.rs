@@ -515,6 +515,7 @@ struct SavedFunc {
     func_params: Vec<ObjectId>,
     va_param: Option<ObjectId>,
     cfg_mode: bool,
+    region_labels: HashSet<String>,
     labels: HashMap<String, Label>,
     breakables: Vec<Breakable>,
     switch_stack: Vec<SwitchState>,
@@ -780,8 +781,13 @@ struct Sema<'a> {
     /// *non*-variadic function is copied from.
     va_param: Option<ObjectId>,
     /// Whether the function being checked is lowered through a control-flow
-    /// graph, which is what `goto` and a nested `case` label need.
+    /// graph, which is what a `goto` Rust cannot express and a nested `case`
+    /// label need.
     cfg_mode: bool,
+    /// The labels of the function being checked that a
+    /// [region](crate::regions) will be built for, which are the ones a
+    /// structured body has to keep. Empty in CFG mode, which keeps them all.
+    region_labels: HashSet<String>,
     /// The labels of the function being checked, collected before its body is.
     labels: HashMap<String, Label>,
     /// Whether the initialiser being checked may give a flexible array member
@@ -872,6 +878,7 @@ impl<'a> Sema<'a> {
             func_params: Vec::new(),
             va_param: None,
             cfg_mode: false,
+            region_labels: HashSet::new(),
             labels: HashMap::new(),
             flexible_init: init::FlexibleInit::Automatic,
             label_addrs: HashSet::new(),

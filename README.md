@@ -82,8 +82,11 @@ cinrs::include_c99!("vendor/parser.c");
   is written in — variable length arrays, file-scope,
   `static` and `extern` objects, every operator, every control structure —
   `if`, `while`, `do`/`while`, `for`, `switch` with fallthrough, `break`,
-  `continue`, `return`, and `goto`, which is lowered to a state machine over
-  basic blocks.
+  `continue`, `return`, and `goto` — an outward one becomes a labelled block
+  or a labelled loop named after the C label, so `goto done` is `break 'done`
+  and `goto retry` is `continue 'retry`; a jump Rust cannot make at all (into
+  a block, or through a computed `goto`) puts the function through a state
+  machine over basic blocks instead.
 * **Every character set C has.** Digraphs, the bundled `<iso646.h>`, and the
   nine **trigraphs**, replaced in translation phase 1 wherever the revision
   still has them — every strict entry point below `c23!`, which is where C
@@ -135,8 +138,9 @@ cinrs::include_c99!("vendor/parser.c");
   is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
   `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members
   (initialised ones included, for an object with static storage duration),
-  **labels as values** — `&&label` and the computed `goto *e`, which fall out
-  of the state machine a jumping function is already lowered into —
+  **labels as values** — `&&label` and the computed `goto *e`, whose value is
+  the state number the label stands for in the machine such a function is
+  lowered into —
   `asm` labels, `constructor`/`destructor`, `__func__`, casts to a union type,
   **nested functions** — lambda-lifted to a private file-scope item that takes
   a pointer to each enclosing local it uses, so a store inside one is visible
@@ -662,6 +666,14 @@ wrapping arithmetic, division) — built three times over, as `gcc -O2`, as
 `clang -O2`, and as a `cinrs` block compiled by `rustc -C opt-level=3`, and
 timed. Every program's output is compared byte for byte across the three
 builds, so the suite is a differential test as well as a benchmark.
+
+Two of those kernels are a pair: `statemachine`, a lexer written as a dozen
+labels that jump into one another, and `statemachine-structured`, the same
+lexer with `while` and `switch`. `gcc` and `clang` take the same time over
+both; what separates them for `cinrs` is the state machine an unstructurable
+`goto` still needs. An *outward* `goto` needs none — it is a labelled block or
+a labelled loop — which is why `whetstone` and `interp-switch`, whose jumps are
+of that kind, sit on `gcc -O2`.
 
 `benches/cinrs-bench` is the harness; its
 [README](benches/cinrs-bench/README.md) says how to run it and how to add a

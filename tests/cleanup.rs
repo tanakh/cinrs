@@ -8,10 +8,13 @@
 //!
 //! The two lowerings say it differently and have to agree. In the structured
 //! one a drop guard is bound right after the object, so Rust's own drop order
-//! *is* C's; in the [CFG] one the locals live to the end of the function, so
-//! the calls are emitted on the edges that leave the scope. Every test here
-//! runs in both, which is what the `goto` in the second half of each pair is
-//! for.
+//! *is* C's — and a `goto` that leaves a scope is a `break` out of the Rust
+//! block it is, which drops what that block holds; in the [CFG] one the locals
+//! live to the end of the function, so the calls are emitted on the edges that
+//! leave the scope. Every test here runs in both, which is what the second
+//! half of each pair is for: an ordinary `goto` outwards keeps the structured
+//! form now, so the twin uses a computed one, which nothing but the graph can
+//! express.
 //!
 //! [CFG]: https://docs.rs/cinrs
 
@@ -43,11 +46,12 @@ fn guards_run_in_reverse_declaration_order() {
             return trace[0] * 100 + trace[1] * 10 + trace[2] + traced * 1000;
         }
 
-        /* The same, in a function the `goto` puts through the control-flow
-           graph. */
+        /* The same, in a function the computed `goto` puts through the
+           control-flow graph. */
         int with_goto(void) {
+            void *entry = &&start;
             traced = 0;
-            goto start;
+            goto *entry;
         start:
             {
                 int a __attribute__((cleanup(note))) = 1;
@@ -115,8 +119,9 @@ fn every_exit_from_the_scope_runs_the_cleanup() {
            `return` rather than drops after it: the value goes into a
            temporary, so the call cannot change it either. */
         int value_first_with_goto(int c) {
+            void *entry = &&here;
             if (c) {
-                goto here;
+                goto *entry;
             }
         here:
             {
@@ -141,14 +146,15 @@ fn every_exit_from_the_scope_runs_the_cleanup() {
             return runs * 100 + last;
         }
 
-        /* The same loop in a function the `goto` puts through the
+        /* The same loop in a function the computed `goto` puts through the
            control-flow graph, where the object is hoisted and the call is
            emitted on each edge that leaves the body: once per iteration, on
            the bottom edge, on the `continue` and on the `break` alike. */
         int per_iteration_with_goto(int n) {
+            void *entry = &&start;
             runs = 0;
             int i = 0;
-            goto start;
+            goto *entry;
         start:
             for (; i < n; i++) {
                 int a __attribute__((cleanup(count))) = i;
@@ -207,7 +213,9 @@ fn a_goto_leaving_two_scopes_runs_both_cleanups() {
         static void note(int *p) { trace[traced++] = *p; }
 
         /* The jump leaves two scopes at once, innermost first — and the label
-           is outside both. */
+           is outside both. It is an outward `goto`, so this one keeps the
+           structured form: the `break` out of the two Rust blocks drops the
+           guards they hold, in Rust's own order. */
         int out_of_two(void) {
             traced = 0;
             {
@@ -255,15 +263,50 @@ fn a_goto_leaving_two_scopes_runs_both_cleanups() {
             }
             return traced * 100 + trace[0] * 10 + trace[2];
         }
+
+        /* Both of those in the graph, where the calls are statements on the
+           edge the jump takes rather than drops at the end of a block. */
+        int out_of_two_in_the_graph(void) {
+            void *target = &&done;
+            traced = 0;
+            {
+                int outer __attribute__((cleanup(note))) = 1;
+                {
+                    int inner __attribute__((cleanup(note))) = 2;
+                    if (outer + inner == 3) {
+                        goto *target;
+                    }
+                    trace[traced++] = 99;
+                }
+            }
+        done:
+            return traced * 100 + trace[0] * 10 + trace[1];
+        }
+
+        int backwards_in_the_graph(void) {
+            void *target = &&again;
+            traced = 0;
+            int i = 0;
+        again:
+            {
+                int a __attribute__((cleanup(note))) = i;
+                if (++i < 3) {
+                    goto *target;
+                }
+            }
+            return traced * 100 + trace[0] * 10 + trace[2];
+        }
     }
 
     unsafe {
         // Inner (2) then outer (1).
         assert_eq!(out_of_two(), 2 * 100 + 2 * 10 + 1);
+        assert_eq!(out_of_two_in_the_graph(), 2 * 100 + 2 * 10 + 1);
         // Inner (2), the marker (3), then the outer (1).
         assert_eq!(out_of_one(), 3 * 1000 + 2 * 100 + 3 * 10 + 1);
         // Three passes, values 0, 1, 2.
         assert_eq!(backwards(), 3 * 100 + 2);
+        assert_eq!(backwards_in_the_graph(), 3 * 100 + 2);
     }
 }
 

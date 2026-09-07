@@ -1,6 +1,8 @@
 //! Statements: the lowering of `switch` into fallthrough groups, and the
 //! decision between the structured and the [CFG](crate::cfg) form.
 
+use std::collections::HashSet;
+
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
@@ -138,13 +140,13 @@ impl Sema<'_> {
     /// Refuses the jumps a statement expression may not make.
     ///
     /// A label — and therefore a `goto` — inside one is refused in every mode:
-    /// the decision to lower a function through a
-    /// [control-flow graph](crate::cfg) is made from the *statements* of its
-    /// body, so a jump buried in an expression would be silently dropped
-    /// rather than lowered. `break` and `continue` that leave the statement
-    /// expression are fine in the structured mode, where a Rust block
-    /// expression is exactly what a statement expression is, and refused in
-    /// CFG mode, where there is no loop left to leave.
+    /// how a function is lowered is decided from the *statements* of its body,
+    /// so a jump buried in an expression would be silently dropped rather than
+    /// lowered — by the [regions](crate::regions) as much as by the
+    /// [control-flow graph](crate::cfg). `break` and `continue` that leave the
+    /// statement expression are fine in the structured mode, where a Rust
+    /// block expression is exactly what a statement expression is, and refused
+    /// in CFG mode, where there is no loop left to leave.
     fn check_stmt_expr_jumps(&mut self, block: &ast::Block) {
         let mut bad: Vec<(SourceRange, Escape)> = Vec::new();
         collect_escaping_jumps(&block.items, 0, &mut bad);
@@ -156,9 +158,9 @@ impl Sema<'_> {
                      expression can jump to it"
                 ),
                 Escape::Leaves(what) if cfg_mode => format!(
-                    "{what} inside a statement expression is not supported in a function that \
-                     also uses 'goto': the function is lowered into a state machine, and there \
-                     is no enclosing loop left to leave"
+                    "{what} inside a statement expression is not supported in a function whose \
+                     jumps Rust cannot express: the function is lowered into a state machine, \
+                     and there is no enclosing loop left to leave"
                 ),
                 Escape::Leaves(_) => continue,
             };
@@ -177,13 +179,15 @@ impl Sema<'_> {
                     self.label_vla_scopes.entry(id).or_insert(scopes);
                 }
                 let body = Box::new(self.stmt(body));
+                let wanted = self.cfg_mode || self.region_labels.contains(&label.name);
                 match self.labels.get(&label.name) {
-                    // Outside CFG mode nothing can jump to a label, so it is
-                    // only the statement under it that matters. The range says
-                    // whether this is the occurrence that *defined* the label:
-                    // a repeat has been reported already, and giving the graph
-                    // two entries into one block would only confuse it.
-                    Some(entry) if self.cfg_mode && entry.range == label.range => Stmt::Label {
+                    // A label nothing jumps to leaves no trace: it matters only
+                    // where the graph enters it, or where a
+                    // [region](crate::regions) will be built for it. The range
+                    // says whether this is the occurrence that *defined* the
+                    // label: a repeat has been reported already, and giving the
+                    // graph two entries into one block would only confuse it.
+                    Some(entry) if wanted && entry.range == label.range => Stmt::Label {
                         id: entry.id,
                         body,
                         range: label.range,
@@ -988,21 +992,26 @@ impl Sema<'_> {
         self.label_vla_scopes.clear();
     }
 
-    /// Whether a function's body has to be lowered through a control-flow
-    /// graph.
+    /// How a function's body is lowered: `None` for the control-flow graph,
+    /// and otherwise the labels the structured form builds a
+    /// [region](crate::regions) for.
     ///
-    /// Three things force it: a `goto` — computed or not — which Rust has
-    /// nothing to offer for; GNU's `&&label`, whose *value* is the state
-    /// number the label stands for; and a `case` or `default` label that is
-    /// not a direct child of its `switch` body, which the fallthrough-group
-    /// lowering cannot express. Everything else keeps the structured form,
-    /// whose output reads like the C it came from.
+    /// Three things force the graph: a `goto` that is not an outward jump —
+    /// [`regions`](crate::regions) is what decides which are — and GNU's
+    /// computed `goto`, which jumps to a value; `&&label`, whose *value* is
+    /// the state number the label stands for; and a `case` or `default` label
+    /// that is not a direct child of its `switch` body, which the
+    /// fallthrough-group lowering cannot express. Everything else keeps the
+    /// structured form, whose output reads like the C it came from.
     ///
-    /// The first two are read off the statements, and `&&label` off
-    /// [`ast::FunctionDef::uses_label_addrs`], because it is an expression and
-    /// may stand anywhere one may.
-    pub(super) fn needs_cfg(def: &ast::FunctionDef) -> bool {
-        def.uses_label_addrs || block_needs_cfg(&def.body, 0, false)
+    /// The labels and the `case`s are read off the statements, and `&&label`
+    /// off [`ast::FunctionDef::uses_label_addrs`], because it is an expression
+    /// and may stand anywhere one may.
+    pub(super) fn lowering(def: &ast::FunctionDef) -> Option<HashSet<String>> {
+        if def.uses_label_addrs || block_needs_cfg(&def.body, 0, false) {
+            return None;
+        }
+        crate::regions::analyze(&def.body)
     }
 
     /// Evaluates a `case` label and converts it to the switch's type.
@@ -1181,7 +1190,9 @@ fn block_needs_cfg(block: &ast::Block, switch_depth: u32, at_top: bool) -> bool 
 
 fn stmt_needs_cfg(stmt: &ast::Stmt, switch_depth: u32, at_top: bool) -> bool {
     match &stmt.kind {
-        ast::StmtKind::Goto(_) | ast::StmtKind::GotoPtr(_) => true,
+        // An ordinary `goto` is [`crate::regions`]'s to answer for; a computed
+        // one jumps to a state number, which only the graph has.
+        ast::StmtKind::GotoPtr(_) => true,
         // A chain of labels on one statement is as much a direct child of the
         // `switch` as the statement itself.
         ast::StmtKind::Case { body, .. }

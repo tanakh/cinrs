@@ -3,10 +3,11 @@
 //! What the state machine *computes* is covered by the integration tests that
 //! run it, and what it *reads* like by the code-generation snapshots. This file
 //! covers the invariants that hold between the two: which functions take the
-//! CFG path at all, that the cleanups leave a graph with no block that only
-//! forwards to another and none that cannot be reached, and that a label whose
-//! address GNU's `&&label` took keeps a block — and therefore a number — of
-//! its own through all three.
+//! CFG path **at all** — most `goto`s do not, and
+//! [`cinrs_core::regions`] is where that line is drawn — that the
+//! cleanups leave a graph with no block that only forwards to another and none
+//! that cannot be reached, and that a label whose address GNU's `&&label` took
+//! keeps a block — and therefore a number — of its own through all three.
 
 use std::str::FromStr;
 
@@ -121,35 +122,97 @@ fn check_invariants(cfg: &Cfg) {
     );
 }
 
+/// A scanner that enters its loop in the middle.
+///
+/// A jump *into* a block is the one thing no Rust label can express — a
+/// labelled block is only ever entered at its top — so this is a function the
+/// graph is for. See [`only_a_jump_rust_cannot_make_takes_the_cfg_path`].
 const FIND: &str = "
     int find(const int *values, int n, int needle) {
         int i = 0;
-    loop:
-        if (i >= n) goto missing;
-        if (values[i] == needle) goto found;
-        i++;
-        goto loop;
-    found:
-        return i;
-    missing:
+        if (n < 0) goto probe;
+        while (i < n) {
+            i++;
+        probe:
+            if (values[i] == needle) return i;
+        }
         return -1;
     }
 ";
 
 #[test]
-fn only_a_function_that_jumps_takes_the_cfg_path() {
-    // A `goto` anywhere in the function is enough.
+fn only_a_jump_rust_cannot_make_takes_the_cfg_path() {
+    // A jump into a loop body, an `if` branch or a `switch` group: there is no
+    // way into a Rust block but its top.
     assert!(!is_structured(FIND, "find"));
-    // A label with nothing jumping to it is not.
-    assert!(is_structured("int f(int n) { done: return n; }", "f"));
-    // Nor is an ordinary `switch`, however tangled.
-    assert!(is_structured(
-        "int f(int n) { switch (n) { case 1: case 2: return 1; default: break; } return 0; }",
+    assert!(!is_structured(
+        "int f(int n) { if (n) goto in_branch; if (n > 1) { in_branch: return 1; } return 0; }",
         "f"
     ));
-    // A `case` label that is not a direct child of the body is.
+    assert!(!is_structured(
+        "int f(int n) { if (n) goto arm; switch (n) { case 1: arm: return 1; } return 0; }",
+        "f"
+    ));
+    // A label in a block the `goto` is not inside is the same thing.
+    assert!(!is_structured(
+        "int f(int n) { { goto other; } { other: return 1; } }",
+        "f"
+    ));
+    // Two labels whose regions would have to overlap without nesting: the
+    // forward jump to `late` has to cross the loop `early` heads.
+    assert!(!is_structured(
+        "int f(int n) { if (n) goto late; early: n++; late: if (n < 3) goto early; return n; }",
+        "f"
+    ));
+    // A declaration between the first jump and the label it names: the region
+    // is a Rust block, and `x` would go out of scope at the label.
+    assert!(!is_structured(
+        "int f(int n) { if (n) goto done; int x = n + 1; n = x; done: return n; }",
+        "f"
+    ));
+    // GNU's `&&label`, whose value is the state number the label stands for.
+    assert!(!is_structured(
+        "int f(int n) { void *p = &&here; goto *p; here: return n; }",
+        "f"
+    ));
+    // A `case` label that is not a direct child of its `switch` body.
     assert!(!is_structured(
         "int f(int n) { switch (n) { if (n) { case 1: return 1; } } return 0; }",
+        "f"
+    ));
+
+    // An outward `goto` is a `break` of a labelled block, and a backward one a
+    // `continue` of a labelled loop, so neither needs the graph.
+    assert!(is_structured(
+        "int f(int n) { int t = 0; while (n) { if (n == 3) goto done; t += n--; } done: return t; }",
+        "f"
+    ));
+    assert!(is_structured(
+        "int f(int n) { retry: if (n > 10) { n /= 2; goto retry; } return n; }",
+        "f"
+    ));
+    // Both kinds at one label, which is a block in front of a loop.
+    assert!(is_structured(
+        "int f(int n) { if (n < 0) goto retry; n = -n; retry: n++; if (n < 0) goto retry; return n; }",
+        "f"
+    ));
+    // A jump out of a `switch`, which the labelled-block chain is inside.
+    assert!(is_structured(
+        "int f(int n) { switch (n) { case 1: goto done; default: n = 0; } n++; done: return n; }",
+        "f"
+    ));
+    // A declaration in a block *inside* the region is as scoped as C says, so
+    // it is no obstacle: leaving that block through the `break` frees what it
+    // holds, which is what leaving it any other way would do.
+    assert!(is_structured(
+        "int f(int n) { { int a[n]; a[0] = 1; if (n) goto done; n += a[0]; } n++; done: return n; }",
+        "f"
+    ));
+    // A label with nothing jumping to it needs nothing at all.
+    assert!(is_structured("int f(int n) { done: return n; }", "f"));
+    // Nor does an ordinary `switch`, however tangled.
+    assert!(is_structured(
+        "int f(int n) { switch (n) { case 1: case 2: return 1; default: break; } return 0; }",
         "f"
     ));
     // Only the function that jumps changes shape.
@@ -161,9 +224,9 @@ fn only_a_function_that_jumps_takes_the_cfg_path() {
 fn the_graph_is_cleaned_up() {
     let cfg = cfg_of(FIND, "find");
     check_invariants(&cfg);
-    // The entry, the two tests, the two returns and the increment: chain
-    // merging leaves nothing else, and the `loop:` label costs no block of its
-    // own because the test was merged into it.
+    // The entry, the loop's test, the increment, the probe and the two
+    // returns: chain merging leaves nothing else, and the `probe:` label costs
+    // no block of its own because the test was merged into it.
     assert_eq!(cfg.blocks.len(), 6, "{cfg:#?}");
     // Both returns are their own block, and both are reachable.
     let returns = cfg
@@ -209,8 +272,10 @@ fn every_local_gets_a_name_of_its_own() {
              { int x = 1; total += x; }
              { int x = 20; { int x = 300; total += x; } }
              if (n) goto out;
-             total = -1;
-         out:
+             while (n < 0) {
+             out:
+                 total = -1;
+             }
              return total;
          }",
         "shadowing",
@@ -226,8 +291,10 @@ fn a_function_local_static_is_not_hoisted() {
              static int calls;
              int local = 0;
              if (n) goto out;
-             local = 1;
-         out:
+             while (n < 0) {
+             out:
+                 local = 1;
+             }
              calls++;
              return calls + local;
          }",
@@ -242,15 +309,14 @@ fn a_loop_keeps_its_edges() {
     let cfg = cfg_of(
         "int sum(int n) {
              int total = 0;
+             if (n < 0) goto zero;
              for (int i = 0; i < n; i++) {
                  if (i == 3) continue;
                  if (i == 7) break;
+             zero:
                  total += i;
              }
-             if (total < 0) goto zero;
              return total;
-         zero:
-             return 0;
          }",
         "sum",
     );

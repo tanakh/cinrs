@@ -1,0 +1,28 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int gcd(int a, int b) {\n            int t;\n        retry:\n            if (b != 0) {\n                t = a % b;\n                a = b;\n                b = t;\n                goto retry;\n            }\n            return a;\n        }\n        \")"
+---
+mod __cinrs_unit_e5690b9b {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    pub unsafe extern "C" fn gcd(
+        mut a: ::core::ffi::c_int,
+        mut b: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut t: ::core::ffi::c_int = 0;
+            'retry: loop {
+                if b != 0 {
+                    t = a % b;
+                    a = b;
+                    b = t;
+                    continue 'retry;
+                }
+                break 'retry;
+            }
+            return a;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_e5690b9b::*;

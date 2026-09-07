@@ -1,56 +1,48 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-expression: "generate(r\"\n        int find(const int *values, int n, int needle) {\n            int i = 0;\n        loop:\n            if (i >= n) goto missing;\n            if (values[i] == needle) goto found;\n            i++;\n            goto loop;\n        found:\n            return i;\n        missing:\n            return -1;\n        }\n        \")"
+expression: "generate(r\"\n        int countdown(int n, int start_inside) {\n            int steps = 0;\n            if (start_inside) goto inside;\n            while (n > 0) {\n                n--;\n            inside:\n                steps++;\n            }\n            return steps * 10 + n;\n        }\n        \")"
 ---
-mod __cinrs_unit_3db7f700 {
+mod __cinrs_unit_e25ccc91 {
     const _: () = { /* the data-model check */ };
     #[allow(…)]
-    pub unsafe extern "C" fn find(
-        mut values: *const ::core::ffi::c_int,
+    pub unsafe extern "C" fn countdown(
         mut n: ::core::ffi::c_int,
-        mut needle: ::core::ffi::c_int,
+        mut start_inside: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
         unsafe {
-            let mut i: ::core::ffi::c_int = 0;
+            let mut steps: ::core::ffi::c_int = 0;
             let mut __cinrs_state: ::core::primitive::u32 = 0;
             'cfg: loop {
                 match __cinrs_state {
                     0 => {
-                        i = 0;
-                        __cinrs_state = 1;
+                        steps = 0;
+                        if start_inside != 0 {
+                            __cinrs_state = 3;
+                        } else {
+                            __cinrs_state = 1;
+                        }
                         continue 'cfg;
                     }
                     1 => {
-                        if i >= n {
+                        if n > 0 {
                             __cinrs_state = 2;
                         } else {
-                            __cinrs_state = 3;
+                            __cinrs_state = 4;
                         }
                         continue 'cfg;
                     }
                     2 => {
-                        return -1;
+                        n = n.wrapping_sub(1);
+                        __cinrs_state = 3;
+                        continue 'cfg;
                     }
                     3 => {
-                        if ({
-                            let __cinrs_tmp0 = values
-                                .offset(i as ::core::primitive::isize);
-                            (*__cinrs_tmp0)
-                        }) == needle
-                        {
-                            __cinrs_state = 4;
-                        } else {
-                            __cinrs_state = 5;
-                        }
+                        steps = steps.wrapping_add(1);
+                        __cinrs_state = 1;
                         continue 'cfg;
                     }
                     4 => {
-                        return i;
-                    }
-                    5 => {
-                        i = i.wrapping_add(1);
-                        __cinrs_state = 1;
-                        continue 'cfg;
+                        return steps.wrapping_mul(10).wrapping_add(n);
                     }
                     _ => ::core::unreachable!(),
                 }
@@ -59,4 +51,4 @@ mod __cinrs_unit_3db7f700 {
     }
 }
 #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
-pub use __cinrs_unit_3db7f700::*;
+pub use __cinrs_unit_e25ccc91::*;

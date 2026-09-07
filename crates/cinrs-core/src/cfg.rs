@@ -1,11 +1,17 @@
-//! The control-flow-graph lowering, used for functions that jump.
+//! The control-flow-graph lowering: the fallback for the jumps Rust cannot
+//! make.
 //!
 //! Nearly every C function's control flow maps onto Rust's own — that is what
 //! [`codegen`](crate::codegen) does by default, and it is what makes an
-//! expansion readable. Three constructs do not map:
+//! expansion readable. An outward `goto` maps too, onto the labelled block or
+//! the labelled loop [`regions`](crate::regions) builds for it. What is left
+//! does not:
 //!
-//! * `goto`, which may jump anywhere in the function, forwards or backwards,
-//!   into or out of any block;
+//! * a `goto` **into** a block — a label inside a loop body, an `if` branch or
+//!   a `switch` group, named from outside it — or one whose regions would have
+//!   to overlap another label's without nesting, or one with a declaration
+//!   between it and the label it names; [`regions`](crate::regions) is where
+//!   the line is drawn;
 //! * a `case` (or `default`) label that is not a direct child of its `switch`
 //!   body — Duff's device, where the labels sit inside a loop the `switch`
 //!   wraps; and
@@ -581,6 +587,9 @@ impl Lowerer<'_> {
             }
             Stmt::Switch(_) => {
                 unreachable!("sema lowers every switch into a SwitchTree in CFG mode")
+            }
+            Stmt::Region(_) => {
+                unreachable!("a region is only built for a body that stays structured")
             }
         }
     }

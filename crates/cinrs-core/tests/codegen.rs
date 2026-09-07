@@ -436,26 +436,73 @@ fn a_call_without_a_prototype_casts_at_the_call_site() {
     ));
 }
 
+/// A `goto` out of a nest of loops to a label near the end of the function:
+/// the label ends a labelled block, and the jump is the `break` that leaves it.
 #[test]
-fn goto_becomes_a_state_machine() {
+fn an_outward_goto_becomes_a_labelled_block() {
     insta::assert_snapshot!(generate(
         r"
-        int find(const int *values, int n, int needle) {
-            int i = 0;
-        loop:
-            if (i >= n) goto missing;
-            if (values[i] == needle) goto found;
-            i++;
-            goto loop;
-        found:
-            return i;
-        missing:
-            return -1;
+        int find_pair(const int *values, int n, int target) {
+            int found = -1;
+            for (int i = 0; i < n; i++) {
+                for (int j = i + 1; j < n; j++) {
+                    if (values[i] + values[j] == target) {
+                        found = i * 100 + j;
+                        goto done;
+                    }
+                }
+            }
+        done:
+            return found;
         }
         "
     ));
 }
 
+/// A `goto` back to a label the statements after it belong to: the label opens
+/// a labelled loop, and the jump is the `continue` that restarts it.
+#[test]
+fn a_backward_goto_becomes_a_labelled_loop() {
+    insta::assert_snapshot!(generate(
+        r"
+        int gcd(int a, int b) {
+            int t;
+        retry:
+            if (b != 0) {
+                t = a % b;
+                a = b;
+                b = t;
+                goto retry;
+            }
+            return a;
+        }
+        "
+    ));
+}
+
+/// A jump *into* a loop body has no Rust shape at all, so the whole function
+/// becomes a state machine over its basic blocks.
+#[test]
+fn goto_becomes_a_state_machine() {
+    insta::assert_snapshot!(generate(
+        r"
+        int countdown(int n, int start_inside) {
+            int steps = 0;
+            if (start_inside) goto inside;
+            while (n > 0) {
+                n--;
+            inside:
+                steps++;
+            }
+            return steps * 10 + n;
+        }
+        "
+    ));
+}
+
+/// The jump here is into the body of the `while`, which is what keeps the
+/// function on the CFG path: every local of one goes into a single scope, and
+/// the three `x`es have to be told apart there.
 #[test]
 fn hoisted_locals_are_renamed_apart() {
     insta::assert_snapshot!(generate(
@@ -464,9 +511,12 @@ fn hoisted_locals_are_renamed_apart() {
             int total = 0;
             { int x = 1; total += x; }
             { int x = 20; { int x = 300; total += x; } total += x; }
-            if (n) goto out;
-            total = -1;
-        out:
+            if (n) goto inside;
+            while (n < 0) {
+            inside:
+                total = -1;
+                n++;
+            }
             return total;
         }
         "
@@ -1164,18 +1214,22 @@ fn a_cleanup_attribute_in_a_cfg_body_runs_on_the_edges() {
     // the call instead — the `continue` and the bottom of the loop body alike,
     // which is what runs it once per iteration. The `return` computes its
     // value into a temporary first, because C runs the cleanups after the
-    // result is known.
+    // result is known. The jump into the loop body is what keeps the function
+    // on this path; the structured lowering does the same thing with Rust's
+    // own drops, and has a snapshot of its own.
     insta::assert_snapshot!(generate(
         r#"
         static void note(int *p);
 
         int jumping(int c) {
             int a __attribute__((cleanup(note))) = 1;
+            if (c < 0) goto inside;
             while (c) {
                 int b __attribute__((cleanup(note))) = 2;
                 if (b) {
                     continue;
                 }
+            inside:
                 goto out;
             }
             return a;

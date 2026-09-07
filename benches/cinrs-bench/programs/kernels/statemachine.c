@@ -1,10 +1,12 @@
 /* A lexer written as a `goto`-heavy state machine.
  *
- * Twelve labels and a `goto` out of each of them, which is the shape `cinrs`
- * has to lower into its own state machine over basic blocks: a function that
- * jumps becomes a `loop { match block { … } }`, so a C program that was
- * already a state machine gets translated into one and this measures what the
- * second layer costs.
+ * Twelve labels and a `goto` out of each of them, jumping into one another in
+ * both directions, which is the shape `cinrs` has to lower into its own state
+ * machine over basic blocks: an *outward* `goto` becomes a labelled block or a
+ * labelled loop and costs nothing, but these regions would have to overlap
+ * without nesting, so the function becomes a `loop { match block { … } }`. A C
+ * program that was already a state machine gets translated into one, and this
+ * measures what the second layer costs.
  *
  * SPDX-License-Identifier: MIT OR Apache-2.0
  */
