@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.6 %** (`gnu11!`), 85.2 % (`gnu89!`) | 254: 0 bug, 16 unimplemented, 189 not planned, 49 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.6 %** (`gnu11!`), 85.2 % (`gnu89!`); 88.9 % / 88.5 % on `beta` | 254: 0 bug, 3 unimplemented, 190 not planned, 61 toolchain |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **81.3 %** of the 203 run | 38: 0 bug, 8 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -177,7 +177,7 @@ A summary therefore reads
 
 ```
 gcc.c-torture/execute through `gnu11!`: 1515/1769 correct (85.6%) — 1411 passed, 104 rejected as the standard requires
-  errors: 254 — bug 0, unimplemented 16, not planned 189, toolchain 49
+  errors: 254 — bug 0, unimplemented 3, not planned 190, toolchain 61
   (7 not generated) — 4 m 22 s
 ```
 
@@ -189,7 +189,7 @@ One id per line: a marker, the id, a category tag and a note.
 
 ```
 execute/20001009-2  [not-planned]    compile error: inline assembly is not supported
-00204               [unimplemented]  unsupported: `va_arg` with a struct type
+00213               [unimplemented]  unsupported: a `goto` out of a statement expression
 ?00140                               variadic function definition; needs Rust 1.99
 !00200                               error: "'long long' requires C99 or later"  conforming: …
 ```

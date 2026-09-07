@@ -1,0 +1,84 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr\"\n        #include <stdarg.h>\n\n        /* One SSE eightbyte then one INTEGER eightbyte. */\n        struct Mixed { double d; int i; };\n        /* The other way round, which is not the same classification. */\n        struct Other { int i; double d; };\n        /* Two floats share the first eightbyte; the third has its own. */\n        struct Three { float a, b, c; };\n        /* Thirteen bytes of `char` are two INTEGER eightbytes. */\n        struct Bytes { char x[13]; };\n\n        double read_them(int n, ...) {\n            va_list ap;\n            va_start(ap, n);\n            struct Mixed m = va_arg(ap, struct Mixed);\n            struct Other o = va_arg(ap, struct Other);\n            struct Three t = va_arg(ap, struct Three);\n            struct Bytes b = va_arg(ap, struct Bytes);\n            va_end(ap);\n            return m.d + m.i + o.i + o.d + t.a + t.b + t.c + b.x[12];\n        }\n        \")"
+---
+mod __cinrs_unit_3f73a1c1 {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Mixed {
+        pub d: ::core::ffi::c_double,
+        pub i: ::core::ffi::c_int,
+    }
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Other {
+        pub i: ::core::ffi::c_int,
+        pub d: ::core::ffi::c_double,
+    }
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Three {
+        pub a: ::core::ffi::c_float,
+        pub b: ::core::ffi::c_float,
+        pub c: ::core::ffi::c_float,
+    }
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Bytes {
+        pub x: [::core::ffi::c_char; 13],
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn read_them(
+        mut n: ::core::ffi::c_int,
+        __cinrs_va: ...
+    ) -> ::core::ffi::c_double {
+        unsafe {
+            let mut ap: ::core::ffi::VaList = __cinrs_va.clone();
+            ap = __cinrs_va.clone();
+            let mut m: Mixed = {
+                let __cinrs_tmp0: [::core::primitive::u64; 2] = [
+                    ap.next_arg::<::core::primitive::f64>().to_bits(),
+                    ap.next_arg::<::core::primitive::u64>(),
+                ];
+                ::core::ptr::read_unaligned(__cinrs_tmp0.as_ptr().cast::<Mixed>())
+            };
+            let mut o: Other = {
+                let __cinrs_tmp1: [::core::primitive::u64; 2] = [
+                    ap.next_arg::<::core::primitive::u64>(),
+                    ap.next_arg::<::core::primitive::f64>().to_bits(),
+                ];
+                ::core::ptr::read_unaligned(__cinrs_tmp1.as_ptr().cast::<Other>())
+            };
+            let mut t: Three = {
+                let __cinrs_tmp2: [::core::primitive::u64; 2] = [
+                    ap.next_arg::<::core::primitive::f64>().to_bits(),
+                    ap.next_arg::<::core::primitive::f64>().to_bits(),
+                ];
+                ::core::ptr::read_unaligned(__cinrs_tmp2.as_ptr().cast::<Three>())
+            };
+            let mut b: Bytes = {
+                let __cinrs_tmp3: [::core::primitive::u64; 2] = [
+                    ap.next_arg::<::core::primitive::u64>(),
+                    ap.next_arg::<::core::primitive::u64>(),
+                ];
+                ::core::ptr::read_unaligned(__cinrs_tmp3.as_ptr().cast::<Bytes>())
+            };
+            return m.d + m.i as ::core::ffi::c_double + o.i as ::core::ffi::c_double
+                + o.d + t.a as ::core::ffi::c_double + t.b as ::core::ffi::c_double
+                + t.c as ::core::ffi::c_double
+                + ({
+                    let __cinrs_tmp4 = (&raw mut b.x)
+                        .cast::<::core::ffi::c_char>()
+                        .offset(12);
+                    (*__cinrs_tmp4)
+                }) as ::core::ffi::c_double;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_3f73a1c1::*;

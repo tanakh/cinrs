@@ -3361,7 +3361,7 @@ impl<'a> Codegen<'a> {
             ExprKind::Builtin { op, args } => self.builtin(*op, args, span),
             ExprKind::Atomic(atomic) => self.atomic(atomic, span),
             ExprKind::VaListPristine => Value::new(self.va_pristine(span), prec::CALL),
-            ExprKind::VaArg { ap } => self.va_arg(ap, expr.ty, span),
+            ExprKind::VaArg { ap, record } => self.va_arg(ap, record.as_deref(), expr.ty, span),
             // `va_end` is nothing: the list ends when its value is dropped.
             ExprKind::VaEnd => Value::atom(quote_spanned! {span=> () }),
             // C23's `unreachable()`. C says reaching it is undefined, and
@@ -4597,8 +4597,49 @@ impl<'a> Codegen<'a> {
     /// asked for by name. A function pointer is the exception: `Option<fn>` is
     /// not one of them, so the argument is read as a `void *` and transmuted,
     /// which is what it is.
-    fn va_arg(&mut self, ap: &Place, ty: Ty, span: Span) -> Value {
+    ///
+    /// A `struct` or a `union` is not a primitive at all, and is rebuilt from
+    /// the registers the ABI passed it in — one `next_arg` per
+    /// [eightbyte](ir::Eightbyte), which `sema` has already classified. The
+    /// words are gathered into a `[u64; N]`, whose bytes are exactly the
+    /// object's, and read back out of it: `read_unaligned` rather than a
+    /// `transmute`, because the record may be *shorter* than the words that
+    /// carried it — `struct { char x[13]; }` arrives in two of them — and
+    /// because `[u64; N]` is eight-byte aligned while a record holding an
+    /// `__int128` wants sixteen.
+    fn va_arg(
+        &mut self,
+        ap: &Place,
+        record: Option<&[ir::Eightbyte]>,
+        ty: Ty,
+        span: Span,
+    ) -> Value {
         let access = self.place(ap, true).access;
+        if let Some(classes) = record {
+            let target = self.ty(ty, span);
+            let u64_ty = primitive_ty("u64", span);
+            let f64_ty = primitive_ty("f64", span);
+            let words = classes.iter().map(|class| match class {
+                ir::Eightbyte::Int => quote_spanned! {span=> #access.next_arg::<#u64_ty>() },
+                ir::Eightbyte::Sse => {
+                    quote_spanned! {span=> #access.next_arg::<#f64_ty>().to_bits() }
+                }
+                // The ABI passes an eightbyte nothing reaches in no register,
+                // so there is nothing to read and nothing the record can see.
+                ir::Eightbyte::None => quote_spanned! {span=> 0 },
+            });
+            let count = Literal::usize_unsuffixed(classes.len());
+            let value = self.temporary();
+            return Value::new(
+                quote_spanned! {span=>
+                    {
+                        let #value: [#u64_ty; #count] = [#(#words),*];
+                        ::core::ptr::read_unaligned(#value.as_ptr().cast::<#target>())
+                    }
+                },
+                prec::BLOCK,
+            );
+        }
         if self.program.types.is_func_pointer(ty) {
             let target = self.ty(ty, span);
             let void = self.pointee_ty(Ty::Void, span);

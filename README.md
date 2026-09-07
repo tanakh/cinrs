@@ -155,7 +155,9 @@ Run it with `cargo run --example fact`.
   width up from the operands, and there is nothing above 128 bits, so a
   128-bit *operand* is refused (a 128-bit *result* is fine); and
   `va_arg(ap, __int128)` needs a `VaArgSafe` implementation Rust still keeps
-  unstable, though *passing* one through `...` works.
+  unstable, though *passing* one through `...` works — and a 128-bit *member*
+  of a `struct` is fine, since `va_arg` of a record is read eightbyte by
+  eightbyte.
 * **Thread-local objects.** `_Thread_local`, C23's `thread_local` and GNU's
   `__thread` become a `std::thread_local!` holding an `UnsafeCell`, so a C
   counter really is one per thread and `&x` is a pointer to *this* thread's
@@ -273,7 +275,10 @@ Run it with `cargo run --example fact`.
 * `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or
   returned; the usual uses — `va_start`, `va_arg`, `va_copy`, passing a list to
   `vprintf` — are fine, and so is a **`va_list *`** parameter or local, which
-  is what lets a helper advance the caller's list.
+  is what lets a helper advance the caller's list. `va_arg` of a `struct`, a
+  `union` or a complex value is rebuilt from the eightbytes the ABI passed it
+  in, so it works for records of **at most sixteen bytes on x86-64 System V**
+  and is a located error anywhere else.
 * The platform's include directories are never searched. A real `<stdio.h>` is
   not C, so anything outside the bundled set is declared by hand or pointed at
   with an include path.
@@ -430,9 +435,10 @@ as unimplemented or not planned, case by case.
   suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
   216 of 220 under `c11!` and 217 of 220 under `c23!` and every GNU dialect.
   **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
-  implemented — a `goto` out of a statement expression and `va_arg` with a
-  struct — one is C23's empty initialiser `{}` in a block a strict `c99!` or
-  `c11!` refuses it in, and the last needs a newer Rust than 1.98. Strict
+  implemented — a `goto` out of a statement expression, and a `va_arg` of a
+  `struct` too large for the argument registers — one is C23's empty
+  initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in, and the
+  last needs a newer Rust than 1.98. Strict
   `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
   use something C99 added and a strict C89 entry point is required to refuse
   them. The corpus is a git submodule, so a fresh checkout skips the suite
@@ -443,8 +449,10 @@ as unimplemented or not planned, case by case.
   exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
   `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
   (85.2 %) under `gnu89!`, which is the language these C89-era programs were
-  written in and refuses none of them. **Not one of the 254 errors is a
-  bug**; they are inline assembly, the vector extensions, the complex
+  written in and refuses none of them; on `beta`, where a variadic definition
+  compiles, the same runs are 1,573 (88.9 %) and 1,566 (88.5 %). **Not one of
+  the 254 errors is a bug**; they are inline assembly, the vector extensions,
+  the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
   implement, the definitions and `va_list`s that need Rust 1.99, and five

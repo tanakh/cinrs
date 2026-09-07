@@ -23,6 +23,41 @@
 //! * `va_arg(ap, T)` is `ap.next_arg::<T>()`, using the `core::ffi` type of `T`
 //!   — those are aliases of the primitives `VaArgSafe` is implemented for.
 //!
+//! # `va_arg` of a `struct` or a `union`
+//!
+//! C99 allows any complete object type, and `VaArgSafe` covers none of the
+//! aggregates. So an aggregate is not read at its own type: it is *reassembled
+//! from the registers the ABI passed it in*. On x86-64 System V (AMD64 psABI
+//! 3.2.3) an argument of at most sixteen bytes is split into one or two
+//! **eightbytes**, each classified INTEGER or SSE from the fields that overlap
+//! it, and each passed in one register of that file. So `va_arg(ap, struct S)`
+//! becomes one `next_arg::<u64>()` per INTEGER eightbyte and one
+//! `next_arg::<f64>()` per SSE eightbyte, gathered into a `[u64; N]` whose
+//! bytes are then read as the record — see `Sema::record_eightbytes` for the
+//! classification and `codegen`'s `va_arg` for what it emits.
+//!
+//! That is the whole of the support, and its edges are sharp:
+//!
+//! * **Only x86-64 System V.** Every other ABI classifies differently — the
+//!   Microsoft x64 one passes an aggregate over eight bytes *by pointer*,
+//!   AArch64 has homogeneous float aggregates, i686 puts everything on the
+//!   stack — so any other [target](crate::target) is refused by name rather
+//!   than translated with the wrong rules.
+//! * **At most sixteen bytes, and naturally aligned.** Anything else is class
+//!   MEMORY: the caller pushes it into the *overflow area*, which nothing in
+//!   the stable `VaList` API can reach.
+//! * `long double` is mapped to `double` throughout this crate, so it is
+//!   classified SSE. A real `long double` member is X87 and would make the
+//!   whole record MEMORY; a program that has one is already translated with
+//!   the wrong width, which `doc/c-status.md` records.
+//! * The eightbytes are read *one at a time*, and the ABI decides
+//!   register-versus-stack for the argument *as a whole*. They agree unless a
+//!   two-eightbyte record is the very argument that exhausts the register save
+//!   area — five integer or seven SSE eightbytes into the list — where the
+//!   caller pushes the whole record and reading its first eightbyte still
+//!   finds a register. A record of at most eight bytes is one eightbyte and is
+//!   therefore always exact.
+//!
 //! # What is refused
 //!
 //! `va_list` is opaque: it has no size, nothing may point at it, and it may
@@ -34,13 +69,23 @@
 //! implements `VaArgSafe` for the 128-bit primitives only behind the unstable
 //! `c_variadic_int128` feature. *Passing* one through `...` is unaffected —
 //! that is the call site, and the ABI — so a program can still read it back as
-//! two `unsigned long long` halves.
+//! two `unsigned long long` halves. A 128-bit *member* of a record is fine:
+//! nothing reads it at its own type, only the two integer eightbytes it is.
 
 use crate::ast;
 use crate::capture::SourceRange;
-use crate::ir::{Expr, ExprKind, Place, Ty};
+use crate::ir::{Eightbyte, Expr, ExprKind, Place, RecordId, RustField, Ty};
+use crate::target::{Arch, Os};
 
 use super::{Sema, VA_LIST_PLACEMENT};
+
+/// The largest argument the classification can place in registers: two
+/// eightbytes. Anything larger is class MEMORY.
+///
+/// `rustc_target`'s own limit is eight eightbytes, which is only ever reached
+/// by a 512-bit SIMD vector — a whole-register class this crate has no way to
+/// produce.
+const MAX_EIGHTBYTES: u64 = 2;
 
 /// One of the builtins `<stdarg.h>`'s macros stand for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -153,17 +198,26 @@ impl Sema<'_> {
     ) -> Option<Expr> {
         let place = self.va_list_lvalue(ap)?;
         let target = self.ty_of(&type_name.ty)?;
-        self.check_va_arg_type(target, type_name.range)?;
-        Some(Expr::new(ExprKind::VaArg { ap: place }, target, range))
+        let record = self.check_va_arg_type(target, type_name.range)?;
+        Some(Expr::new(
+            ExprKind::VaArg { ap: place, record },
+            target,
+            range,
+        ))
     }
 
     /// Whether a type may be read out of an argument list, and why not.
-    fn check_va_arg_type(&mut self, ty: Ty, range: SourceRange) -> Option<()> {
+    ///
+    /// The success value is what [`ExprKind::VaArg`] carries: the eightbyte
+    /// classes of a `struct` or a `union`, and `None` for every other type,
+    /// which is read in one `next_arg` at the type itself.
+    #[expect(clippy::option_option, reason = "the outer one is the error")]
+    fn check_va_arg_type(&mut self, ty: Ty, range: SourceRange) -> Option<Option<Vec<Eightbyte>>> {
         if ty.is_error() {
             return None;
         }
         if ty.is_pointer() || ty.is_enum() || ty == Ty::Double {
-            return Some(());
+            return Some(None);
         }
         if ty.is_int128() {
             // `VaArgSafe` is what `next_arg` needs, and Rust implements it for
@@ -180,26 +234,17 @@ impl Sema<'_> {
             );
             return None;
         }
-        if ty.is_complex() {
-            // `next_arg` needs `VaArgSafe`, and Rust implements it for the
-            // primitives only. A complex value is a two-field `#[repr(C)]`
-            // struct, which is the same case as any other aggregate — and on
-            // System V it is not even passed like one, being two SSE
-            // eightbytes rather than memory.
-            self.error(
-                range,
-                format!(
-                    "va_arg with '{}' is not supported: Rust's `VaArgSafe` covers the \
-                     primitive types only, and a complex value is a pair",
-                    self.tyname(ty)
-                ),
-            );
-            return None;
+        // A complex value is a pair of components side by side — a two-field
+        // `#[repr(C)]` struct — so it is read the way an aggregate is, and the
+        // ABI classifies it the same way: `float _Complex` is one SSE
+        // eightbyte holding both halves, `double _Complex` is two.
+        if ty.is_record() || ty.is_complex() {
+            return self.record_eightbytes(ty, range).map(Some);
         }
         if ty.is_arithmetic() {
             let promoted = ty.promote_argument(&self.target);
             if promoted == ty {
-                return Some(());
+                return Some(None);
             }
             // GCC's wording, because it says exactly what went wrong: the
             // argument was widened on the way in, so reading it back at its
@@ -217,15 +262,151 @@ impl Sema<'_> {
             );
             return None;
         }
-        if ty.is_record() {
-            self.error(range, "va_arg with a struct type is not supported yet");
-            return None;
-        }
         self.error(
             range,
             format!("va_arg with type '{}' is not supported", self.tyname(ty)),
         );
         None
+    }
+
+    /// The eightbyte classes of a `struct` or `union` argument, or the reason
+    /// it cannot be read back.
+    fn record_eightbytes(&mut self, ty: Ty, range: SourceRange) -> Option<Vec<Eightbyte>> {
+        let refuse = |sema: &mut Self, why: &str| {
+            sema.error(
+                range,
+                format!("va_arg with '{}' is not supported: {why}", sema.tyname(ty)),
+            );
+            None::<Vec<Eightbyte>>
+        };
+        // Every other ABI classifies differently, and one of them — the
+        // Microsoft x64 one — does not pass a large aggregate by value at all.
+        // Naming the rule beats translating with the wrong one.
+        if self.target.arch != Arch::X86_64 || self.target.os == Os::Windows {
+            if ty.is_complex() {
+                return refuse(
+                    self,
+                    "a complex value is a pair, so it is read back the way an aggregate is, \
+                     which is only supported on x86-64 System V targets",
+                );
+            }
+            self.error(
+                range,
+                "va_arg of a struct type is only supported on x86-64 System V targets",
+            );
+            return None;
+        }
+        if !self.types().is_complete(ty) {
+            return refuse(self, "the type is incomplete");
+        }
+        let Some(layout) = self.types().size_align(ty, &self.target) else {
+            return refuse(self, "the type has no size");
+        };
+        let eightbytes = layout.size.div_ceil(8);
+        if eightbytes > MAX_EIGHTBYTES {
+            return refuse(
+                self,
+                &format!(
+                    "it is {} bytes, and the x86-64 System V ABI passes a struct larger \
+                     than 16 bytes on the stack, where Rust's 'va_list' cannot reach it",
+                    layout.size
+                ),
+            );
+        }
+        let mut classes = vec![Eightbyte::None; eightbytes as usize];
+        if self.classify(ty, 0, &mut classes).is_none() {
+            return refuse(
+                self,
+                "a member is not aligned the way its own type asks, so the x86-64 System V \
+                 ABI passes the struct on the stack, where Rust's 'va_list' cannot reach it",
+            );
+        }
+        Some(classes)
+    }
+
+    /// Merges the eightbyte classes of everything in `ty` at byte `offset`
+    /// into `classes`; `None` is class MEMORY.
+    ///
+    /// This mirrors `classify` in `rustc_target`'s
+    /// `compiler/rustc_target/src/callconv/x86_64.rs`, which is the reference
+    /// for the rules the AMD64 psABI states in 3.2.3 — right down to the
+    /// merge, which is `min` over an ordering in which INTEGER comes first, so
+    /// that one integer field anywhere in an eightbyte makes the whole of it
+    /// INTEGER. What is missing from this copy is what a C program cannot
+    /// reach: SIMD vectors, and therefore the `SseUp` class, and the X87 class
+    /// that a real `long double` would have (see the module documentation).
+    fn classify(&self, ty: Ty, offset: u64, classes: &mut [Eightbyte]) -> Option<()> {
+        let ty = self.types().unatomic(ty);
+        let layout = self.types().size_align(ty, &self.target)?;
+        // "If the size of an object is larger than eight eightbytes, or it
+        // contains unaligned fields, it has class MEMORY" — a zero-sized
+        // member cannot be unaligned, having nothing to align.
+        if layout.size == 0 {
+            return Some(());
+        }
+        if !offset.is_multiple_of(layout.align.max(1)) {
+            return None;
+        }
+        let class = match ty {
+            Ty::Float | Ty::Double => Eightbyte::Sse,
+            // A complex value is a pair of components side by side, and that
+            // is how the ABI sees it: `float _Complex` is one SSE eightbyte
+            // holding both halves, `double _Complex` is two.
+            Ty::ComplexFloat | Ty::ComplexDouble => {
+                let half = ty.complex_component();
+                self.classify(half, offset, classes)?;
+                let stride = half.size_bytes(&self.target);
+                return self.classify(half, offset + stride, classes);
+            }
+            Ty::Array(id) => {
+                let elem = self.types().array_type(id).elem;
+                let stride = self.types().size_of(elem, &self.target)?.max(1);
+                let mut at = offset;
+                while at < offset + layout.size {
+                    self.classify(elem, at, classes)?;
+                    at += stride;
+                }
+                return Some(());
+            }
+            Ty::Record(id) => return self.classify_record(id, offset, classes),
+            // Everything left is an integer, an enumeration or a pointer.
+            _ => Eightbyte::Int,
+        };
+        merge(classes, offset, layout.size, class);
+        Some(())
+    }
+
+    /// [`Sema::classify`] for the members of one record.
+    ///
+    /// The members come from the *laid out* record rather than from the C
+    /// declaration, because a bit-field is not a member of the generated item:
+    /// a maximal run of them shares one storage field, which is what the ABI
+    /// classifies — "bit-fields are always classified as integer" — and which
+    /// is the only place an *unnamed* bit-field can be seen at all. A union
+    /// needs no case of its own: every one of its members is at offset zero,
+    /// and classifying them all is what "a union classifies per member" means.
+    fn classify_record(&self, id: RecordId, offset: u64, classes: &mut [Eightbyte]) -> Option<()> {
+        let record = self.types().record(id);
+        for field in &record.rust_fields {
+            match field {
+                RustField::Member(index) => {
+                    let member = &record.fields[*index];
+                    // A flexible array member has no elements, and the ABI
+                    // ignores it exactly as `sizeof` does.
+                    if member.flexible {
+                        continue;
+                    }
+                    self.classify(member.ty, offset + member.offset, classes)?;
+                }
+                RustField::Bits {
+                    offset: at, bytes, ..
+                } => merge(classes, offset + at, *bytes, Eightbyte::Int),
+                // Padding and the zero-sized field that carries an alignment
+                // are not part of the object's value and carry no class.
+                RustField::Pad { .. } | RustField::Align { .. } => {}
+            }
+        }
+        Some(())
     }
 
     /// Resolves an argument that must denote a `va_list` object.
@@ -312,6 +493,28 @@ impl Sema<'_> {
             Ty::Array(id) => self.mentions_va_list(self.types().array_type(id).elem),
             _ => false,
         }
+    }
+}
+
+/// Gives every eightbyte that `size` bytes at `offset` reach the class
+/// `class`, merged with whatever is already there.
+///
+/// The merge is `rustc_target`'s: INTEGER wins over SSE, and either wins over
+/// an eightbyte nothing has reached yet — which is what makes
+/// `struct { int i; float f; }` one integer register rather than two halves of
+/// two.
+fn merge(classes: &mut [Eightbyte], offset: u64, size: u64, class: Eightbyte) {
+    if size == 0 {
+        return;
+    }
+    let first = (offset / 8) as usize;
+    let last = ((offset + size - 1) / 8) as usize;
+    for slot in classes.iter_mut().take(last + 1).skip(first) {
+        *slot = match *slot {
+            Eightbyte::None => class,
+            Eightbyte::Int => Eightbyte::Int,
+            Eightbyte::Sse => class,
+        };
     }
 }
 

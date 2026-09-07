@@ -1161,11 +1161,94 @@ fn va_arg_refuses_a_promoted_type() {
              'double' not 'float' to 'va_arg'",
         ],
     );
-    va_rejected(
-        "struct S { int x; };
-         int f(int n, ...) { va_list ap; va_start(ap, n); return va_arg(ap, struct S).x; }",
-        &["va_arg with a struct type is not supported yet"],
+}
+
+/// A record of at most sixteen bytes is rebuilt from its eightbytes, so it is
+/// accepted; anything the x86-64 System V ABI would put on the stack is not,
+/// because nothing in Rust's stable `va_list` reaches the overflow area.
+#[test]
+fn va_arg_of_a_record_follows_the_system_v_classification() {
+    va_accepted(
+        "struct S { int x; double y; };
+         union U { double d; long long l; };
+         struct Empty { };
+         int f(int n, ...) {
+             va_list ap;
+             va_start(ap, n);
+             struct S s = va_arg(ap, struct S);
+             union U u = va_arg(ap, union U);
+             struct Empty e = va_arg(ap, struct Empty);
+             (void) e;
+             return s.x + (int) s.y + (int) u.d;
+         }",
     );
+    va_rejected(
+        "struct Big { double a, b, c; };
+         int f(int n, ...) { va_list ap; va_start(ap, n); return (int) va_arg(ap, struct Big).a; }",
+        &[
+            "va_arg with 'struct Big' is not supported: it is 24 bytes, and the x86-64 \
+             System V ABI passes a struct larger than 16 bytes on the stack, where Rust's \
+             'va_list' cannot reach it",
+        ],
+    );
+    va_rejected(
+        "struct P { char c; int i; } __attribute__((packed));
+         int f(int n, ...) { va_list ap; va_start(ap, n); return va_arg(ap, struct P).i; }",
+        &[
+            "va_arg with 'struct P' is not supported: a member is not aligned the way its \
+             own type asks, so the x86-64 System V ABI passes the struct on the stack, \
+             where Rust's 'va_list' cannot reach it",
+        ],
+    );
+    va_rejected(
+        "struct S;
+         int f(int n, ...) { va_list ap; va_start(ap, n); va_arg(ap, struct S); return 0; }",
+        &["va_arg with 'struct S' is not supported: the type is incomplete"],
+    );
+}
+
+/// The classification is one ABI's, and every other one differs — the
+/// Microsoft x64 ABI passes an aggregate over eight bytes by pointer, AArch64
+/// has homogeneous float aggregates — so nothing else is guessed at.
+#[test]
+fn va_arg_of_a_record_is_x86_64_system_v_only() {
+    const SOURCE: &str = "struct S { int x; };
+         int f(int n, ...) { va_list ap; va_start(ap, n); return va_arg(ap, struct S).x; }";
+    for triple in [
+        "aarch64-unknown-linux-gnu",
+        "i686-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+    ] {
+        let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+        let mut options = Options::new(Standard::C99).for_target(target);
+        options.c_variadic = true;
+        options.complex = true;
+        let found = errors_with(&format!("{STDARG}{SOURCE}"), &options);
+        assert_eq!(
+            found,
+            ["va_arg of a struct type is only supported on x86-64 System V targets"],
+            "for {triple}"
+        );
+        // A complex value is a pair and goes down the same road, so it stops
+        // at the same place — saying so in its own words, since "a struct
+        // type" is not what the program wrote.
+        let found = errors_with(
+            &format!(
+                "{STDARG}double _Complex f(int n, ...) {{ va_list ap; va_start(ap, n); \
+                 return va_arg(ap, double _Complex); }}"
+            ),
+            &options,
+        );
+        assert_eq!(
+            found,
+            [
+                "va_arg with 'double _Complex' is not supported: a complex value is a pair, \
+                 so it is read back the way an aggregate is, which is only supported on \
+                 x86-64 System V targets"
+            ],
+            "for {triple}"
+        );
+    }
 }
 
 #[test]

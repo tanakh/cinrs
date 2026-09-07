@@ -1,0 +1,44 @@
+error: va_arg with 'struct Big' is not supported: it is 24 bytes, and the x86-64 System V ABI passes a struct larger than 16 bytes on the stack, where Rust's 'va_list' cannot reach it
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:32:27
+   |
+32 |         return va_arg(ap, struct Big).a;
+   |                           ^^^^^^
+
+error: va_arg with 'struct Packed' is not supported: a member is not aligned the way its own type asks, so the x86-64 System V ABI passes the struct on the stack, where Rust's 'va_list' cannot reach it
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:39:27
+   |
+39 |         return va_arg(ap, struct Packed).i;
+   |                           ^^^^^^
+
+error: va_arg with 'struct Opaque' is not supported: the type is incomplete
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:46:20
+   |
+46 |         va_arg(ap, struct Opaque);
+   |                    ^^^^^^
+
+error: va_arg with type 'int[2]' is not supported
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:53:27
+   |
+53 |         return va_arg(ap, int[2])[0];
+   |                           ^^^
+
+error: va_arg of a struct type is only supported on x86-64 System V targets
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:69:27
+   |
+69 |         return va_arg(ap, struct Point).x;
+   |                           ^^^^^^
+
+error: va_arg of a struct type is only supported on x86-64 System V targets
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/va_arg_struct_errors.rs:85:27
+   |
+85 |         return va_arg(ap, struct Wide).a;
+   |                           ^^^^^^
+
+error: aborting due to 6 previous errors
+

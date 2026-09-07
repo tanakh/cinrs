@@ -25,8 +25,7 @@ cinrs::c99! {
     float _Complex narrowed(double _Complex z) { return (float _Complex) z; }
     int nonzero(double _Complex z) { return z ? 1 : 0; }
 
-    /* Passing one through `...` is fine — it is `va_arg` of a complex type
-     * that has nowhere to go, and that is refused. */
+    /* Passing one through `...` needs nothing of the runtime. */
     int sink(int n, ...);
     int through_varargs(double _Complex z) { return sink(1, z); }
 }

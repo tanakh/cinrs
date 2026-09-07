@@ -163,14 +163,19 @@ defines.
 
 ```
 gcc.c-torture/execute through `gnu11!`: 1515/1769 correct (85.6%) — 1411 passed, 104 rejected as the standard requires
-  errors: 254 — bug 0, unimplemented 16, not planned 189, toolchain 49
-  (7 not generated) — 4 m 22 s
+  errors: 254 — bug 0, unimplemented 3, not planned 190, toolchain 61
+  (7 not generated) — 4 m 02 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned | toolchain |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1515/1769** | **85.6 %** | 1411 | 104 | 0 | 16 | 189 | 49 |
-| `gnu89!` | 1508/1769 | 85.2 % | 1508 | — | 0 | 17 | 195 | 49 |
+| **`gnu11!`** | **1515/1769** | **85.6 %** | 1411 | 104 | 0 | 3 | 190 | 61 |
+| `gnu89!` | 1508/1769 | 85.2 % | 1508 | — | 0 | 4 | 196 | 61 |
+
+On **`beta`**, where a variadic definition compiles, the sixty-one `toolchain`
+entries pass instead: 1573/1769 (88.9 %) under `gnu11!` and 1566/1769 (88.5 %)
+under `gnu89!`. That gap is the whole of the difference between the two
+toolchains, which is why those lines carry `?` and are guarded neither way.
 
 by group:
 
@@ -235,10 +240,9 @@ above are *not* in this table:
 | category | `gnu89!` | `gnu11!` | cause | e.g. |
 | --- | ---: | ---: | --- | --- |
 | not planned | 68 | 68 | inline assembly is not supported | `execute/20001009-2` |
-| not planned | 45 | 45 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| toolchain | 39 | 39 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
-| not planned | 18 | 18 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
-| unimplemented | 14 | 14 | `va_arg` with a struct type | `execute/920625-1` |
+| toolchain | 51 | 51 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
+| not planned | 44 | 44 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
+| not planned | 19 | 19 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, `issignaling`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
 | toolchain | 10 | 10 | `va_list` — a `va_list *` included — in a context that needs Rust 1.99 | `execute/20000519-1` |
 | not planned | 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | not planned | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
@@ -254,18 +258,34 @@ above are *not* in this table:
 | not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
 | not planned | 2 | 2 | a `link_error()` nothing defines, which an optimiser is required to delete | `execute/medce-1` |
 | not planned | 2 | 1 | the address of a label of the **enclosing** function — `&&label` inside a nested one, which is the nonlocal jump one step earlier | `execute/920721-4` |
+| unimplemented | 1 | 1 | a label inside a statement expression, which nothing outside it could jump to | `execute/930406-1` |
 | unimplemented | 1 | 1 | an initialised flexible array member in a *nested* context: GCC takes one inside a `union` whose other member already makes the object large enough. Every other shape of the extension is [implemented](gnu-extensions.md) | `execute/pr28865` |
+| unimplemented | 1 | 1 | **`va_arg` of a `struct` larger than sixteen bytes**, which the x86-64 System V ABI passes on the stack — the overflow area, which nothing in Rust's stable `va_list` reaches. Every smaller record now works; see [`doc/c-status.md`](c-status.md) | `execute/va-arg-22` |
 | not planned | 1 | 1 | `sizeof(va_list)`, which the case `malloc`s by: Rust's `VaList` is a value with a lifetime rather than a size | `execute/va-arg-21` |
 | not planned | 1 | 1 | an incompatible pointer argument — `execute(&p)` with `p` a `short[5]` — which C makes a constraint violation and GCC only warned about until GCC 14 | `execute/920302-1` |
 | unimplemented | 1 | — | a nested function that uses the enclosing function's **variable length array** | `execute/921017-1` |
+| not planned | 1 | 1 | `__attribute__((aligned))` on a *function* | `execute/align-3` |
+| not planned | 1 | 1 | `__attribute__((weak))`, which needs Rust's unstable `#[linkage]` | `execute/20030125-1` |
 
-Everything below those has one case each, and the report prints all of them.
+That is every cause the report groups; the ones with a single case each are at
+the bottom.
 The `__builtin_…` count is the sum of two rows the report prints separately,
 because a diagnostic raised inside an `#include`d corpus file carries the file
 name and is grouped on its own; the `vector_size` and
 address-of-a-nested-function counts are sums of two for the same reason.
 
-The last round of work — **labels as values**, an **alignment specifier on an
+The last round of work was **`va_arg` of a `struct`**. It moves **12** cases
+out of `[unimplemented]` — `920625-1`, `920908-1`, the seven `931004-*`,
+`pr44575`, `strct-stdarg-1` and `strct-varg-1`, every one of them a `struct` of
+at most sixteen bytes read back out of an argument list — and into `?`, because
+what is left in their way is only the Rust 1.99 variadic gate: on `beta` they
+pass, which is the whole of the 85.6 % → 88.9 % difference between the two
+toolchains. Two more stopped at a second gate rather than moving: `va-arg-22`
+passes records of up to thirty-one bytes, which the ABI puts on the stack, and
+`va-arg-pack-1` reaches `__builtin_va_arg_pack` and is now `[not-planned]` with
+the rest of the unimplemented builtins.
+
+The round before that — **labels as values**, an **alignment specifier on an
 object**, **pointers to `va_list`** and an **initialised flexible array
 member** — took `gnu11!` up by **14** and `gnu89!` by **14**, and no case went
 the other way in either:
@@ -283,7 +303,7 @@ gate that was hiding them and stopped at a second one — `920302-1` at an
 incompatible pointer argument, `va-arg-21` at `sizeof(va_list)`, and
 `pr28865` at a flexible array member initialised inside a `union`.
 
-The round before that took each entry point up by **one**, and it was the
+The round before *that* took each entry point up by **one**, and it was the
 corpus's last `[bug]`: `execute/20020227-1` compares a `__complex__ float`
 member of a packed record, and Rust's own `==` on the runtime's complex type
 borrows the field to do it. See [the baseline](#baseline).
@@ -351,13 +371,15 @@ other. Nothing here optimises, so the call survives and the link fails. They
 would pass under `-O`, and asking `rustc` for that would change what the whole
 suite measures.
 
-**Read the table by its first column.** 138 of `gnu11!`'s 254 errors are the
-top three `not planned` rows — inline assembly, the vector extensions and the
-`__builtin_…` forms nobody is going to write — and another 19 are the
+**Read the table by its first column.** 131 of `gnu11!`'s 254 errors are the
+three largest `not planned` rows — inline assembly, the vector extensions and
+the `__builtin_…` forms nobody is going to write — and another 13 are the
 complex-integer and `va_list`-in-a-record corners Rust has no counterpart for.
-49 more are the Rust 1.99 gap, which simply passes on a newer toolchain and is
-marked `?` in both lists. 16 are the honest list of what is not implemented
-yet, and 14 of those are one entry: `va_arg` with a struct type. None is a bug.
+61 more are the Rust 1.99 gap, which simply passes on a newer toolchain and is
+marked `?` in both lists. **Three** are the honest list of what is not
+implemented yet — a label inside a statement expression, a flexible array
+member initialised inside a `union`, and a `va_arg` of a `struct` too large for
+the registers. None is a bug.
 
 The 104 C89-rule cases — implicit `int`, an implicit function declaration, a
 K&R parameter with no declaration — are not in the table at all, because under
@@ -410,7 +432,7 @@ id, a category tag and a note; see
 [`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)
 for what the categories mean and what `?` and `!` say. Guard mode skips every
 listed case, runs it anyway, and reports one that has started passing so the
-line can go. 49 lines of each list carry `?`, which here means "this needs Rust
+line can go. 61 lines of each list carry `?`, which here means "this needs Rust
 1.99": they pass on a newer toolchain and are guarded neither way, and the
 harness marks them itself from the wording of the diagnostic, so a regenerated
 list keeps them. 104 lines of the `gnu11!` list carry `!`.

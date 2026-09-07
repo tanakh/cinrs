@@ -1094,3 +1094,72 @@ fn the_product_and_quotient_agree_with_cc() {
         report.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// reading one back out of an argument list
+// ---------------------------------------------------------------------------
+
+/// `va_arg` of a complex type, which needs a variadic *definition* (Rust 1.99)
+/// and, like every other aggregate, the x86-64 System V classification.
+///
+/// A complex value is a pair of components side by side, and that is exactly
+/// how the ABI sees it: `float _Complex` is eight bytes and one SSE eightbyte
+/// holding both halves, `double _Complex` is sixteen and two. So it is read
+/// back the way a `struct` is — one `next_arg` per eightbyte — rather than at
+/// its own type, which `VaArgSafe` has nothing to say about. See
+/// `tests/vaarg_structs.rs`.
+#[rustversion::since(1.99)]
+mod variadic {
+    use cinrs::c11;
+    use cinrs::rt::Complex;
+
+    c11! {
+        #include <complex.h>
+        #include <stdarg.h>
+
+        /* Two SSE eightbytes each, read back and summed. */
+        double _Complex sum_double(int n, ...) {
+            va_list ap;
+            double _Complex total = 0;
+            va_start(ap, n);
+            for (int i = 0; i < n; i++) total += va_arg(ap, double _Complex);
+            va_end(ap);
+            return total;
+        }
+
+        /* One SSE eightbyte, both halves in it — and an `int` after the pair,
+           so a wrong eightbyte count would show up in the neighbour. */
+        float _Complex first_float(int n, ...) {
+            va_list ap;
+            float _Complex z;
+            int tail;
+            va_start(ap, n);
+            z = va_arg(ap, float _Complex);
+            tail = va_arg(ap, int);
+            va_end(ap);
+            return z + tail;
+        }
+
+        /* The caller in C, so that both sides of the ABI are exercised. */
+        double _Complex sum_from_c(void) {
+            double _Complex a = 1.0 + 2.0 * _Complex_I;
+            double _Complex b = 10.0 + 20.0 * _Complex_I;
+            return sum_double(2, a, b);
+        }
+    }
+
+    #[test]
+    fn a_complex_value_is_read_back_eightbyte_by_eightbyte() {
+        unsafe {
+            let a = Complex::new(1.5f64, -2.5);
+            let b = Complex::new(0.25f64, 4.0);
+            assert_eq!(sum_double(2, a, b), Complex::new(1.75, 1.5));
+            assert_eq!(sum_double(0), Complex::new(0.0, 0.0));
+            assert_eq!(
+                first_float(1, Complex::new(3.5f32, 1.25), 4i32),
+                Complex::new(7.5f32, 1.25)
+            );
+            assert_eq!(sum_from_c(), Complex::new(11.0, 22.0));
+        }
+    }
+}

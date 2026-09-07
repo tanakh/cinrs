@@ -482,7 +482,9 @@
 //! argument back out of a list, which needs a `VaArgSafe` implementation that
 //! Rust still keeps behind the unstable `c_variadic_int128` feature; *passing*
 //! a 128-bit value through `...` is unaffected, so a program can read it back
-//! as two `unsigned long long` halves.
+//! as two `unsigned long long` halves — or as a one-member `struct`, which is
+//! read [eightbyte by eightbyte](#va_arg-of-a-struct-or-a-union) and so needs
+//! no 128-bit `next_arg` at all.
 //!
 //! # What is generated
 //!
@@ -1057,8 +1059,10 @@
 //! What is refused, each with the reason: `_Imaginary` (no compiler implements
 //! it, and C99 7.3.1p3 makes it optional), a complex *integer* type
 //! (`_Complex int`, a GNU extension of its own — `3i` says to write `3.0i`),
-//! `va_arg` of a complex type, an `_Atomic` or a bit-field of one,
-//! `<tgmath.h>`, and any `printf` conversion for one, C having none.
+//! an `_Atomic` or a bit-field of one, `<tgmath.h>`, and any `printf`
+//! conversion for one, C having none. `va_arg(ap, double _Complex)` *is*
+//! there: a pair is read back the way [any other
+//! aggregate](#va_arg-of-a-struct-or-a-union) is.
 //! `__STDC_IEC_559_COMPLEX__` is never defined: the arithmetic of Annex G.5.1
 //! is implemented, the rest of the annex is not claimed.
 //!
@@ -1614,6 +1618,79 @@
 //! can: a `struct` member, a file-scope object and a return type of that type
 //! are each refused, with the same "only a local variable or parameter"
 //! message a bare `va_list` gets there.
+//!
+//! ## `va_arg` of a `struct` or a `union`
+//!
+//! C99 allows `va_arg` at any complete object type, and Rust's `VaList` has
+//! `next_arg` for the primitives only. So an aggregate is not read at its own
+//! type: it is **reassembled from the registers the ABI passed it in**. On
+//! x86-64 System V (AMD64 psABI 3.2.3) an argument of at most sixteen bytes is
+//! split into one or two *eightbytes*, each classified INTEGER or SSE from the
+//! members that overlap it — one integer member anywhere in an eightbyte makes
+//! the whole of it INTEGER — and each passed in one register of that file. A
+//! `va_arg` therefore becomes one `next_arg::<u64>()` per INTEGER eightbyte
+//! and one `next_arg::<f64>()` per SSE one, gathered into a `[u64; N]` and read
+//! back out of it:
+//!
+//! ```
+//! # #[rustversion::since(1.99)]
+//! # fn main() {
+//! cinrs::c99! {
+//!     #include <stdarg.h>
+//!
+//!     /* Eight bytes of `double` then four of `int`: SSE, then INTEGER. */
+//!     struct Reading { double value; int sensor; };
+//!
+//!     double total(int n, ...) {
+//!         va_list ap;
+//!         double sum = 0;
+//!         va_start(ap, n);
+//!         for (int i = 0; i < n; i++) {
+//!             struct Reading r = va_arg(ap, struct Reading);
+//!             sum += r.value * r.sensor;
+//!         }
+//!         va_end(ap);
+//!         return sum;
+//!     }
+//! }
+//!
+//! let a = Reading { value: 1.5, sensor: 2 };
+//! let b = Reading { value: 0.25, sensor: 4 };
+//! assert_eq!(unsafe { total(2, a, b) }, 4.0);
+//! # }
+//! # #[rustversion::before(1.99)]
+//! # fn main() {}
+//! ```
+//!
+//! A `union` follows the same rule, classified per member since they all start
+//! at offset zero; a bit-field counts as the integer its storage is; a member
+//! that is itself a `struct`, a `union` or an array flattens to its scalars;
+//! and `__int128` is fine *inside* a record — nothing reads it at its own type,
+//! only as the two integer eightbytes it is.
+//!
+//! Three things are refused by name rather than translated with the wrong
+//! rules. A record **larger than sixteen bytes**, or one with a member the
+//! packing has moved off its own type's alignment, is class MEMORY: the caller
+//! pushes it into the *overflow area*, which nothing in the stable `VaList` API
+//! can reach. Any [target](#the-data-model) that is not x86-64 System V —
+//! the Microsoft x64 ABI passes an aggregate over eight bytes *by pointer*,
+//! AArch64 has homogeneous float aggregates, i686 puts everything on the stack
+//! — says so instead of guessing.
+//!
+//! And one edge is worth knowing rather than refusing. The eightbytes are read
+//! one at a time, while the ABI decides register-versus-stack for the argument
+//! *as a whole*: they agree unless a two-eightbyte record is the very argument
+//! that exhausts the register save area — five integer or seven SSE eightbytes
+//! into the list — where the caller pushes the whole record onto the stack and
+//! reading its first eightbyte still finds a register. A record of at most
+//! eight bytes is a single eightbyte and is therefore always exact. `long
+//! double` is another: this crate maps it to `double` throughout, so a member
+//! of that type is classified SSE, where a real `long double` would be X87 and
+//! would put the whole record in memory.
+//!
+//! `tests/vaarg_structs.rs` checks the classification against the host's own C
+//! compiler, on a generated corpus of a hundred and fifty records read through
+//! four argument shapes each.
 //!
 //! # Error reporting
 //!

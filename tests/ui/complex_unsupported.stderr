@@ -58,36 +58,29 @@ error: bit-field 'z' has invalid type 'double _Complex'; only the integer types 
 29 |     struct Packed { double _Complex z : 3; };
    |                                     ^
 
-error: va_arg with 'double _Complex' is not supported: Rust's `VaArgSafe` covers the primitive types only, and a complex value is a pair
-       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
-  --> tests/ui/complex_unsupported.rs:31:58
-   |
-31 |     double _Complex read(va_list ap) { return va_arg(ap, double _Complex); }
-   |                                                          ^^^^^^
-
 error: '__imag__' of the real type 'double' is a zero, and a zero is not assignable
-  --> tests/ui/complex_unsupported.rs:34:34
+  --> tests/ui/complex_unsupported.rs:32:34
    |
-34 |     void assign_imag(double x) { __imag__ x = 1.0; }
+32 |     void assign_imag(double x) { __imag__ x = 1.0; }
    |                                  ^^^^^^^^
 
 error: the operands of '__builtin_complex' have different types, 'double' and 'float'
-  --> tests/ui/complex_unsupported.rs:37:42
+  --> tests/ui/complex_unsupported.rs:35:42
    |
-37 |     double _Complex mixed(void) { return __builtin_complex(1.0, 2.0f); }
+35 |     double _Complex mixed(void) { return __builtin_complex(1.0, 2.0f); }
    |                                          ^^^^^^^^^^^^^^^^^
 
 error: an operand of '__builtin_complex' must have a real floating type, not 'int'
-  --> tests/ui/complex_unsupported.rs:38:63
+  --> tests/ui/complex_unsupported.rs:36:63
    |
-38 |     double _Complex integral(void) { return __builtin_complex(1, 2); }
+36 |     double _Complex integral(void) { return __builtin_complex(1, 2); }
    |                                                               ^
 
 error: '_Complex' requires C99 or later (this block is c89!)
-  --> tests/ui/complex_unsupported.rs:44:32
+  --> tests/ui/complex_unsupported.rs:42:32
    |
-44 |     double c89_complex(void) { double _Complex z = 0; return 0; }
+42 |     double c89_complex(void) { double _Complex z = 0; return 0; }
    |                                ^^^^^^
 
-error: aborting due to 15 previous errors
+error: aborting due to 14 previous errors
 

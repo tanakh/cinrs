@@ -2750,6 +2750,27 @@ impl Expr {
     }
 }
 
+/// The class of one *eightbyte* of a `struct` or `union` read out of an
+/// argument list, under the x86-64 System V classification (AMD64 psABI
+/// 3.2.3).
+///
+/// [`crate::sema`] computes it and code generation turns each entry into one
+/// `next_arg` call. There is deliberately no `SseUp`: the reference
+/// implementation this mirrors — `rustc_target`'s
+/// `compiler/rustc_target/src/callconv/x86_64.rs` — needs that class for SIMD
+/// vectors and for the floating types wider than eight bytes, and a C program
+/// this crate translates has neither, `long double` being mapped to `double`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Eightbyte {
+    /// An integer register: read as a `u64`.
+    Int,
+    /// An SSE register: read as an `f64`, whose bits are the eightbyte.
+    Sse,
+    /// Nothing of the object reaches this eightbyte — it is padding, which the
+    /// ABI passes in no register at all, so nothing is read for it.
+    None,
+}
+
 /// Who is being called.
 #[derive(Clone, Debug)]
 pub enum Callee {
@@ -2971,6 +2992,10 @@ pub enum ExprKind {
     VaArg {
         /// The list to read from and advance.
         ap: Place,
+        /// How a `struct` or `union` is taken apart to be read: one entry per
+        /// [eightbyte](Eightbyte) of it, in order. `None` for every other
+        /// type, which is read in one `next_arg` at the type itself.
+        record: Option<Vec<Eightbyte>>,
     },
     /// C23's `unreachable()`, which promises control never gets here.
     Unreachable,
@@ -3365,7 +3390,7 @@ pub fn calls_a_function(expr: &Expr) -> bool {
         | ExprKind::Unreachable
         | ExprKind::VaEnd => false,
         ExprKind::Load(place) | ExprKind::AddrOf(place) => place_calls_a_function(place),
-        ExprKind::VaArg { ap } => place_calls_a_function(ap),
+        ExprKind::VaArg { ap, .. } => place_calls_a_function(ap),
         ExprKind::Assign { place, value } | ExprKind::CompoundAssign { place, value, .. } => {
             place_calls_a_function(place) || calls_a_function(value)
         }
@@ -3433,7 +3458,7 @@ pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
         | ExprKind::Unreachable
         | ExprKind::VaEnd => false,
         ExprKind::Load(place) | ExprKind::AddrOf(place) => place_mentions_object(place, object),
-        ExprKind::VaArg { ap } => place_mentions_object(ap, object),
+        ExprKind::VaArg { ap, .. } => place_mentions_object(ap, object),
         ExprKind::Assign { place, value } | ExprKind::CompoundAssign { place, value, .. } => {
             place_mentions_object(place, object) || mentions_object(value, object)
         }

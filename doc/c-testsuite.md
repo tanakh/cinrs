@@ -179,9 +179,9 @@ Two rules, both out of the corpus's own tags:
 Nothing is excluded by the other two tags. `needs-cpp` is fine — `cinrs` has
 the whole C99 preprocessor — and so is `needs-libc`, since the bundled headers
 declare the platform's real library and the calls link against it. A case that
-needs something `cinrs` does not have, such as `00204`'s `va_arg` with a struct
-type, is left in and *fails*, so that it shows up in the count instead of being
-quietly filtered out of it.
+needs something `cinrs` does not have, such as `00204`'s `va_arg` of a `struct`
+the x86-64 System V ABI passes on the stack, is left in and *fails*, so that it
+shows up in the count instead of being quietly filtered out of it.
 
 ## How a case becomes a Rust file
 
@@ -371,7 +371,7 @@ translated (`tests/vla.rs` covers the same shape).
 
 | case | what it needs |
 | --- | --- |
-| `00204` | `va_arg` with a struct type |
+| `00204` | `va_arg` of a `struct` **larger than sixteen bytes**. The case is a deliberate ABI stress test, and most of what it does now works — `va_arg` of a `struct` is [implemented](../src/lib.rs) for the one to two eightbytes the x86-64 System V ABI passes in registers. What is left is its homogeneous float aggregates of three and four `double`s and of `long double`, which are twenty-four and thirty-two bytes and go into the overflow area, where nothing in Rust's stable `va_list` can reach them. (`long double` is mapped to `double` here in any case, so the case's `%Lf` conversions would print the wrong thing even if the size rule let it through.) |
 | `00213` | a `goto` out of a statement expression. Whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. The other thing this case writes — a `?:` one of whose operands is `void` — now works; see [`doc/gnu-extensions.md`](gnu-extensions.md). |
 | `00216` | the C23 empty initialiser `{}`, which the case writes as `(empty_s){}` — so it fails under `c99!` and `c11!` and **passes** under `c23!` and every GNU dialect. Its *other* gap, initialising a flexible array member, is closed: GCC allows it for an object with static storage duration and so does this now; see [`doc/gnu-extensions.md`](gnu-extensions.md). |
 

@@ -89,19 +89,19 @@ execute/920415-1                      [not-planned]    compile error: '&&l' name
 execute/920428-2                      [not-planned]    compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/920501-7                      [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 ?execute/920501-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/920625-1                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
+?execute/920625-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/920721-4                      [not-planned]    compile error: '&&lab1' names a label of the enclosing function; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 ?execute/920726-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/920908-1                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
+?execute/920908-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/921017-1                      [unimplemented]  compile error: a nested function cannot use 'a': it is a variable length array, whose length lives in the enclosing frame, and cinrs does not capture that yet. Pass the array and its length as parameters
 execute/930406-1                      [unimplemented]  compile error: a label cannot appear inside a statement expression; nothing outside the expression can jump to it
-execute/931004-10                     [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-12                     [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-14                     [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-2                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-4                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-6                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/931004-8                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
+?execute/931004-10                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-12                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-14                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-4                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-6                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/931004-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/960312-1                      [not-planned]    compile error: inline assembly is not supported
 ?execute/980205                                        compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/980608-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -170,7 +170,7 @@ execute/pr41239                       [not-planned]    compile error: inline ass
 execute/pr41935                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/pr43385                       [not-planned]    compile error: inline assembly is not supported
 execute/pr43560                       [not-planned]    compile error: inline assembly is not supported
-execute/pr44575                       [unimplemented]  compile error: va_arg with a struct type is not supported yet
+?execute/pr44575                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr44852                       [not-planned]    compile error: inline assembly is not supported
 ?execute/pr44942                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr45695                       [not-planned]    compile error: inline assembly is not supported
@@ -258,8 +258,8 @@ execute/stdarg-2                      [not-planned]    compile error: va_list is
 execute/stdarg-3                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 ?execute/stdarg-4                                      compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/stkalign                      [not-planned]    compile error: inline assembly is not supported
-execute/strct-stdarg-1                [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/strct-varg-1                  [unimplemented]  compile error: va_arg with a struct type is not supported yet
+?execute/strct-stdarg-1                                compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+?execute/strct-varg-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/user-printf                                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-10                                     compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
@@ -275,7 +275,7 @@ execute/va-arg-14                     [not-planned]    compile error: va_list is
 ?execute/va-arg-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-20                                     compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/va-arg-21                     [not-planned]    compile error: invalid application of 'sizeof' to 'va_list' — the case `malloc`s a `va_list` and keeps the pointers in an array, and Rust's `VaList` is a value with a lifetime rather than a size. The `va_list *` half of it works
-execute/va-arg-22                     [unimplemented]  compile error: va_arg with a struct type is not supported yet
+execute/va-arg-22                     [unimplemented]  compile error: va_arg with 'struct A31' is not supported: it is 31 bytes, and the x86-64 System V ABI passes a struct larger than 16 bytes on the stack, where Rust's 'va_list' cannot reach it
 ?execute/va-arg-23                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-24                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-26                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -285,7 +285,7 @@ execute/va-arg-22                     [unimplemented]  compile error: va_arg wit
 ?execute/va-arg-7                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-9                                      compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/va-arg-pack-1                 [unimplemented]  compile error: va_arg with a struct type is not supported yet
+execute/va-arg-pack-1                 [not-planned]    compile error: '__builtin_va_arg_pack' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/va-arg-trap-1                 [not-planned]    compile error: va_list is only supported as a local variable or parameter
 ?execute/vfprintf-1                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/vfprintf-chk-1                                compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)

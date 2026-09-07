@@ -25,11 +25,24 @@ fn generate(source: &str) -> String {
 
 /// Expands `source` as the given standard's entry point would.
 fn generate_for(standard: Standard, source: &str) -> String {
+    generate_with(Options::new(standard), source)
+}
+
+/// The same, for a unit translated for a named target rather than the host.
+///
+/// Only the snapshots whose *code* depends on the data model need it —
+/// `va_arg` of a `struct`, whose classification is the x86-64 System V one —
+/// so that they read the same on every machine the test runs on.
+fn generate_for_target(standard: Standard, triple: &str, source: &str) -> String {
+    let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+    generate_with(Options::new(standard).for_target(target), source)
+}
+
+fn generate_with(mut options: Options, source: &str) -> String {
     let input = TokenStream::from_str(source).expect("the C must lex as Rust tokens");
     // Variadic definitions are generated whatever the toolchain: this test only
     // ever reads the text back, and the snapshots have to be the same
     // everywhere.
-    let mut options = Options::new(standard);
     options.c_variadic = true;
     // Whether the C checked out is asked of the front end rather than of the
     // expansion's text: the expansion may hold a `compile_error!` of its own —
@@ -484,6 +497,40 @@ fn variadic_definitions() {
             double first = va_arg(ap, double);
             va_end(ap);
             return written + (int) first;
+        }
+        "
+    ));
+}
+
+/// A `struct` argument is rebuilt from the eightbytes the x86-64 System V ABI
+/// passed it in: one `next_arg` each, `u64` for an INTEGER eightbyte and `f64`
+/// for an SSE one, gathered into a `[u64; N]` and read back out of it.
+#[test]
+fn va_arg_of_a_struct_reads_one_word_per_eightbyte() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r"
+        #include <stdarg.h>
+
+        /* One SSE eightbyte then one INTEGER eightbyte. */
+        struct Mixed { double d; int i; };
+        /* The other way round, which is not the same classification. */
+        struct Other { int i; double d; };
+        /* Two floats share the first eightbyte; the third has its own. */
+        struct Three { float a, b, c; };
+        /* Thirteen bytes of `char` are two INTEGER eightbytes. */
+        struct Bytes { char x[13]; };
+
+        double read_them(int n, ...) {
+            va_list ap;
+            va_start(ap, n);
+            struct Mixed m = va_arg(ap, struct Mixed);
+            struct Other o = va_arg(ap, struct Other);
+            struct Three t = va_arg(ap, struct Three);
+            struct Bytes b = va_arg(ap, struct Bytes);
+            va_end(ap);
+            return m.d + m.i + o.i + o.d + t.a + t.b + t.c + b.x[12];
         }
         "
     ));

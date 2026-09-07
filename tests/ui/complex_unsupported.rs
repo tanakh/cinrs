@@ -4,12 +4,12 @@
 //! nothing on them; `%`, the bitwise operators and the shifts want integers;
 //! a complex *integer* type is a GNU extension of its own that nothing here
 //! could be; `_Imaginary` is a type no compiler implements; and a complex
-//! value is a pair, which rules out a bit-field, an `_Atomic` object and
-//! `va_arg`.
+//! value is a pair, which rules out a bit-field and an `_Atomic` object.
+//! (`va_arg` of one is *not* on the list: a pair is read back the way any
+//! other aggregate is — see `tests/complex.rs`.)
 
 cinrs::c11! {
     #include <complex.h>
-    #include <stdarg.h>
 
     int ordered(double _Complex a, double _Complex b) { return a < b; } //~ ERROR: are not ordered
     int ordered2(double _Complex a, double b) { return a >= b; } //~ ERROR: are not ordered
@@ -27,8 +27,6 @@ cinrs::c11! {
     /* A pair has no lock-free atomic and cannot be a bit-field. */
     _Atomic double _Complex shared; //~ ERROR: is not supported yet
     struct Packed { double _Complex z : 3; }; //~ ERROR: only the integer types may be given a width
-
-    double _Complex read(va_list ap) { return va_arg(ap, double _Complex); } //~ ERROR: `VaArgSafe`
 
     /* `__imag__` of a real lvalue is a zero, and a zero has no address. */
     void assign_imag(double x) { __imag__ x = 1.0; } //~ ERROR: is a zero, and a zero is not assignable
