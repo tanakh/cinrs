@@ -414,6 +414,23 @@ fn read_bundled(name: &str) -> Option<Resolved> {
     })
 }
 
+/// Reads the file an `include_c99!("…")` names.
+///
+/// Not a search: the path was resolved against the directory of the invoking
+/// `.rs` file before it got here, so it either is the translation unit or it is
+/// nothing. What comes back is the same [`Resolved`] a header does — the
+/// display name for diagnostics and for `__FILE__`, the text, the directory its
+/// own `#include "…"` searches first, and the absolute path the expansion
+/// tracks for rebuilds.
+pub fn read_source(path: &Path) -> Result<Resolved, Error> {
+    match read_file(path)? {
+        Some(found) => Ok(found),
+        None => Err(Error::NotFound {
+            searched: vec![display_path(path)],
+        }),
+    }
+}
+
 /// Reads a candidate path: `Ok(None)` when there is no such file, which means
 /// the search goes on, and an error when there is one and it cannot be used,
 /// which means it does not.

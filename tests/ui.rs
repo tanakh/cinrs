@@ -83,6 +83,15 @@ fn build(root: &str, dependencies: DependencyBuilder) -> Config {
     // one test, `no_std_without_the_pragma.rs`, where what is being blessed is
     // that the caret lands on the C declaration that needed the crate.
     config.stderr_filter("in the list of imported crates", "in the crate root");
+    // The name of a unit's module — and of the `extern` declarations renamed
+    // apart inside it — carries a hash of where the invocation is and what it
+    // says, so that two blocks in one Rust module cannot collide. It reaches a
+    // blessed file whenever `rustc` names an item of ours (a call to a library
+    // function from a `safe` function is one), where it would make the test
+    // depend on the exact bytes of its own source. The hash is not what such a
+    // test is about, so it is written as a placeholder.
+    config.stderr_filter("__cinrs_unit_[0-9a-f]{8}", "__cinrs_unit_HASH");
+    config.stderr_filter("__cinrs_[0-9a-f]{8}_", "__cinrs_HASH_");
     config
 }
 

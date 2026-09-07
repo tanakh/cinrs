@@ -8,7 +8,7 @@ This is a library that implements a procedural macro allowing C code to be writt
 use cinrs::c99;
 
 c99! {
-    int fact(int n) {
+    __attribute__((cinrs_safe)) int fact(int n) {
         if (n == 0) {
             return 1;
         } else {
@@ -17,12 +17,21 @@ c99! {
     }
 }
 
-// The generated functions are `extern "C"`, so calling one is `unsafe`.
-let v = unsafe { fact(10) };
+// `cinrs_safe` (also spelled `[[cinrs::safe]]`) generates the function
+// without `unsafe` and lets `rustc` check its body, so the call needs none
+// either. Without it a C function is a foreign function like any other and a
+// call to it is `unsafe`, which is the default.
+let v = fact(10);
 println!("fact(10) = {v}");
 ```
 
 Run it with `cargo run --example fact`.
+
+A C file that already exists goes in whole, with the same translation:
+
+```rust,ignore
+cinrs::include_c99!("vendor/parser.c");
+```
 
 ## What works
 
@@ -203,6 +212,8 @@ Run it with `cargo run --example fact`.
   `#pragma cinrs export` gives everything with external linkage a real C
   symbol, so that another block — or a C library — can call it by name (with
   C's own risk: two exported units defining one name is a duplicate symbol);
+  `#pragma cinrs safe f g` generates those functions without `unsafe` and lets
+  `rustc` check them;
   `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
   needs from `alloc` rather than from `std`, and refuses a thread-local object,
   which needs `std` outright;
@@ -210,7 +221,18 @@ Run it with `cargo run --example fact`.
   `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a
   renamed dependency — the generated code names it only for complex numbers,
   and `::cinrs` is the default.
-* **Two input forms.** C the Rust lexer accepts is written as raw tokens —
+* **Safe functions.** A C function is a foreign function, so calling one is
+  `unsafe` — unless it is marked `[[cinrs::safe]]`,
+  `__attribute__((cinrs_safe))` or named by `#pragma cinrs safe f g`. Such a
+  function is generated as a plain `pub extern "C" fn` whose body is *not*
+  wrapped in an `unsafe` block, so `rustc` checks the whole translation: a raw
+  pointer dereference, a read of a C global or of a `union` member, a call to
+  the C library or to a function of the unit that is not itself safe are each
+  an error with the caret on the C that asked for it. What is left compiles and
+  is a useful language — arithmetic, control flow (`goto` included), locals,
+  records and `enum`s by value, bit-fields, and calls to other safe functions —
+  and Rust calls it as `fact(10)`.
+* **Three input forms.** C the Rust lexer accepts is written as raw tokens —
   `int café(void)` included, since Rust's identifiers are UAX #31's too; C it
   refuses (hexadecimal floating constants, `'ab'`, the prefixed literals
   `L"…"`, `u8"…"`, `u"…"`, `U"…"` and `u8'x'`, a universal character name,
@@ -218,7 +240,8 @@ Run it with `cargo run --example fact`.
   continuations, C23's digit separators such as `1'000'000`) goes in a string
   literal instead. `##` cannot be written in
   raw-token form either, so a replacement list spells the pasting operator
-  `a # # b`.
+  `a # # b`. The third form is a **file**: `include_c99!("parser.c")` and one
+  such macro per entry point — see [Including a C file](#including-a-c-file).
 * **Errors that point at the C.** Every generated token carries the span of the
   C token it came from, so both `cargo` and an IDE put the caret on the C code
   — for the front end's own diagnostics and for `rustc`'s. Pointing *inside* a
@@ -244,6 +267,50 @@ Run it with `cargo run --example fact`.
   predefines `__STDC_NO_COMPLEX__` and makes `_Complex` a diagnostic naming
   the feature. `cinrs-rt` is itself `#![no_std]`, so having it on costs a
   `#![no_std]` crate nothing.
+
+## Including a C file
+
+C that already lives in a file goes in whole, with one macro per entry point:
+`include_c89!`, `include_c90!`, `include_c99!`, `include_c11!`, `include_c17!`,
+`include_c23!` and the five `include_gnu…!` forms.
+
+```rust,ignore
+cinrs::include_c99!("c/geometry.c");
+
+let p = Point { x: -3, y: 4 };
+assert_eq!(point_manhattan(p), 7);
+```
+
+The file is read while the macro expands and translated exactly as the same
+text inside a `c99!` block would be: it is one translation unit, so every
+construct is accepted (a file is text, and the lexemes Rust's own lexer refuses
+are no trouble there), `#pragma cinrs …` inside it configures the unit,
+`#include "…"` in it searches **its own** directory first, and the expansion is
+a module plus a glob re-export like any other invocation's. `__FILE__` and
+`__LINE__` name the `.c` file and its own lines, and the file is mentioned with
+`include_str!` in the expansion, so editing it rebuilds the crate.
+
+A **relative path is resolved against the directory of the `.rs` file the macro
+is written in** — the same rule `#include "…"` follows — and an absolute one is
+used as it stands.
+
+The one thing that is not as good as writing the C inline is where a diagnostic
+can point. There is no C in the `.rs` file, so **every error lands on the macro
+invocation**: a message of this crate's carries the position inside the file in
+its text —
+
+```text
+error: c/geometry.c:12:5: use of undeclared identifier 'wrong'
+ --> src/lib.rs:3:21
+  |
+3 | cinrs::include_c99!("c/geometry.c");
+  |                     ^^^^^^^^^^^^^^
+```
+
+— and so does an error `rustc` raises about the generated code. Neither `cargo`
+nor `rust-analyzer` will jump into the `.c` file: they show the location in the
+message rather than under the caret. A call written in *Rust* is unaffected —
+the caret is on the call, where it always was.
 
 ## Known limitations
 

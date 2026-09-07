@@ -1,0 +1,14 @@
+error: include_c99! takes one string literal naming a C file, as in include_c99!("vendor/parser.c")
+ --> tests/ui/include_c_not_a_literal.rs:9:21
+  |
+9 | cinrs::include_c99!(c / geometry.c);
+  |                     ^
+
+error: include_c99! takes one string literal naming a C file, as in include_c99!("vendor/parser.c")
+  --> tests/ui/include_c_not_a_literal.rs:12:21
+   |
+12 | cinrs::include_c99!("a.c", "b.c");
+   |                     ^^^^^
+
+error: aborting due to 2 previous errors
+

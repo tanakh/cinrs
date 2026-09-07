@@ -1,0 +1,8 @@
+error: 'total' takes '...', so it cannot be safe: Rust makes every function with a C variable argument list unsafe
+  --> tests/ui-since-1.99/safe_variadic.rs:17:20
+   |
+17 |     __attribute__((cinrs_safe)) int total(int n, ...) {
+   |                    ^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

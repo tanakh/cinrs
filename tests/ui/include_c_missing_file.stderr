@@ -1,0 +1,8 @@
+error: include_c99! cannot find 'c/nowhere.c': there is no file at tests/ui/c/nowhere.c. A relative path is resolved against the directory of the .rs file this macro is written in
+ --> tests/ui/include_c_missing_file.rs:9:21
+  |
+9 | cinrs::include_c99!("c/nowhere.c");
+  |                     ^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

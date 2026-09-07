@@ -1,0 +1,21 @@
+error[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> tests/ui/safe_thread_local.rs:16:9
+   |
+16 |         counter += by;
+   |         ^^^^^^^ dereference of raw pointer
+   |
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+   = note: this error originates in the macro `cinrs::c11` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0133]: dereference of raw pointer is unsafe and requires unsafe block
+  --> tests/ui/safe_thread_local.rs:17:16
+   |
+17 |         return counter;
+   |                ^^^^^^^ dereference of raw pointer
+   |
+   = note: raw pointers may be null, dangling or unaligned; they can violate aliasing rules and cause data races: all of these are undefined behavior
+   = note: this error originates in the macro `cinrs::c11` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0133`.

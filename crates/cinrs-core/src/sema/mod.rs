@@ -63,6 +63,18 @@
 //! it), a **nonlocal `goto`**, and capturing a variable length array or a
 //! `va_list`.
 //!
+//! # Safe functions
+//!
+//! [`check_safe`] is the pass that runs *after* this one, once the
+//! preprocessor's pragmas have reached the [`ir::Program`]: it applies
+//! `#pragma cinrs safe`, refuses the three shapes that could never be safe,
+//! and reports a safe function calling one of this unit's own that is not.
+//! What it needs from here is the call graph, which `Sema::call` records as it
+//! checks each direct call — see [`ir::CallEdge`] — and the
+//! `[[cinrs::safe]]` attribute, which `Sema::declare_function` puts on the
+//! [`ir::Function`]. Everything else about a safe function is `rustc`'s to
+//! check, since [`crate::codegen`] simply leaves the `unsafe` out.
+//!
 //! # Purity
 //!
 //! Nothing here touches `proc_macro2`. Diagnostics and IR nodes carry byte
@@ -180,6 +192,118 @@ pub fn check_pragmas(program: &Program) -> Diagnostics {
                     .to_owned(),
             );
         }
+    }
+    diags
+}
+
+/// Applies `#pragma cinrs safe` and checks every function that is to be
+/// generated without `unsafe`.
+///
+/// A safe function is an ordinary `extern "C" fn` whose body is not wrapped in
+/// an `unsafe` block, so `rustc` checks it: a raw pointer dereference, a call
+/// to a function that is not safe, a read of a C global or of a `union` member
+/// — every unsafe operation the translation of the C needs — is an error with
+/// the caret on the C that asked for it. This function does the part `rustc`
+/// cannot do:
+///
+/// * the names `#pragma cinrs safe` gave are looked up, since only the program
+///   knows what the unit defines, and one that names nothing is reported;
+/// * the three shapes that could never be safe are refused where they were
+///   written rather than becoming a puzzle from `rustc`: a function this unit
+///   only *declares* (there is no body to check, and the call is a foreign one
+///   whatever the attribute says), a *variadic* definition (Rust makes every
+///   C-variadic function unsafe) and a GNU *nested* function (it reaches the
+///   enclosing frame through hidden pointer parameters, which its body
+///   dereferences);
+/// * a call to a function of this unit that is not safe is reported in C's own
+///   words, naming the callee and the attribute that would fix it — `rustc`
+///   would say "call to unsafe function is unsafe", which is true and says
+///   nothing about the C.
+///
+/// A call to a function the unit only declares — `printf`, or anything else the
+/// program links against — is deliberately left to `rustc`: nothing here can
+/// make a foreign function safe, and its message says exactly that.
+pub fn check_safe(program: &mut Program, named: &[crate::pp::SafeName]) -> Diagnostics {
+    let mut diags = Diagnostics::new();
+    for request in named {
+        // A lifted nested function keeps the name the program gave it, but it
+        // is not what a pragma naming a function of the unit means; the item
+        // name it was given is what tells the two apart.
+        let found = program
+            .functions
+            .iter_mut()
+            .find(|func| func.name == request.name && !func.is_nested());
+        match found {
+            Some(func) => func.safe = func.safe.or(Some(request.range)),
+            None => diags.error(
+                request.range,
+                format!(
+                    "#pragma cinrs safe names '{}', which this unit does not declare",
+                    request.name
+                ),
+            ),
+        }
+    }
+
+    // A refused request is *taken back*, not only reported: the item this unit
+    // still generates for the function — a stub, since the unit no longer
+    // compiles — has to be one `rustc` accepts, and `extern "C" fn f(n: c_int,
+    // ...)` is not, so a second error about the same mistake would follow the
+    // first. The request is what was wrong; the ordinary `unsafe` item is what
+    // stands in its place.
+    let mut refused: HashSet<usize> = HashSet::new();
+    for (index, func) in program.functions.iter_mut().enumerate() {
+        let Some(range) = func.safe else { continue };
+        let refusal = if func.body.is_none() {
+            format!(
+                "'{}' is only declared here, so it cannot be safe: an extern function is \
+                 compiled elsewhere and nothing about it can be checked",
+                func.name
+            )
+        } else if func.sig.variadic {
+            format!(
+                "'{}' takes '...', so it cannot be safe: Rust makes every function with a \
+                 C variable argument list unsafe",
+                func.name
+            )
+        } else if func.is_nested() {
+            format!(
+                "'{}' is a nested function, so it cannot be safe: it reaches the enclosing \
+                 function's objects through hidden pointer parameters, which its body \
+                 dereferences",
+                func.name
+            )
+        } else {
+            continue;
+        };
+        func.safe = None;
+        refused.insert(index);
+        diags.error(range, refusal);
+    }
+
+    // The one check worth making here rather than leaving to `rustc`: a call
+    // between two functions of this unit, where the C names both. A callee
+    // whose own request was just refused is left out of it — "mark it
+    // [[cinrs::safe]]" is no advice for a function that was marked and told
+    // why it could not be.
+    for call in &program.calls {
+        let caller = program.function(call.caller);
+        let callee = program.function(call.callee);
+        if !caller.is_safe()
+            || callee.is_safe()
+            || callee.is_extern()
+            || refused.contains(&(call.callee.0 as usize))
+        {
+            continue;
+        }
+        diags.error(
+            call.range,
+            format!(
+                "function '{}' is not safe; mark it [[cinrs::safe]] or call it from a non-safe \
+                 function",
+                callee.name
+            ),
+        );
     }
     diags
 }

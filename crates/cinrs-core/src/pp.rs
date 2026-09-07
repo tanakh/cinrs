@@ -83,6 +83,7 @@
 //! #pragma cinrs include_path "vendor/include"
 //! #pragma cinrs link "mylib"
 //! #pragma cinrs export
+//! #pragma cinrs safe gcd fact
 //! #pragma cinrs no_std
 //! #pragma cinrs module "geometry"
 //! ```
@@ -92,7 +93,9 @@
 //! paths resolve against `CARGO_MANIFEST_DIR`); the third puts
 //! `#[link(name = "mylib")]` on the generated `extern` block; the fourth gives
 //! everything with external linkage a real C symbol, so that another unit can
-//! link to it; the last names the module the expansion goes into. Being
+//! link to it; the fifth generates those functions without `unsafe`, so that
+//! `rustc` checks them (see [`crate::sema::check_safe`]); the last names the
+//! module the expansion goes into. Being
 //! directives rather than attributes or macro arguments is what makes them
 //! mean the same thing in raw-token and in string-literal input. An unknown
 //! `#pragma cinrs` option is an error; every other pragma is ignored, as
@@ -703,6 +706,21 @@ struct EmbedParams {
     if_empty: Vec<PTok>,
 }
 
+/// One function `#pragma cinrs safe` named.
+///
+/// The pragma is the spelling that works in every entry point and in
+/// string-literal input, so it names its functions rather than being written on
+/// one; whether a name is a function of this unit at all is
+/// [sema's](crate::sema::check_safe) question, and the range is what its
+/// diagnostic points at.
+#[derive(Clone, Debug)]
+pub struct SafeName {
+    /// The identifier as written.
+    pub name: String,
+    /// Where it was written.
+    pub range: SourceRange,
+}
+
 /// Everything one run of the preprocessor produced.
 #[derive(Debug)]
 pub struct Preprocessed {
@@ -724,6 +742,8 @@ pub struct Preprocessed {
     pub embedded_files: Vec<std::path::PathBuf>,
     /// The libraries `#pragma cinrs link` asked for, in the order asked.
     pub link_libraries: Vec<String>,
+    /// The functions `#pragma cinrs safe` named, in the order named.
+    pub safe_functions: Vec<SafeName>,
     /// Whether `#pragma cinrs export` asked for real C symbols.
     pub export: bool,
     /// Whether `#pragma cinrs no_std` said the expansion goes into a
@@ -786,6 +806,7 @@ pub fn preprocess(
         user_headers: pp.user_headers,
         embedded_files: pp.embedded_files,
         link_libraries: pp.link_libraries,
+        safe_functions: pp.safe_functions,
         export: pp.export,
         no_std: pp.no_std,
         module: pp.module,
@@ -1138,6 +1159,8 @@ struct Pp<'a> {
     embedded_files: Vec<std::path::PathBuf>,
     /// The libraries `#pragma cinrs link` asked for.
     link_libraries: Vec<String>,
+    /// The functions `#pragma cinrs safe` named.
+    safe_functions: Vec<SafeName>,
     /// Set by `#pragma cinrs export`.
     export: bool,
     /// Set by `#pragma cinrs no_std`.
@@ -1214,6 +1237,7 @@ impl<'a> Pp<'a> {
             user_headers: Vec::new(),
             embedded_files: Vec::new(),
             link_libraries: Vec::new(),
+            safe_functions: Vec::new(),
             export: false,
             no_std: false,
             module: None,
@@ -2454,12 +2478,13 @@ impl Pp<'_> {
     /// is addressed to *us*, so an option we do not know is a mistake worth
     /// reporting rather than a hint some other compiler might understand.
     ///
-    /// The five it does know configure the unit:
+    /// The ones it does know configure the unit:
     ///
     /// ```c
     /// #pragma cinrs include_path "vendor/include"
     /// #pragma cinrs link "m"
     /// #pragma cinrs export
+    /// #pragma cinrs safe gcd fact
     /// #pragma cinrs no_std
     /// #pragma cinrs module "geometry"
     /// ```
@@ -2648,7 +2673,7 @@ impl Pp<'_> {
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
     const OPTIONS: &'static str =
-        "'target', 'include_path', 'link', 'export', 'no_std', 'module' and 'crate'";
+        "'target', 'include_path', 'link', 'export', 'safe', 'no_std', 'module' and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2679,6 +2704,11 @@ impl Pp<'_> {
                     _ => self.module_pragma(value, rest[1].range),
                 }
             }
+            // A list of function names rather than one string: the spelling of
+            // `[[cinrs::safe]]` that every entry point has, since `[[…]]` is
+            // C23's and `__attribute__` cannot be written where the function
+            // is not.
+            "safe" => self.safe_pragma(&rest[1..], option.range),
             // Unit-wide and argument-less: everything with external linkage
             // becomes a real C symbol, and the `Vec` a variable length array
             // or `alloca` needs comes from `alloc` rather than from `std`.
@@ -2758,6 +2788,39 @@ impl Pp<'_> {
                 "'#pragma cinrs target' must come before every '#include' and '#if', which \
                  were already answered with the previous data model",
             );
+        }
+    }
+
+    /// `#pragma cinrs safe f g h`, which asks for those functions to be
+    /// generated without `unsafe`.
+    ///
+    /// It takes identifiers rather than a string so that it reads like the C it
+    /// is naming, and any number of them, since a unit that marks one function
+    /// usually marks several. A name that is not a function defined here is a
+    /// mistake, and [`crate::sema::check_safe`] — which is the only pass that
+    /// knows what the unit defines — says so.
+    fn safe_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        if rest.is_empty() {
+            self.diags.error(
+                range,
+                "#pragma cinrs safe needs the name of at least one function",
+            );
+            return;
+        }
+        for tok in rest {
+            match tok.name() {
+                Some(name) => self.safe_functions.push(SafeName {
+                    name: name.to_owned(),
+                    range: tok.range,
+                }),
+                None => self.diags.error(
+                    tok.range,
+                    format!(
+                        "#pragma cinrs safe takes function names, found {}",
+                        tok.kind.describe()
+                    ),
+                ),
+            }
         }
     }
 

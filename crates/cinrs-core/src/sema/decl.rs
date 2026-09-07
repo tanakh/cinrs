@@ -173,6 +173,7 @@ impl Sema<'_> {
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
             self.reject_cleanup(&attrs, "a 'typedef'");
+            self.reject_safe(&attrs, "a 'typedef'");
             self.reject_alignas(&decl.specifiers, "a 'typedef'");
             return self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
         }
@@ -231,6 +232,7 @@ impl Sema<'_> {
         if let Some(range) = attrs.packed {
             self.error(range, "'packed' is only meaningful on a record or a member");
         }
+        self.reject_safe(&attrs, "an object");
         // `_Alignas(N)`, `_Alignas(T)` and `__attribute__((aligned(N)))` on the
         // object itself; see [`Sema::align_request`]. The operand is checked
         // here, where it is written; whether the object can carry the answer
@@ -618,6 +620,27 @@ impl Sema<'_> {
             call,
             range: cleanup.range,
         })))
+    }
+
+    /// Refuses `[[cinrs::safe]]` where there is no function *definition* for it
+    /// to apply to.
+    ///
+    /// Safety is a property of a body: the attribute makes the generated item
+    /// an ordinary `extern "C" fn` whose statements `rustc` checks. A
+    /// `typedef`, an object of function pointer type and any other declaration
+    /// has no body to check, and a call *through* such a type is unsafe in Rust
+    /// whatever the attribute says — so writing it there would promise
+    /// something that is not delivered.
+    pub(super) fn reject_safe(&mut self, attrs: &ast::Attributes, what: &str) {
+        if let Some(range) = attrs.safe {
+            self.error(
+                range,
+                format!(
+                    "'safe' is not allowed on {what}: it applies to a function definition, \
+                     whose body is what is checked"
+                ),
+            );
+        }
     }
 
     /// Reports a `cleanup` attribute somewhere it cannot mean anything.
@@ -2019,6 +2042,11 @@ impl Sema<'_> {
                 entry.is_inline |= is_inline;
                 entry.noreturn |= is_noreturn;
                 entry.cold |= attrs.cold.is_some();
+                // Attributes accumulate over the declarations of one function,
+                // so a `safe` written on any of them makes it safe — and the
+                // range kept is the first one, which is where the diagnostics
+                // about it point.
+                entry.safe = entry.safe.or(attrs.safe);
                 entry.inline_hint = entry.inline_hint.or(inline_hint);
                 entry.init_kind = entry.init_kind.or(init_kind);
                 entry.deprecated = entry
@@ -2068,6 +2096,7 @@ impl Sema<'_> {
                     section: attrs.section.as_ref().map(|s| s.node.clone()),
                     asm_label: asm_label.map(|label| label.node.clone()),
                     init_kind,
+                    safe: attrs.safe,
                     locals: Vec::new(),
                     uses_alloca: false,
                     body: None,

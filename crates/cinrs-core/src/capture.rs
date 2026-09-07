@@ -32,6 +32,13 @@
 //!   is validated against every token's [`Span::source_text`] before it is
 //!   trusted.
 //!
+//! * **File mode** ([`InputMode::CFile`]), which is what
+//!   `include_c99!("…")` captures with [`capture_c_file`]: the text is a `.c`
+//!   file read from disk, and nothing in the `.rs` file corresponds to a
+//!   position in it, so every range resolves to the span of the macro
+//!   invocation and the file names its own position in the message — exactly
+//!   as an `#include`d header does.
+//!
 //! * **Raw-token mode**, fallback path ([`InputMode::Reconstructed`]). When
 //!   there is no local file (macro-generated input, some IDE contexts such as
 //!   rust-analyzer, or unit tests that build a `TokenStream` with
@@ -253,6 +260,14 @@ pub enum InputMode {
     Reconstructed,
     /// The text came from an `#include`d file.
     Included,
+    /// The text is a `.c` file an `include_c99!("…")` named.
+    ///
+    /// Like an [`Included`](InputMode::Included) file in every way that
+    /// matters to a diagnostic — there is no span inside it, so the caret goes
+    /// on the macro invocation and the message carries `path:line:col` — and
+    /// unlike one in being a translation unit rather than something pulled
+    /// into one.
+    CFile,
 }
 
 /// Everything [`SourceMap::add_file`] needs to know about a new file.
@@ -358,9 +373,14 @@ impl SourceFile {
         self.first_line
     }
 
-    /// Whether this file was pulled in by an `#include`.
+    /// Whether this file is one whose diagnostics name it themselves: an
+    /// `#include`d header, or the `.c` file of an `include_c99!`.
+    ///
+    /// Neither has a span of its own — the caret lands on the `#include` or on
+    /// the macro invocation — so `file:line:column` goes into the message
+    /// instead; see [`SourceMap::header_position`].
     pub fn is_included(&self) -> bool {
-        self.mode == InputMode::Included
+        matches!(self.mode, InputMode::Included | InputMode::CFile)
     }
 
     fn local_line_col(&self, local: u32) -> (usize, usize) {
@@ -790,6 +810,43 @@ pub fn capture_with(
     }
 }
 
+/// Makes a `.c` file read from disk the source of a translation unit.
+///
+/// This is what [`include_c99!`](crate::expand_include) captures instead of a
+/// token stream: there is no C in the `.rs` file at all, so there is nothing to
+/// slice and nothing to point a span into. The file becomes the map's root,
+/// named by its own path, and every position in it resolves to `span` — the
+/// macro invocation, which is the only place in the `.rs` file a caret can go.
+/// Being [`InputMode::CFile`] is what puts `file.c:12:5: ` in front of the
+/// message, exactly as a header's position travels there.
+///
+/// `name` is how diagnostics write the path — relative to the working
+/// directory wherever it can be, since an absolute one differs between two
+/// machines — and is also what `__FILE__` expands to and what the file's own
+/// `#include "…"` searches beside.
+pub fn capture_c_file(name: String, text: String, span: Span) -> Source {
+    let mut map = SourceMap::new();
+    let unit_id = unit_id_of(span, &text);
+    let root = map.add_file(FileSpec {
+        rust_path: Some(name.clone()),
+        name,
+        text,
+        anchors: Vec::new(),
+        fallback_span: span,
+        precise: false,
+        precise_spans: None,
+        mode: InputMode::CFile,
+        // Its own lines: `__LINE__` in a `.c` file names a line of that file.
+        first_line: 1,
+    });
+    Source {
+        map,
+        root,
+        mode: InputMode::CFile,
+        unit_id,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // unit identity
 // ---------------------------------------------------------------------------
@@ -837,6 +894,23 @@ fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
 
 fn is_string_literal(repr: &str) -> bool {
     repr.starts_with('"') || repr.starts_with("r\"") || repr.starts_with("r#")
+}
+
+/// The text a `Literal` denotes, when it is a plain or raw string literal.
+///
+/// [`crate::expand_include`] is what needs it: the argument of
+/// `include_c99!("…")` is a path, and a path with a `\` in it has to be the
+/// one the user wrote rather than the escape sequence it is spelled as.
+/// Anything that is not a string literal — a byte string, a number, an
+/// identifier — answers [`None`].
+pub fn string_literal_value(literal: &proc_macro2::Literal) -> Option<String> {
+    let repr = literal.to_string();
+    if !is_string_literal(&repr) {
+        return None;
+    }
+    decode_string_literal(&repr, false)
+        .ok()
+        .map(|(text, _)| text)
 }
 
 /// Unescapes a Rust string literal (plain or raw) into the text it denotes.

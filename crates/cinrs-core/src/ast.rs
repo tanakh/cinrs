@@ -541,6 +541,12 @@ pub struct Attributes {
     /// `mode(M)`, which replaces the declared type with the one the machine
     /// mode names, keeping its signedness.
     pub mode: Option<Spanned<String>>,
+    /// `[[cinrs::safe]]` / `__attribute__((cinrs_safe))`: generate the function
+    /// without `unsafe`, so that `rustc` checks its body.
+    ///
+    /// This crate's own attribute rather than one of GCC's, which is why it is
+    /// spelled in this crate's namespace both ways.
+    pub safe: Option<SourceRange>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -576,6 +582,7 @@ impl Attributes {
         self.destructor = self.destructor.or(other.destructor);
         self.cleanup = self.cleanup.take().or(other.cleanup);
         self.mode = self.mode.take().or(other.mode);
+        self.safe = self.safe.or(other.safe);
     }
 }
 

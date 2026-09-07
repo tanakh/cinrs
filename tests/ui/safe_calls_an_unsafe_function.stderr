@@ -1,0 +1,8 @@
+error: function 'helper' is not safe; mark it [[cinrs::safe]] or call it from a non-safe function
+  --> tests/ui/safe_calls_an_unsafe_function.rs:15:16
+   |
+15 |         return helper(n);
+   |                ^^^^^^
+
+error: aborting due to 1 previous error
+

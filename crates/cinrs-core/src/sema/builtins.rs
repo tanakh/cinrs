@@ -990,6 +990,7 @@ impl Sema<'_> {
             section: None,
             asm_label: None,
             init_kind: None,
+            safe: None,
             locals: Vec::new(),
             uses_alloca: false,
             body: None,

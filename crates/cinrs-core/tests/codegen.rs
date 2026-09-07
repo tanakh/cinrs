@@ -164,6 +164,28 @@ fn readme_example() {
     ));
 }
 
+/// A safe function is the one shape that carries no `unsafe` at all: not on
+/// the item, and not around the body — which is what lets `rustc` check the
+/// translation of the C.
+#[test]
+fn a_safe_function_is_generated_without_unsafe() {
+    insta::assert_snapshot!(generate(
+        r"
+        #pragma cinrs safe twice
+
+        __attribute__((cinrs_safe)) int fact(int n) {
+            if (n == 0) {
+                return 1;
+            } else {
+                return n * fact(n - 1);
+            }
+        }
+
+        int twice(int n) { return fact(n) + fact(n); }
+        "
+    ));
+}
+
 #[test]
 fn loops_and_labels() {
     insta::assert_snapshot!(generate(

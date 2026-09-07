@@ -2,6 +2,7 @@
 
 use crate::ast;
 use crate::capture::SourceRange;
+use crate::ir;
 use crate::ir::{
     BinOp, Callee, CmpOp, Expr, ExprKind, FuncId, Function, LogicalOp, Place, PlaceKind, Signature,
     StrData, StrId, Ty, UNREACHABLE_BUILTIN, VmDim,
@@ -2059,10 +2060,20 @@ impl Sema<'_> {
         // may not be settled yet — a forward-declared nested function is only
         // defined further down — so the edge is recorded and the environments
         // are closed over once the unit is done.
-        if let (Callee::Direct(callee), Some(frame)) = (&target, self.nest.last())
-            && self.program.function(*callee).is_nested()
-        {
-            self.nested_calls.push((frame.func, *callee));
+        if let (Callee::Direct(id), Some(frame)) = (&target, self.nest.last()) {
+            let (caller, id) = (frame.func, *id);
+            if self.program.function(id).is_nested() {
+                self.nested_calls.push((caller, id));
+            }
+            // Every direct call is an edge of the unit's call graph, which is
+            // what tells a `[[cinrs::safe]]` function that its callee is not
+            // one; see [`crate::sema::check_safe`]. The range is the callee's
+            // own, so that the caret lands on the name that was called.
+            self.program.calls.push(ir::CallEdge {
+                caller,
+                callee: id,
+                range: callee.range,
+            });
         }
 
         let mut values = Vec::with_capacity(args.len());
@@ -2178,6 +2189,7 @@ impl Sema<'_> {
             section: None,
             asm_label: None,
             init_kind: None,
+            safe: None,
             locals: Vec::new(),
             uses_alloca: false,
             body: None,

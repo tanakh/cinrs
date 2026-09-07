@@ -1,0 +1,20 @@
+error: #pragma cinrs safe names 'nowhere', which this unit does not declare
+  --> tests/ui/safe_bad_requests.rs:10:24
+   |
+10 |     #pragma cinrs safe nowhere
+   |                        ^^^^^^^
+
+error: #pragma cinrs safe needs the name of at least one function
+  --> tests/ui/safe_bad_requests.rs:12:19
+   |
+12 |     #pragma cinrs safe
+   |                   ^^^^
+
+error: unknown 'cinrs' attribute 'sound'; the ones this crate has are 'safe'
+  --> tests/ui/safe_bad_requests.rs:15:7
+   |
+15 |     [[cinrs::sound]] int f(int n) { return n; }
+   |       ^^^^^
+
+error: aborting due to 3 previous errors
+

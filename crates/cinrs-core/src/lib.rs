@@ -68,6 +68,16 @@
 //! `#embed` takes the same route with [`Analysis::embedded_files`] and
 //! `include_bytes!`, since a resource is bytes rather than text.
 //!
+//! # Where `include_c99!` fits
+//!
+//! [`expand_include`] is [`expand`] with a `.c` file in place of the token
+//! stream: the file becomes the map's root — see
+//! [`capture::capture_c_file`] — and every pass after that is the same one.
+//! Since nothing in the `.rs` file corresponds to a position in the `.c`, that
+//! root resolves every range to the span of the macro invocation and carries
+//! its own `path:line:column` into the message, which is exactly what a header
+//! already does.
+//!
 //! # Example
 //!
 //! ```
@@ -497,6 +507,9 @@ pub struct Analysis {
     /// The libraries `#pragma cinrs link` asked the `extern` block to be
     /// linked against.
     pub link_libraries: Vec<String>,
+    /// The functions `#pragma cinrs safe` asked to be generated without
+    /// `unsafe`; see [`sema::check_safe`].
+    pub safe_functions: Vec<pp::SafeName>,
     /// Whether `#pragma cinrs export` asked for real C symbols.
     pub export: bool,
     /// Whether `#pragma cinrs no_std` said the expansion goes into a
@@ -591,6 +604,7 @@ struct FrontEndOutput {
     user_headers: Vec<PathBuf>,
     embedded_files: Vec<PathBuf>,
     link_libraries: Vec<String>,
+    safe_functions: Vec<pp::SafeName>,
     export: bool,
     no_std: bool,
     module: Option<String>,
@@ -626,6 +640,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         user_headers,
         embedded_files,
         link_libraries,
+        safe_functions,
         export,
         no_std,
         module,
@@ -646,6 +661,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         user_headers,
         embedded_files,
         link_libraries,
+        safe_functions,
         export,
         no_std,
         module,
@@ -671,7 +687,16 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
     let mut diagnostics = Diagnostics::new();
     // Capture must stay on this thread: it handles `proc_macro2::Span`s, which
     // are not `Send`. Everything after it works on plain byte offsets.
-    let mut source = capture::capture_with(input, &mut diagnostics, subspan);
+    let source = capture::capture_with(input, &mut diagnostics, subspan);
+    analyze_source(source, options, diagnostics)
+}
+
+/// Runs the front end over a [`Source`] that has already been captured.
+///
+/// [`analyze_with`] is this with the capture in front of it; the other caller
+/// is [`expand_include`], whose source is a `.c` file rather than a token
+/// stream.
+fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagnostics) -> Analysis {
     // The environment is read here rather than in `Options::new`, so that the
     // diagnostic a bad `CINRS_TARGET` deserves has a range to sit on — the
     // whole invocation, there being nothing in the C to point at.
@@ -720,6 +745,7 @@ pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subsp
         user_headers: out.user_headers,
         embedded_files: out.embedded_files,
         link_libraries: out.link_libraries,
+        safe_functions: out.safe_functions,
         export: out.export,
         no_std: out.no_std,
         module: out.module,
@@ -769,6 +795,102 @@ fn including_directory(rust_path: Option<&str>) -> Option<PathBuf> {
     Some(Path::new(rust_path?).parent()?.to_path_buf())
 }
 
+/// Expands one `include_c99!("path")` invocation: the same translation, over a
+/// `.c` file rather than over C written inside the `.rs`.
+///
+/// The file is read and translated exactly as [string-literal
+/// input](capture::InputMode::StringLiteral) would be — every C construct is
+/// accepted, `#pragma cinrs …` inside it configures the unit, and its own
+/// directory is what its `#include "…"` searches first, as a header's is.
+///
+/// # Where a relative path is resolved
+///
+/// Against the **directory of the `.rs` file the macro is written in**, which
+/// is what `#include "…"` in a `c99!` block already does and what the author
+/// is looking at. `Span::local_file` is how that directory is found; where the
+/// compiler will not say (input built by another macro, some IDE contexts),
+/// `CARGO_MANIFEST_DIR` stands in, so that a path written relative to the
+/// package still resolves. An absolute path is used as it stands.
+///
+/// # Diagnostics
+///
+/// There is no C in the `.rs` file, so there is no span to point into: every
+/// diagnostic — this crate's and `rustc`'s about the generated code — lands on
+/// the macro invocation, and a message of ours carries `path:line:column` in
+/// front of it, exactly as one inside an `#include`d header does. The file is
+/// named in the expansion with `include_str!` as well, so that editing it
+/// rebuilds the crate.
+pub fn expand_include(input: TokenStream, options: &Options) -> TokenStream {
+    let macro_name = format!("include_{}", options.macro_name());
+    let mut trees = input.into_iter();
+    let (first, second) = (trees.next(), trees.next());
+    let span = first.as_ref().map_or_else(Span::call_site, TokenTree::span);
+    let name = match (&first, &second) {
+        (Some(TokenTree::Literal(literal)), None) => capture::string_literal_value(literal),
+        _ => None,
+    };
+    let Some(name) = name else {
+        return diag::compile_error_at(
+            span,
+            &format!(
+                "{macro_name} takes one string literal naming a C file, as in \
+                 {macro_name}(\"vendor/parser.c\")"
+            ),
+        );
+    };
+
+    let path = include_path(&name, span);
+    let found = match include::read_source(&path) {
+        Ok(found) => found,
+        Err(include::Error::Unreadable { path, error }) => {
+            return diag::compile_error_at(span, &format!("cannot read '{path}': {error}"));
+        }
+        Err(include::Error::NotFound { searched }) => {
+            let looked = searched.join(", ");
+            return diag::compile_error_at(
+                span,
+                &format!(
+                    "{macro_name} cannot find '{name}': there is no file at {looked}. A relative \
+                     path is resolved against the directory of the .rs file this macro is \
+                     written in"
+                ),
+            );
+        }
+    };
+
+    // The file is the unit's own text, so it is tracked like a header: editing
+    // it has to rebuild the crate that names it.
+    let tracked: Vec<PathBuf> = found.path.into_iter().collect();
+    let source = capture::capture_c_file(found.name, found.text, span);
+    let analysis = analyze_source(source, options, Diagnostics::new());
+    generate_unit(analysis, &tracked)
+}
+
+/// Where `include_c99!("name")` looks for its file.
+///
+/// The directory of the `.rs` file the invocation is written in, which is what
+/// `Span::local_file` reports and what a quoted `#include` in a `c99!` block
+/// already searches first; `CARGO_MANIFEST_DIR` when the compiler will not say
+/// where that is, and nothing at all — the path as written, against the working
+/// directory — when even that is unset, which is a unit test rather than a
+/// build.
+fn include_path(name: &str, span: Span) -> PathBuf {
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(dir) = span
+        .local_file()
+        .and_then(|rs| rs.parent().map(Path::to_path_buf))
+    {
+        return dir.join(path);
+    }
+    match std::env::var_os(include::MANIFEST_DIR_VAR) {
+        Some(root) => Path::new(&root).join(path),
+        None => path.to_path_buf(),
+    }
+}
+
 /// Expands one `c99!`-style invocation.
 ///
 /// The result is a private module holding the unit's items plus a glob
@@ -807,6 +929,15 @@ pub fn expand(input: TokenStream, options: &Options) -> TokenStream {
 ///
 /// See [`Subspan`]; [`expand`] is this with no hook.
 pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspan>) -> TokenStream {
+    generate_unit(analyze_with(input, options, subspan), &[])
+}
+
+/// Semantic analysis and code generation over a finished [`Analysis`].
+///
+/// `extra_tracking` names files the expansion must depend on that the
+/// preprocessor did not read itself — the `.c` file [`expand_include`] was
+/// pointed at, which is the unit's own text rather than a header of it.
+fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream {
     let Analysis {
         source,
         unit,
@@ -815,6 +946,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         user_headers,
         embedded_files,
         link_libraries,
+        safe_functions,
         export,
         no_std,
         module,
@@ -824,7 +956,7 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
         // options the caller handed in.
         options,
         ..
-    } = analyze_with(input, options, subspan);
+    } = analysis;
     let options = &options;
 
     let unit_id = source.unit_id();
@@ -840,15 +972,20 @@ pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspa
     if let Some(path) = crate_path {
         program.crate_path = path;
     }
-    // The pragmas are the preprocessor's, so the two rules that depend on one
-    // can only be checked now that the program and the pragmas are together.
+    // The pragmas are the preprocessor's, so the rules that depend on one can
+    // only be checked now that the program and the pragmas are together.
+    // `check_safe` also *applies* one, which is why it comes before code
+    // generation reads `Function::safe`.
     let mut pragma_diagnostics = sema::check_pragmas(&program);
+    pragma_diagnostics.extend(sema::check_safe(&mut program, &safe_functions));
     expansions.annotate(&mut pragma_diagnostics);
     diagnostics.extend(pragma_diagnostics);
 
     // Emitted whether or not the unit compiled: a header that is being fixed
     // is exactly the one whose next edit has to trigger a rebuild.
-    let mut out = rebuild_tracking(&user_headers, &embedded_files);
+    let mut tracked = extra_tracking.to_vec();
+    tracked.extend(user_headers);
+    let mut out = rebuild_tracking(&tracked, &embedded_files);
     if diagnostics.has_errors() {
         out.extend(diagnostics.to_token_stream(&source.map));
         out.extend(codegen::generate_stubs(&program, &source.map, options));

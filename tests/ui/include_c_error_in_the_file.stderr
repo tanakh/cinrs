@@ -1,0 +1,8 @@
+error: tests/ui/c/bad.c:3:12: implicit declaration of function 'frobnicate' is invalid in C99
+  --> tests/ui/include_c_error_in_the_file.rs:11:21
+   |
+11 | cinrs::include_c99!("c/bad.c");
+   |                     ^^^^^^^^^
+
+error: aborting due to 1 previous error
+

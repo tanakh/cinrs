@@ -1,0 +1,14 @@
+error: 'safe' is not allowed on a 'typedef': it applies to a function definition, whose body is what is checked
+  --> tests/ui/safe_on_a_typedef_or_an_object.rs:10:7
+   |
+10 |     [[cinrs::safe]] typedef int Unary(int);
+   |       ^^^^^
+
+error: 'safe' is not allowed on an object: it applies to a function definition, whose body is what is checked
+  --> tests/ui/safe_on_a_typedef_or_an_object.rs:12:7
+   |
+12 |     [[cinrs::safe]] int (*handler)(int);
+   |       ^^^^^
+
+error: aborting due to 2 previous errors
+

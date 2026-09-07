@@ -7,7 +7,7 @@
 //!
 //! ```
 //! cinrs::c99! {
-//!     int fact(int n) {
+//!     __attribute__((cinrs_safe)) int fact(int n) {
 //!         if (n == 0) {
 //!             return 1;
 //!         } else {
@@ -16,11 +16,19 @@
 //!     }
 //! }
 //!
-//! // The generated functions are `extern "C"`, so calling one is `unsafe`.
-//! assert_eq!(unsafe { fact(10) }, 3_628_800);
+//! // `cinrs_safe` is what makes the call ordinary Rust; see [Safe
+//! // functions](#safe-functions). Without it a C function is a foreign
+//! // function like any other and a call to it is `unsafe`, which is the
+//! // default.
+//! assert_eq!(fact(10), 3_628_800);
 //! ```
 //!
-//! Each macro invocation is one translation unit.
+//! Each macro invocation is one translation unit, and a C file that already
+//! exists is one too — see [Including a C file](#including-a-c-file):
+//!
+//! ```text
+//! cinrs::include_c99!("vendor/parser.c");
+//! ```
 //!
 //! # Standards and dialects
 //!
@@ -500,7 +508,9 @@
 //! `static` function is generated without `pub`, and a file-scope variable
 //! becomes a `static mut` item, which Rust must read by value:
 //! `assert_eq!({ counter }, 1)` rather than `assert_eq!(counter, 1)`, since
-//! taking a reference to a `static mut` is an error in edition 2024.
+//! taking a reference to a `static mut` is an error in edition 2024. `unsafe`
+//! is the default, and [Safe functions](#safe-functions) is how a function
+//! stops being foreign.
 //!
 //! Arithmetic follows C, not Rust: `+`, `-`, `*` and the shifts wrap instead
 //! of panicking (unsigned wrap-around is defined in C, and wrapping is the
@@ -856,6 +866,111 @@
 //! Variably modified types and `alloca` are the only constructs whose
 //! expansion needs more than `core`; see [`no_std`](#no_std) for what that
 //! means in a crate without an allocator.
+//!
+//! # Safe functions
+//!
+//! A C function is a foreign function, and calling one is `unsafe` for the
+//! same reason calling any other is. A function the unit marks **safe** is
+//! generated without it — as a plain `pub extern "C" fn` whose body is *not*
+//! wrapped in an `unsafe` block — so `rustc` checks the whole translation, and
+//! Rust calls it like any other Rust function:
+//!
+//! ```
+//! cinrs::c99! {
+//!     __attribute__((cinrs_safe)) int gcd(int a, int b) {
+//!         while (b != 0) {
+//!             int t = a % b;
+//!             a = b;
+//!             b = t;
+//!         }
+//!         return a < 0 ? -a : a;
+//!     }
+//! }
+//!
+//! assert_eq!(gcd(48, -18), 6);
+//! ```
+//!
+//! There are three spellings, and they mean the same thing:
+//!
+//! * `[[cinrs::safe]]`, the C23 attribute in this crate's own vendor
+//!   namespace, wherever `[[…]]` parses — [`c23!`], [`gnu23!`] and the other
+//!   GNU dialects, which take the C23 syntax as GCC does. In a strict
+//!   pre-C23 entry point an attribute specifier is gated, so write one of the
+//!   other two there;
+//! * `__attribute__((cinrs_safe))`, which works in **every** entry point,
+//!   [`c89!`] included, for the reason every other double-underscore spelling
+//!   does: the name is reserved to the implementation;
+//! * `#pragma cinrs safe f g h`, a list of function names, which works in
+//!   every entry point *and* in [string-literal
+//!   form](#input-forms) and needs nothing written on the function itself. A
+//!   name the unit does not declare is a diagnostic.
+//!
+//! A safe function may also be `static` (private to the module, as C says), be
+//! `inline`, and be exported — `#pragma cinrs export` gives it
+//! `#[unsafe(no_mangle)] pub extern "C" fn`.
+//!
+//! ## What a safe body may hold
+//!
+//! Whatever passes Rust's own checks, which is more C than it sounds: integer
+//! and floating arithmetic and comparisons, all the control flow (`if`,
+//! `while`, `do`, `for`, `switch` with fallthrough, and `goto`, whose [state
+//! machine](#control-flow) is safe code too), locals and parameters, `struct`,
+//! `union` and `enum` values passed and returned **by value**, `_Bool`,
+//! bit-field accessors on a local, the [complex](#complex-numbers) arithmetic,
+//! pointer *values* (holding one, comparing it, returning it), string literals,
+//! and calls to other safe functions of the same unit.
+//!
+//! Division is Rust's, which is C99's: it truncates towards zero. What C
+//! leaves undefined — a zero divisor, `INT_MIN / -1` — Rust panics on, and a
+//! panic cannot cross an `extern "C"` frame, so the program aborts. That is a
+//! run-time property rather than something `safe` promises.
+//!
+//! ## What `rustc` refuses
+//!
+//! Everything else, with the caret on the C that asked for it. Reading or
+//! writing **through a pointer** — `*p`, `p[i]`, `p->f` — since pointers are
+//! raw pointers, and that includes the elements of an **array**, local or not,
+//! because `a[i]` is `*(a + i)` in C and is translated as one; a
+//! **file-scope object**, which is a `static mut`; a
+//! **`union` member**, whose read is unsafe in Rust; a call to a function the
+//! unit only **declares**, such as anything from the C library; a
+//! **`_Thread_local` object**, every access to which is a dereference of the
+//! `*mut T` its cell hands out; the **atomics**, which are reached through
+//! `AtomicX::from_ptr`; a call **through a function pointer**; the elements of
+//! a **variable length array** or of `alloca`'s storage, which are reached
+//! through a pointer like any others; reading an argument out of a
+//! **`va_list`**; a cast that becomes a `transmute`; and C23's
+//! `unreachable()`, which is
+//! [`core::hint::unreachable_unchecked`] — the one construct that asks for
+//! undefined behaviour by name.
+//!
+//! The messages are `rustc`'s, because `rustc` is what did the checking; one
+//! case has a message of this crate's instead, since C is what a reader is
+//! looking at:
+//!
+//! ```text
+//! error: function 'helper' is not safe; mark it [[cinrs::safe]] or call it
+//! from a non-safe function
+//! ```
+//!
+//! ## What is refused outright
+//!
+//! Three shapes could never be safe, and say so where the request was written
+//! rather than turning into a puzzle from `rustc`: a function this unit only
+//! **declares** (there is no body to check); a **variadic** definition (Rust
+//! makes every function with a C variable argument list `unsafe`); and a GNU
+//! **nested function**, which reaches the enclosing frame through [hidden
+//! pointer parameters](#nested-functions) that its body dereferences. So is
+//! the attribute on a `typedef` or an object of function pointer type, neither
+//! of which has a body either.
+//!
+//! One corner is worth knowing: the accessors generated for the bit-fields of
+//! a **`union`** are safe methods that read the storage inside an `unsafe`
+//! block of their own, so a safe function may read one where reading an
+//! ordinary member of that `union` would be refused.
+//!
+//! Nothing about the C changes: a call *from* C to a safe function is what it
+//! always was, and a function that is not safe may call one that is.
 //!
 //! # One block, one module
 //!
@@ -1600,8 +1715,9 @@
 //! platform splits `PATH` and searched last. `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
-//! five `cinrs` pragmas are [`target`](#the-data-model),
-//! [`export`](#linking-two-blocks-together), [`no_std`](#no_std),
+//! six `cinrs` pragmas are [`target`](#the-data-model),
+//! [`export`](#linking-two-blocks-together), [`safe`](#safe-functions),
+//! [`no_std`](#no_std),
 //! [`module`](#one-block-one-module) and
 //! [`crate`](#the-complex-feature), which says where the `cinrs` crate itself
 //! is for a renamed dependency.
@@ -1789,6 +1905,9 @@
 //! "# }
 //! ```
 //!
+//! The third form is a file of its own, which has no such limits either; see
+//! [Including a C file](#including-a-c-file).
+//!
 //! ## The `nightly` feature
 //!
 //! Pointing a span *inside* a string literal needs
@@ -1822,6 +1941,59 @@
 //! changes nothing else: raw-token input is already exact, and a context where
 //! `subspan` declines to answer (`rust-analyzer`, or a literal produced by
 //! another macro) falls back to the message on its own.
+//!
+//! # Including a C file
+//!
+//! The third input form is a file: [`include_c99!`] and one such macro per
+//! entry point — [`include_c89!`], [`include_c90!`], [`include_c11!`],
+//! [`include_c17!`], [`include_c23!`] and the five `include_gnu…!` forms.
+//!
+//! ```text
+//! cinrs::include_c99!("c/geometry.c");
+//!
+//! let p = Point { x: -3, y: 4 };
+//! assert_eq!(point_manhattan(p), 7);
+//! ```
+//!
+//! The file is read while the macro expands and translated exactly as the same
+//! text inside a [`c99!`] block would be. It is one translation unit, so every
+//! construct is accepted — a file is text, and the lexemes Rust's own lexer
+//! refuses (`0x1.8p3`, `L"…"`, `\` continuations, `##`) are no trouble there —
+//! `#pragma cinrs …` written inside it configures the unit, `#include "…"` in
+//! it searches **its own** directory first as a header's does, and the
+//! expansion is [a module plus a glob re-export](#one-block-one-module) like
+//! any other invocation's. `__FILE__` and `__LINE__` name the `.c` file and its
+//! own lines, and the file is mentioned with `include_str!` in the expansion,
+//! so editing it rebuilds the crate exactly as editing a header does.
+//!
+//! A **relative path is resolved against the directory of the `.rs` file the
+//! macro is written in**, which is the rule `#include "…"` already follows; an
+//! absolute path is used as it stands. `Span::local_file` is how that directory
+//! is found, and where the compiler will not say — input built by another
+//! macro, some IDE contexts — `CARGO_MANIFEST_DIR` stands in, so a path written
+//! relative to the package still resolves.
+//!
+//! ## Where the errors go
+//!
+//! There is no C in the `.rs` file, so there is no span to point into: **every
+//! diagnostic lands on the macro invocation**. A message of this crate's
+//! carries the position inside the file in its text, exactly as one from inside
+//! an `#include`d header does:
+//!
+//! ```text
+//! error: c/geometry.c:12:5: use of undeclared identifier 'wrong'
+//!  --> src/lib.rs:3:21
+//!   |
+//! 3 | cinrs::include_c99!("c/geometry.c");
+//!   |                     ^^^^^^^^^^^^^^
+//! ```
+//!
+//! and so does an error `rustc` raises about the generated code. **`cargo` and
+//! `rust-analyzer` show the location in the message rather than by jumping into
+//! the `.c` file** — that is the price of keeping the C in a file of its own,
+//! and it is the only difference from writing the same text inline. A call
+//! written in *Rust* is unaffected: the caret is on the call, where it always
+//! was.
 //!
 //! # Status
 //!
@@ -1970,6 +2142,10 @@
 #![no_std]
 
 pub use cinrs_macros::{c11, c17, c23, c89, c90, c99, gnu11, gnu17, gnu23, gnu89, gnu99};
+pub use cinrs_macros::{
+    include_c11, include_c17, include_c23, include_c89, include_c90, include_c99, include_gnu11,
+    include_gnu17, include_gnu23, include_gnu89, include_gnu99,
+};
 
 /// The runtime the generated code links against; see [`cinrs_rt`].
 ///

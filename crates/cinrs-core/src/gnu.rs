@@ -47,6 +47,9 @@ pub enum Attribute {
     Cleanup,
     /// `mode(M)`: the declared type is the one the machine mode names.
     Mode,
+    /// `cinrs_safe`, and `[[cinrs::safe]]`: this crate's own attribute, which
+    /// generates the function without `unsafe` so that `rustc` checks it.
+    Safe,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weak` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -112,9 +115,31 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "destructor" => Attribute::Destructor,
         "cleanup" => Attribute::Cleanup,
         "mode" => Attribute::Mode,
+        // Not GCC's: this crate's own, spelled the way a GNU attribute of
+        // another vendor's is, so that it works in every entry point.
+        "cinrs_safe" => Attribute::Safe,
         _ if IGNORED_ATTRIBUTES.contains(&bare) => Attribute::Ignored,
         _ => return None,
     })
+}
+
+/// The names `[[cinrs::…]]` knows, for the diagnostic that lists them.
+///
+/// C23 6.7.13.1p3 lets an implementation ignore an attribute in a namespace it
+/// does not know, and [`attribute`] does exactly that for `[[clang::…]]` and
+/// the rest — but `cinrs` is *our* namespace, so a name we do not know there is
+/// a mistake worth reporting, exactly as an unknown `#pragma cinrs` option is.
+pub const CINRS_ATTRIBUTES: &[&str] = &["safe"];
+
+/// What a `[[cinrs::name]]` attribute asks for.
+///
+/// The same attributes are spelled `__attribute__((cinrs_name))` for the entry
+/// points where `[[…]]` is C23 and later only; see [`attribute`].
+pub fn cinrs_attribute(name: &str) -> Option<Attribute> {
+    match name {
+        "safe" => Some(Attribute::Safe),
+        _ => None,
+    }
 }
 
 /// The reason an [`Attribute::Unsupported`] one is refused.

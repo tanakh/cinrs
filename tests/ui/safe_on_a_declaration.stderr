@@ -1,0 +1,8 @@
+error: 'elsewhere' is only declared here, so it cannot be safe: an extern function is compiled elsewhere and nothing about it can be checked
+  --> tests/ui/safe_on_a_declaration.rs:11:7
+   |
+11 |     [[cinrs::safe]] int elsewhere(int n);
+   |       ^^^^^
+
+error: aborting due to 1 previous error
+

@@ -31,6 +31,12 @@
 //! provokes: unused bindings, redundant parentheses, non-Rust naming, code a
 //! human can see is unreachable, and so on.
 //!
+//! A function the unit marked [safe](crate::sema::check_safe) —
+//! `[[cinrs::safe]]`, `__attribute__((cinrs_safe))` or `#pragma cinrs safe` —
+//! is the one exception: it is generated as `pub extern "C" fn` and its body is
+//! *not* wrapped, so `rustc` checks every operation the translation of the C
+//! needs and refuses the ones that are unsafe, with the caret on the C.
+//!
 //! A unit that asked for `#pragma cinrs export` gives everything with external
 //! linkage `#[unsafe(no_mangle)]` on top of that, so that its functions and
 //! objects are real C symbols another unit can link against — with C's own
@@ -804,6 +810,24 @@ impl<'a> Codegen<'a> {
         let name = format!("__cinrs_tmp{}", self.temporaries);
         self.temporaries += 1;
         Ident::new(&name, Span::mixed_site())
+    }
+
+    /// A temporary whose *position* is the C it came from, while it still
+    /// resolves as though it had been written at the macro's definition site.
+    ///
+    /// `Span::mixed_site` carries both a hygiene context and a position, and
+    /// the position it carries is the whole invocation. That is invisible until
+    /// a diagnostic is about an expression built out of such a name — `p[i]`
+    /// becomes a temporary holding `p.offset(i)` and the place
+    /// `(*__cinrs_tmp0)`, whose span `rustc` widens to cover the name as well
+    /// and therefore to the macro call as a whole. `resolved_at` keeps
+    /// the hygiene and takes the position from the C instead, which is where
+    /// the caret belongs: a dereference a *safe* function may not do is
+    /// reported on the `p[i]` that asked for it.
+    fn temporary_at(&mut self, span: Span) -> Ident {
+        let name = format!("__cinrs_tmp{}", self.temporaries);
+        self.temporaries += 1;
+        Ident::new(&name, span.resolved_at(Span::mixed_site()))
     }
 
     /// Builds a Rust label such as `'l0`.
@@ -1933,6 +1957,15 @@ impl<'a> Codegen<'a> {
             }
             None => TokenStream::new(),
         };
+        // A function the unit asked to be safe is generated without `unsafe`,
+        // and its body without the `unsafe` block, so that `rustc` checks every
+        // operation in it; see [`crate::sema::check_safe`] for what that
+        // catches and what it refuses outright.
+        let unsafety = if func.is_safe() {
+            TokenStream::new()
+        } else {
+            quote_spanned! {span=> unsafe }
+        };
         quote_spanned! {span=>
             #attrs
             #export
@@ -1940,7 +1973,7 @@ impl<'a> Codegen<'a> {
             #cold
             #deprecated
             #section
-            #vis unsafe extern "C" fn #name(#params) #ret
+            #vis #unsafety extern "C" fn #name(#params) #ret
         }
     }
 
@@ -2030,7 +2063,14 @@ impl<'a> Codegen<'a> {
             TokenStream::new()
         };
         // One `unsafe` block around the whole body: in edition 2024 the body of
-        // an `unsafe fn` is not itself an unsafe block any more.
+        // an `unsafe fn` is not itself an unsafe block any more. A safe
+        // function is exactly the one that does not get it — that block is what
+        // would stop `rustc` checking the translation.
+        if func.is_safe() {
+            return quote_spanned! {span=>
+                #signature { #arena #body }
+            };
+        }
         quote_spanned! {span=>
             #signature {
                 unsafe { #arena #body }
@@ -2061,6 +2101,11 @@ impl<'a> Codegen<'a> {
         let span = self.sp(func.range);
         self.enter_function(func);
         let signature = self.signature(func);
+        if func.is_safe() {
+            return quote_spanned! {span=>
+                #signature { ::core::unreachable!() }
+            };
+        }
         quote_spanned! {span=>
             #signature {
                 unsafe { ::core::unreachable!() }
@@ -5848,7 +5893,7 @@ impl<'a> Codegen<'a> {
                 // so an expression that reads the object twice still calls
                 // `with` once.
                 let name = self.object_ident(*id, span);
-                let tmp = self.temporary();
+                let tmp = self.temporary_at(span);
                 let cell = Ident::new("__cinrs_cell", Span::mixed_site());
                 // The cell holds whatever wrappers the storage carries, and
                 // the object is reached through them exactly as it is for
@@ -5870,7 +5915,7 @@ impl<'a> Codegen<'a> {
             PlaceKind::Index { base, index } => {
                 let pointer = self.pointer_operand(base, place.ty, mutable, span);
                 let offset = self.scaled_offset(place.ty, index, false, span);
-                let tmp = self.temporary();
+                let tmp = self.temporary_at(span);
                 LoweredPlace::plain(
                     quote_spanned! {span=> let #tmp = #pointer.offset(#offset); },
                     parenthesize(quote_spanned! {span=> *#tmp }, span),
@@ -5921,7 +5966,7 @@ impl<'a> Codegen<'a> {
             }
             PlaceKind::Str(id) => {
                 let pointer = self.string_pointer(*id, !mutable, span);
-                let tmp = self.temporary();
+                let tmp = self.temporary_at(span);
                 LoweredPlace::plain(
                     quote_spanned! {span=> let #tmp = #pointer; },
                     parenthesize(quote_spanned! {span=> *#tmp }, span),
@@ -6025,7 +6070,7 @@ impl<'a> Codegen<'a> {
             );
         }
         let value = self.pointer_operand(ptr, pointee, mutable, span);
-        let tmp = self.temporary();
+        let tmp = self.temporary_at(span);
         LoweredPlace::plain(
             quote_spanned! {span=> let #tmp = #value; },
             parenthesize(quote_spanned! {span=> *#tmp }, span),

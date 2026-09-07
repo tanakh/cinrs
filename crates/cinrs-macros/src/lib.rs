@@ -235,6 +235,114 @@ pub fn gnu23(input: TokenStream) -> TokenStream {
     expand_gnu(input, Standard::C23)
 }
 
+/// Compiles the C89 (C90) file at `path`.
+///
+/// [`include_c99!`](macro@include_c99) documents the whole family; this is the
+/// [`c89!`](macro@c89) entry point of it, so implicit `int`, implicit function
+/// declarations and old-style definitions are what the file may use, and
+/// everything C99 added is a diagnostic.
+#[proc_macro]
+pub fn include_c89(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C89))
+}
+
+/// Compiles the C90 file at `path`; see
+/// [`include_c99!`](macro@include_c99) and [`c90!`](macro@c90).
+#[proc_macro]
+pub fn include_c90(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C89))
+}
+
+/// Compiles the C99 file at `path` — one translation unit, exactly as if its
+/// text had been written inside [`c99!`](macro@c99).
+///
+/// ```ignore
+/// cinrs::include_c99!("vendor/parser.c");
+/// ```
+///
+/// The file is read at expansion time and translated with the same front end:
+/// every C construct is accepted (the file is text, so the lexemes Rust's own
+/// lexer refuses are no trouble), `#pragma cinrs …` inside it configures the
+/// unit, `#include "…"` in it searches the file's own directory first, and the
+/// expansion is a module plus a glob re-export like any other invocation's.
+/// `__FILE__` and `__LINE__` name the `.c` file and its own lines.
+///
+/// A **relative path is resolved against the directory of the `.rs` file the
+/// macro is written in** — the same rule `#include "…"` follows — and an
+/// absolute one is used as it stands. The file is named with `include_str!` in
+/// the expansion, so editing it rebuilds the crate.
+///
+/// **Diagnostics land on the invocation.** There is no C in the `.rs` file for
+/// a caret to point at, so a message of this crate's carries the position
+/// inside the file — `vendor/parser.c:12:5: unknown type name 'foo'` — and an
+/// error `rustc` raises about the generated code is reported at the macro call.
+/// Neither `cargo` nor an IDE will jump into the `.c` file; the position is in
+/// the text of the message.
+///
+/// There is one of these per entry point: `include_c89!`, `include_c90!`,
+/// `include_c11!`, `include_c17!`, `include_c23!` and the five `include_gnu…!`
+/// forms.
+#[proc_macro]
+pub fn include_c99(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C99))
+}
+
+/// Compiles the C11 file at `path`; see
+/// [`include_c99!`](macro@include_c99) and [`c11!`](macro@c11).
+#[proc_macro]
+pub fn include_c11(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C11))
+}
+
+/// Compiles the C17 file at `path`; see
+/// [`include_c99!`](macro@include_c99) and [`c17!`](macro@c17).
+#[proc_macro]
+pub fn include_c17(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C17))
+}
+
+/// Compiles the C23 file at `path`; see
+/// [`include_c99!`](macro@include_c99) and [`c23!`](macro@c23).
+#[proc_macro]
+pub fn include_c23(input: TokenStream) -> TokenStream {
+    include(input, Options::new(Standard::C23))
+}
+
+/// Compiles the C89 file at `path` with the GNU extensions switched on; see
+/// [`include_c99!`](macro@include_c99) and [`gnu89!`](macro@gnu89).
+#[proc_macro]
+pub fn include_gnu89(input: TokenStream) -> TokenStream {
+    include(input, Options::gnu(Standard::C89))
+}
+
+/// Compiles the C99 file at `path` with the GNU extensions switched on; see
+/// [`include_c99!`](macro@include_c99) and [`gnu99!`](macro@gnu99).
+#[proc_macro]
+pub fn include_gnu99(input: TokenStream) -> TokenStream {
+    include(input, Options::gnu(Standard::C99))
+}
+
+/// Compiles the C11 file at `path` with the GNU extensions switched on; see
+/// [`include_c99!`](macro@include_c99) and [`gnu11!`](macro@gnu11).
+#[proc_macro]
+pub fn include_gnu11(input: TokenStream) -> TokenStream {
+    include(input, Options::gnu(Standard::C11))
+}
+
+/// Compiles the C17 file at `path` with the GNU extensions switched on; see
+/// [`include_c99!`](macro@include_c99) and [`gnu17!`](macro@gnu17).
+#[proc_macro]
+pub fn include_gnu17(input: TokenStream) -> TokenStream {
+    include(input, Options::gnu(Standard::C17))
+}
+
+/// Compiles the C23 file at `path` with the GNU extensions switched on; see
+/// [`include_c99!`](macro@include_c99) and [`gnu23!`](macro@gnu23).
+#[proc_macro]
+pub fn include_gnu23(input: TokenStream) -> TokenStream {
+    include(input, Options::gnu(Standard::C23))
+}
+
 /// The body every strict entry point shares.
 fn expand(input: TokenStream, standard: Standard) -> TokenStream {
     run(input, Options::new(standard))
@@ -243,6 +351,14 @@ fn expand(input: TokenStream, standard: Standard) -> TokenStream {
 /// The body every GNU entry point shares.
 fn expand_gnu(input: TokenStream, standard: Standard) -> TokenStream {
     run(input, Options::gnu(standard))
+}
+
+/// The body every `include_…!` entry point shares.
+///
+/// No [`Subspan`] hook: the C is in a file of its own, and there is nothing in
+/// the `.rs` for a span to point into.
+fn include(input: TokenStream, options: Options) -> TokenStream {
+    cinrs_core::expand_include(input.into(), &options).into()
 }
 
 fn run(input: TokenStream, options: Options) -> TokenStream {

@@ -1889,6 +1889,15 @@ pub struct Function {
     /// Whether `__attribute__((constructor))` asked for it to run before
     /// `main`, or `destructor` for after it.
     pub init_kind: Option<InitKind>,
+    /// Where the function was asked to be [safe](crate::sema::check_safe), if
+    /// it was: `[[cinrs::safe]]`, `__attribute__((cinrs_safe))` or
+    /// `#pragma cinrs safe`.
+    ///
+    /// A safe function is generated as `extern "C" fn` rather than
+    /// `unsafe extern "C" fn`, and its body is *not* wrapped in an `unsafe`
+    /// block, so `rustc` checks it. The range is where the request was
+    /// written, which is what the diagnostics about it point at.
+    pub safe: Option<SourceRange>,
     /// Whether the body calls `alloca`, in which case the generated item opens
     /// with the arena the emulation allocates out of.
     ///
@@ -1977,6 +1986,32 @@ impl Function {
     pub fn is_nested(&self) -> bool {
         self.item_name.is_some()
     }
+
+    /// Whether the function is generated without `unsafe`; see
+    /// [`Function::safe`].
+    pub fn is_safe(&self) -> bool {
+        self.safe.is_some()
+    }
+}
+
+/// One direct call, from the function whose body holds it to the function it
+/// names.
+///
+/// Sema records these as it checks the calls, and
+/// [`check_safe`](crate::sema::check_safe) is the one thing that reads them: a
+/// [safe](Function::safe) function calling one that is not gets a diagnostic
+/// worded in C rather than `rustc`'s "call to unsafe function". A call through
+/// a *pointer* has no edge — there is no callee to name — and is left to
+/// `rustc`, which refuses it in a safe function like any other unsafe
+/// operation.
+#[derive(Clone, Copy, Debug)]
+pub struct CallEdge {
+    /// The function the call was written in.
+    pub caller: FuncId,
+    /// The function it calls.
+    pub callee: FuncId,
+    /// Where the callee was named, which is where a diagnostic points.
+    pub range: SourceRange,
 }
 
 /// A file-scope `typedef`, which becomes a Rust type alias.
@@ -2025,6 +2060,8 @@ pub struct Program {
     pub externs: Vec<ObjectId>,
     /// Every function, indexed by [`FuncId`], in declaration order.
     pub functions: Vec<Function>,
+    /// Every direct call the unit's bodies make; see [`CallEdge`].
+    pub calls: Vec<CallEdge>,
     /// The file-scope `typedef`s, in declaration order.
     pub typedefs: Vec<TypedefItem>,
     /// The `enum` constants that become Rust `const` items, in order.

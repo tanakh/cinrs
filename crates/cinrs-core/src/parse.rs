@@ -529,6 +529,9 @@ impl Parser<'_> {
             }
         };
         self.advance();
+        // `[[cinrs::safe]]`: this crate's own namespace, whose names are read
+        // from a table of their own.
+        let mut ours = false;
         if self.at_punct(Punct::Colon) && self.nth(1).is_punct(Punct::Colon) {
             self.advance();
             self.advance();
@@ -544,15 +547,34 @@ impl Parser<'_> {
                 }
             };
             self.advance();
-            // Only the GNU namespace names attributes this front end knows;
-            // anything else is another vendor's and is ignored.
-            if prefix != "gnu" && prefix != "clang" {
+            // Only the GNU namespace and this crate's own name attributes this
+            // front end knows; anything else is another vendor's and is
+            // ignored.
+            if prefix == "cinrs" {
+                if gnu::cinrs_attribute(&name).is_none() {
+                    self.skip_attribute_args()?;
+                    let range = self.span_to_here(start);
+                    self.error(
+                        range,
+                        format!(
+                            "unknown 'cinrs' attribute '{name}'; the ones this crate has are {}",
+                            Self::list_of_names(gnu::CINRS_ATTRIBUTES)
+                        ),
+                    );
+                    return Ok(());
+                }
+                ours = true;
+            } else if prefix != "gnu" && prefix != "clang" {
                 self.skip_attribute_args()?;
                 return Ok(());
             }
         }
 
-        let known = gnu::attribute(&name);
+        let known = if ours {
+            gnu::cinrs_attribute(&name)
+        } else {
+            gnu::attribute(&name)
+        };
         // Only three attributes have arguments this front end reads; every
         // other clause may hold anything at all — `format(printf, 1, 2)` names
         // a *mode* rather than a value — and is skipped as balanced tokens.
@@ -632,6 +654,7 @@ impl Parser<'_> {
             Some(gnu::Attribute::Destructor) => {
                 attrs.destructor = attrs.destructor.or(Some(range));
             }
+            Some(gnu::Attribute::Safe) => attrs.safe = attrs.safe.or(Some(range)),
             // A statement attribute with nothing to say here: a `switch` group
             // falls through in the generated Rust either way.
             Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}
@@ -734,6 +757,17 @@ impl Parser<'_> {
             self.advance();
         }
         Err(self.error_bail(start, "unterminated attribute argument list"))
+    }
+
+    /// `'a'`, `'a' and 'b'`, `'a', 'b' and 'c'` — how a diagnostic lists the
+    /// names it would have accepted.
+    fn list_of_names(names: &[&str]) -> String {
+        let quoted: Vec<String> = names.iter().map(|name| format!("'{name}'")).collect();
+        match quoted.split_last() {
+            None => String::new(),
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        }
     }
 
     /// Whether a `_Static_assert` declaration starts here.
@@ -2900,15 +2934,20 @@ impl Parser<'_> {
                     Ok(attrs) => {
                         if self.starts_declaration() {
                             self.parse_block_declaration().map(|mut item| {
-                                if let BlockItem::Decl(decl) = &mut item {
-                                    decl.specifiers.noreturn =
-                                        decl.specifiers.noreturn.or(attrs.noreturn);
-                                    // The sequence belongs to the declaration
-                                    // that follows it, exactly as one written
-                                    // among the specifiers does — which is
-                                    // where `parse_declaration_head` finds the
-                                    // same attributes at file scope.
-                                    decl.specifiers.attrs.merge(attrs);
+                                // The sequence belongs to the declaration —
+                                // or to the GNU nested function definition —
+                                // that follows it, exactly as one written
+                                // among the specifiers does, which is where
+                                // `parse_declaration_head` finds the same
+                                // attributes at file scope.
+                                let specifiers = match &mut item {
+                                    BlockItem::Decl(decl) => Some(&mut decl.specifiers),
+                                    BlockItem::NestedFunction(def) => Some(&mut def.specifiers),
+                                    _ => None,
+                                };
+                                if let Some(specifiers) = specifiers {
+                                    specifiers.noreturn = specifiers.noreturn.or(attrs.noreturn);
+                                    specifiers.attrs.merge(attrs);
                                 }
                                 item
                             })

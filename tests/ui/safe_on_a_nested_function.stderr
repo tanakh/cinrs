@@ -1,0 +1,8 @@
+error: 'note' is a nested function, so it cannot be safe: it reaches the enclosing function's objects through hidden pointer parameters, which its body dereferences
+  --> tests/ui/safe_on_a_nested_function.rs:14:24
+   |
+14 |         __attribute__((cinrs_safe)) void note(int value) { tally += value; }
+   |                        ^^^^^^^^^^
+
+error: aborting due to 1 previous error
+
