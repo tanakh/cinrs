@@ -158,7 +158,7 @@ named in the reason, so the list of them is a to-do rather than a silent hole.
 
 ## Baseline
 
-Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
+Measured on `rustc 1.98.1` (stable), x86_64-unknown-linux-gnu, at the pinned
 corpus revision: **99 files, 276 RUN lines, 203 run, 73 skipped**, in about ten
 seconds.
 

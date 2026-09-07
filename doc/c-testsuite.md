@@ -269,7 +269,7 @@ same reason the other two must be:
 
 ## Baseline
 
-Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
+Measured on `rustc 1.98.1` (stable), x86_64-unknown-linux-gnu, at the pinned
 corpus revision.
 
 **Correct** is passed plus rejected-as-required; see
@@ -345,7 +345,7 @@ dialect: `gcc -std=gnu89` takes all of the above as extensions too.
 
 `00140` is the one case whose result depends on the compiler: it *defines* a
 variadic function, which needs Rust 1.99, so it passes on beta and nightly and
-fails on 1.97.1. The tables above count it as a `toolchain` error; on 1.99 it
+fails on 1.98.1. The tables above count it as a `toolchain` error; on 1.99 it
 is a pass, and every row goes up by one — 174/175 (99.4 %) for `c89!`, 215/218
 (98.6 %) for `c99!` and 217/220 (98.6 %) for the other six.
 

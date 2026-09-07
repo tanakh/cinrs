@@ -432,7 +432,7 @@ as unimplemented or not planned, case by case.
   **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
   implemented — a `goto` out of a statement expression and `va_arg` with a
   struct — one is C23's empty initialiser `{}` in a block a strict `c99!` or
-  `c11!` refuses it in, and the last needs a newer Rust than 1.97. Strict
+  `c11!` refuses it in, and the last needs a newer Rust than 1.98. Strict
   `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
   use something C99 added and a strict C89 entry point is required to refuse
   them. The corpus is a git submodule, so a fresh checkout skips the suite

@@ -150,7 +150,7 @@ than the built-in cap does. Measured that way, a full guard run takes
 
 ## Baseline
 
-Measured on `rustc 1.97.1` (stable), x86_64-unknown-linux-gnu, at the pinned
+Measured on `rustc 1.98.1` (stable), x86_64-unknown-linux-gnu, at the pinned
 corpus revision, under the two entry points worth pointing at this corpus:
 `gnu89!`, which is the language these programs were actually written in, and
 `gnu11!`, the harness default and the closest thing here to the
