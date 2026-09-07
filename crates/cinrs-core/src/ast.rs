@@ -547,6 +547,9 @@ pub struct Attributes {
     /// This crate's own attribute rather than one of GCC's, which is why it is
     /// spelled in this crate's namespace both ways.
     pub safe: Option<SourceRange>,
+    /// `weak`, which only sema can answer: it is refused on a definition and
+    /// accepted on a declaration.
+    pub weak: Option<SourceRange>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -583,6 +586,7 @@ impl Attributes {
         self.cleanup = self.cleanup.take().or(other.cleanup);
         self.mode = self.mode.take().or(other.mode);
         self.safe = self.safe.or(other.safe);
+        self.weak = self.weak.or(other.weak);
     }
 }
 

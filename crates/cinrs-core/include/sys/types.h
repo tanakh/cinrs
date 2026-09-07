@@ -74,8 +74,6 @@ typedef int pid_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef unsigned int mode_t;
-__extension__ typedef unsigned long long dev_t;
-__extension__ typedef unsigned long long ino_t;
 typedef long time_t;
 typedef long clock_t;
 typedef long suseconds_t;
@@ -84,14 +82,25 @@ typedef unsigned int id_t;
 typedef int key_t;
 typedef char *caddr_t;
 
+/* `dev_t` and `ino_t` are 64 bits on both, but they are 64 bits under
+ * different *names*: `unsigned long` where that is already 64 bits and
+ * `unsigned long long` where it is not. Spelling them the way the platform's
+ * own headers do is what lets a unit mix these declarations with the real
+ * `<sys/stat.h>` — C11 6.7p3 makes a typedef redefinition legal only when the
+ * two types are the same one, and `unsigned long` and `unsigned long long` are
+ * two types however wide they are. */
 #if __SIZEOF_POINTER__ == 8
 typedef unsigned long nlink_t;
 typedef long blksize_t;
 typedef long blkcnt_t;
+typedef unsigned long dev_t;
+typedef unsigned long ino_t;
 #else
 typedef unsigned int nlink_t;
 typedef long blksize_t;
 __extension__ typedef long long blkcnt_t;
+__extension__ typedef unsigned long long dev_t;
+__extension__ typedef unsigned long long ino_t;
 #endif
 
 #endif

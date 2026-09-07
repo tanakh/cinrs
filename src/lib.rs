@@ -314,8 +314,13 @@
 //! how common it is, and whether it is supported, accepted and ignored, refused
 //! with a reason, or still to come. The short version of what is *refused* —
 //! recognised and reported rather than mistranslated — is inline assembly,
-//! `__attribute__((weak))`, `alias`, `vector_size`,
-//! `__complex__` and `#include_next`. Neither `alloca` nor `cleanup` is on
+//! `alias`, `weakref`, `vector_size` and
+//! `__complex__`. `__attribute__((weak))` is half off that list: it is refused
+//! on a *definition*, where Rust's unstable `#[linkage]` would be needed, and
+//! accepted and ignored on a declaration of something defined elsewhere, which
+//! is what lets glibc's own headers be read. `#include_next` is off it
+//! altogether — see [System headers](#system-headers).
+//! Neither `alloca` nor `cleanup` is on
 //! that list any more: see [Variably modified types and
 //! `alloca`](#variably-modified-types-and-alloca) and
 //! [`cleanup`](#the-cleanup-attribute); nor are [nested
@@ -1631,13 +1636,17 @@
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
 //! `<stdnoreturn.h>`, `<string.h>`, `<threads.h>`, `<time.h>`, `<uchar.h>`,
 //! `<wchar.h>` and `<wctype.h>`,
-//! and never reads the
-//! platform's. A real `<stdio.h>` is not C — glibc's is built out of GNU
-//! extensions, compiler builtins and `__asm__` renaming — so a front end that
-//! read it would have to be GCC. The bundled ones declare what the platform's
+//! and reads the platform's only when a unit
+//! [asks for them](#system-headers). A real `<stdio.h>` is not plain C —
+//! glibc's is built out of GNU extensions, compiler builtins and `__asm__`
+//! renaming, and its layouts are the host's rather than the target model's.
+//! The bundled ones declare what the platform's
 //! C library really exports, in plain C99, and the calls link against the real
 //! implementation. `<setjmp.h>` is there too, as a header that says
-//! `setjmp`/`longjmp` are not supported.
+//! `setjmp`/`longjmp` are not supported; the *call* is refused as well,
+//! whichever header declared it, since the platform's own `<setjmp.h>` is one
+//! [`system_include`](#system-headers) away and declares them as ordinary
+//! functions. Declaring them, and declaring a `jmp_buf`, are both fine.
 //!
 //! Five headers that are not C's are bundled beside them, because a small
 //! program reaches for them and none of the five needs a type with a layout:
@@ -1650,7 +1659,9 @@
 //! an `#error` when the target is Windows, whose C runtime has no header of
 //! any of those names. Anything with a layout — `struct stat`, `sigset_t`,
 //! `fd_set`, `pthread_t` — is deliberately absent: a header that guessed at
-//! one of those would corrupt memory rather than fail to compile.
+//! one of those would corrupt memory rather than fail to compile. Those come
+//! from the machine's own headers instead; see [System
+//! headers](#system-headers).
 //!
 //! `<signal.h>` is C's, and its signal *numbers* are the platform's: the six
 //! the standard requires plus the POSIX ones, at Linux's or the BSD/Apple
@@ -1694,9 +1705,86 @@
 //! assert_eq!(unsafe { cinrs_doc_wide() }, 6);
 //! ```
 //!
-//! Anything else — POSIX, a third-party library, your own project's headers —
-//! is written out as C declarations by hand, or pointed at with an include
-//! path if the header itself is plain enough C to parse.
+//! Anything else — POSIX beyond those five, a third-party library, your own
+//! project's headers — is written out as C declarations by hand, pointed at
+//! with an include path, or taken from the machine itself with
+//! [`#pragma cinrs system_include`](#system-headers).
+//!
+//! ## System headers
+//!
+//! The platform's own directories — `/usr/include` and its like — are **not
+//! searched by default**, which is what makes a `c99!` block self-contained
+//! and portable across [target models](#the-data-model). One pragma turns them
+//! on, for the types no bundled header can honestly declare: `struct stat`,
+//! `DIR`, `pthread_mutex_t`, `regex_t`, `struct utsname`, the real `FILE`.
+//!
+//! ```
+//! # #[cfg(all(target_os = "linux", target_env = "gnu"))]
+//! # fn main() {
+//! cinrs::gnu11! {
+//!     #pragma cinrs system_include
+//!
+//!     #include <sys/utsname.h>
+//!
+//!     int kernel_name_length(void) {
+//!         struct utsname u;
+//!         int n = 0;
+//!         if (uname(&u) != 0) return -1;
+//!         while (u.sysname[n] != '\0') n++;
+//!         return n;
+//!     }
+//! }
+//!
+//! assert!(unsafe { kernel_name_length() } > 0);
+//! # }
+//! # #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+//! # fn main() {}
+//! ```
+//!
+//! With the switch on the search order becomes: the including file's own
+//! directory, the configured directories, the **bundled** headers, then the
+//! **platform's** — so a name cinrs carries still comes from cinrs, and only
+//! what it does not carry comes from the machine.
+//! `#pragma cinrs system_include first` swaps the last two, which is how a
+//! program asks for the platform's `<stdio.h>` and so for a `FILE` whose
+//! `sizeof` is a number. `CINRS_SYSTEM_INCLUDE=1` (or `=first`) sets the same
+//! switch for a whole crate, and a pragma in a unit overrides it.
+//!
+//! A header *found* in one of the platform's directories resolves its own
+//! `#include`s there first, whichever mode is in force, which is what keeps
+//! that header set self-consistent: glibc's `<pthread.h>` gets glibc's
+//! `<time.h>`, and there is one `struct timespec` rather than two.
+//!
+//! The directories are `CINRS_SYSTEM_INCLUDE_PATH` when it is set, and
+//! otherwise, on Linux, `/usr/local/include`, the multiarch directory
+//! (`/usr/include/x86_64-linux-gnu` and its like, when it exists) and
+//! `/usr/include`. **GCC's and Clang's own private directories are never
+//! searched**: their `limits.h`, `stdint.h`, `stddef.h` and `stdarg.h` belong
+//! to that compiler, chain onward with `#include_next`, and are bundled here
+//! anyway. Apple's platforms and Windows have no default — the macOS SDK path
+//! is knowable only from `xcrun --show-sdk-path` — and a **cross build** has
+//! none either, since those directories hold the host's headers and a
+//! `struct stat` laid out for another architecture is worse than none; both are
+//! an error naming `CINRS_SYSTEM_INCLUDE_PATH`.
+//!
+//! A system header is **not** recorded for rebuilds: it belongs to the machine
+//! rather than to the crate, so upgrading libc does not rebuild every unit
+//! that read one. Your own headers still are.
+//!
+//! What those headers *declare* is their own business, and glibc decides it
+//! from the feature test macros exactly as it does for GCC: a strict entry
+//! point defines `__STRICT_ANSI__`, so glibc withholds everything outside C —
+//! no `sigset_t`, no `struct sigaction` — while a GNU one leaves
+//! `_DEFAULT_SOURCE` on and POSIX is there. `#define _GNU_SOURCE 1` ahead of
+//! the first `#include` works in either.
+//!
+//! GNU's `#include_next` works with GCC's semantics — the search goes on from
+//! the entry *after* the one the current file was found under — because the
+//! platform's headers use it; so does `__has_include_next`.
+//!
+//! `doc/system-headers.md` in the repository has the table: every standard and
+//! POSIX header, both entry points, what passes and why the one that does not
+//! does not.
 //!
 //! ## Your own headers
 //!
@@ -1712,7 +1800,10 @@
 //!
 //! — whose relative paths resolve against `CARGO_MANIFEST_DIR`, or with the
 //! `CINRS_INCLUDE_PATH` environment variable, which is split the way the
-//! platform splits `PATH` and searched last. `#pragma cinrs link "name"` puts
+//! platform splits `PATH` and searched last —
+//! `#pragma cinrs system_include` adds the platform's own directories after
+//! that, and is its own [section](#system-headers).
+//! `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
 //! six `cinrs` pragmas are [`target`](#the-data-model),
@@ -2037,8 +2128,10 @@
 //! object](#thread-local-objects), which is a `std::thread_local!`, and a
 //! [complex value](#complex-numbers), which is `cinrs-rt`'s (itself
 //! `#![no_std]`) — see [`no_std`](#no_std); the
-//! platform's include directories are never searched, so anything outside the
-//! bundled headers is declared by hand or pointed at with an include path;
+//! platform's include directories are not searched unless a unit asks for them
+//! with [`#pragma cinrs system_include`](#system-headers), so by default
+//! anything outside the bundled headers is declared by hand or pointed at with
+//! an include path;
 //! `va_list` is [`core::ffi::VaList`], which cannot be stored in a `struct` or
 //! returned; and sizes and alignments come from a
 //! [model of the target](#the-data-model) rather than from its own C

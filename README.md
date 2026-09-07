@@ -124,7 +124,9 @@ cinrs::include_c99!("vendor/parser.c");
   `<fcntl.h>`, `<strings.h>` and `<alloca.h>` — whose types and constants come
   from the same target model everything else does. Your own headers are found
   next to the `.rs` file that includes them, and editing one rebuilds the
-  crate. `#embed "logo.png"` puts the bytes
+  crate. The platform's *own* headers — `/usr/include` and its like, and so
+  `struct stat`, `DIR` and `pthread_mutex_t` — are one pragma away; see
+  [System headers](#system-headers). `#embed "logo.png"` puts the bytes
   of a file into the program — with `limit`, `prefix`, `suffix`, `if_empty`
   and `__has_embed` — and editing *that* rebuilds the crate too.
 * **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
@@ -312,6 +314,82 @@ nor `rust-analyzer` will jump into the `.c` file: they show the location in the
 message rather than under the caret. A call written in *Rust* is unaffected —
 the caret is on the call, where it always was.
 
+## System headers
+
+The bundled headers are enough for the standard library, and being written in
+plain C99 against the [target model](#cross-compilation) is what makes a `c99!`
+block mean the same thing on every machine. What they cannot give is a type
+whose *layout* only the platform knows: `struct stat`, `DIR`,
+`pthread_mutex_t`, `regex_t`, `struct utsname`, the real `FILE`. Those come
+from the platform's own headers, and one pragma puts them on the search path:
+
+```rust,ignore
+cinrs::gnu11! {
+    #pragma cinrs system_include
+
+    #include <sys/stat.h>
+
+    long file_size(const char *path) {
+        struct stat st;
+        return stat(path, &st) == 0 ? (long) st.st_size : -1;
+    }
+}
+```
+
+**The switch is off by default.** With it on the search order becomes
+
+1. the directory of the file the `#include "…"` is written in;
+2. `#pragma cinrs include_path`, then `Options::include_paths`, then
+   `CINRS_INCLUDE_PATH`;
+3. the **bundled** headers;
+4. the **platform's** directories.
+
+so a name cinrs bundles still comes from cinrs, and only what it does not carry
+— `<sys/stat.h>`, `<pthread.h>`, `<dirent.h>`, `<regex.h>` — comes from the
+machine. `#pragma cinrs system_include first` swaps 3 and 4, which is how a
+program asks for the platform's `<stdio.h>` and so for a `FILE` it can take the
+`sizeof` of. `CINRS_SYSTEM_INCLUDE=1` (or `=first`) is the same switch for a
+whole crate, and a pragma in a unit overrides it.
+
+A header *found* in one of those directories resolves its own `#include`s
+there first, whichever mode is in force. That is what keeps the platform's set
+self-consistent: glibc's `<pthread.h>` gets glibc's `<time.h>`, and the program
+ends up with one `struct timespec` rather than two.
+
+**Which directories.** `CINRS_SYSTEM_INCLUDE_PATH` when it is set — split the
+way the platform splits `PATH` — and otherwise, on Linux, `/usr/local/include`,
+the multiarch directory (`/usr/include/x86_64-linux-gnu` and its like, when it
+exists) and `/usr/include`. GCC's and Clang's own private directories are
+**never** searched: their `limits.h`, `stdint.h`, `stddef.h` and `stdarg.h` are
+that compiler's, chain onward with `#include_next`, and are bundled here
+anyway. Apple's platforms and Windows have no default — the macOS SDK path is
+knowable only from `xcrun --show-sdk-path` — so there
+`CINRS_SYSTEM_INCLUDE_PATH` is the only way in.
+
+**Cross builds get no default.** Those directories hold the *host's* headers,
+and a `struct stat` laid out for another architecture is worse than no
+`struct stat` at all, so a unit whose target is not the host is an error unless
+`CINRS_SYSTEM_INCLUDE_PATH` points at the sysroot.
+
+**Rebuilds.** Your own headers are recorded with `include_str!`, so editing one
+rebuilds the crate. A system header is not: it belongs to the machine rather
+than to the crate, and upgrading libc would otherwise rebuild every unit that
+ever read one.
+
+**Feature test macros are glibc's, and the entry point sets them.** A strict
+`c11!` defines `__STRICT_ANSI__`, as `gcc -std=c11` does, and glibc then
+withholds everything outside C — no `sigset_t`, no `struct sigaction`. A
+`gnu11!` does not, so `_DEFAULT_SOURCE` is on and POSIX is there. Writing
+`#define _GNU_SOURCE 1` ahead of the first `#include` works in either.
+
+GNU's **`#include_next`** works, with GCC's semantics — the search goes on from
+the entry *after* the one the current file was found under — because the
+platform's headers use it; so does `__has_include_next`.
+
+`doc/system-headers.md` has the table of what glibc's headers do in the front
+end, header by header and entry point by entry point, and what the remaining
+gaps are.
+
 ## Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
@@ -360,9 +438,19 @@ the caret is on the call, where it always was.
   `union` or a complex value is rebuilt from the eightbytes the ABI passed it
   in, so it works for records of **at most sixteen bytes on x86-64 System V**
   and is a located error anywhere else.
-* The platform's include directories are never searched. A real `<stdio.h>` is
-  not C, so anything outside the bundled set is declared by hand or pointed at
-  with an include path.
+* The platform's include directories are not searched *by default*, which is
+  what keeps a unit self-contained and portable across target models. A program
+  that needs `struct stat` or the real `FILE` asks for them with
+  `#pragma cinrs system_include`; see [System headers](#system-headers) for
+  what that costs, and `doc/system-headers.md` for the one header of the
+  standard set glibc will not hand over (`<tgmath.h>`).
+* `setjmp` and `longjmp` are refused where they are *called*, whichever header
+  declared them: they resume a saved machine context, and the state a
+  `longjmp` would return into is the generated Rust's. Declaring them, and
+  declaring a `jmp_buf`, are fine — half of POSIX pulls `<setjmp.h>` in.
+* The extended floating types — `__float128`, `_Float128`, `_Float16` and the
+  rest of TS 18661-3's set — are refused with the reason rather than mapped
+  onto `double`.
 * Sizes and alignments come from a model of the target rather than from the
   target's own C compiler. Cross-compiling needs one line in a build script;
   see [Cross-compilation](#cross-compilation) below, and note that without it
@@ -552,6 +640,15 @@ as unimplemented or not planned, case by case.
 
 The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
 each harness skips itself with a note when its corpus is missing.
+
+A fourth corpus needs no fetching, because it is already on the machine: **the
+platform's own headers**. `tests/system_headers.rs` puts each of the C standard
+headers and the POSIX set through the front end alone, in `gnu11!` and `c11!`,
+with the platform's copies preferred over the bundled ones — **66 of the 67 go
+through unchanged** against glibc 2.43, the exception being `<tgmath.h>` — and
+then compiles and runs ordinary programs against those declarations, comparing
+`sizeof(struct stat)` and its like against the host's own `cc`.
+[`doc/system-headers.md`](doc/system-headers.md) is the table.
 
 ## How it works
 

@@ -177,6 +177,42 @@ fn a_link_pragma_is_accepted_and_names_a_library() {
 }
 
 // ---------------------------------------------------------------------------
+// #include_next
+// ---------------------------------------------------------------------------
+
+/// GNU's `#include_next`: the search taken up again after the directory the
+/// file writing it was found in.
+///
+/// Two `chain.h`s on the path, the first of which reaches past itself. The
+/// point is that a header can wrap another of the *same name*, which is what a
+/// platform's `<limits.h>` does and what makes reading one possible at all.
+#[test]
+fn include_next_reaches_the_next_header_of_the_same_name() {
+    c99! {
+        #pragma cinrs include_path "tests/include/next-a"
+        #pragma cinrs include_path "tests/include/next-b"
+        #include <chain.h>
+
+        #ifndef CHAIN_A
+        #error the first chain.h was not read
+        #endif
+        #ifndef CHAIN_B
+        #error #include_next did not reach the second chain.h
+        #endif
+        #ifndef CHAIN_A_SEES_A_NEXT
+        #error __has_include_next should have found the second chain.h
+        #endif
+        #ifdef CHAIN_B_SEES_A_NEXT
+        #error nothing comes after the second chain.h
+        #endif
+
+        int chain_sum(void) { return CHAIN_SUM; }
+    }
+
+    assert_eq!(unsafe { chain_sum() }, 3);
+}
+
+// ---------------------------------------------------------------------------
 // the macro-expanded form of #include (6.10.2p4)
 // ---------------------------------------------------------------------------
 

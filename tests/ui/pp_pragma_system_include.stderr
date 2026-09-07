@@ -1,0 +1,14 @@
+error: unexpected 'maybe' after #pragma cinrs system_include, which takes either nothing or 'first'
+ --> tests/ui/pp_pragma_system_include.rs:5:34
+  |
+5 |     #pragma cinrs system_include maybe
+  |                                  ^^^^^
+
+error: unexpected identifier 'extra' after #pragma cinrs system_include first
+ --> tests/ui/pp_pragma_system_include.rs:6:40
+  |
+6 |     #pragma cinrs system_include first extra
+  |                                        ^^^^^
+
+error: aborting due to 2 previous errors
+

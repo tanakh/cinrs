@@ -296,6 +296,16 @@ pub struct Options {
     /// search order and for the `CINRS_INCLUDE_PATH` environment variable,
     /// which comes last.
     pub include_paths: Vec<PathBuf>,
+    /// Whether `#include` also searches the platform's own directories, and
+    /// where in the order they go.
+    ///
+    /// **Off by default**, which is what keeps a unit self-contained and
+    /// portable across [target models](target). [`analyze`] replaces this with
+    /// what [`include::SYSTEM_ENV_VAR`] says when the caller left it at
+    /// [`include::System::Off`], and the unit's own
+    /// `#pragma cinrs system_include` replaces it again; see
+    /// [`mod@include`] for the whole order and for the directories themselves.
+    pub system_include: include::System,
     /// The data model the generated code is compiled for.
     ///
     /// Defaults to the host's, which [`analyze`] replaces with the one
@@ -355,6 +365,7 @@ impl Options {
             dialect,
             dollar_in_identifiers: true,
             include_paths: Vec::new(),
+            system_include: include::System::Off,
             target: TargetModel::host(),
             target_source: TargetSource::Host,
             c_variadic: C_VARIADIC_SUPPORTED,
@@ -702,6 +713,7 @@ fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagno
     // whole invocation, there being nothing in the C to point at.
     let mut options = options.clone();
     apply_env_target(&mut options, source.root_range(), &mut diagnostics);
+    apply_env_system_include(&mut options, source.root_range(), &mut diagnostics);
     let file = source.map.file(source.root);
     let arg = FrontEndInput {
         ctx: pp::Context {
@@ -778,6 +790,36 @@ fn apply_env_target(options: &mut Options, range: SourceRange, diagnostics: &mut
             options.target_source = source;
         }
         Err(unknown) => diagnostics.error(range, unknown.message(&source)),
+    }
+}
+
+/// Resolves [`include::SYSTEM_ENV_VAR`] into `options`, reporting a value that
+/// is neither a boolean nor `first`.
+///
+/// Only when the caller left the switch off, for [`apply_env_target`]'s
+/// reason: an [`Options::system_include`] the caller set is a deliberate
+/// choice, and a test that sets one must not have the developer's own
+/// environment change the answer.
+fn apply_env_system_include(
+    options: &mut Options,
+    range: SourceRange,
+    diagnostics: &mut Diagnostics,
+) {
+    if options.system_include != include::System::Off {
+        return;
+    }
+    let Ok(value) = std::env::var(include::SYSTEM_ENV_VAR) else {
+        return;
+    };
+    match include::System::from_env_value(&value) {
+        Some(mode) => options.system_include = mode,
+        None => diagnostics.error(
+            range,
+            format!(
+                "{}={value:?} is not one of '1', 'first' or '0'",
+                include::SYSTEM_ENV_VAR
+            ),
+        ),
     }
 }
 

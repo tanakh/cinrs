@@ -19,26 +19,48 @@
 //!    neither of the first two steps will find. A bare name is deliberately
 //!    left out of this step, so that a `stdio.h` sitting in the working
 //!    directory never shadows the bundled one;
-//! 4. the [bundled headers](bundled).
+//! 4. the [bundled headers](bundled);
+//! 5. the platform's own directories — `/usr/include` and friends — but only
+//!    when [the switch](System) is on.
 //!
 //! `#include <name>` skips steps 1 and 3. A name that is absolute is used as
 //! it stands.
 //!
-//! # What is deliberately *not* searched
+//! # The platform's own directories
 //!
-//! The system directories — `/usr/include` and friends — are never looked in,
-//! on any platform. A real `<stdio.h>` is not C: glibc's is a thicket of
-//! `__attribute__`, `__extension__`, `__asm__` renaming, `_Float128` and
-//! compiler builtins, and musl's and Apple's are only a little tamer. A front
-//! end that read them would have to become GCC to survive them, and would
-//! break every time libc changed. So `cinrs` ships its own small, plain-C99
-//! declarations of the standard library instead: they declare exactly what the
-//! platform's real library exports, the linker binds the calls to the real
-//! implementation, and the C that uses them is ordinary C. A program that
-//! needs a system header cinrs does not bundle can still point at one with
-//! `#pragma cinrs include_path`, but it does so knowingly.
+//! Step 5 is **off by default**, and everything above it is enough for a
+//! self-contained, target-model-portable unit. A real `<stdio.h>` is not
+//! plain C: glibc's is a thicket of `__attribute__`, `__extension__`,
+//! `__asm__` renaming and compiler builtins, and its layouts are the host's
+//! rather than the [target model](crate::target)'s. So `cinrs` ships its own
+//! small, plain-C99 declarations of the standard library: they declare exactly
+//! what the platform's real library exports, the linker binds the calls to the
+//! real implementation, and the C that uses them is ordinary C.
+//!
+//! What the bundled set cannot give is the things whose *layout* only the
+//! platform knows — `struct stat`, `DIR`, `pthread_mutex_t`, the real
+//! `FILE` — so a program that needs those turns the switch on with
+//! `#pragma cinrs system_include` (or `CINRS_SYSTEM_INCLUDE=1` in the
+//! environment, which is the crate-wide default the pragma overrides). With
+//! [`System::Last`] the bundled headers still win, and only a name they do not
+//! carry reaches the platform; with [`System::First`] the platform's copy of
+//! every header wins, which is what makes `FILE` the real `struct _IO_FILE`.
+//!
+//! The directories searched are [`SYSTEM_PATH_ENV_VAR`] when it is set, and
+//! otherwise [`system_directories`]'s per-target default. **The compiler's own
+//! private directories are never among them**: GCC's and Clang's
+//! `.../include/{limits,stdint,stddef,stdarg}.h` chain to the next header of
+//! the same name with `#include_next` and expect their own compiler's
+//! builtins, and every one of those headers is bundled here anyway.
+//!
+//! Nothing found under step 5 is tracked for rebuilds: a system header is part
+//! of the machine rather than of the crate, and `include_str!`-ing
+//! `/usr/include/stdio.h` into the build would make every unit rebuild when the
+//! libc package is upgraded, which is not what the file identifies.
 
 use std::path::{Path, PathBuf};
+
+use crate::target::{Arch, Env, Os, TargetModel, TargetSource};
 
 /// The bundled standard headers, as `(name, text)` pairs.
 ///
@@ -115,6 +137,15 @@ pub enum Origin {
     /// A directory on disk. Empty means the current directory, which is what
     /// the parent of a bare `lib.rs` comes out as.
     Dir(PathBuf),
+    /// A directory on disk reached through one of the platform's own
+    /// directories — the including file is a *system* header.
+    ///
+    /// It searches that directory first, as any other file does, and its
+    /// `<…>` includes then go to the platform's directories **before** the
+    /// bundled ones whatever the mode is. That is what keeps the platform's
+    /// header set self-consistent: glibc's `<pthread.h>` gets glibc's
+    /// `<time.h>`, and so one `struct timespec` rather than two.
+    SystemDir(PathBuf),
     /// The bundled set: one bundled header including another finds it there.
     Bundled,
     /// Nowhere — the compiler would not say where the including file is.
@@ -122,11 +153,86 @@ pub enum Origin {
     Unknown,
 }
 
+/// Whether the platform's own include directories are searched, and where in
+/// the order they go.
+///
+/// Set by `#pragma cinrs system_include` in a unit and by
+/// [`SYSTEM_ENV_VAR`] across a crate; see the [module docs](self).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum System {
+    /// Not searched at all, which is where the switch starts.
+    #[default]
+    Off,
+    /// Searched after the bundled headers: the bundled `<stdio.h>` still wins,
+    /// and only a header cinrs does not carry — `<sys/stat.h>`, `<pthread.h>`
+    /// — comes from the platform. `#pragma cinrs system_include`.
+    Last,
+    /// Searched before them, so that the platform's copy of every header wins.
+    /// `#pragma cinrs system_include first`.
+    First,
+}
+
+impl System {
+    /// The value [`SYSTEM_ENV_VAR`] holds, read the way a build system spells
+    /// a boolean: `1`, `on`, `true` and `yes` for [`System::Last`], `first`
+    /// for [`System::First`], and `0`, `off`, `false`, `no` or nothing at all
+    /// for [`System::Off`]. Anything else is `None`, which the caller reports.
+    pub fn from_env_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "0" | "off" | "false" | "no" => Some(System::Off),
+            "1" | "on" | "true" | "yes" => Some(System::Last),
+            "first" => Some(System::First),
+            _ => None,
+        }
+    }
+
+    /// Whether the platform's directories are searched at all.
+    pub fn is_on(self) -> bool {
+        self != System::Off
+    }
+}
+
+/// The environment variable that turns the platform's directories on for a
+/// whole crate: `1` for [`System::Last`], `first` for [`System::First`].
+///
+/// A `#pragma cinrs system_include` in a unit overrides it.
+pub const SYSTEM_ENV_VAR: &str = "CINRS_SYSTEM_INCLUDE";
+
+/// The environment variable that *replaces* [`system_directories`]'s
+/// per-target default, split the way the platform splits `PATH`.
+///
+/// This is the only way to name the directories on a target whose default
+/// cinrs does not know — Apple's, whose SDK path is knowable only from
+/// `xcrun --show-sdk-path`, and Windows — and the only way to point a cross
+/// build at a sysroot.
+pub const SYSTEM_PATH_ENV_VAR: &str = "CINRS_SYSTEM_INCLUDE_PATH";
+
+/// One place a search looks, in the order it looks.
+///
+/// A [`Resolved`] records the entry it was found under so that an
+/// `#include_next` written inside it can go on from the entry *after* that
+/// one, which is the whole of GCC's semantics for the directive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// A configured directory: `#pragma cinrs include_path`,
+    /// [`crate::Options::include_paths`] or [`ENV_VAR`].
+    Dir(PathBuf),
+    /// The working directory, which only a quoted name that is itself a path
+    /// is looked for in; see the [module docs](self).
+    WorkingDir,
+    /// The [bundled headers](BUNDLED).
+    Bundled,
+    /// One of the platform's own directories.
+    System(PathBuf),
+}
+
 /// The include directories a unit searches, in the order it searches them.
 ///
-/// The three lists are kept apart so that the order is a decision rather than
-/// an accident: what the unit itself asks for wins over what the build asked
-/// for, which wins over what the environment asked for.
+/// The lists are kept apart so that the order is a decision rather than an
+/// accident: what the unit itself asks for wins over what the build asked for,
+/// which wins over what the environment asked for, which wins over what is
+/// bundled — and the platform's own directories are not there at all until
+/// [`SearchPaths::enable_system`] puts them there.
 #[derive(Clone, Debug, Default)]
 pub struct SearchPaths {
     /// Directories from `#pragma cinrs include_path`, in the order written.
@@ -135,6 +241,10 @@ pub struct SearchPaths {
     options: Vec<PathBuf>,
     /// Directories from the `CINRS_INCLUDE_PATH` environment variable.
     env: Vec<PathBuf>,
+    /// The platform's own directories, empty while the switch is off.
+    system: Vec<PathBuf>,
+    /// Where those go, and whether they are searched at all.
+    mode: System,
 }
 
 /// The environment variable holding a global list of include directories.
@@ -156,6 +266,8 @@ impl SearchPaths {
             env: std::env::var_os(ENV_VAR)
                 .map(|value| std::env::split_paths(&value).collect())
                 .unwrap_or_default(),
+            system: Vec::new(),
+            mode: System::Off,
         }
     }
 
@@ -182,13 +294,199 @@ impl SearchPaths {
         }
     }
 
-    /// Every configured directory, in search order.
+    /// Every configured directory, in search order — the ones a `#embed`
+    /// resource is looked for in, which is everything but the header steps.
     fn dirs(&self) -> impl Iterator<Item = &PathBuf> {
         self.pragma
             .iter()
             .chain(self.options.iter())
             .chain(self.env.iter())
     }
+
+    /// Puts the platform's own directories on the path.
+    ///
+    /// Idempotent in the mode that matters: turning the switch on twice with
+    /// the same directories changes nothing, and asking for `first` after
+    /// asking for the plain form moves them, which is what a unit that writes
+    /// both pragmas means.
+    pub fn enable_system(&mut self, mode: System, dirs: Vec<PathBuf>) {
+        self.mode = mode;
+        self.system = dirs;
+    }
+
+    /// Whether — and where — the platform's own directories are searched.
+    pub fn system_mode(&self) -> System {
+        self.mode
+    }
+
+    /// Every place a header is looked for, in the order it is looked for,
+    /// after the including file's own directory.
+    ///
+    /// This is the list `#include_next` walks: a header found under
+    /// entry *i* continues from entry *i + 1*.
+    ///
+    /// `from_system` says the directive was written *in* one of the platform's
+    /// own headers, which puts the platform's directories ahead of the bundled
+    /// ones however the switch was set; see [`Origin::SystemDir`].
+    pub fn entries(&self, from_system: bool) -> Vec<Entry> {
+        let mut entries: Vec<Entry> = self.dirs().cloned().map(Entry::Dir).collect();
+        entries.push(Entry::WorkingDir);
+        let system = self.system.iter().cloned().map(Entry::System);
+        match self.mode {
+            System::Off => entries.push(Entry::Bundled),
+            System::Last if !from_system => {
+                entries.push(Entry::Bundled);
+                entries.extend(system);
+            }
+            System::Last | System::First => {
+                entries.extend(system);
+                entries.push(Entry::Bundled);
+            }
+        }
+        entries
+    }
+}
+
+/// The platform's own include directories for `target`, when nothing named
+/// them.
+///
+/// [`SYSTEM_PATH_ENV_VAR`] takes priority over this and is checked first;
+/// what is left is the default, and there are only two rules to it.
+///
+/// **A cross build has no default.** The directories below belong to the
+/// machine the compiler is *running* on, and a `<sys/stat.h>` laid out for
+/// another architecture is worse than no `<sys/stat.h>` at all — its
+/// `struct stat` would have the wrong offsets and the program would read the
+/// wrong bytes. So a target that is not the host is an error naming
+/// [`SYSTEM_PATH_ENV_VAR`], which is how a sysroot is pointed at.
+///
+/// **Only the C library's directories, never the compiler's.** On Linux that
+/// is `/usr/local/include`, the multiarch directory
+/// (`/usr/include/x86_64-linux-gnu`, and its like, added only when it exists)
+/// and `/usr/include`. GCC's `/usr/lib/gcc/*/include` and Clang's
+/// `/usr/lib/clang/*/include` are deliberately absent: their `limits.h`,
+/// `stdint.h`, `stddef.h` and `stdarg.h` are that compiler's own, chain onward
+/// with `#include_next`, and are bundled here anyway.
+///
+/// Apple's platforms have no default because the SDK moves with Xcode and is
+/// only knowable from `xcrun --show-sdk-path`; Windows and everything else has
+/// none because there is no such convention to follow.
+pub fn system_directories(
+    target: &TargetModel,
+    source: &TargetSource,
+) -> Result<Vec<PathBuf>, String> {
+    if let Some(value) = std::env::var_os(SYSTEM_PATH_ENV_VAR) {
+        let dirs: Vec<PathBuf> = std::env::split_paths(&value)
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .collect();
+        if !dirs.is_empty() {
+            return Ok(dirs);
+        }
+    }
+    if *target != TargetModel::host() {
+        let named = match source.triple() {
+            Some(triple) => format!("'{triple}'"),
+            None => "another machine".to_owned(),
+        };
+        return Err(format!(
+            "the platform's include directories are the *host*'s, and this unit is being \
+             translated for {named}; a header laid out for another machine is worse than none, \
+             so point {SYSTEM_PATH_ENV_VAR} at the target's sysroot include directories — or \
+             leave the system headers switched off for this target"
+        ));
+    }
+    match target.os {
+        Os::Linux => {
+            let mut dirs = vec![PathBuf::from("/usr/local/include")];
+            for tuple in multiarch_tuples(target) {
+                let dir = PathBuf::from(format!("/usr/include/{tuple}"));
+                if dir.is_dir() {
+                    dirs.push(dir);
+                }
+            }
+            dirs.push(PathBuf::from("/usr/include"));
+            Ok(dirs)
+        }
+        Os::Darwin => Err(format!(
+            "on Apple's platforms the C library's headers live inside the SDK, whose path only \
+             'xcrun --show-sdk-path' knows, so cinrs has no default to offer: set \
+             {SYSTEM_PATH_ENV_VAR} to \"$(xcrun --show-sdk-path)/usr/include\""
+        )),
+        os => Err(format!(
+            "cinrs has no default include directories for {}; set {SYSTEM_PATH_ENV_VAR} to the \
+             directories the platform's headers live in",
+            os.as_str()
+        )),
+    }
+}
+
+/// The multiarch directory names a Linux target's headers may live under,
+/// most specific first.
+///
+/// Debian's layout, which Ubuntu and a good many others follow: the tuple is
+/// `<arch>-linux-<env>`, with the architecture spelled the way `dpkg` spells
+/// it rather than the way the triple does — `i386` for 32-bit x86,
+/// `powerpc64le` for little-endian 64-bit PowerPC. Only a directory that
+/// really exists is used, which is what lets the Arm entries name both the
+/// hard-float and the soft-float spelling without guessing.
+fn multiarch_tuples(target: &TargetModel) -> Vec<String> {
+    let env = match target.env {
+        Env::Musl => "musl",
+        Env::Bionic => "android",
+        Env::Uclibc => "uclibc",
+        // A Linux triple that names no environment is glibc; see `Env`.
+        _ => "gnu",
+    };
+    let archs: &[&str] = match target.arch {
+        Arch::X86_64 => &["x86_64"],
+        Arch::X86 => &["i386"],
+        Arch::Aarch64 => &["aarch64"],
+        Arch::Arm => &["arm"],
+        Arch::Riscv32 => &["riscv32"],
+        Arch::Riscv64 => &["riscv64"],
+        Arch::PowerPc => &["powerpc"],
+        Arch::PowerPc64 => {
+            if target.big_endian {
+                &["powerpc64"]
+            } else {
+                &["powerpc64le"]
+            }
+        }
+        Arch::S390x => &["s390x"],
+        Arch::Mips => {
+            if target.big_endian {
+                &["mips"]
+            } else {
+                &["mipsel"]
+            }
+        }
+        Arch::Mips64 => {
+            if target.big_endian {
+                &["mips64"]
+            } else {
+                &["mips64el"]
+            }
+        }
+        Arch::Sparc => &["sparc"],
+        Arch::Sparc64 => &["sparc64"],
+        Arch::LoongArch64 => &["loongarch64"],
+        // Nothing installs headers under a wasm tuple.
+        Arch::Wasm32 => &[],
+    };
+    // Arm's ABI is part of the tuple and the model does not carry it, so both
+    // spellings are offered and the one that exists is taken.
+    let suffixes: &[&str] = if target.arch == Arch::Arm && env == "gnu" {
+        &["eabihf", "eabi"]
+    } else {
+        &[""]
+    };
+    let mut tuples = Vec::new();
+    for arch in archs {
+        for suffix in suffixes {
+            tuples.push(format!("{arch}-linux-{env}{suffix}"));
+        }
+    }
+    tuples
 }
 
 /// A header that was found.
@@ -205,8 +503,34 @@ pub struct Resolved {
     /// optimisation: the canonical path of the file, or the bundled name.
     pub key: String,
     /// The absolute path of the file, for rebuild tracking. `None` for a
-    /// bundled header, which cannot change without the crate changing.
+    /// bundled header, which cannot change without the crate changing, and for
+    /// a header taken from one of the platform's own directories, which is
+    /// part of the machine rather than of the crate.
     pub path: Option<PathBuf>,
+    /// The [entry](Entry) it was found under, which is where an
+    /// `#include_next` written inside it goes on *after*. `None` when it was
+    /// not found by a search at all: an absolute name, or the including file's
+    /// own directory.
+    pub found_in: Option<Entry>,
+    /// Whether it came from one of the platform's own directories.
+    pub system: bool,
+}
+
+impl Resolved {
+    /// Marks a header as one of the platform's own.
+    ///
+    /// Two things follow, and they are the whole of what "system header" means
+    /// here: its own `<…>` includes prefer the platform's directories, so that
+    /// the platform's header set stays self-consistent; and it is not tracked
+    /// for rebuilds, because it belongs to the machine rather than to the
+    /// crate.
+    fn make_system(&mut self) {
+        self.system = true;
+        self.path = None;
+        if let Origin::Dir(dir) = std::mem::take(&mut self.origin) {
+            self.origin = Origin::SystemDir(dir);
+        }
+    }
 }
 
 /// Why a header could not be included.
@@ -240,18 +564,19 @@ pub fn resolve(
     // An absolute name is not searched for: it either is the file or it is
     // nothing.
     if Path::new(name).is_absolute() {
-        return match read_file(Path::new(name))? {
-            Some(found) => Ok(found),
-            None => Err(Error::NotFound {
-                searched: vec![display_path(Path::new(name))],
-            }),
-        };
+        return absolute(name, origin);
     }
 
     if form == Form::Quoted {
         match origin {
-            Origin::Dir(dir) => {
-                if let Some(found) = read_file(&dir.join(name))? {
+            Origin::Dir(dir) | Origin::SystemDir(dir) => {
+                if let Some(mut found) = read_file(&dir.join(name))? {
+                    // A header beside a system header is a system header too:
+                    // `bits/types.h` is reached that way, and it must not
+                    // suddenly start preferring the bundled set.
+                    if let Origin::SystemDir(_) = origin {
+                        found.make_system();
+                    }
                     return Ok(found);
                 }
                 searched.push(display_dir(dir));
@@ -266,37 +591,116 @@ pub fn resolve(
         }
     }
 
-    for dir in paths.dirs() {
-        if let Some(found) = read_file(&dir.join(name))? {
-            return Ok(found);
+    walk(name, form, paths, from_system(origin), 0, searched)
+}
+
+/// Whether the file writing the directive is one of the platform's own.
+fn from_system(origin: &Origin) -> bool {
+    matches!(origin, Origin::SystemDir(_))
+}
+
+/// A header named by an absolute path, which is not searched for: it either is
+/// the file or it is nothing.
+///
+/// One header of the platform's naming another by its full path keeps the set
+/// together, exactly as a relative name found beside it does.
+fn absolute(name: &str, origin: &Origin) -> Result<Resolved, Error> {
+    match read_file(Path::new(name))? {
+        Some(mut found) => {
+            if from_system(origin) {
+                found.make_system();
+            }
+            Ok(found)
         }
-        let shown = display_dir(dir);
+        None => Err(Error::NotFound {
+            searched: vec![display_path(Path::new(name))],
+        }),
+    }
+}
+
+/// `#include_next <name>`: the same search, taken up again at the entry
+/// *after* the one the file writing the directive was found under.
+///
+/// GCC's semantics exactly, and the reason the directive exists: a platform's
+/// `<limits.h>` finishes with `#include_next <limits.h>` to reach the *next*
+/// `limits.h` on the path rather than itself. `current` is
+/// [`Resolved::found_in`] of the file the directive is written in; a file that
+/// was not found by a search at all — the unit's own text, or a header taken
+/// from the including file's directory — has no entry to go on from, and GCC
+/// starts such a search at the beginning, which is what `None` does here.
+///
+/// The quoted and the angled forms mean the same thing, as they do in GCC: the
+/// including file's own directory is never step one of an `#include_next`.
+pub fn resolve_next(
+    name: &str,
+    origin: &Origin,
+    current: Option<&Entry>,
+    paths: &SearchPaths,
+) -> Result<Resolved, Error> {
+    if Path::new(name).is_absolute() {
+        return absolute(name, origin);
+    }
+    let system = from_system(origin);
+    let start = match current {
+        Some(entry) => paths
+            .entries(system)
+            .iter()
+            .position(|e| e == entry)
+            .map_or(0, |at| at + 1),
+        None => 0,
+    };
+    walk(name, Form::Angled, paths, system, start, Vec::new())
+}
+
+/// The part of the search that walks [`SearchPaths::entries`], from `start`.
+fn walk(
+    name: &str,
+    form: Form,
+    paths: &SearchPaths,
+    from_system: bool,
+    start: usize,
+    mut searched: Vec<String>,
+) -> Result<Resolved, Error> {
+    for entry in paths.entries(from_system).into_iter().skip(start) {
+        let shown = match &entry {
+            Entry::Dir(dir) | Entry::System(dir) => {
+                if let Some(mut found) = read_file(&dir.join(name))? {
+                    if matches!(entry, Entry::System(_)) {
+                        found.make_system();
+                    }
+                    found.found_in = Some(entry);
+                    return Ok(found);
+                }
+                display_dir(dir)
+            }
+            // A name that is itself a path, taken from the working directory.
+            // This is what `#include __FILE__` needs: the name a header is
+            // known by is relative to the working directory, so a header that
+            // includes itself asks for `some/dir/thing.h` from inside
+            // `some/dir`, which neither the origin nor a `-I` will resolve. A
+            // bare header name is not looked for here, so nothing in the
+            // working directory can shadow a bundled header.
+            Entry::WorkingDir => {
+                if form != Form::Quoted || !is_path(name) {
+                    continue;
+                }
+                if let Some(mut found) = read_file(Path::new(name))? {
+                    found.found_in = Some(entry);
+                    return Ok(found);
+                }
+                display_dir(Path::new(""))
+            }
+            Entry::Bundled => {
+                if let Some(mut found) = read_bundled(name) {
+                    found.found_in = Some(entry);
+                    return Ok(found);
+                }
+                BUNDLED_DIR.to_owned()
+            }
+        };
         if !searched.contains(&shown) {
             searched.push(shown);
         }
-    }
-
-    // A name that is itself a path, taken from the working directory. This is
-    // what `#include __FILE__` needs: the name a header is known by is
-    // relative to the working directory, so a header that includes itself
-    // asks for `some/dir/thing.h` from inside `some/dir`, which neither the
-    // origin nor a `-I` will resolve. A bare header name is not looked for
-    // here, so nothing in the working directory can shadow a bundled header.
-    if form == Form::Quoted && is_path(name) {
-        if let Some(found) = read_file(Path::new(name))? {
-            return Ok(found);
-        }
-        let shown = display_dir(Path::new(""));
-        if !searched.contains(&shown) {
-            searched.push(shown);
-        }
-    }
-
-    if let Some(found) = read_bundled(name) {
-        return Ok(found);
-    }
-    if !searched.iter().any(|d| d == BUNDLED_DIR) {
-        searched.push(BUNDLED_DIR.to_owned());
     }
     Err(Error::NotFound { searched })
 }
@@ -338,13 +742,15 @@ pub fn resolve_embed(
 
     if form == Form::Quoted {
         match origin {
-            Origin::Dir(dir) => {
+            Origin::Dir(dir) | Origin::SystemDir(dir) => {
                 if let Some(found) = read_bytes(&dir.join(name))? {
                     return Ok(found);
                 }
                 searched.push(display_dir(dir));
             }
-            // A bundled header's `#embed` has nowhere of its own to look.
+            // A bundled header's `#embed` has nowhere of its own to look, and
+            // the platform's directories hold no resources either — `#embed`
+            // is for a picture, not for a declaration.
             Origin::Bundled | Origin::Unknown => {}
         }
     }
@@ -411,6 +817,8 @@ fn read_bundled(name: &str) -> Option<Resolved> {
         key: display.clone(),
         name: display,
         path: None,
+        found_in: Some(Entry::Bundled),
+        system: false,
     })
 }
 
@@ -455,6 +863,10 @@ fn read_file(path: &Path) -> Result<Option<Resolved>, Error> {
         origin: Origin::Dir(path.parent().unwrap_or(Path::new("")).to_path_buf()),
         key,
         path: Some(absolute),
+        // Filled in by the search that found it; a file read by name — an
+        // absolute `#include`, or `include_c99!` — was found by no search.
+        found_in: None,
+        system: false,
     }))
 }
 
@@ -561,5 +973,148 @@ mod tests {
             Error::NotFound { searched } => assert_eq!(searched, ["src", "<cinrs>"]),
             other => panic!("expected a not-found error, got {other:?}"),
         }
+    }
+
+    // -- the platform's own directories -------------------------------------
+
+    fn with_system(mode: System) -> SearchPaths {
+        let mut paths = SearchPaths::default();
+        paths.enable_system(mode, vec![PathBuf::from("/usr/include")]);
+        paths
+    }
+
+    #[test]
+    fn the_switch_reads_the_spellings_a_build_system_uses() {
+        assert_eq!(System::from_env_value("1"), Some(System::Last));
+        assert_eq!(System::from_env_value(" YES "), Some(System::Last));
+        assert_eq!(System::from_env_value("First"), Some(System::First));
+        assert_eq!(System::from_env_value("0"), Some(System::Off));
+        assert_eq!(System::from_env_value(""), Some(System::Off));
+        assert_eq!(System::from_env_value("maybe"), None);
+        assert!(!System::Off.is_on());
+        assert!(System::Last.is_on() && System::First.is_on());
+    }
+
+    #[test]
+    fn the_mode_decides_where_the_platform_goes() {
+        let system = Entry::System(PathBuf::from("/usr/include"));
+        assert_eq!(
+            SearchPaths::default().entries(false),
+            [Entry::WorkingDir, Entry::Bundled],
+            "off by default"
+        );
+        assert_eq!(
+            with_system(System::Last).entries(false),
+            [Entry::WorkingDir, Entry::Bundled, system.clone()]
+        );
+        assert_eq!(
+            with_system(System::First).entries(false),
+            [Entry::WorkingDir, system.clone(), Entry::Bundled]
+        );
+        // A directive written inside a system header prefers the platform
+        // whatever the mode, so that glibc's `<pthread.h>` gets glibc's
+        // `<time.h>` and there is one `struct timespec` rather than two.
+        assert_eq!(
+            with_system(System::Last).entries(true),
+            [Entry::WorkingDir, system.clone(), Entry::Bundled]
+        );
+        assert_eq!(
+            SearchPaths::default().entries(true),
+            [Entry::WorkingDir, Entry::Bundled],
+            "and nothing at all while the switch is off"
+        );
+    }
+
+    #[test]
+    fn the_platform_is_searched_only_when_the_switch_is_on() {
+        // Something every Unix has and this crate does not bundle. The test is
+        // about the *order*, so a platform without it simply checks less.
+        let name = "sys/stat.h";
+        let there = Path::new("/usr/include").join(name).is_file();
+        let off = resolve(
+            name,
+            Form::Angled,
+            &Origin::Unknown,
+            &SearchPaths::default(),
+        );
+        assert!(off.is_err(), "the platform is not searched by default");
+        if there {
+            let on = resolve(
+                name,
+                Form::Angled,
+                &Origin::Unknown,
+                &with_system(System::Last),
+            )
+            .expect("the platform has it");
+            assert!(on.system, "and it is marked as the platform's");
+            assert!(on.path.is_none(), "so it is not tracked for rebuilds");
+            assert!(matches!(on.origin, Origin::SystemDir(_)));
+        }
+    }
+
+    #[test]
+    fn the_bundled_copy_wins_unless_the_platform_goes_first() {
+        let name = "stdio.h";
+        if !Path::new("/usr/include").join(name).is_file() {
+            return;
+        }
+        let last = resolve(
+            name,
+            Form::Angled,
+            &Origin::Unknown,
+            &with_system(System::Last),
+        )
+        .expect("bundled");
+        assert_eq!(last.name, bundled_name(name));
+        let first = resolve(
+            name,
+            Form::Angled,
+            &Origin::Unknown,
+            &with_system(System::First),
+        )
+        .expect("the platform's");
+        assert!(first.system, "the platform's copy came first");
+    }
+
+    #[test]
+    fn a_cross_target_has_no_default_directories() {
+        // The one target that is certainly not the host, whichever machine
+        // this is: the model differs from the host's in at least its
+        // architecture.
+        let host = TargetModel::host();
+        let triple = if host.arch == Arch::S390x {
+            "sparc64-unknown-linux-gnu"
+        } else {
+            "s390x-unknown-linux-gnu"
+        };
+        let target = TargetModel::from_triple(triple).expect("a target this crate models");
+        let source = TargetSource::Env(triple.to_owned());
+        // Only meaningful when the environment has not named directories
+        // itself, which is exactly the case the rule is about.
+        if std::env::var_os(SYSTEM_PATH_ENV_VAR).is_some() {
+            return;
+        }
+        let message = system_directories(&target, &source).expect_err("a cross build has none");
+        assert!(message.contains(SYSTEM_PATH_ENV_VAR), "{message}");
+        assert!(message.contains(triple), "{message}");
+    }
+
+    #[test]
+    fn the_multiarch_tuple_follows_the_model() {
+        let tuples =
+            |triple: &str| multiarch_tuples(&TargetModel::from_triple(triple).expect("modelled"));
+        assert_eq!(tuples("x86_64-unknown-linux-gnu"), ["x86_64-linux-gnu"]);
+        assert_eq!(tuples("i686-unknown-linux-gnu"), ["i386-linux-gnu"]);
+        assert_eq!(tuples("aarch64-unknown-linux-musl"), ["aarch64-linux-musl"]);
+        assert_eq!(
+            tuples("arm-unknown-linux-gnueabihf"),
+            ["arm-linux-gnueabihf", "arm-linux-gnueabi"],
+            "the ABI is not in the model, so both spellings are offered"
+        );
+        assert_eq!(
+            tuples("powerpc64le-unknown-linux-gnu"),
+            ["powerpc64le-linux-gnu"]
+        );
+        assert_eq!(tuples("s390x-unknown-linux-gnu"), ["s390x-linux-gnu"]);
     }
 }

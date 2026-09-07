@@ -174,6 +174,7 @@ impl Sema<'_> {
             attrs.merge(decl.specifiers.attrs.clone());
             self.reject_cleanup(&attrs, "a 'typedef'");
             self.reject_safe(&attrs, "a 'typedef'");
+            self.reject_weak(&attrs, "a 'typedef'");
             self.reject_alignas(&decl.specifiers, "a 'typedef'");
             return self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
         }
@@ -272,6 +273,11 @@ impl Sema<'_> {
             _ => None,
         } {
             self.reject_cleanup(&attrs, what);
+        }
+        // An `extern` declaration reserves no storage, so there is no
+        // definition for the linker to make weak; anything else here does.
+        if storage != Some(ast::StorageClass::Extern) {
+            self.reject_weak(&attrs, "an object this unit defines");
         }
 
         let thread_local = self.check_thread_local(decl, storage, file_scope);
@@ -655,6 +661,34 @@ impl Sema<'_> {
                     "'cleanup' attribute ignored on {what}: it calls the function when the \
                      object goes out of scope, and only an object with automatic storage \
                      duration ever does"
+                ),
+            );
+        }
+    }
+
+    /// Refuses `__attribute__((weak))` where it would mean something.
+    ///
+    /// Weak linkage is two things at once: a *definition* the linker may
+    /// replace with a strong one, and a *reference* that may go unresolved and
+    /// whose address is then null. Neither is expressible in stable Rust —
+    /// `#[linkage]` is unstable — so the definition is refused with the reason.
+    ///
+    /// A plain declaration is another matter: the only thing lost is the null
+    /// address, the call itself is exactly the call a strong declaration makes,
+    /// and refusing it would make glibc's `<pthread.h>` unreadable over one
+    /// internal function nobody calls. So it is accepted, and
+    /// `__has_attribute(weak)` still answers *no*, which is what keeps a
+    /// program that guards on the answer from taking the branch that tests the
+    /// address; see [`crate::gnu::has_attribute`].
+    pub(super) fn reject_weak(&mut self, attrs: &ast::Attributes, what: &str) {
+        if let Some(range) = attrs.weak {
+            self.error(
+                range,
+                format!(
+                    "'weak' is not supported on {what}: Rust's `#[linkage]` is unstable, so weak \
+                     linkage cannot be asked for. Only a declaration of something defined \
+                     elsewhere may carry it, where it is accepted and ignored — the symbol then \
+                     having to be there at link time"
                 ),
             );
         }
@@ -1892,6 +1926,9 @@ impl Sema<'_> {
             );
         }
         self.reject_cleanup(attrs, "a function");
+        if definition.is_some() {
+            self.reject_weak(attrs, "a function definition");
+        }
         // C23 has no `constexpr` functions, and neither has this: a constant
         // here is a value, folded wherever its name is used.
         if let Some(storage) = &specifiers.storage

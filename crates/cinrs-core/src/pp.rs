@@ -81,6 +81,7 @@
 //! ```c
 //! #pragma cinrs target "i686-unknown-linux-gnu"
 //! #pragma cinrs include_path "vendor/include"
+//! #pragma cinrs system_include first
 //! #pragma cinrs link "mylib"
 //! #pragma cinrs export
 //! #pragma cinrs safe gcd fact
@@ -90,10 +91,12 @@
 //!
 //! The first picks the data model the unit is translated for, overriding
 //! `CINRS_TARGET`; the second adds a directory to the search path (relative
-//! paths resolve against `CARGO_MANIFEST_DIR`); the third puts
-//! `#[link(name = "mylib")]` on the generated `extern` block; the fourth gives
+//! paths resolve against `CARGO_MANIFEST_DIR`); the third puts the platform's
+//! own include directories on that path, after the bundled headers or — with
+//! `first` — before them (see [`crate::include`]); the fourth puts
+//! `#[link(name = "mylib")]` on the generated `extern` block; the fifth gives
 //! everything with external linkage a real C symbol, so that another unit can
-//! link to it; the fifth generates those functions without `unsafe`, so that
+//! link to it; the sixth generates those functions without `unsafe`, so that
 //! `rustc` checks them (see [`crate::sema::check_safe`]); the last names the
 //! module the expansion goes into. Being
 //! directives rather than attributes or macro arguments is what makes them
@@ -1091,6 +1094,10 @@ struct OpenFile {
     pos: usize,
     /// Where an `#include "…"` written in it looks first.
     origin: include::Origin,
+    /// The search entry it was found under, which is where an `#include_next`
+    /// written in it goes on *after*. `None` for the unit's own text and for a
+    /// header no search found.
+    found_in: Option<include::Entry>,
     /// What identifies it for `#pragma once` and the include-guard
     /// optimisation: its canonical path, or the name of a bundled header.
     key: String,
@@ -1172,6 +1179,9 @@ struct Pp<'a> {
     /// Where the data model in force came from, which is what a
     /// `#pragma cinrs target` the scan never read is reported against.
     target_source: TargetSource,
+    /// The data model in force, which is what the platform's own include
+    /// directories are chosen from — and refused for, on a cross build.
+    target: crate::target::TargetModel,
     /// The `target` pragmas [`scan_target_pragma`] already dealt with.
     target_pragmas: TargetPragmas,
     /// Whether anything has yet been decided *by* the data model: a header
@@ -1206,6 +1216,7 @@ impl<'a> Pp<'a> {
                     Some(dir) => include::Origin::Dir(dir.clone()),
                     None => include::Origin::Unknown,
                 },
+                found_in: None,
                 key: ctx.file_name.clone(),
                 cond_base: 0,
             }],
@@ -1243,10 +1254,19 @@ impl<'a> Pp<'a> {
             module: None,
             crate_path: None,
             target_source: options.target_source.clone(),
+            target: options.target,
             target_pragmas: ctx.target_pragmas.clone(),
             model_observed: false,
         };
         pp.define_predefined(options);
+        // The crate-wide switch, which `#pragma cinrs system_include` in the
+        // unit turns on again with the mode it wants. Reported against the
+        // whole unit, there being nothing in the C to point at — the same
+        // place a bad `CINRS_TARGET` is reported.
+        if options.system_include.is_on() {
+            let range = SourceRange::new(ctx.base, ctx.base + ctx.text.len() as Pos);
+            pp.enable_system_include(options.system_include, range);
+        }
         pp
     }
 
@@ -2299,17 +2319,12 @@ impl Pp<'_> {
             }
             "define" => self.define(rest, range),
             "undef" => self.undef(rest, range),
-            "include" => self.include(&line, range),
-            // `#include_next` exists to reach the *next* header of a name on
-            // the search path, which only makes sense when the system
-            // directories are on it — and they never are here.
-            "include_next" => {
-                self.diags.error(
-                    range,
-                    "#include_next is not supported; cinrs never searches the platform's \
-                     include directories, so there is no next header to reach",
-                );
-            }
+            "include" => self.include(&line, range, false),
+            // GNU's `#include_next`: the same search, taken up again after the
+            // directory the file writing it was found in. A platform's
+            // `<limits.h>` ends with one to reach the next `limits.h` on the
+            // path rather than itself.
+            "include_next" => self.include(&line, range, true),
             "error" => {
                 let text = self.directive_text(&line, 1);
                 let message = if text.is_empty() {
@@ -2672,8 +2687,8 @@ impl Pp<'_> {
     }
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
-    const OPTIONS: &'static str =
-        "'target', 'include_path', 'link', 'export', 'safe', 'no_std', 'module' and 'crate'";
+    const OPTIONS: &'static str = "'target', 'include_path', 'system_include', 'link', \
+                                   'export', 'safe', 'no_std', 'module' and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2709,6 +2724,7 @@ impl Pp<'_> {
             // C23's and `__attribute__` cannot be written where the function
             // is not.
             "safe" => self.safe_pragma(&rest[1..], option.range),
+            "system_include" => self.system_include_pragma(&rest[1..], option.range),
             // Unit-wide and argument-less: everything with external linkage
             // becomes a real C symbol, and the `Vec` a variable length array
             // or `alloca` needs comes from `alloc` rather than from `std`.
@@ -2824,6 +2840,68 @@ impl Pp<'_> {
         }
     }
 
+    /// `#pragma cinrs system_include` and `#pragma cinrs system_include first`,
+    /// which put the platform's own include directories on the search path.
+    ///
+    /// Plain, they go *after* the bundled headers: the bundled `<stdio.h>`
+    /// still wins, and only a header cinrs does not carry — `<sys/stat.h>`,
+    /// `<pthread.h>`, `<dirent.h>` — comes from the platform. With `first`
+    /// they go before, which is how a unit asks for the platform's own
+    /// `<stdio.h>` and so for the real `FILE`.
+    ///
+    /// A bare word rather than a string, like `safe`'s function names, so that
+    /// it reads as the switch it is; and like every other pragma this one is
+    /// answered where it stands, so it has to come before the `#include`s it
+    /// is meant to change.
+    fn system_include_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        let mode = match rest.first() {
+            None => include::System::Last,
+            Some(tok) if tok.name() == Some("first") => include::System::First,
+            Some(tok) => {
+                let what = match tok.name() {
+                    Some(name) => format!("'{name}'"),
+                    None => tok.kind.describe().to_owned(),
+                };
+                self.diags.error(
+                    tok.range,
+                    format!(
+                        "unexpected {what} after #pragma cinrs system_include, which takes \
+                         either nothing or 'first'"
+                    ),
+                );
+                return;
+            }
+        };
+        if let Some(extra) = rest.get(1) {
+            self.diags.error(
+                extra.range,
+                format!(
+                    "unexpected {} after #pragma cinrs system_include first",
+                    extra.kind.describe()
+                ),
+            );
+        }
+        // Which directories the platform's headers live in is read off the
+        // data model, so the model is settled from here on; see
+        // `Pp::target_pragma`.
+        self.model_observed = true;
+        self.enable_system_include(mode, range);
+    }
+
+    /// Works out the platform's own include directories and puts them on the
+    /// path, or says why there are none to put there.
+    ///
+    /// The one thing that can go wrong is a cross build with no
+    /// [`include::SYSTEM_PATH_ENV_VAR`]: the default directories are the
+    /// *host*'s, and a header laid out for another machine is worse than no
+    /// header at all. See [`include::system_directories`].
+    fn enable_system_include(&mut self, mode: include::System, range: SourceRange) {
+        match include::system_directories(&self.target, &self.target_source) {
+            Ok(dirs) => self.search.enable_system(mode, dirs),
+            Err(message) => self.diags.error(range, message),
+        }
+    }
+
     /// `#pragma cinrs module "name"`, which names the module the expansion is
     /// generated into.
     ///
@@ -2934,8 +3012,10 @@ impl Pp<'_> {
 
     // -- #include -----------------------------------------------------------
 
-    /// `#include <name>`, `#include "name"` and `#include MACRO`.
-    fn include(&mut self, line: &[PTok], range: SourceRange) {
+    /// `#include <name>`, `#include "name"` and `#include MACRO` — and, with
+    /// `next`, GNU's `#include_next`, which is the same thing looked for from
+    /// the entry after the one the current file was found under.
+    fn include(&mut self, line: &[PTok], range: SourceRange, next: bool) {
         // A header reads the model — every bundled one branches on `_WIN32`
         // or on `__SIZEOF_POINTER__` — so once one is opened the model is
         // settled; see `Pp::target_pragma`.
@@ -2951,7 +3031,13 @@ impl Pp<'_> {
             return;
         }
         let origin = self.cur().origin.clone();
-        let found = match include::resolve(&name, form, &origin, &self.search) {
+        let looked = if next {
+            let current = self.cur().found_in.clone();
+            include::resolve_next(&name, &origin, current.as_ref(), &self.search)
+        } else {
+            include::resolve(&name, form, &origin, &self.search)
+        };
+        let found = match looked {
             Ok(found) => found,
             Err(include::Error::Unreadable { path, error }) => {
                 self.diags
@@ -2963,10 +3049,20 @@ impl Pp<'_> {
                     include::Form::Angled => format!("<{name}>"),
                     include::Form::Quoted => format!("\"{name}\""),
                 };
-                self.diags.error(
-                    range,
-                    format!("{quoted} file not found; searched: {}", searched.join(", ")),
-                );
+                let message = match (next, searched.is_empty()) {
+                    (false, _) => {
+                        format!("{quoted} file not found; searched: {}", searched.join(", "))
+                    }
+                    (true, true) => format!(
+                        "{quoted} file not found by #include_next; there is nothing after the \
+                         place this file was found in"
+                    ),
+                    (true, false) => format!(
+                        "{quoted} file not found by #include_next; searched: {}",
+                        searched.join(", ")
+                    ),
+                };
+                self.diags.error(range, message);
                 return;
             }
         };
@@ -3271,6 +3367,7 @@ impl Pp<'_> {
             input,
             pos: 0,
             origin: found.origin,
+            found_in: found.found_in,
             key: found.key,
             cond_base: self.conds.len(),
         });
@@ -4101,15 +4198,18 @@ impl Pp<'_> {
                     );
                     return None;
                 };
-                // `__has_include_next` looks past the file the directive is
-                // written in, which for us is the angled search alone.
-                let form = if name == "__has_include_next" {
-                    include::Form::Angled
-                } else {
-                    form
-                };
+                // `__has_include_next` asks the question `#include_next`
+                // answers: is there one *after* the place this file was found
+                // in? Where there is no next place there is no next header,
+                // and the answer is a plain no.
                 let origin = self.cur().origin.clone();
-                u128::from(include::resolve(&header, form, &origin, &self.search).is_ok())
+                let found = if name == "__has_include_next" {
+                    let current = self.cur().found_in.clone();
+                    include::resolve_next(&header, &origin, current.as_ref(), &self.search)
+                } else {
+                    include::resolve(&header, form, &origin, &self.search)
+                };
+                u128::from(found.is_ok())
             }
             "__has_attribute" | "__has_declspec_attribute" => u128::from(
                 inner

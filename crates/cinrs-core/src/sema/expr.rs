@@ -2054,6 +2054,18 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         let (target, sig, name) = self.callee(callee)?;
+        if let Some(what) = non_local_jump(&name) {
+            self.error(
+                callee.range,
+                format!(
+                    "'{name}' is not supported: {what} restores a saved machine context, and the \
+                     state it would return into is the generated Rust's — which the compiler is \
+                     entitled to assume nothing leaves that way. Declaring it is fine; calling it \
+                     would corrupt the program"
+                ),
+            );
+            return None;
+        }
         // A call to a nested function has to pass the addresses of whatever it
         // captures, and for an object the caller does not own itself that means
         // the caller has to have been passed it too. What the callee captures
@@ -3370,6 +3382,29 @@ fn const_parts_of(expr: &Expr) -> Option<crate::complex::Parts> {
             let (im, _) = const_parts_of(im)?;
             Some((re, im))
         }
+        _ => None,
+    }
+}
+
+/// Whether a name is one of the non-local jumps, and what to call it.
+///
+/// `setjmp` and `longjmp` unwind by restoring a saved machine context, which
+/// has no meaning in the Rust cinrs generates. The bundled `<setjmp.h>` says so
+/// with an `#error` and stops there — but the *platform's* `<setjmp.h>`,
+/// reachable once `#pragma cinrs system_include` is on, declares them as
+/// ordinary functions, and a program that then called one would compile and
+/// corrupt itself. So the refusal is on the **call**, by name, wherever the
+/// declaration came from. Declaring them, and declaring a `jmp_buf`, are both
+/// fine: `<setjmp.h>` is pulled in by half of POSIX.
+///
+/// The names are the standard ones and the spellings glibc's macros expand to.
+fn non_local_jump(name: &str) -> Option<&'static str> {
+    match name {
+        "setjmp" | "_setjmp" | "__setjmp" | "sigsetjmp" | "__sigsetjmp" => {
+            Some("saving a jump target")
+        }
+        "longjmp" | "_longjmp" | "__longjmp" | "siglongjmp" | "__libc_longjmp"
+        | "__libc_siglongjmp" => Some("jumping to a saved target"),
         _ => None,
     }
 }

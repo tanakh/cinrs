@@ -1,20 +1,20 @@
-error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
- --> tests/ui/gnu_unsupported.rs:5:44
-  |
-5 |     int weak_function(void) __attribute__((weak));
-  |                                            ^^^^
+error: 'weak' is not supported on a function definition: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for. Only a declaration of something defined elsewhere may carry it, where it is accepted and ignored — the symbol then having to be there at link time
+  --> tests/ui/gnu_unsupported.rs:13:20
+   |
+13 |     __attribute__((weak)) int defined_weak(void) { return 1; }
+   |                    ^^^^
 
 error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
- --> tests/ui/gnu_unsupported.rs:7:37
-  |
-7 |     typedef int v4si __attribute__((vector_size(16)));
-  |                                     ^^^^^^^^^^^
+  --> tests/ui/gnu_unsupported.rs:15:37
+   |
+15 |     typedef int v4si __attribute__((vector_size(16)));
+   |                                     ^^^^^^^^^^^
 
 error: 'alias' is not supported: write a function that forwards to the other one instead
- --> tests/ui/gnu_unsupported.rs:9:38
-  |
-9 |     int aliased(void) __attribute__((alias("weak_function")));
-  |                                      ^^^^^
+  --> tests/ui/gnu_unsupported.rs:17:38
+   |
+17 |     int aliased(void) __attribute__((alias("declared_weak")));
+   |                                      ^^^^^
 
 error: aborting due to 3 previous errors
 

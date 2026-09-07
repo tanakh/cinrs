@@ -50,8 +50,13 @@ pub enum Attribute {
     /// `cinrs_safe`, and `[[cinrs::safe]]`: this crate's own attribute, which
     /// generates the function without `unsafe` so that `rustc` checks it.
     Safe,
+    /// `weak`: the symbol may be missing at link time, and its address is then
+    /// null. Refused on a *definition*, where Rust's unstable `#[linkage]`
+    /// would be the only way to say it, and ignored on a declaration; see
+    /// [`crate::sema`].
+    Weak,
     /// `asm("symbol")` written as an attribute is not a thing, but
-    /// `alias`, `weak` and the rest are: known, and refused with the reason.
+    /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
     /// Known and safe to ignore: a hint, a diagnostic request, or something
     /// the generated Rust cannot observe.
@@ -63,10 +68,6 @@ pub enum Attribute {
 /// Silently ignoring one of these would change what the program *means*, which
 /// is the one thing this crate will not do.
 pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
-    (
-        "weak",
-        "is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for",
-    ),
     (
         "weakref",
         "is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for",
@@ -115,6 +116,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "destructor" => Attribute::Destructor,
         "cleanup" => Attribute::Cleanup,
         "mode" => Attribute::Mode,
+        "weak" => Attribute::Weak,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,
@@ -205,8 +207,15 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
 ];
 
 /// Whether `__has_attribute(name)` answers yes.
+///
+/// `weak` answers **no** although a declaration carrying it is accepted: what
+/// the question is really asked for is whether a weak *reference* can be
+/// tested for null, and here it cannot — the symbol has to be there at link
+/// time. A program that guards on the answer therefore takes the portable
+/// branch, and one that writes the attribute unguarded on a declaration — as
+/// glibc's `<pthread.h>` does — is not stopped by it.
 pub fn has_attribute(name: &str) -> bool {
-    attribute(name).is_some_and(|a| a != Attribute::Unsupported)
+    attribute(name).is_some_and(|a| !matches!(a, Attribute::Unsupported | Attribute::Weak))
 }
 
 /// The value `__has_c_attribute(name)` answers with.
