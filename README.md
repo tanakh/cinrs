@@ -41,8 +41,9 @@ Run it with `cargo run --example fact`.
   `__VA_OPT__`, `#elifdef`/`#elifndef`, binary constants, digit separators,
   empty initialisers, `auto` type inference, enumerations with a fixed
   underlying type or a value too wide for `int`, unnamed parameters in a
-  definition, a label anywhere in a compound statement, `<stdckdint.h>` and
-  `unreachable()`. A feature from a later revision used in
+  definition, a label anywhere in a compound statement, improved tag
+  compatibility — a tag defined twice with the same members is one type —
+  `<stdckdint.h>` and `unreachable()`. A feature from a later revision used in
   an earlier block is a diagnostic that says which macro to write instead — and
   `c89!` is that rule pointed the other way, refusing everything C99 added
   (`//` comments, mixed declarations and code, `long long`, designated
@@ -106,7 +107,8 @@ Run it with `cargo run --example fact`.
   the C token that was really written.
 * **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
   `<string.h>`, `<math.h>`, `<signal.h>`, `<wchar.h>`, `<uchar.h>`,
-  `<iso646.h>`, C11's `<stdatomic.h>`, C23's `<stdckdint.h>` and the rest) are
+  `<iso646.h>`, C11's `<stdatomic.h>` and `<threads.h>`, C23's `<stdckdint.h>`
+  and the rest) are
   bundled with the crate, written in plain C99 rather than read from the
   platform, and the calls link against the real C library. So are five POSIX
   ones a small program actually reaches for — `<sys/types.h>`, `<unistd.h>`,
@@ -165,6 +167,15 @@ Run it with `cargo run --example fact`.
   with a constant initialiser. An `extern` thread-local object and exporting
   one under `#pragma cinrs export` are refused — both would need Rust's
   unstable `#[thread_local]`.
+* **C11's threads.** `<threads.h>` (7.26) is bundled, and the threads it makes
+  are the C library's own: `thrd_create`, `mtx_*`, `cnd_*`, `tss_*` and
+  `call_once` are that library's functions, and `mtx_t` and `cnd_t` are laid
+  out as its `pthread_mutex_t` and `pthread_cond_t` — which a differential
+  test against the host's `cc` checks. Two libraries are modelled, glibc (2.28
+  and later) and musl, both on Linux; on Apple and Windows, whose runtimes have
+  no such header at all, and on the platforms whose layouts cinrs does not
+  know, the header is an `#error` naming the reason and
+  `__STDC_NO_THREADS__` says so.
 * **Atomics.** C11's `_Atomic` — the qualifier and the `_Atomic(T)` specifier
   — the bundled `<stdatomic.h>`, GCC's memory-order-aware `__atomic_*`
   builtins, the older sequentially consistent `__sync_*` ones and Clang's
@@ -242,12 +253,15 @@ Run it with `cargo run --example fact`.
   C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
   the GNU side: inline assembly and the vector extensions.
-  One of C11's four `__STDC_NO_*` macros is predefined, which is the
-  standard's own way of saying that threads are left out;
-  `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
-  `<threads.h>` does not. `__STDC_NO_COMPLEX__` follows the `complex` feature
-  below and is normally *not* defined; neither are `__STDC_NO_ATOMICS__` and
-  `__STDC_NO_VLA__`, atomics and variably modified types being here. The one
+  Two of C11's four `__STDC_NO_*` macros depend on how the expansion was
+  configured, which is the standard's own way of saying that a part is left
+  out. `__STDC_NO_THREADS__` follows the *target*: `<threads.h>` declares the
+  platform's own threads, so it is bundled for the C libraries whose objects
+  cinrs can lay out — glibc and musl, both on Linux — and refuses on the rest,
+  which is where the macro is predefined. `__STDC_NO_COMPLEX__` follows the
+  `complex` feature below and is normally *not* defined; neither are
+  `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, atomics and variably modified
+  types being here. The one
   corner of the latter that is left is a bound written in a *type name* —
   `(double (*)[m])p` — where there is no declaration to keep the length in, so
   an expression that needs it is refused.
@@ -460,12 +474,12 @@ as unimplemented or not planned, case by case.
   one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **165 of the 203 revisions run are correct
-  (81.3 %)** — 138 answered exactly and 27 refused because the entry point
+  which lines must be diagnosed. **167 of the 203 revisions run are correct
+  (82.3 %)** — 139 answered exactly and 28 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
   **557 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and **not
-  one of its 38 errors is a bug** either: they are the features the document
+  one of its 36 errors is a bug** either: they are the features the document
   lists as not yet implemented, and the places where `cinrs` and Clang
   disagree on purpose — usually with GCC on `cinrs`'s side.
 

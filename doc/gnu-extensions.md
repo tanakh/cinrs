@@ -93,10 +93,14 @@ exactly the same place.
    `#if defined(__GNUC__) && __GNUC__ >= 4`, and those work here. `__VERSION__`
    names cinrs and its version, and nothing claims to be Clang.
 
-One of C11 6.10.8.3's subsetting macros — `__STDC_NO_THREADS__` — is defined
-as `1` in every entry point, which turns that gap into the conforming omission
-the standard provides for. `__STDC_NO_COMPLEX__` follows the `complex` cargo
-feature, which is on by default, so it is *not* normally defined either. The
+Two of C11 6.10.8.3's subsetting macros are defined as `1` where the part they
+name is really absent, which turns each gap into the conforming omission the
+standard provides for — and are absent otherwise. `__STDC_NO_THREADS__`
+follows the *target model*: the bundled `<threads.h>` declares the platform's
+own threads, so it exists on the targets whose C library cinrs can lay the
+objects out for — glibc and musl, both on Linux — and refuses on the rest,
+where the macro is defined. `__STDC_NO_COMPLEX__` follows the `complex` cargo
+feature, which is on by default, so it too is *not* normally defined. The
 other two, `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, are never defined:
 atomics and the variably modified types — `int a[n]`, `double a[n][m]`,
 `int (*p)[n]`, `typedef int T[n];` and the parameter forms — are implemented.

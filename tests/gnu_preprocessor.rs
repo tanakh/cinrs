@@ -221,12 +221,21 @@ c99! {
     const char *timestamp(void) { return __TIMESTAMP__; }
     int include_level(void) { return __INCLUDE_LEVEL__; }
 
-    /* Threads are left out in every build, and Annex G is never claimed
-       whether or not complex arithmetic is there. */
-    #if defined(__STDC_NO_THREADS__) && !defined(__STDC_IEC_559_COMPLEX__)
+    /* Annex G is never claimed, whether or not complex arithmetic is here. */
+    #ifndef __STDC_IEC_559_COMPLEX__
     int subsetting(void) { return 1; }
     #else
     int subsetting(void) { return 0; }
+    #endif
+
+    /* C11's threads are the platform's own, so this one follows the *target*:
+       the macro is predefined exactly where the bundled `<threads.h>` refuses,
+       which is every target whose C library it cannot lay the objects out
+       for. */
+    #ifdef __STDC_NO_THREADS__
+    int no_threads(void) { return 1; }
+    #else
+    int no_threads(void) { return 0; }
     #endif
 
     /* Complex arithmetic is the one optional part that depends on a cargo
@@ -274,6 +283,14 @@ fn the_predefined_macros_say_what_this_implementation_is() {
         unsafe { no_complex() },
         i32::from(!cfg!(feature = "complex")),
         "__STDC_NO_COMPLEX__ has to follow the 'complex' feature"
+    );
+    assert_eq!(
+        unsafe { no_threads() },
+        i32::from(!cfg!(all(
+            target_os = "linux",
+            any(target_env = "gnu", target_env = "musl")
+        ))),
+        "__STDC_NO_THREADS__ has to follow whether <threads.h> declares anything"
     );
     assert_eq!(unsafe { has_vla() }, 1);
     assert_eq!(unsafe { has_atomics() }, 1);

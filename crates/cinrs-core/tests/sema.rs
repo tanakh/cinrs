@@ -321,6 +321,130 @@ fn constructs_that_are_still_out_of_reach_are_named() {
     );
 }
 
+/// C23 6.7.2.3p1 (N3037): two definitions of one tag in one scope declare one
+/// type when their members agree, and are the redefinition they always were
+/// when they do not — with the difference named.
+#[test]
+fn a_repeated_tag_definition_is_c23s_same_type() {
+    let mut c23 = Options::new(Standard::C23);
+    c23.c_variadic = true;
+    c23.complex = true;
+    let accepted_c23 = |source: &str| {
+        let found = errors_with(source, &c23);
+        assert!(found.is_empty(), "expected no errors, got {found:#?}");
+    };
+    let rejected_c23 = |source: &str, expected: &[&str]| {
+        assert_eq!(errors_with(source, &c23), expected, "for:\n{source}");
+    };
+
+    // The member list repeated, in every shape one can be written in.
+    accepted_c23("struct S { int x; int y; }; struct S { int x, y; };");
+    accepted_c23("union U { int x; float y; }; union U { int x; float y; };");
+    accepted_c23("struct S { int x; }; struct S { signed int x; };");
+    accepted_c23("typedef int T; struct S { int x; }; struct S { T x; };");
+    accepted_c23("struct S { unsigned b : 3; }; struct S { unsigned b : 3; };");
+    accepted_c23("struct S { struct S *next; }; struct S { struct S *next; };");
+    accepted_c23("struct S { struct { int x; }; }; struct S { struct { int x; }; };");
+    // An enumeration too, and its enumerators are not declared twice either:
+    // the correspondence is by name, so the order may differ.
+    accepted_c23("enum E { A, B }; enum E { A, B };");
+    accepted_c23("enum E { A = 1, B = 0 }; enum E { B = 0, A = 1 };");
+    accepted_c23("enum E : short { A }; enum E : short { A };");
+
+    // A member list that differs, with the difference named.
+    rejected_c23(
+        "struct S { int x; }; struct S { int y; };",
+        &[
+            "redefinition of 'struct S' with an incompatible member list: the member at \
+           position 1 is named 'y' here and 'x' in the first definition",
+        ],
+    );
+    rejected_c23(
+        "struct S { int x; }; struct S { float x; };",
+        &[
+            "redefinition of 'struct S' with an incompatible member list: member 'x' has type \
+           'float' here and 'int' in the first definition",
+        ],
+    );
+    rejected_c23(
+        "struct S { int x; }; struct S { int x; int y; };",
+        &[
+            "redefinition of 'struct S' with an incompatible member list: the first definition \
+           has one member and this one has 2 members",
+        ],
+    );
+    rejected_c23(
+        "struct S { unsigned b : 3; }; struct S { unsigned b : 4; };",
+        &[
+            "redefinition of 'struct S' with an incompatible member list: member 'b' is 4 bits \
+           wide here and 3 in the first definition",
+        ],
+    );
+    rejected_c23(
+        "struct S { _Alignas(8) int x; }; struct S { int x; };",
+        &[
+            "redefinition of 'struct S' with an incompatible member list: the alignment differs: \
+           the type's own here and 8 in the first definition",
+        ],
+    );
+    rejected_c23(
+        "enum E { A, B }; enum E { A, B, C };",
+        &[
+            "redefinition of 'enum E' with an incompatible enumerator list: the first definition \
+           has 2 enumerators and this one has 3 enumerators",
+        ],
+    );
+    rejected_c23(
+        "enum E { A = 1 }; enum E { A = 2 };",
+        &[
+            "redefinition of 'enum E' with an incompatible enumerator list: enumerator 'A' is 2 \
+           here and 1 in the first definition",
+        ],
+    );
+    rejected_c23(
+        "enum E { A }; enum E { B };",
+        &[
+            "redefinition of 'enum E' with an incompatible enumerator list: the first definition \
+           has no enumerator named 'B'",
+        ],
+    );
+    rejected_c23(
+        "enum E : short { A }; enum E : long { A };",
+        &[
+            "redefinition of 'enum E' with an incompatible enumerator list: the underlying type \
+           is 'long' here and 'short' in the first definition",
+        ],
+    );
+
+    // Two tags of one name from two *scopes* are compatible on the same rule.
+    // The `typedef` is how the outer one is named from inside the block, where
+    // the tag itself means the inner declaration.
+    accepted_c23(
+        "struct S { int x; }; typedef struct S outer; \
+         int f(void) { struct S { int x; } inner; return _Generic(inner, outer: 1); }",
+    );
+    accepted_c23(
+        "struct S { int x; }; typedef struct S outer; \
+         int f(void) { struct S { int x; } inner; outer *p = &inner; return p->x; }",
+    );
+    // …and are two types again when the members differ.
+    rejected_c23(
+        "struct S { int x; }; typedef struct S outer; \
+         int f(void) { struct S { long x; } inner; return _Generic(inner, outer: 1); }",
+        &["'_Generic' has no association for the controlling expression's type 'struct S'"],
+    );
+    // Before C23 compatibility is tag identity, so the same pointer is the
+    // riddle the note explains.
+    rejected(
+        "struct S { int x; }; typedef struct S outer; \
+         int f(void) { struct S { int x; } inner; outer *p = &inner; return p->x; }",
+        &[
+            "cannot initialize 'p', of type 'struct S *', with an expression of type \
+           'struct S *'",
+        ],
+    );
+}
+
 #[test]
 fn tags_are_checked() {
     rejected(

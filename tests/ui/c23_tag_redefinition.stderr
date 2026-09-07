@@ -1,0 +1,76 @@
+error: redefinition of 'struct Named' with an incompatible member list: the member at position 1 is named 'y' here and 'x' in the first definition
+       note: previous definition is at line 19
+  --> tests/ui/c23_tag_redefinition.rs:20:5
+   |
+20 |     struct Named { int y; };
+   |     ^^^^^^
+
+error: redefinition of 'struct Typed' with an incompatible member list: member 'x' has type 'float' here and 'int' in the first definition
+       note: previous definition is at line 24
+  --> tests/ui/c23_tag_redefinition.rs:25:5
+   |
+25 |     struct Typed { float x; };
+   |     ^^^^^^
+
+error: redefinition of 'struct Counted' with an incompatible member list: the first definition has one member and this one has 2 members
+       note: previous definition is at line 29
+  --> tests/ui/c23_tag_redefinition.rs:30:5
+   |
+30 |     struct Counted { int x; int y; };
+   |     ^^^^^^
+
+error: redefinition of 'struct Bits' with an incompatible member list: member 'b' is 4 bits wide here and 3 in the first definition
+       note: previous definition is at line 34
+  --> tests/ui/c23_tag_redefinition.rs:35:5
+   |
+35 |     struct Bits { unsigned b : 4; };
+   |     ^^^^^^
+
+error: redefinition of 'struct Aligned' with an incompatible member list: the alignment differs: the type's own here and 8 in the first definition
+       note: previous definition is at line 39
+  --> tests/ui/c23_tag_redefinition.rs:40:5
+   |
+40 |     struct Aligned { int x; };
+   |     ^^^^^^
+
+error: redefinition of 'union Ordered' with an incompatible member list: the member at position 1 is named 'y' here and 'x' in the first definition
+       note: previous definition is at line 44
+  --> tests/ui/c23_tag_redefinition.rs:45:5
+   |
+45 |     union Ordered { float y; int x; };
+   |     ^^^^^
+
+error: redefinition of 'enum Values' with an incompatible enumerator list: enumerator 'V' is 2 here and 1 in the first definition
+  --> tests/ui/c23_tag_redefinition.rs:50:5
+   |
+50 |     enum Values { V = 2 };
+   |     ^^^^
+
+error: redefinition of 'enum Names' with an incompatible enumerator list: the first definition has no enumerator named 'M'
+  --> tests/ui/c23_tag_redefinition.rs:55:5
+   |
+55 |     enum Names { M };
+   |     ^^^^
+
+error: redefinition of 'struct Inner' with an incompatible member list: the first definition has one member and this one has 2 members
+       note: previous definition is at line 62
+  --> tests/ui/c23_tag_redefinition.rs:63:9
+   |
+63 |         struct Inner { int x; long y; };
+   |         ^^^^^^
+
+error: redefinition of 'struct Same'
+       note: previous definition is at line 71
+  --> tests/ui/c23_tag_redefinition.rs:72:5
+   |
+72 |     struct Same { int x; };
+   |     ^^^^^^
+
+error: redefinition of 'enum Twice'
+  --> tests/ui/c23_tag_redefinition.rs:78:5
+   |
+78 |     enum Twice { T };
+   |     ^^^^
+
+error: aborting due to 11 previous errors
+

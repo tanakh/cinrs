@@ -108,7 +108,7 @@ pub use capture::{FileId, InputMode, Pos, Source, SourceMap, SourceRange, Subspa
 pub use diag::{Diagnostic, Diagnostics, Level};
 pub use ir::{Program, Ty};
 pub use pp::Token;
-pub use target::{Arch, Os, TargetModel, TargetSource, UnknownTarget};
+pub use target::{Arch, Env, Os, TargetModel, TargetSource, UnknownTarget};
 
 /// The environment variable that names the target the expansion is for.
 ///

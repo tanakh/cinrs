@@ -174,7 +174,9 @@
 //! `#elifdef`/`#elifndef`, binary constants, digit separators, the empty
 //! initialiser `{}`, `auto` type inference, enumerations with a fixed
 //! underlying type, labels before a declaration and at the end of a block,
-//! and `unreachable()`.
+//! improved tag compatibility — a tag defined twice in one scope with the same
+//! members declares one type, and two of one name from two scopes are
+//! compatible (N3037) — and `unreachable()`.
 //!
 //! ```
 //! cinrs::c23! {
@@ -211,11 +213,14 @@
 //! `\N{LATIN SMALL LETTER E WITH ACUTE}`: each is a located error rather
 //! than a silent mistranslation. `_Thread_local` *is* there — see
 //! [Thread-local objects](#thread-local-objects) — and so are
-//! [atomics](#atomics), but the rest of C11's threads, `<threads.h>` and all,
-//! is not. Two of C11's four subsetting macros — `__STDC_NO_THREADS__` and
-//! `__STDC_NO_COMPLEX__` — are predefined, which is the standard's own way of
-//! saying that those parts are left out; `__STDC_NO_ATOMICS__` and
-//! `__STDC_NO_VLA__` are not, because those parts are here — see
+//! [atomics](#atomics) and C11's thread library, whose `<threads.h>` is
+//! bundled for the two C libraries whose objects it can lay out (glibc and
+//! musl, both on Linux) and refuses on the platforms where the library has no
+//! such header. Of C11's four subsetting macros, `__STDC_NO_THREADS__` is
+//! predefined exactly where that header refuses and `__STDC_NO_COMPLEX__`
+//! where the `complex` feature is off — which is the standard's own way of
+//! saying that a part is left out; `__STDC_NO_ATOMICS__` and
+//! `__STDC_NO_VLA__` are never predefined, because those parts are here — see
 //! [atomics](#atomics) and [Variably modified types and
 //! `alloca`](#variably-modified-types-and-alloca). Three things are
 //! simplifications rather than omissions:
@@ -1143,6 +1148,71 @@
 //! `#pragma cinrs export` cannot give a `thread_local!` item a C symbol,
 //! because there is no stable way to.
 //!
+//! # C11 threads
+//!
+//! `<threads.h>` (C11 7.26) is bundled, and the threads it makes are the C
+//! library's own: `thrd_create` is the library's `thrd_create`, and the
+//! objects the header declares are laid out the way that library lays them
+//! out, so a `mtx_t` an expansion puts on the stack is a `pthread_mutex_t` the
+//! library can lock.
+//!
+//! ```
+//! # #[cfg(all(target_os = "linux", any(target_env = "gnu", target_env = "musl")))]
+//! # fn main() {
+//! cinrs::c11! {
+//!     #include <threads.h>
+//!
+//!     static mtx_t lock;
+//!     static long counter;
+//!
+//!     static int bump(void *times) {
+//!         long i;
+//!         for (i = 0; i < *(long *)times; i++) {
+//!             mtx_lock(&lock);
+//!             counter++;
+//!             mtx_unlock(&lock);
+//!         }
+//!         return 0;
+//!     }
+//!
+//!     long counted(long times) {
+//!         thrd_t a, b;
+//!         counter = 0;
+//!         mtx_init(&lock, mtx_plain);
+//!         thrd_create(&a, bump, &times);
+//!         thrd_create(&b, bump, &times);
+//!         thrd_join(a, 0);
+//!         thrd_join(b, 0);
+//!         mtx_destroy(&lock);
+//!         return counter;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { counted(1000) }, 2000);
+//! # }
+//! # #[cfg(not(all(target_os = "linux", any(target_env = "gnu", target_env = "musl"))))]
+//! # fn main() {}
+//! ```
+//!
+//! Two of the types — `mtx_t` and `cnd_t` — are opaque blocks of bytes whose
+//! size belongs to the C library rather than to C, so the header models the
+//! two libraries whose layouts it knows: **glibc** (whose `thrd_*` functions
+//! arrived in 2.28) and **musl**, both on Linux. Everywhere else it is an
+//! `#error` naming the reason — Apple's libSystem and the Microsoft UCRT have
+//! no `<threads.h>` at all, and the BSDs, bionic and uClibc lay the objects
+//! out their own way — and `__STDC_NO_THREADS__` is predefined there, which is
+//! C11 6.10.8.3's way of saying so and what lets a portable program take the
+//! other branch instead of hitting the `#error`.
+//!
+//! `struct timespec` comes from `<time.h>`, where C puts it, beside
+//! `timespec_get` and `TIME_UTC`; `thread_local` is defined as
+//! `_Thread_local` up to C17 and left alone in [`c23!`], where it is a
+//! keyword. One function is declared but should not be called from translated
+//! C: `thrd_exit` is `pthread_exit`, which ends the thread by forcing an
+//! unwind through the frames above it, and Rust aborts rather than let a
+//! foreign unwind cross the generated `extern "C"` frame. Return from the
+//! thread function instead.
+//!
 //! # Atomics
 //!
 //! C11's atomics are here, and so are the two builtin families that came
@@ -1257,8 +1327,9 @@
 //! typedefs, `atomic_flag` with `ATOMIC_FLAG_INIT`, the `memory_order`
 //! enumeration, `ATOMIC_VAR_INIT`, `atomic_init`, `kill_dependency`, the
 //! fences, `atomic_is_lock_free`, the `ATOMIC_*_LOCK_FREE` macros (all `2`)
-//! and the generic functions. `<threads.h>` is not, and
-//! `__STDC_NO_THREADS__` stays defined; `__STDC_NO_ATOMICS__` does not.
+//! and the generic functions. Neither `__STDC_NO_ATOMICS__` nor — on a target
+//! whose C library the bundled [`<threads.h>`](#c11-threads) models —
+//! `__STDC_NO_THREADS__` is predefined.
 //!
 //! # Control flow
 //!
@@ -1443,8 +1514,8 @@
 //! `<inttypes.h>`, `<iso646.h>`, `<limits.h>`, `<math.h>`, `<signal.h>`,
 //! `<stdalign.h>`, `<stdarg.h>`, `<stdatomic.h>`,
 //! `<stdbool.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`, `<stdlib.h>`,
-//! `<stdnoreturn.h>`, `<string.h>`, `<time.h>`, `<uchar.h>`, `<wchar.h>` and
-//! `<wctype.h>`,
+//! `<stdnoreturn.h>`, `<string.h>`, `<threads.h>`, `<time.h>`, `<uchar.h>`,
+//! `<wchar.h>` and `<wctype.h>`,
 //! and never reads the
 //! platform's. A real `<stdio.h>` is not C — glibc's is built out of GNU
 //! extensions, compiler builtins and `__asm__` renaming — so a front end that

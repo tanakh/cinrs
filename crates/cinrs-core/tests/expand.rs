@@ -133,6 +133,32 @@ fn a_valid_translation_unit_expands_to_code() {
     assert!(expand(TokenStream::new(), &options()).is_empty());
 }
 
+/// C23 6.7.2.3p1 (N3037): a tag defined twice in one scope with the same
+/// members is one type, so it is **one** generated item — the second
+/// definition is resolved only to be compared with the first, and nothing is
+/// emitted for it or for the anonymous members it created.
+#[test]
+fn a_repeated_tag_definition_generates_one_item() {
+    let source = "struct Point { int x; struct { int inner; }; }; \
+                  struct Point { int x; struct { int inner; }; }; \
+                  int width(struct Point p) { return p.x; }";
+    let output = expand(stream(source), &Options::new(Standard::C23)).to_string();
+    assert!(!output.contains("compile_error"), "{output}");
+    assert_eq!(
+        output.matches("pub struct Point").count(),
+        1,
+        "one type, one item: {output}"
+    );
+    // Two items in all — `Point` and the one type its anonymous member has.
+    // The second definition created a second of each to be compared with the
+    // first, and neither is emitted.
+    assert_eq!(
+        output.matches("pub struct ").count(),
+        2,
+        "the second definition left an item behind: {output}"
+    );
+}
+
 #[test]
 fn a_prototype_without_a_definition_becomes_an_extern_declaration() {
     // A promise the unit never keeps is what C's linkage model is made of: the

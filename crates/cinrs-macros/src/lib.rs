@@ -129,10 +129,12 @@ pub fn c99(input: TokenStream) -> TokenStream {
 /// `<uchar.h>`'s `char16_t` and `char32_t`, and the `CMPLX` family in
 /// `<complex.h>`. `__STDC_VERSION__` is `201112L`.
 ///
-/// C11's threads are not here: `<threads.h>` is absent and
-/// `__STDC_NO_THREADS__` is predefined. An `_Atomic` `struct` is a clear error
-/// rather than a silent mistranslation — it would need a lock, and there is
-/// nothing in the generated Rust to be one.
+/// C11's threads are here too, as the platform's own: `<threads.h>` is
+/// bundled for the C libraries whose objects it can lay out — glibc and musl,
+/// both on Linux — and is an `#error` naming the reason elsewhere, which is
+/// where `__STDC_NO_THREADS__` is predefined. An `_Atomic` `struct` is a clear
+/// error rather than a silent mistranslation — it would need a lock, and there
+/// is nothing in the generated Rust to be one.
 #[proc_macro]
 pub fn c11(input: TokenStream) -> TokenStream {
     expand(input, Standard::C11)
@@ -153,7 +155,9 @@ pub fn c17(input: TokenStream) -> TokenStream {
 /// `false`, `nullptr`, `static_assert`, `alignof`, `alignas`, `constexpr`,
 /// `typeof`), `[[…]]` attributes, `__VA_OPT__`, `#elifdef` / `#elifndef`,
 /// binary constants, digit separators, empty initialisers, `auto` type
-/// inference, enumerations with a fixed underlying type, `unreachable()`,
+/// inference, enumerations with a fixed underlying type, improved tag
+/// compatibility (a tag defined twice in one scope with the same members is
+/// one type), `unreachable()`,
 /// `#embed`, `char8_t` and the `u8'x'` character prefix.
 /// `__STDC_VERSION__` is `202311L`.
 ///

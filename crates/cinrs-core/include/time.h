@@ -10,6 +10,11 @@
  * `time_t` is `long` on the Unix platforms, which makes it 32 bits wide on a
  * 32-bit target — glibc's own default without `_TIME_BITS=64` — and `long
  * long` on Windows.
+ *
+ * `struct timespec` (C11 7.27.1) is `{ time_t; long; }` on all three, which is
+ * eight bytes on a 32-bit Unix and sixteen everywhere else. It is here rather
+ * than in `<threads.h>` alone because C puts it here, and `thrd_sleep`,
+ * `mtx_timedlock` and `cnd_timedwait` all take one.
  */
 #ifndef _CINRS_TIME_H
 #define _CINRS_TIME_H
@@ -27,6 +32,17 @@ typedef long time_t;
 typedef long clock_t;
 #define CLOCKS_PER_SEC 1000000
 #endif
+
+/* C11 7.27.1p3. `tv_nsec` is `long` on glibc, musl, Apple's library and the
+ * Microsoft one alike — glibc spells it `__syscall_slong_t`, which is `long`
+ * on every target this crate models. */
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+
+/* The one time base C requires, and the value all four libraries give it. */
+#define TIME_UTC 1
 
 struct tm {
     int tm_sec;
@@ -55,5 +71,9 @@ char *asctime(const struct tm *timeptr);
 char *ctime(const time_t *timer);
 size_t strftime(char *s, size_t maxsize, const char *format,
                 const struct tm *timeptr);
+
+/* C11 7.27.2.5. glibc has had it since 2.16, musl since 1.1.5, Apple since
+ * macOS 10.15 and the Microsoft UCRT since Visual Studio 2015. */
+int timespec_get(struct timespec *ts, int base);
 
 #endif /* _CINRS_TIME_H */

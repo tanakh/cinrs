@@ -241,6 +241,69 @@ impl Os {
     }
 }
 
+/// The C library a triple's environment component names.
+///
+/// On most systems the [operating system](Os) settles the library — Apple has
+/// libSystem, the BSDs each have their own — and this is [`Env::None`]. Linux
+/// is the exception: `-gnu`, `-musl` and `-android` are three libraries with
+/// three sets of layouts behind the same system macros, and a header that laid
+/// a `mtx_t` out for the wrong one would corrupt memory. So the environment is
+/// kept, and [`TargetModel::macros`] turns the two this crate models into
+/// `__cinrs_glibc__` and `__cinrs_musl__` for the bundled headers to branch on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Env {
+    /// The GNU C Library, `-gnu*`: `gnu`, `gnueabihf`, `gnux32`, `gnullvm`.
+    Gnu,
+    /// musl, `-musl*`.
+    Musl,
+    /// Android's bionic, which a triple names `-android` or `-androideabi`.
+    Bionic,
+    /// uClibc, `-uclibc*`.
+    Uclibc,
+    /// The Microsoft runtime, `-msvc`.
+    Msvc,
+    /// The triple says nothing, because the system has only one C library
+    /// (Apple, the BSDs, WASI) or because there is none at all.
+    #[default]
+    None,
+}
+
+impl Env {
+    /// The name used in diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Env::Gnu => "gnu",
+            Env::Musl => "musl",
+            Env::Bionic => "android",
+            Env::Uclibc => "uclibc",
+            Env::Msvc => "msvc",
+            Env::None => "",
+        }
+    }
+
+    /// The environment a triple's last component names.
+    ///
+    /// A Linux triple that names none — `x86_64-unknown-linux` — is glibc,
+    /// which is what `rustc` and `gcc` both take it for.
+    fn from_component(component: &str, os: Os) -> Self {
+        if component.starts_with("gnu") {
+            Env::Gnu
+        } else if component.starts_with("musl") {
+            Env::Musl
+        } else if component.starts_with("android") {
+            Env::Bionic
+        } else if component.starts_with("uclibc") {
+            Env::Uclibc
+        } else if component == "msvc" {
+            Env::Msvc
+        } else if os == Os::Linux {
+            Env::Gnu
+        } else {
+            Env::None
+        }
+    }
+}
+
 /// Where the [`TargetModel`] of an expansion came from.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum TargetSource {
@@ -447,6 +510,9 @@ pub struct TargetModel {
     /// The operating system, which decides the `__linux__`-style macros and so
     /// the branch every bundled header takes.
     pub os: Os,
+    /// The C library the triple's environment component names, which on Linux
+    /// is the difference between glibc's layouts and musl's; see [`Env`].
+    pub env: Env,
     /// Whether plain `char` is a signed type.
     ///
     /// This follows `core::ffi::c_char` exactly, because the generated code
@@ -513,6 +579,7 @@ impl TargetModel {
     pub const LP64: Self = Self {
         arch: Arch::X86_64,
         os: Os::Linux,
+        env: Env::Gnu,
         char_signed: true,
         short_bits: 16,
         int_bits: 32,
@@ -545,6 +612,7 @@ impl TargetModel {
     /// pointers, and a 16-bit `wchar_t`.
     pub const LLP64: Self = Self {
         os: Os::Windows,
+        env: Env::Msvc,
         long_bits: 32,
         wchar_bits: 16,
         wchar_signed: false,
@@ -585,6 +653,7 @@ impl TargetModel {
         Self {
             arch: host_arch(),
             os: host_os(),
+            env: host_env(),
             char_signed,
             short_bits: 16,
             int_bits: if cfg!(any(target_arch = "avr", target_arch = "msp430")) {
@@ -703,6 +772,7 @@ impl TargetModel {
         Ok(Self {
             arch,
             os,
+            env: Env::from_component(env, os),
             char_signed,
             short_bits: 16,
             int_bits: 32,
@@ -780,7 +850,41 @@ impl TargetModel {
         if self.os.is_elf() && self.arch != Arch::Wasm32 {
             out.push(("__ELF__", "1".to_owned()));
         }
+        // Which C library a *Linux* target links against, for the bundled
+        // headers that have to lay one of its types out. Nothing else says it:
+        // `__linux__` is true of all three, and the real `__GLIBC__` comes
+        // from glibc's own `<features.h>` rather than from a compiler. These
+        // two are cinrs's own, named so, and defined only where the answer is
+        // known — a `-android` or `-uclibc` triple gets neither, and a header
+        // that needs one then refuses rather than guessing. Elsewhere the
+        // operating system settles the library, so there is nothing to say.
+        if self.os == Os::Linux {
+            match self.env {
+                Env::Gnu => out.push(("__cinrs_glibc__", "1".to_owned())),
+                Env::Musl => out.push(("__cinrs_musl__", "1".to_owned())),
+                _ => {}
+            }
+        }
         out
+    }
+}
+
+/// The C library this crate was compiled against, for [`TargetModel::host`].
+const fn host_env() -> Env {
+    if cfg!(target_env = "gnu") {
+        Env::Gnu
+    } else if cfg!(target_env = "musl") {
+        Env::Musl
+    } else if cfg!(target_os = "android") {
+        Env::Bionic
+    } else if cfg!(target_env = "uclibc") {
+        Env::Uclibc
+    } else if cfg!(target_env = "msvc") {
+        Env::Msvc
+    } else if cfg!(target_os = "linux") {
+        Env::Gnu
+    } else {
+        Env::None
     }
 }
 
@@ -1139,6 +1243,63 @@ mod tests {
         assert!(bare.contains(&"__arm__=1".to_owned()));
         assert!(bare.contains(&"__ELF__=1".to_owned()));
         assert!(!bare.iter().any(|m| m.starts_with("__linux")));
+    }
+
+    /// The C library a Linux triple names, which is the one thing `__linux__`
+    /// does not say and the bundled `<threads.h>` has to know.
+    #[test]
+    fn the_c_library_of_a_linux_triple() {
+        for (triple, want) in [
+            ("x86_64-unknown-linux-gnu", Env::Gnu),
+            ("armv7-unknown-linux-gnueabihf", Env::Gnu),
+            ("x86_64-unknown-linux-gnux32", Env::Gnu),
+            // A Linux triple that names no environment is glibc, which is what
+            // `rustc` and `gcc` both take it for.
+            ("x86_64-unknown-linux", Env::Gnu),
+            ("x86_64-unknown-linux-musl", Env::Musl),
+            ("aarch64-unknown-linux-musl", Env::Musl),
+            ("aarch64-linux-android", Env::Bionic),
+            ("armv7-unknown-linux-uclibceabi", Env::Uclibc),
+            ("x86_64-pc-windows-msvc", Env::Msvc),
+            // mingw is `-gnu` and is *not* glibc; the macro below is what keeps
+            // the two apart, since it is defined only on Linux.
+            ("x86_64-pc-windows-gnu", Env::Gnu),
+            ("aarch64-apple-darwin", Env::None),
+            ("x86_64-unknown-freebsd", Env::None),
+            ("wasm32-unknown-unknown", Env::None),
+        ] {
+            assert_eq!(model(triple).env, want, "{triple}");
+        }
+
+        let glibc = "__cinrs_glibc__=1".to_owned();
+        let musl = "__cinrs_musl__=1".to_owned();
+        assert!(macros("x86_64-unknown-linux-gnu").contains(&glibc));
+        assert!(macros("i686-unknown-linux-gnu").contains(&glibc));
+        assert!(macros("x86_64-unknown-linux-musl").contains(&musl));
+        // One or the other, never both, and neither where the answer is not
+        // known: a `<threads.h>` that guessed would corrupt memory.
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "aarch64-linux-android",
+            "x86_64-pc-windows-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-unknown-freebsd",
+            "wasm32-unknown-unknown",
+        ] {
+            let macros = macros(triple);
+            let named = usize::from(macros.contains(&glibc)) + usize::from(macros.contains(&musl));
+            assert!(named <= 1, "{triple} claims two C libraries");
+        }
+        for triple in [
+            "aarch64-linux-android",
+            "x86_64-pc-windows-gnu",
+            "aarch64-apple-darwin",
+        ] {
+            let macros = macros(triple);
+            assert!(!macros.contains(&glibc), "{triple}");
+            assert!(!macros.contains(&musl), "{triple}");
+        }
     }
 
     #[test]

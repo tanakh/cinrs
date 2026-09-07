@@ -700,12 +700,12 @@ fn the_target_is_described_consistently_with_the_target_model() {
         "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
     ));
     assert!(cond("!defined(__clang__)"));
-    // The part of C11 this crate leaves out says so, which is what makes
-    // leaving it out conforming — and atomics and variable length arrays,
-    // which it does *not* leave out, deliberately say nothing. Complex
-    // arithmetic is the one that depends on a feature; see
-    // [`stdc_no_complex_follows_the_feature`].
-    assert!(cond("defined(__STDC_NO_THREADS__)"));
+    // Atomics and variable length arrays are not left out, so the macros that
+    // would say so are deliberately absent. The other two do depend on how the
+    // expansion was configured: complex arithmetic on a cargo feature — see
+    // [`stdc_no_complex_follows_the_feature`] — and threads on the *target*,
+    // since `<threads.h>` declares the platform's own; see
+    // [`stdc_no_threads_follows_the_target`].
     assert!(cond(
         "!defined(__STDC_NO_ATOMICS__) && !defined(__STDC_NO_VLA__)"
     ));
@@ -758,6 +758,40 @@ fn stdc_no_complex_follows_the_feature() {
             .map(|t| t.kind.spelling().to_owned())
             .collect();
         assert_eq!(spellings, [want], "for complex = {complex}");
+    }
+}
+
+/// `__STDC_NO_THREADS__` says the same thing about C11's thread library, and
+/// the answer is the *target's*: the bundled `<threads.h>` declares the
+/// platform's own threads, so it exists where cinrs can lay the C library's
+/// objects out — glibc and musl, both on Linux — and refuses everywhere else,
+/// which is where the macro is predefined.
+#[test]
+fn stdc_no_threads_follows_the_target() {
+    let source = "#ifdef __STDC_NO_THREADS__\nabsent\n#else\npresent\n#endif\n";
+    for (triple, want) in [
+        ("x86_64-unknown-linux-gnu", "present"),
+        ("i686-unknown-linux-gnu", "present"),
+        ("aarch64-unknown-linux-musl", "present"),
+        ("aarch64-apple-darwin", "absent"),
+        ("x86_64-pc-windows-msvc", "absent"),
+        ("x86_64-unknown-freebsd", "absent"),
+        ("aarch64-linux-android", "absent"),
+        ("wasm32-unknown-unknown", "absent"),
+    ] {
+        let target = cinrs_core::TargetModel::from_triple(triple).expect("a model cinrs knows");
+        let options = Options::new(Standard::C11).for_target(target);
+        let mut diags = cinrs_core::Diagnostics::new();
+        let ctx = Context::new(source, 0);
+        let tokens = lex_text(source, ctx.base, &lex_options());
+        let out = preprocess(&tokens, &ctx, &options, &mut diags);
+        let spellings: Vec<String> = out
+            .tokens
+            .iter()
+            .filter(|t| !t.is_eof())
+            .map(|t| t.kind.spelling().to_owned())
+            .collect();
+        assert_eq!(spellings, [want], "for {triple}");
     }
 }
 

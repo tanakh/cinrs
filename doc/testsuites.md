@@ -7,7 +7,7 @@ questions, which is why there are three of them and not one:
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
 | [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.6 %** (`gnu11!`), 85.2 % (`gnu89!`); 88.9 % / 88.5 % on `beta` | 254: 0 bug, 3 unimplemented, 190 not planned, 61 toolchain |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **81.3 %** of the 203 run | 38: 0 bug, 8 unimplemented, 30 not planned |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them

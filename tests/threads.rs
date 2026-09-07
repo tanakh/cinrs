@@ -9,6 +9,10 @@
 //!
 //! The expansion of one of these units needs `std`, which is the one way they
 //! differ from everything else this crate generates.
+//!
+//! The threads themselves are Rust's here, because what is under test is the
+//! *object*. C11's own thread library — `<threads.h>`, where the threads are
+//! made from translated C — is in `tests/c11_threads.rs`.
 
 use std::thread;
 

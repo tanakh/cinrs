@@ -3,8 +3,8 @@
 //! `c23!` is `c11!` plus the keywords C23 promoted (`bool`, `true`, `false`,
 //! `nullptr`, `static_assert`, `alignof`, `constexpr`, `typeof`), `[[…]]`
 //! attributes, `__VA_OPT__`, `#elifdef`, binary constants, digit separators,
-//! empty initialisers, `auto`, enumerations with a fixed underlying type and
-//! `unreachable()`.
+//! empty initialisers, `auto`, enumerations with a fixed underlying type,
+//! `unreachable()` and improved tag compatibility.
 
 use cinrs::{c17, c23};
 
@@ -879,4 +879,146 @@ fn a_label_may_stand_before_a_case_group_that_is_empty() {
         assert_eq!(declaration_after_case(1), 7);
         assert_eq!(declaration_after_case(9), -1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// improved tag compatibility (N3037)
+// ---------------------------------------------------------------------------
+
+/// C23 6.7.2.3p1: a tag defined twice in one scope with the same members
+/// declares **one** type — which is what a header defining `struct Point`, and
+/// a unit that defines it again beside a prototype, have always meant.
+///
+/// One type means one generated Rust item: the second definition adds nothing,
+/// and the functions written against either of them take the same argument.
+#[test]
+fn a_tag_defined_twice_with_the_same_members_is_one_type() {
+    c23! {
+        struct Point { int x; int y; };
+
+        int manhattan(struct Point p);
+
+        /* The same members, written the other way round: one declaration, not
+         * two types. `manhattan` above and `manhattan` below are the same
+         * function, taking the same `struct Point`. */
+        struct Point { int x, y; };
+
+        int manhattan(struct Point p) {
+            int x = p.x < 0 ? -p.x : p.x;
+            int y = p.y < 0 ? -p.y : p.y;
+            return x + y;
+        }
+
+        struct Point origin(void) {
+            struct Point p = { 0, 0 };
+            return p;
+        }
+
+        /* A tag that names itself, defined twice: the member is the same
+         * pointer in both. */
+        struct Node { int value; struct Node *next; };
+        struct Node { int value; struct Node *next; };
+
+        int sum(struct Node *head) {
+            int total = 0;
+            while (head) {
+                total += head->value;
+                head = head->next;
+            }
+            return total;
+        }
+
+        /* An enumeration too, and the correspondence is by name: the second
+         * list is the first reordered, so the two are one type and `RED` is
+         * not declared twice either. */
+        enum Colour { RED = 0, GREEN = 1, BLUE = 2 };
+        enum Colour { BLUE = 2, RED = 0, GREEN = 1 };
+
+        int colour_total(void) { return RED + GREEN + BLUE; }
+
+        /* And a union. */
+        union Word { int as_int; unsigned char as_bytes[4]; };
+        union Word { int as_int; unsigned char as_bytes[4]; };
+
+        int low_byte(int value) {
+            union Word w;
+            w.as_int = value;
+            return w.as_bytes[0];
+        }
+    }
+
+    unsafe {
+        let p = Point { x: -3, y: 4 };
+        assert_eq!(manhattan(p), 7);
+        assert_eq!(origin().x, 0);
+
+        let mut tail = Node {
+            value: 2,
+            next: core::ptr::null_mut(),
+        };
+        let mut head = Node {
+            value: 40,
+            next: &raw mut tail,
+        };
+        assert_eq!(sum(&raw mut head), 42);
+
+        assert_eq!(colour_total(), 3);
+        assert_eq!(low_byte(0x0403_0201), 1);
+    }
+}
+
+/// The rule works across *scopes* as well: two tags of one name declared in
+/// two places are compatible types when their members agree (6.2.7p1), which
+/// is what `_Generic` selects on and what lets a pointer to one be assigned to
+/// a pointer to the other.
+#[test]
+fn two_tags_of_one_name_from_two_scopes_are_compatible() {
+    c23! {
+        struct Pair { int a; int b; };
+        typedef struct Pair outer_pair;
+
+        int through_a_block(void) {
+            /* A tag of the same name declared inside a block is a *different*
+             * type — but, in C23, a compatible one. */
+            struct Pair { int a; int b; } inner = { 3, 4 };
+            outer_pair *p = &inner;
+            int selected = _Generic(inner, outer_pair: 1, default: 0);
+            return p->a + p->b + selected;
+        }
+
+        int an_incompatible_one(void) {
+            struct Pair { long a; long b; } inner = { 3, 4 };
+            /* Different member types, so this one is not the outer `Pair` and
+             * the `default` association is what is chosen. */
+            return _Generic(inner, outer_pair: 1, default: 0);
+        }
+
+        int builtin_answer(void) {
+            struct Pair { int a; int b; } inner;
+            (void)inner;
+            return __builtin_types_compatible_p(struct Pair, outer_pair);
+        }
+    }
+
+    unsafe {
+        assert_eq!(through_a_block(), 8);
+        assert_eq!(an_incompatible_one(), 0);
+        assert_eq!(builtin_answer(), 1);
+    }
+}
+
+/// Before C23 the same text is the redefinition it always was, in every entry
+/// point — GNU dialects included, since GCC 15 implements N3037 in `-std=c23`
+/// and `-std=gnu23` only.
+#[test]
+fn a_repeated_definition_is_still_a_redefinition_before_c23() {
+    // `tests/ui/c23_tag_redefinition.rs` is where the diagnostics are pinned
+    // down; this is the *accepting* half, which needs a `c17!` block that
+    // compiles: one definition, not two.
+    c17! {
+        struct Point { int x; int y; };
+        int width(struct Point p) { return p.x; }
+    }
+
+    assert_eq!(unsafe { width(Point { x: 5, y: 6 }) }, 5);
 }

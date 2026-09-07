@@ -984,14 +984,43 @@ impl Sema<'_> {
             }
             Some(TagEntry::Record(id)) if !self.types().record(id).complete => id,
             Some(TagEntry::Record(id)) => {
+                let tag = spec
+                    .name
+                    .as_ref()
+                    .expect("matched a named tag")
+                    .name
+                    .clone();
+                // C23 6.7.2.3p1, as WG14 N3037 rewrote it: a second definition
+                // of a tag in the same scope declares the *same type* when its
+                // member list is compatible with the first's, and is the
+                // constraint violation it always was when it is not. Only the
+                // C23 entry points have it, which is where GCC 15 put it too —
+                // `-std=c23` and `-std=gnu23`, not the GNU dialects of the
+                // older revisions.
+                let difference = if self.gating.standard >= crate::Standard::C23 {
+                    self.compare_redefinition(id, spec_id, spec, fields)
+                } else {
+                    Some(String::new())
+                };
+                let Some(difference) = difference else {
+                    // One type, defined twice: the first definition's, which
+                    // every earlier use already names.
+                    self.record_by_spec[spec_id.index()] = Some(id);
+                    return Ok(Ty::Record(id));
+                };
                 let previous = self.types().record(id).range;
+                let message = if difference.is_empty() {
+                    format!("redefinition of '{} {tag}'", kind.as_str())
+                } else {
+                    format!(
+                        "redefinition of '{} {tag}' with an incompatible member list: \
+                         {difference}",
+                        kind.as_str()
+                    )
+                };
                 return Err(TypeError {
                     range: spec.range,
-                    message: format!(
-                        "redefinition of '{} {}'",
-                        kind.as_str(),
-                        spec.name.as_ref().expect("matched a named tag").name
-                    ),
+                    message,
                     note: Some((previous, "previous definition is".to_owned())),
                 });
             }
@@ -1024,6 +1053,194 @@ impl Sema<'_> {
             self.static_assert(assert);
         }
         Ok(Ty::Record(id))
+    }
+
+    /// Resolves a second definition of a tag already defined in this scope and
+    /// says whether it declares a *different* type (C23 6.2.7p1, N3037).
+    ///
+    /// `None` means the two definitions declare one type, which is what C23
+    /// made them; `Some(difference)` names what makes them two, for the
+    /// diagnostic. The second member list has to be resolved to be compared —
+    /// `int` and a `typedef` of it are the same member, and two spellings of
+    /// one pointer are the same member — so it is resolved into a tag of its
+    /// own, which nothing then refers to and no item is generated for.
+    fn compare_redefinition(
+        &mut self,
+        first: RecordId,
+        spec_id: ast::RecordSpecId,
+        spec: &ast::RecordSpec,
+        fields: &[ast::FieldDecl],
+    ) -> Option<String> {
+        let kind = self.types().record(first).kind;
+        let mark = self.program.types.records().len();
+        let again =
+            self.declare_record(kind, spec.name.as_ref().map(|n| n.name.clone()), spec.range);
+        // The tag itself still means the first definition inside this list, so
+        // `struct S { struct S *next; };` written twice names one type in both
+        // and the two members compare equal.
+        self.record_by_spec[spec_id.index()] = Some(first);
+        self.define_record(again, spec, fields);
+        for assert in &spec.asserts {
+            self.static_assert(assert);
+        }
+        let difference = self.record_difference(first, again, &mut Vec::new());
+        if difference.is_none() {
+            // The two agree, so everything this resolution created is a
+            // duplicate of something the first definition already generated —
+            // the tag itself, and the type of any anonymous member of it.
+            // Nothing refers to any of it, and no item is generated for it.
+            self.program.types.suppress_records_from(mark);
+        }
+        difference
+    }
+
+    /// What makes two definitions of one tag two types, or `None` when they
+    /// are one (C23 6.2.7p1).
+    ///
+    /// The rule is a one-to-one correspondence between the members in which
+    /// each pair has the same name, compatible types, the same bit-field width
+    /// and the same alignment specifier — and, for a `struct`, the same order.
+    /// A `union` is held to the order as well: C23 asks it only of structures,
+    /// but GCC and Clang both compare unions member by member, and a program
+    /// that reorders a union's members between two definitions has said
+    /// something worth being told about.
+    ///
+    /// `comparing` is the pairs of tags this comparison is already inside, so
+    /// that two types that name each other — or themselves, from two scopes —
+    /// are compared once rather than for ever. A pair already on it is taken
+    /// to agree, which is the answer that makes the *whole* comparison say
+    /// "the same" exactly when nothing else disagrees.
+    pub(super) fn record_difference(
+        &self,
+        first: RecordId,
+        again: RecordId,
+        comparing: &mut Vec<(RecordId, RecordId)>,
+    ) -> Option<String> {
+        if comparing.contains(&(first, again)) {
+            return None;
+        }
+        let types = self.types();
+        let (a, b) = (types.record(first), types.record(again));
+        if !a.complete || !b.complete {
+            return Some("one of the two definitions left the type incomplete".to_owned());
+        }
+        if a.fields.len() != b.fields.len() {
+            return Some(format!(
+                "the first definition has {} and this one has {}",
+                members(a.fields.len()),
+                members(b.fields.len())
+            ));
+        }
+        comparing.push((first, again));
+        let difference = a
+            .fields
+            .iter()
+            .zip(&b.fields)
+            .enumerate()
+            .find_map(|(position, (x, y))| self.field_difference(position, x, y, comparing));
+        comparing.pop();
+        if difference.is_some() {
+            return difference;
+        }
+        // C23 6.2.7p1 asks for the same alignment specifier on corresponding
+        // members; `_Alignas` on a member raises the *record's* alignment, and
+        // `__attribute__((packed))` and `#pragma pack(N)` lower every member's,
+        // so the two records are what carry the answer.
+        if a.align != b.align {
+            return Some(format!(
+                "the alignment differs: {} here and {} in the first definition",
+                alignment(b.align),
+                alignment(a.align)
+            ));
+        }
+        if a.packed != b.packed {
+            return Some(format!(
+                "the packing differs: {} here and {} in the first definition",
+                packing(b.packed),
+                packing(a.packed)
+            ));
+        }
+        if a.layout != b.layout {
+            return Some("the two definitions lay the type out differently".to_owned());
+        }
+        None
+    }
+
+    /// What makes two corresponding members two members, or `None`.
+    ///
+    /// `x` is the first definition's and `y` is the one being compared with it,
+    /// which is why every message says "here" of `y`.
+    fn field_difference(
+        &self,
+        position: usize,
+        x: &ir::Field,
+        y: &ir::Field,
+        comparing: &mut Vec<(RecordId, RecordId)>,
+    ) -> Option<String> {
+        let at = position + 1;
+        if x.anonymous != y.anonymous {
+            return Some(format!(
+                "the member at position {at} is anonymous in one definition and named in the other"
+            ));
+        }
+        if !x.anonymous && x.name != y.name {
+            return Some(format!(
+                "the member at position {at} is named '{}' here and '{}' in the first definition",
+                y.name, x.name
+            ));
+        }
+        let named = if x.anonymous {
+            format!("the anonymous member at position {at}")
+        } else {
+            format!("member '{}'", x.name)
+        };
+        match (&x.bits, &y.bits) {
+            (Some(x), Some(y)) if x.width != y.width => {
+                return Some(format!(
+                    "{named} is {} bits wide here and {} in the first definition",
+                    y.width, x.width
+                ));
+            }
+            (Some(_), None) => {
+                return Some(format!(
+                    "{named} is a bit-field in the first definition and not here"
+                ));
+            }
+            (None, Some(_)) => {
+                return Some(format!(
+                    "{named} is a bit-field here and not in the first definition"
+                ));
+            }
+            _ => {}
+        }
+        if x.is_const != y.is_const {
+            return Some(format!(
+                "{named} is 'const' in one definition and not in the other"
+            ));
+        }
+        if x.flexible != y.flexible {
+            return Some(format!(
+                "{named} is a flexible array member in one definition and not in the other"
+            ));
+        }
+        // An anonymous member has no name to match on and its type is a tag of
+        // its own, one per definition, so the two are compared the way the
+        // records themselves are; `compatible` would say no, since neither has
+        // a tag for the structural rule to match.
+        let same = match (x.anonymous, x.ty, y.ty) {
+            (true, Ty::Record(p), Ty::Record(q)) => {
+                self.record_difference(p, q, comparing).is_none()
+            }
+            _ => self.compatible_in(x.ty, y.ty, comparing),
+        };
+        if !same {
+            return Some(format!(
+                "{named} has type '{}' here and '{}' in the first definition",
+                self.tyname(y.ty),
+                self.tyname(x.ty)
+            ));
+        }
+        None
     }
 
     /// Creates an incomplete tag and reserves the Rust name it will use.
@@ -2157,6 +2374,7 @@ impl Sema<'_> {
                     unsigned,
                     fixed,
                     complete,
+                    ..
                 }) => {
                     // A mention of a tag whose list has not been seen: it has
                     // a size all the same when a fixed underlying type gave it
@@ -2208,6 +2426,7 @@ impl Sema<'_> {
                             unsigned,
                             fixed: underlying.is_some(),
                             complete: false,
+                            list: None,
                         },
                     );
                     // `enum E : short;` names a type with a *size* — N3030
@@ -2229,10 +2448,41 @@ impl Sema<'_> {
         let mut declared: Option<Ty> = None;
         if let Some(name) = &spec.name {
             match self.tag_here(&name.name) {
-                Some(TagEntry::Enum { complete: true, .. }) => {
+                Some(TagEntry::Enum {
+                    ty,
+                    unsigned,
+                    fixed,
+                    complete: true,
+                    list,
+                }) => {
+                    // C23 6.7.2.3p1 (N3037), as for a `struct`: a second
+                    // definition of one tag in one scope declares the same type
+                    // when the two agree, and is the redefinition it always was
+                    // when they do not. The enumerators are not declared again
+                    // either, which is what makes `enum E { m }; enum E { m };`
+                    // legal in C23 where `m` used to be a redefinition too
+                    // (`drs/dr1xx.c`).
+                    let difference = if self.gating.standard >= crate::Standard::C23 {
+                        self.enum_difference(list, ty, fixed, underlying, enumerators)
+                    } else {
+                        Some(String::new())
+                    };
+                    let Some(difference) = difference else {
+                        self.enum_by_spec[spec_id.index()] = Some(ty);
+                        self.enum_unsigned[spec_id.index()] = Some(unsigned);
+                        return Ok(ty);
+                    };
                     return Err(TypeError::at(
                         spec.range,
-                        format!("redefinition of 'enum {}'", name.name),
+                        if difference.is_empty() {
+                            format!("redefinition of 'enum {}'", name.name)
+                        } else {
+                            format!(
+                                "redefinition of 'enum {}' with an incompatible enumerator \
+                                 list: {difference}",
+                                name.name
+                            )
+                        },
                     ));
                 }
                 Some(TagEntry::Enum { ty, fixed, .. }) => {
@@ -2326,6 +2576,7 @@ impl Sema<'_> {
                     unsigned: false,
                     fixed: underlying.is_some(),
                     complete: false,
+                    list: None,
                 },
             );
         }
@@ -2463,6 +2714,20 @@ impl Sema<'_> {
             self.enum_by_spec[spec_id.index()] = Some(ty);
         }
         if let Some(name) = &spec.name {
+            // The list is kept only where a second definition of the tag could
+            // be legal — C23 6.7.2.3p1 (N3037) — which is the one thing that
+            // reads it back.
+            let list = if self.gating.standard >= crate::Standard::C23 {
+                self.enum_lists.push(
+                    placed
+                        .iter()
+                        .map(|(name, value, _, _)| (name.clone(), *value))
+                        .collect(),
+                );
+                Some((self.enum_lists.len() - 1) as u32)
+            } else {
+                None
+            };
             self.insert_tag(
                 &name.name,
                 TagEntry::Enum {
@@ -2470,6 +2735,7 @@ impl Sema<'_> {
                     unsigned,
                     fixed: underlying.is_some(),
                     complete: true,
+                    list,
                 },
             );
         }
@@ -2478,6 +2744,150 @@ impl Sema<'_> {
         }
         self.enum_unsigned[spec_id.index()] = Some(unsigned);
         Ok(ty)
+    }
+
+    /// What makes a second definition of an `enum` tag a different type from
+    /// the first, or `None` when C23 makes the two one (6.2.7p1, N3037).
+    ///
+    /// An empty string is "they are different and there is nothing useful to
+    /// say about how", which is every case this cannot answer: an entry point
+    /// that kept no list, or an enumerator whose value will not fold.
+    ///
+    /// The correspondence is by *name* rather than by position. 6.2.7p1 asks
+    /// for "a one-to-one correspondence between their members" and requires the
+    /// same order only of structures, so `enum E { A = 1, B = 2 }` and
+    /// `enum E { B = 2, A = 1 }` are one type — which is what `C23/n3037_1.c`
+    /// writes and what GCC accepts.
+    fn enum_difference(
+        &mut self,
+        list: Option<u32>,
+        ty: Ty,
+        fixed: bool,
+        underlying: Option<Ty>,
+        enumerators: &[ast::Enumerator],
+    ) -> Option<String> {
+        // 6.2.7p1's first requirement: a fixed underlying type on one is the
+        // same fixed underlying type on the other.
+        match (fixed, underlying) {
+            (true, Some(again)) if again != ty => {
+                return Some(format!(
+                    "the underlying type is '{}' here and '{}' in the first definition",
+                    self.tyname(again),
+                    self.tyname(ty)
+                ));
+            }
+            (true, None) => {
+                return Some(
+                    "the first definition gave it a fixed underlying type and this one \
+                     does not"
+                        .to_owned(),
+                );
+            }
+            (false, Some(_)) => {
+                return Some(
+                    "this definition gives it a fixed underlying type and the first one \
+                     does not"
+                        .to_owned(),
+                );
+            }
+            _ => {}
+        }
+        let Some(first) = list.and_then(|list| self.enum_lists.get(list as usize).cloned()) else {
+            return Some(String::new());
+        };
+        let Some(again) = self.enumerator_values(enumerators) else {
+            return Some(String::new());
+        };
+        if first.len() != again.len() {
+            return Some(format!(
+                "the first definition has {} and this one has {}",
+                enumerator_count(first.len()),
+                enumerator_count(again.len())
+            ));
+        }
+        for (name, value) in &again {
+            match first.iter().find(|(first, _)| first == name) {
+                Some((_, first)) if first == value => {}
+                Some((_, first)) => {
+                    return Some(format!(
+                        "enumerator '{name}' is {value} here and {first} in the first \
+                         definition"
+                    ));
+                }
+                None => {
+                    return Some(format!(
+                        "the first definition has no enumerator named '{name}'"
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// The `(name, value)` of every enumerator in a list, without declaring
+    /// any of them — C99 6.7.2.2p3's sequence, evaluated only to be compared.
+    ///
+    /// `None` when a value will not fold, which the caller reads as "these two
+    /// definitions cannot be shown to agree".
+    fn enumerator_values(
+        &mut self,
+        enumerators: &[ast::Enumerator],
+    ) -> Option<Vec<(String, i128)>> {
+        let mut values = Vec::with_capacity(enumerators.len());
+        let mut next = 0i128;
+        for enumerator in enumerators {
+            let value = match &enumerator.value {
+                Some(expr) => {
+                    let value = self.expr(expr)?;
+                    if !value.ty.is_integer() {
+                        return None;
+                    }
+                    match self.const_eval_at(&value, "enumerator value") {
+                        Some(ir::ConstValue::Int(value)) => value,
+                        _ => return None,
+                    }
+                }
+                None => next,
+            };
+            next = value.wrapping_add(1);
+            values.push((enumerator.name.name.clone(), value));
+        }
+        Some(values)
+    }
+}
+
+/// "one enumerator" or "three enumerators", for the same diagnostic.
+fn enumerator_count(count: usize) -> String {
+    if count == 1 {
+        "one enumerator".to_owned()
+    } else {
+        format!("{count} enumerators")
+    }
+}
+
+/// "one member" or "three members", for the redefinition diagnostic.
+fn members(count: usize) -> String {
+    if count == 1 {
+        "one member".to_owned()
+    } else {
+        format!("{count} members")
+    }
+}
+
+/// How the alignment `_Alignas` gave a record reads in that diagnostic.
+fn alignment(align: Option<u64>) -> String {
+    match align {
+        Some(align) => format!("{align}"),
+        None => "the type's own".to_owned(),
+    }
+}
+
+/// How `__attribute__((packed))` or `#pragma pack(N)` reads in it.
+fn packing(packed: Option<u64>) -> String {
+    match packed {
+        Some(1) => "packed".to_owned(),
+        Some(bytes) => format!("packed to {bytes} bytes"),
+        None => "unpacked".to_owned(),
     }
 }
 

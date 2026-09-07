@@ -71,6 +71,7 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("string.h", include_str!("../include/string.h")),
     ("strings.h", include_str!("../include/strings.h")),
     ("sys/types.h", include_str!("../include/sys/types.h")),
+    ("threads.h", include_str!("../include/threads.h")),
     ("time.h", include_str!("../include/time.h")),
     ("uchar.h", include_str!("../include/uchar.h")),
     ("unistd.h", include_str!("../include/unistd.h")),

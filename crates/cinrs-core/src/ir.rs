@@ -797,6 +797,21 @@ impl Types {
         &self.records
     }
 
+    /// Generates no item for any tag added since there were `mark` of them.
+    ///
+    /// What this is for is C23's repeated definition of one tag (N3037): the
+    /// second member list has to be *resolved* to be compared with the first,
+    /// and everything that resolving it created — the tag itself, and any
+    /// anonymous member of it — is then a duplicate of something the first
+    /// definition already generated. The type the program sees is the first
+    /// one; these are left in the arena, unreferenced and unemitted, because
+    /// removing them would move every [`RecordId`] after them.
+    pub fn suppress_records_from(&mut self, mark: usize) {
+        for def in &mut self.records[mark..] {
+            def.emit = false;
+        }
+    }
+
     /// An `enum` definition.
     ///
     /// # Panics

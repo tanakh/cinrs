@@ -280,6 +280,14 @@ enum TagEntry {
         /// Whether an enumerator list has been seen. GNU allows `enum e;`
         /// before one, which C99 does not have at all.
         complete: bool,
+        /// The list that was seen, as an index into [`Sema::enum_lists`], for
+        /// the C23 rule that a second definition of one tag in one scope
+        /// declares the same type when its enumerators agree (N3037).
+        ///
+        /// `None` until the list is seen, and `None` for ever in the entry
+        /// points that have no such rule — nothing else reads it, so nothing
+        /// else pays for it.
+        list: Option<u32>,
     },
 }
 
@@ -471,6 +479,16 @@ struct Sema<'a> {
     /// for good. `Ty` cannot carry the answer — a block-scope enumeration is
     /// `int` here, and `int` is complete — so the *occurrence* records it.
     enum_incomplete: Vec<Option<String>>,
+    /// The enumerator list of every `enum` tag that has been defined, as
+    /// `(name, value)` pairs in declaration order, indexed by
+    /// [`TagEntry::Enum::list`].
+    ///
+    /// C23 (N3037) made a second definition of one tag in one scope declare
+    /// the *same type* when its enumerators agree with the first's, so the
+    /// first's have to be kept to be compared with. Only a definition adds one
+    /// — a `struct` keeps its members in [`ir::RecordDef`] and needs nothing
+    /// here.
+    enum_lists: Vec<Vec<(String, i128)>>,
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
@@ -696,6 +714,7 @@ impl<'a> Sema<'a> {
             enum_by_spec: vec![None; unit.enums.len()],
             enum_unsigned: vec![None; unit.enums.len()],
             enum_incomplete: vec![None; unit.enums.len()],
+            enum_lists: Vec::new(),
             defined_functions: HashSet::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
@@ -1143,20 +1162,32 @@ impl<'a> Sema<'a> {
     /// *identity*.
     ///
     /// The arena hash-conses every derived type and [`Ty`] carries no top-level
-    /// qualifiers, so `a == b` already answers the question for everything but
-    /// the one case C23 removed: a function type with no prototype
-    /// (6.7.5.3p15). Keeping the difference this narrow is deliberate — an
-    /// enumerated type is compatible with an implementation-defined integer
-    /// type too, and opening that here would change what `_Generic` selects.
+    /// qualifiers, so `a == b` already answers the question for all but two
+    /// cases: a function type with no prototype (6.7.5.3p15), which C23
+    /// removed, and — in C23 — two tags of one name from two scopes, which
+    /// 6.2.7p1 makes compatible when their members are (N3037). Keeping the
+    /// difference this narrow is deliberate — an enumerated type is compatible
+    /// with an implementation-defined integer type too, and opening *that*
+    /// here would change what `_Generic` selects.
     fn compatible(&self, a: Ty, b: Ty) -> bool {
+        self.compatible_in(a, b, &mut Vec::new())
+    }
+
+    /// [`Sema::compatible`], carrying the pairs of tags the comparison is
+    /// already inside; see [`Sema::record_difference`].
+    ///
+    /// The list is empty for all but a `struct` or `union` comparison, and
+    /// `Vec::new` allocates nothing, so the guard costs nothing where there is
+    /// nothing to guard against.
+    fn compatible_in(&self, a: Ty, b: Ty, comparing: &mut Vec<(RecordId, RecordId)>) -> bool {
         if a == b {
             return true;
         }
         match (a, b) {
-            (Ty::Func(x), Ty::Func(y)) => self.func_compatible(x, y),
+            (Ty::Func(x), Ty::Func(y)) => self.func_compatible(x, y, comparing),
             (Ty::Pointer(x), Ty::Pointer(y)) => {
                 let (x, y) = (self.types().pointer_type(x), self.types().pointer_type(y));
-                x.konst == y.konst && self.compatible(x.pointee, y.pointee)
+                x.konst == y.konst && self.compatible_in(x.pointee, y.pointee, comparing)
             }
             // C99 6.7.5.2p6: compatible element types, and equal sizes only
             // when *both* have one. `extern int j[]; int j[3];` declares one
@@ -1166,11 +1197,48 @@ impl<'a> Sema<'a> {
                 let (x, y) = (self.types().array_type(x), self.types().array_type(y));
                 x.elem_const == y.elem_const
                     && x.vla == y.vla
-                    && self.compatible(x.elem, y.elem)
+                    && self.compatible_in(x.elem, y.elem, comparing)
                     && (x.incomplete || y.incomplete || x.len == y.len)
             }
+            (Ty::Record(x), Ty::Record(y)) => self.records_compatible(x, y, comparing),
             _ => false,
         }
+    }
+
+    /// C23 6.2.7p1 (N3037) for two `struct` or `union` tags: same tag name,
+    /// both complete, and a member list the other's agrees with.
+    ///
+    /// A tag belongs to the scope it was declared in, so one `struct S` inside
+    /// a block and another at file scope have always been two types here — and
+    /// two *incompatible* types, since compatibility was tag identity. C23
+    /// made them compatible when they are spelled alike, which is the rule
+    /// that was already true across translation units brought inside one.
+    ///
+    /// Two things it deliberately does not do. An **anonymous** record is
+    /// never compatible with another: with no tag there is nothing to say the
+    /// two spellings were meant to be one type, and C23's rule is written
+    /// around the tag. And compatibility is not *identity*: the two are still
+    /// two Rust items, so `_Generic`, `__builtin_types_compatible_p` and a
+    /// pointer assignment see the rule, while assigning one whole `struct` to
+    /// the other still wants the same tag.
+    fn records_compatible(
+        &self,
+        x: RecordId,
+        y: RecordId,
+        comparing: &mut Vec<(RecordId, RecordId)>,
+    ) -> bool {
+        if self.gating.standard < crate::Standard::C23 {
+            return false;
+        }
+        let types = self.types();
+        let (a, b) = (types.record(x), types.record(y));
+        let (Some(tag), Some(other)) = (&a.tag, &b.tag) else {
+            return false;
+        };
+        if tag != other || a.kind != b.kind || !a.complete || !b.complete {
+            return false;
+        }
+        self.record_difference(x, y, comparing).is_none()
     }
 
     /// C99 6.7.5.3p15 for two function types.
@@ -1182,9 +1250,14 @@ impl<'a> Sema<'a> {
     /// unharmed. GCC enforces the same rule, and says so
     /// ("an argument type that has a default promotion cannot match an empty
     /// parameter name list declaration").
-    fn func_compatible(&self, x: ir::FuncTyId, y: ir::FuncTyId) -> bool {
+    fn func_compatible(
+        &self,
+        x: ir::FuncTyId,
+        y: ir::FuncTyId,
+        comparing: &mut Vec<(RecordId, RecordId)>,
+    ) -> bool {
         let (x, y) = (self.types().func_type(x), self.types().func_type(y));
-        if !self.compatible(x.ret, y.ret) {
+        if !self.compatible_in(x.ret, y.ret, comparing) {
             return false;
         }
         match (x.prototyped, y.prototyped) {
@@ -1195,7 +1268,7 @@ impl<'a> Sema<'a> {
                     && x.params
                         .iter()
                         .zip(&y.params)
-                        .all(|(a, b)| self.compatible(*a, *b))
+                        .all(|(a, b)| self.compatible_in(*a, *b, comparing))
             }
             _ => {
                 let prototyped = if x.prototyped { x } else { y };

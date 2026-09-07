@@ -712,7 +712,7 @@ fn the_wide_character_limits_survive_both_headers() {
 
 use std::str::FromStr;
 
-use cinrs_core::{Level, Options, Standard, TargetModel, analyze, include, sema};
+use cinrs_core::{Env, Level, Options, Os, Standard, TargetModel, analyze, include, sema};
 use proc_macro2::TokenStream;
 
 /// The models the branches inside the headers choose between.
@@ -732,6 +732,26 @@ const MODELS: &[&str] = &[
 /// The POSIX headers, which say so with an `#error` on a Windows target.
 const POSIX_ONLY: &[&str] = &["fcntl.h", "strings.h", "unistd.h"];
 
+/// The headers that model a *C library* rather than only a data model, and so
+/// refuse on every target whose library they do not know.
+///
+/// `<threads.h>` is the only one: the C11 thread objects are blocks of bytes
+/// whose size belongs to the library, and it knows glibc's and musl's, both on
+/// Linux. Apple and Windows have no such header at all, and a target with no
+/// operating system has no threads; each is an `#error` naming the reason.
+const LIBC_ONLY: &[(&str, &str)] = &[("threads.h", "<threads.h>")];
+
+/// Whether the C library `model` names is one the headers in [`LIBC_ONLY`]
+/// know: glibc or musl, both on Linux.
+///
+/// Asked of the target model rather than of the triple's spelling, so that a
+/// Linux triple naming a *third* library — `aarch64-linux-android` — comes out
+/// as "not modelled", which is what the header says of it.
+fn libc_is_modelled(model: &str) -> bool {
+    let target = TargetModel::from_triple(model).expect("a model this crate knows");
+    target.os == Os::Linux && matches!(target.env, Env::Gnu | Env::Musl)
+}
+
 /// The headers that are an `#error` on purpose.
 ///
 /// `<setjmp.h>` always: `setjmp`/`longjmp` have no translation, and a header
@@ -748,7 +768,12 @@ fn feature_refusal(name: &str) -> Option<&'static str> {
 /// Every diagnostic including `name` alone raises, for `model`.
 fn header_errors(name: &str, model: &str) -> Vec<String> {
     let target = TargetModel::from_triple(model).expect("a model this crate knows");
-    let options = Options::gnu(Standard::C23).for_target(target);
+    header_errors_with(name, &Options::gnu(Standard::C23).for_target(target))
+}
+
+/// Every diagnostic including `name` alone raises, under `options`.
+fn header_errors_with(name: &str, options: &Options) -> Vec<String> {
+    let options = options.clone();
     let source = format!("#include <{name}>\n");
     let literal = format!("r#####\"{source}\"#####");
     let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
@@ -790,7 +815,17 @@ fn every_bundled_header_compiles_alone_for_every_model() {
                 .find(|(header, _)| header == name)
                 .map(|(_, message)| *message)
                 .or_else(|| feature_refusal(name))
-                .or_else(|| (windows && POSIX_ONLY.contains(name)).then_some("POSIX"));
+                .or_else(|| (windows && POSIX_ONLY.contains(name)).then_some("POSIX"))
+                .or_else(|| {
+                    (!libc_is_modelled(model))
+                        .then(|| {
+                            LIBC_ONLY
+                                .iter()
+                                .find(|(header, _)| header == name)
+                                .map(|(_, message)| *message)
+                        })
+                        .flatten()
+                });
             if let Some(expected) = refused {
                 assert!(
                     errors.iter().any(|e| e.contains(expected)),
@@ -799,6 +834,38 @@ fn every_bundled_header_compiles_alone_for_every_model() {
                 continue;
             }
             assert!(errors.is_empty(), "<{name}> alone for {model}: {errors:?}");
+        }
+    }
+}
+
+/// `<threads.h>` alone, in every *entry point* rather than every model.
+///
+/// It is the one bundled header that declares a `long long` member — the
+/// alignment carrier of `cnd_t`, which is glibc's own choice — and `long long`
+/// is C99's, so the `__extension__` in front of it is what has to make a
+/// `c89!` block take it. The header's own branches are the model sweep's
+/// business; this is about the entry point, which is why it runs only where
+/// the header declares anything at all.
+#[test]
+fn threads_h_compiles_in_every_entry_point() {
+    let host = TargetModel::host();
+    if !(host.os == Os::Linux && matches!(host.env, Env::Gnu | Env::Musl)) {
+        println!("<threads.h> is an #error on this host: nothing to compile");
+        return;
+    }
+    for standard in [
+        Standard::C89,
+        Standard::C99,
+        Standard::C11,
+        Standard::C17,
+        Standard::C23,
+    ] {
+        for options in [Options::new(standard), Options::gnu(standard)] {
+            let errors = header_errors_with("threads.h", &options);
+            assert!(
+                errors.is_empty(),
+                "<threads.h> alone in {standard:?}: {errors:?}"
+            );
         }
     }
 }

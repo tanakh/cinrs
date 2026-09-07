@@ -183,7 +183,7 @@ use crate::include;
 use crate::lex::{
     self, IntLit, Keyword, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind,
 };
-use crate::target::{TargetModel, TargetSource};
+use crate::target::{Env, Os, TargetModel, TargetSource};
 use crate::{Dialect, Gating, Options, Standard};
 
 // ---------------------------------------------------------------------------
@@ -4459,16 +4459,20 @@ impl Pp<'_> {
         }
         self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
-        // implementation a macro to say it left each one out. Threads are
-        // always one of them here; complex arithmetic is one only when the
-        // `complex` feature is off, in which case `_Complex` is a diagnostic
-        // and saying so turns the gap into a conforming omission that a
-        // portable program can take the other branch on. The other two are
-        // *not* among them: `_Atomic`, `<stdatomic.h>` and the `__atomic_*`
-        // builtins are all here, and so are variable length arrays and the
-        // variably modified types built on them — `int a[n][m]`, `int (*p)[n]`,
-        // `typedef int T[n]` and the parameter forms — so neither
-        // `__STDC_NO_ATOMICS__` nor `__STDC_NO_VLA__` is defined.
+        // implementation a macro to say it left each one out. Two of them
+        // depend on how this expansion was configured rather than on the
+        // crate: complex arithmetic is absent when the `complex` feature is
+        // off, in which case `_Complex` is a diagnostic and saying so turns
+        // the gap into a conforming omission that a portable program can take
+        // the other branch on; threads are absent on the targets whose C
+        // library `<threads.h>` does not model, where that header is an
+        // `#error` and the macro is what a program tests instead of hitting
+        // it. The other two are *not* among them: `_Atomic`,
+        // `<stdatomic.h>` and the `__atomic_*` builtins are all here, and so
+        // are variable length arrays and the variably modified types built on
+        // them — `int a[n][m]`, `int (*p)[n]`, `typedef int T[n]` and the
+        // parameter forms — so neither `__STDC_NO_ATOMICS__` nor
+        // `__STDC_NO_VLA__` is defined.
         //
         // `__STDC_IEC_559_COMPLEX__` is never defined either way: it claims
         // the whole of Annex G, and cinrs implements G.5.1's arithmetic
@@ -4476,7 +4480,9 @@ impl Pp<'_> {
         if !options.complex {
             self.define_object("__STDC_NO_COMPLEX__", "1");
         }
-        self.define_object("__STDC_NO_THREADS__", "1");
+        if !threads_available(&options.target) {
+            self.define_object("__STDC_NO_THREADS__", "1");
+        }
         self.define_atomic_macros(options.target.max_scalar_align.min(8));
         // C11 7.28p2: these two say that `char16_t` and `char32_t` really are
         // UTF-16 and UTF-32, which is what the lexer encodes `u"…"` and `U"…"`
@@ -4650,6 +4656,20 @@ impl Pp<'_> {
             }),
         );
     }
+}
+
+/// Whether the bundled `<threads.h>` declares anything on this target, which
+/// is what decides `__STDC_NO_THREADS__` (C11 6.10.8.3).
+///
+/// The C11 thread types are blocks of bytes whose size belongs to the C
+/// library rather than to C, so the header models the two libraries whose
+/// layouts it knows — glibc and musl, both on Linux — and refuses everywhere
+/// else: Apple's libSystem and the Microsoft UCRT have no `<threads.h>` at
+/// all, and the BSDs, bionic and uClibc each lay the objects out their own
+/// way. Where it refuses, the macro says so, which is what lets a portable
+/// program take the other branch instead of hitting the `#error`.
+fn threads_available(target: &TargetModel) -> bool {
+    target.os == Os::Linux && matches!(target.env, Env::Gnu | Env::Musl)
 }
 
 /// The target description macros, every one of them derived from `target`.
