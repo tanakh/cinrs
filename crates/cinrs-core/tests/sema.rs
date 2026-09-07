@@ -1190,14 +1190,30 @@ fn va_list_may_only_be_a_local_or_a_parameter() {
         "va_list f(int n, ...);",
         &["va_list is only supported as a local variable or parameter"],
     );
+    // A `va_list *` is a raw pointer, and a raw pointer may carry a lifetime
+    // that only a *local* or a parameter can leave elided: nothing else may.
     va_rejected(
-        "int f(va_list *ap);",
-        &["pointers to va_list are not supported yet"],
+        "struct S { va_list *ap; };",
+        &["va_list is only supported as a local variable or parameter"],
     );
+    va_rejected(
+        "va_list *shared;",
+        &["va_list is only supported as a local variable or parameter"],
+    );
+    va_rejected(
+        "int f(int n, ...) { static va_list *ap; return 0; }",
+        &["va_list is only supported as a local variable or parameter"],
+    );
+    va_rejected(
+        "va_list *f(int n, ...);",
+        &["va_list is only supported as a local variable or parameter"],
+    );
+    // The address of a list is an ordinary `&`, and a mismatched pointer type
+    // is diagnosed as one.
     va_rejected(
         "void g(int *p);
          int f(int n, ...) { va_list ap; va_start(ap, n); g(&ap); return 0; }",
-        &["pointers to va_list are not supported yet"],
+        &["passing 'va_list *' to parameter 1 of 'g', of incompatible type 'int *'"],
     );
     va_rejected(
         "int f(int n, ...) { return sizeof(va_list); }",

@@ -65,7 +65,7 @@ error: '_Alignas' requires C11 or later (this block is c99!)
 47 |         _Alignas(16) int values[len];
    |         ^^^^^^^^
 
-error: an alignment specifier on an object is not supported yet; '_Alignas' and '__attribute__((aligned))' are honoured on the members of a struct or union, where the generated Rust type can carry the alignment
+error: an alignment specifier is not supported on a variable length array; its storage is allocated at run time and carries the alignment of the element type
   --> tests/ui/sema_vla_errors.rs:47:9
    |
 47 |         _Alignas(16) int values[len];

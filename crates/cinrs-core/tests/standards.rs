@@ -313,19 +313,76 @@ fn alignas_is_honoured_on_a_member() {
          int f(void) { return __builtin_offsetof(struct S, a) == 16 \
                            && sizeof(struct S) == 32; }",
     );
-    rejected(
+    accepted(
         Standard::C11,
-        "_Alignas(16) int global;",
-        &[
-            "an alignment specifier on an object is not supported yet; '_Alignas' and \
-           '__attribute__((aligned))' are honoured on the members of a struct or union, \
-           where the generated Rust type can carry the alignment",
-        ],
+        "_Alignas(16) int global;\nint f(void) { return _Alignof global == 16; }",
     );
     rejected(
         Standard::C11,
         "struct S { _Alignas(3) int a; };",
         &["the requested alignment 3 is not a power of two"],
+    );
+}
+
+#[test]
+fn alignas_is_honoured_on_an_object() {
+    // Automatic, `static`, file-scope and thread-local objects can all carry
+    // one; the wrapper the binding gets is the same in every case.
+    accepted(
+        Standard::C11,
+        "_Alignas(64) char file_scope[8];\n\
+         int f(void) { _Alignas(32) int local = 1; static _Alignas(16) double s; \
+                       return local + (int) s; }",
+    );
+    // `_Alignas(T)` asks for the alignment of a type.
+    accepted(
+        Standard::C11,
+        "int f(void) { _Alignas(double) char b[3]; return _Alignof b; }",
+    );
+    // The strictest of several specifiers wins (6.7.5p6).
+    accepted(
+        Standard::C11,
+        "int f(void) { _Alignas(4) _Alignas(32) char b[3]; return _Alignof b == 32; }",
+    );
+    // Weaker than the type's own alignment is a constraint violation.
+    rejected(
+        Standard::C11,
+        "_Alignas(2) int weak;",
+        &["the requested alignment 2 is weaker than the alignment 4 that 'int' already has"],
+    );
+    // The other three declarations C11 6.7.5p2 forbids it in. GCC's `aligned`
+    // attribute *is* allowed on a `typedef` and on a function, and each has an
+    // answer of its own.
+    rejected(
+        Standard::C11,
+        "_Alignas(16) typedef int aligned_int;",
+        &["an alignment specifier is not allowed on a 'typedef'"],
+    );
+    rejected(
+        Standard::C11,
+        "_Alignas(16) void f(void);",
+        &["an alignment specifier is not allowed on a function"],
+    );
+    rejected(
+        Standard::C11,
+        "void f(_Alignas(16) int x);",
+        &[
+            "an alignment specifier is not allowed on a parameter; the argument is placed \
+             by the calling convention",
+        ],
+    );
+    rejected(
+        Standard::C11,
+        "int f(void) { register _Alignas(16) int x; return x; }",
+        &["an alignment specifier is not allowed on an object declared 'register'"],
+    );
+    rejected(
+        Standard::C11,
+        "int f(int n) { _Alignas(16) int a[n]; return a[0]; }",
+        &[
+            "an alignment specifier is not supported on a variable length array; its storage \
+             is allocated at run time and carries the alignment of the element type",
+        ],
     );
 }
 

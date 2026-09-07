@@ -1,0 +1,52 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int interp(int n) {\n            static void *table[] = { &&add, &&done };\n            int total = 0;\n            int i = 0;\n            goto *table[i];\n        add:\n            total += n;\n            i = 1;\n            goto *table[i];\n        done:\n            return total;\n        }\n        \")"
+---
+mod __cinrs_unit_33d25611 {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    static mut __cinrs_static_33d25611_interp_table: [*mut ::core::ffi::c_void; 2] = [
+        1usize as *mut ::core::ffi::c_void,
+        2usize as *mut ::core::ffi::c_void,
+    ];
+    #[allow(…)]
+    pub unsafe extern "C" fn interp(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut total: ::core::ffi::c_int = 0;
+            let mut i: ::core::ffi::c_int = 0;
+            let mut __cinrs_state: ::core::primitive::u32 = 0;
+            'cfg: loop {
+                match __cinrs_state {
+                    0 => {
+                        total = 0;
+                        i = 0;
+                        __cinrs_state = ({
+                            let __cinrs_tmp0 = (&raw mut __cinrs_static_33d25611_interp_table)
+                                .cast::<*mut ::core::ffi::c_void>()
+                                .offset(i as ::core::primitive::isize);
+                            (*__cinrs_tmp0)
+                        }) as ::core::primitive::usize as ::core::primitive::u32;
+                        continue 'cfg;
+                    }
+                    1 => {
+                        total = total.wrapping_add(n);
+                        i = 1;
+                        __cinrs_state = ({
+                            let __cinrs_tmp1 = (&raw mut __cinrs_static_33d25611_interp_table)
+                                .cast::<*mut ::core::ffi::c_void>()
+                                .offset(i as ::core::primitive::isize);
+                            (*__cinrs_tmp1)
+                        }) as ::core::primitive::usize as ::core::primitive::u32;
+                        continue 'cfg;
+                    }
+                    2 => {
+                        return total;
+                    }
+                    _ => ::core::unreachable!(),
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_33d25611::*;

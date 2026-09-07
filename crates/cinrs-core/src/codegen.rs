@@ -7,10 +7,12 @@
 //!
 //! # Shape of the output
 //!
-//! One expansion produces, in this order: the `struct` and `union` items for
-//! every tag, the `enum` aliases and their constants, the file-scope `typedef`
-//! aliases, one `extern` block for everything the unit only declares, the
-//! `static mut` items, and finally the functions. A C function becomes
+//! One expansion produces, in this order: the alignment wrappers an
+//! over-aligned object needs, the `struct` and `union` items for every tag and
+//! the flexible-array companions that go with them, the `enum` aliases and
+//! their constants, the file-scope `typedef` aliases, one `extern` block for
+//! everything the unit only declares, the `static mut` items, and finally the
+//! functions. A C function becomes
 //!
 //! ```text
 //! #[allow(…)]
@@ -467,6 +469,36 @@ fn rust_spelling(name: &str) -> std::borrow::Cow<'_, str> {
 /// panicking at run time if it is ever reached is a perfectly good answer to
 /// undefined behaviour, and is what the same code already does when the
 /// divisor is only zero at run time.
+/// The label a [label address](ir::ExprKind::LabelAddr) names, through any
+/// conversions around it.
+fn label_state(expr: &Expr) -> Option<ir::LabelId> {
+    match &expr.kind {
+        ExprKind::LabelAddr(id) => Some(*id),
+        ExprKind::Cast(inner) => label_state(inner),
+        _ => None,
+    }
+}
+
+/// The name of the wrapper type an object aligned to `align` is generated
+/// inside; see [`Codegen::align_wrapper_items`].
+fn align_wrapper_ident(align: u64, span: Span) -> Ident {
+    Ident::new(&format!("__cinrs_align_{align}"), span)
+}
+
+/// The name of the companion type a record whose flexible array member holds
+/// `len` elements is generated under; see [`Codegen::flexible_items`].
+fn flexible_ident(rust_name: &str, len: u64, span: Span) -> Ident {
+    c_ident(&format!("__cinrs_{rust_name}_{len}"), span)
+}
+
+/// The length of an array type, or `None` for anything else.
+fn array_len(types: &ir::Types, ty: Ty) -> Option<u64> {
+    match ty {
+        Ty::Array(id) => Some(types.array_type(id).len),
+        _ => None,
+    }
+}
+
 /// The name of a unit's `cleanup` drop guard type, in this crate's own
 /// hygiene: nothing a C program can write reaches it.
 fn cleanup_guard_ty() -> Ident {
@@ -636,6 +668,8 @@ enum VaSource {
     Ellipsis,
     /// The function's own `va_list` parameter.
     Param(ir::ObjectId),
+    /// The function's own `va_list *` parameter, whose *pointee* is the list.
+    PtrParam(ir::ObjectId),
 }
 
 struct Codegen<'a> {
@@ -677,6 +711,15 @@ struct Codegen<'a> {
     uses_complex: Cell<bool>,
     /// Whether anything in the unit needs the `cleanup` drop guard item.
     uses_cleanup: Cell<bool>,
+    /// The state number of every label a `&&label` took the address of, over
+    /// the whole unit.
+    ///
+    /// A [`ir::LabelId`] is unique across the translation unit, which is what
+    /// makes one map enough: a block-scope `static void *table[] = { &&a };`
+    /// becomes an item at module level and is generated before any function
+    /// body, so the number cannot be looked up in the function being emitted.
+    /// See [`Cfg::labels`].
+    label_states: HashMap<ir::LabelId, u32>,
 }
 
 impl<'a> Codegen<'a> {
@@ -693,6 +736,14 @@ impl<'a> Codegen<'a> {
         for constant in &program.enum_constants {
             reserved.insert(constant.rust_name.clone());
         }
+        let mut label_states = HashMap::new();
+        for func in &program.functions {
+            if let Some(ir::Body::Cfg(cfg)) = &func.body {
+                for (id, block) in &cfg.labels {
+                    label_states.insert(*id, block.0);
+                }
+            }
+        }
         Self {
             program,
             map,
@@ -708,6 +759,7 @@ impl<'a> Codegen<'a> {
             uses_int128: Cell::new(false),
             uses_complex: Cell::new(false),
             uses_cleanup: Cell::new(false),
+            label_states,
         }
     }
 
@@ -972,13 +1024,14 @@ impl<'a> Codegen<'a> {
 
     /// The `struct`, `union`, `enum` and `typedef` items of the unit.
     fn type_items(&mut self) -> TokenStream {
-        let mut out = TokenStream::new();
+        let mut out = self.align_wrapper_items();
         for record in self.program.types.records() {
             if !record.emit {
                 continue;
             }
             out.extend(self.record_item(record));
         }
+        out.extend(self.flexible_items());
         for def in self.program.types.enums() {
             if !def.emit {
                 continue;
@@ -1017,9 +1070,102 @@ impl<'a> Codegen<'a> {
         out
     }
 
+    /// The `#[repr(C, align(N))]` wrappers the unit's over-aligned objects are
+    /// generated inside, one per distinct alignment.
+    ///
+    /// Rust can over-align a *type* and nothing else, so an object an
+    /// `_Alignas(64)` made stricter than its type becomes
+    ///
+    /// ```text
+    /// #[repr(C, align(64))] #[derive(Copy, Clone)]
+    /// pub struct __cinrs_align_64<T>(pub T);
+    ///
+    /// let mut buf: __cinrs_align_64<[c_char; 256]> = __cinrs_align_64(…);
+    /// ```
+    ///
+    /// and every access to `buf` goes through `buf.0` — which is also how Rust
+    /// code that reaches such an object reads it. The C type is unchanged:
+    /// `sizeof buf` is the array's size, and only the binding knows about the
+    /// wrapper. See [`ir::Object::align`].
+    fn align_wrapper_items(&self) -> TokenStream {
+        let mut wanted: Vec<(u64, SourceRange)> = self
+            .program
+            .objects
+            .iter()
+            .filter_map(|object| Some((object.align?, object.range)))
+            .collect();
+        wanted.sort_by_key(|(align, _)| *align);
+        wanted.dedup_by_key(|(align, _)| *align);
+        let mut out = TokenStream::new();
+        for (align, range) in wanted {
+            let span = self.sp(range);
+            let name = align_wrapper_ident(align, span);
+            let attrs = allow_attr(span);
+            let literal = Literal::u64_unsuffixed(align);
+            out.extend(quote_spanned! {span=>
+                #attrs
+                #[repr(C, align(#literal))]
+                #[derive(Copy, Clone)]
+                pub struct #name<T>(pub T);
+            });
+        }
+        out
+    }
+
+    /// The companion types an object with a filled-in flexible array member
+    /// needs, one per distinct (record, length).
+    ///
+    /// C99 forbids initialising such a member because the object would have to
+    /// be larger than its type; GNU C allows it for an object with static
+    /// storage duration, and this is where that extra room comes from:
+    ///
+    /// ```text
+    /// #[repr(C)] pub struct __cinrs_W_3 { pub n: c_int, pub data: [c_int; 3] }
+    /// pub static mut w: __cinrs_W_3 = __cinrs_W_3 { n: 3, data: [1, 2, 3] };
+    /// ```
+    ///
+    /// The leading layout is the record's own — the same Rust fields, in the
+    /// same order — so `(&raw mut w).cast::<W>()` is a pointer to a `W`, which
+    /// is what every use of the object goes through. `sizeof w` is still
+    /// `sizeof(struct W)`, as it is in GCC. See [`ir::Object::flexible_len`].
+    fn flexible_items(&self) -> TokenStream {
+        let mut wanted: Vec<(ir::RecordId, u64)> = self
+            .program
+            .objects
+            .iter()
+            .filter_map(|object| match (object.flexible_len, object.ty) {
+                (Some(len), Ty::Record(record)) => Some((record, len)),
+                _ => None,
+            })
+            .collect();
+        wanted.sort_unstable_by_key(|(record, len)| (record.0, *len));
+        wanted.dedup_by_key(|(record, len)| (record.0, *len));
+        let mut out = TokenStream::new();
+        for (record, len) in wanted {
+            let def = self.program.types.record(record);
+            let span = self.sp(def.range);
+            let name = flexible_ident(&def.rust_name, len, span);
+            out.extend(self.record_body(def, &name, Some(len)));
+        }
+        out
+    }
+
     fn record_item(&self, record: &ir::RecordDef) -> TokenStream {
         let span = self.sp(record.range);
         let name = c_ident(&record.rust_name, span);
+        let item = self.record_body(record, &name, None);
+        let accessors = self.bit_field_accessors(record, span);
+        quote_spanned! {span=> #item #accessors }
+    }
+
+    /// The `struct` (or `union`) item itself, under `name`.
+    ///
+    /// `tail` sizes the [flexible array member](ir::Field::flexible), which is
+    /// what makes a [companion type](Codegen::flexible_items) differ from the
+    /// record it stands for; `None` is the record as C declared it, whose
+    /// member is the `[T; 0]` the type says it is.
+    fn record_body(&self, record: &ir::RecordDef, name: &Ident, tail: Option<u64>) -> TokenStream {
+        let span = self.sp(record.range);
         let attrs = allow_attr(span);
         // `Copy` is what makes a C struct behave like one: assigning it,
         // passing it and returning it all copy the bytes.
@@ -1061,7 +1207,19 @@ impl<'a> Codegen<'a> {
                     let field = &record.fields[*index];
                     let fspan = self.sp(field.range);
                     let fname = c_ident(&field.name, fspan);
-                    let fty = self.ty(field.ty, fspan);
+                    let fty = match (tail, field.flexible) {
+                        (Some(len), true) => {
+                            let elem = self
+                                .program
+                                .types
+                                .elem(field.ty)
+                                .expect("a flexible member is an array");
+                            let elem = self.ty(elem, fspan);
+                            let len = usize_literal(len, fspan);
+                            bracketed(quote_spanned! {fspan=> #elem ; #len }, fspan)
+                        }
+                        _ => self.ty(field.ty, fspan),
+                    };
                     // Members are `pub` so Rust code can build and read the
                     // value.
                     fields.extend(quote_spanned! {fspan=> pub #fname: #fty, });
@@ -1085,12 +1243,10 @@ impl<'a> Codegen<'a> {
             fields.extend(quote_spanned! {span=> pub __cinrs_empty: [#byte; 0], });
         }
         let body = braced(fields, span);
-        let item = match record.kind {
+        match record.kind {
             RecordKind::Struct => quote_spanned! {span=> #attrs #derives pub struct #name #body },
             RecordKind::Union => quote_spanned! {span=> #attrs #derives pub union #name #body },
-        };
-        let accessors = self.bit_field_accessors(record, span);
-        quote_spanned! {span=> #item #accessors }
+        }
     }
 
     /// The `impl` block holding one getter and one setter per named bit-field.
@@ -1540,8 +1696,9 @@ impl<'a> Codegen<'a> {
             return TokenStream::new();
         };
         let name = c_ident(item_name, span);
-        let ty = self.ty(object.ty, span);
+        let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
+        let init = self.binding_init(var.object, init, span);
         let attrs = allow_attr(span);
         let (vis, export) = if *exported {
             let export = if self.program.export {
@@ -1604,8 +1761,9 @@ impl<'a> Codegen<'a> {
             return TokenStream::new();
         }
         let name = c_ident(item_name, span);
-        let ty = self.ty(object.ty, span);
+        let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
+        let init = self.binding_init(var.object, init, span);
         let attrs = allow_attr(span);
         let vis = if *exported {
             quote_spanned! {span=> pub }
@@ -1942,14 +2100,20 @@ impl<'a> Codegen<'a> {
         self.va_source = if func.sig.variadic {
             VaSource::Ellipsis
         } else {
-            match func
-                .params
+            // A `va_list *` parameter points at the caller's list, which is
+            // what a `va_list` local of this function starts out as — the same
+            // thing a `va_list` parameter is, one indirection further out.
+            func.params
                 .iter()
-                .find(|id| self.program.object(**id).ty.is_va_list())
-            {
-                Some(id) => VaSource::Param(*id),
-                None => VaSource::None,
-            }
+                .find_map(|id| {
+                    let ty = self.program.object(*id).ty;
+                    if ty.is_va_list() {
+                        return Some(VaSource::Param(*id));
+                    }
+                    let pointee = self.program.types.pointee(ty)?;
+                    pointee.is_va_list().then_some(VaSource::PtrParam(*id))
+                })
+                .unwrap_or(VaSource::None)
         };
     }
 
@@ -2003,6 +2167,10 @@ impl<'a> Codegen<'a> {
                 let name = self.object_ident(id, span);
                 quote_spanned! {span=> #name.clone() }
             }
+            VaSource::PtrParam(id) => {
+                let name = self.object_ident(id, span);
+                quote_spanned! {span=> (*#name).clone() }
+            }
             // `VaSource::None` cannot reach codegen: sema refuses a `va_list`
             // that has nothing to copy.
             _ => {
@@ -2010,6 +2178,141 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> #name.clone() }
             }
         }
+    }
+
+    /// The alignment an object's binding has to be wrapped in, if any.
+    ///
+    /// Rust has no way to over-align a binding, so an object an `_Alignas` or
+    /// an `aligned` made stricter than its type is generated inside a
+    /// one-field wrapper that carries the alignment; see
+    /// [`Codegen::align_wrapper_items`] and [`ir::Object::align`].
+    fn object_align(&self, id: ir::ObjectId) -> Option<u64> {
+        self.program.object(id).align
+    }
+
+    /// The type an object's binding is declared with.
+    fn binding_ty(&self, id: ir::ObjectId, ty: TokenStream, span: Span) -> TokenStream {
+        match self.object_align(id) {
+            Some(align) => {
+                let wrapper = align_wrapper_ident(align, span);
+                quote_spanned! {span=> #wrapper<#ty> }
+            }
+            None => ty,
+        }
+    }
+
+    /// The value an object's binding is initialised with.
+    fn binding_init(&self, id: ir::ObjectId, init: TokenStream, span: Span) -> TokenStream {
+        match self.object_align(id) {
+            Some(align) => {
+                let wrapper = align_wrapper_ident(align, span);
+                quote_spanned! {span=> #wrapper(#init) }
+            }
+            None => init,
+        }
+    }
+
+    /// The type an object's *storage* has, which is its own except for the
+    /// [companion](ir::Object::flexible_len) a filled-in flexible array member
+    /// needs.
+    fn storage_ty(&self, id: ir::ObjectId, span: Span) -> TokenStream {
+        let object = self.program.object(id);
+        match (object.flexible_len, object.ty) {
+            (Some(len), Ty::Record(record)) => {
+                let name = flexible_ident(&self.program.types.record(record).rust_name, len, span);
+                quote_spanned! {span=> #name }
+            }
+            _ => self.ty(object.ty, span),
+        }
+    }
+
+    /// The place expression naming an object, reaching through the alignment
+    /// wrapper and the flexible-array companion when the binding has them.
+    fn object_access(&self, id: ir::ObjectId, span: Span) -> TokenStream {
+        let name = self.object_ident(id, span);
+        self.through_storage(id, quote_spanned! {span=> #name }, span)
+    }
+
+    /// Reaches the C object inside the storage its binding really has.
+    ///
+    /// Two wrappers can sit in between, and they compose: the
+    /// [alignment](ir::Object::align) wrapper's one field, and the
+    /// [flexible-array companion](ir::Object::flexible_len), whose leading
+    /// layout is the record's and whose address is therefore a pointer to it.
+    fn through_storage(&self, id: ir::ObjectId, base: TokenStream, span: Span) -> TokenStream {
+        let object = self.program.object(id);
+        let mut access = base;
+        if object.align.is_some() {
+            let field = Literal::usize_unsuffixed(0);
+            access = quote_spanned! {span=> #access.#field };
+        }
+        if object.flexible_len.is_some() {
+            let ty = self.ty(object.ty, span);
+            access = parenthesize(
+                quote_spanned! {span=> *(&raw mut #access).cast::<#ty>() },
+                span,
+            );
+        }
+        access
+    }
+
+    /// Reading a `va_list` copies it: Rust's is not `Copy`, and C says a list
+    /// passed on is indeterminate afterwards anyway.
+    ///
+    /// A `va_list` place is an object of its own or the `*p` of a `va_list *`
+    /// — nothing may keep one as a member — so the only setup there can be is
+    /// the temporary that pointer goes into. Out of line for the same reason
+    /// [`Codegen::label_address`] is.
+    #[inline(never)]
+    fn va_list_load(&mut self, place: &Place, span: Span) -> Value {
+        let lowered = self.place(place, false);
+        let access = lowered.access;
+        let value = Value::new(quote_spanned! {span=> #access.clone() }, prec::CALL);
+        if lowered.setup.is_empty() {
+            return value;
+        }
+        let setup = lowered.setup;
+        let tokens = value.at(prec::LOWEST, span);
+        Value::new(quote_spanned! {span=> { #setup #tokens } }, prec::BLOCK)
+    }
+
+    /// GNU's `&&label`: the state number the label's block was given, cast to
+    /// the pointer type the expression has.
+    ///
+    /// Out of line — like [`Codegen::label_difference`] — because
+    /// [`Codegen::expr_value`] recurses once per operator and every arm's
+    /// locals are part of its frame; see
+    /// `codegen_of_deeply_nested_input_fits_in_a_small_stack`.
+    #[inline(never)]
+    fn label_address(&self, id: ir::LabelId, ty: Ty, span: Span) -> Value {
+        let state = self.label_states.get(&id).copied().unwrap_or(0);
+        let mut literal = Literal::usize_suffixed(state as usize);
+        literal.set_span(span);
+        let target = self.ty(ty, span);
+        Value::new(quote_spanned! {span=> #literal as #target }, prec::CAST).type_end(true)
+    }
+
+    /// GNU's `&&a - &&b`, folded on the two state numbers.
+    #[inline(never)]
+    fn label_difference(&self, lhs: &Expr, rhs: &Expr, ty: Ty, span: Span) -> Value {
+        let left = self.label_state_literal(lhs, span);
+        let right = self.label_state_literal(rhs, span);
+        let target = self.ty(ty, span);
+        Value::new(
+            quote_spanned! {span=> (#left - #right) as #target },
+            prec::CAST,
+        )
+        .type_end(true)
+    }
+
+    /// The state number a [label address](ir::ExprKind::LabelAddr) stands for,
+    /// as an `isize` literal.
+    fn label_state_literal(&self, expr: &Expr, span: Span) -> TokenStream {
+        let id = label_state(expr).expect("a label address");
+        let state = self.label_states.get(&id).copied().unwrap_or(0);
+        let mut literal = Literal::isize_suffixed(state as isize);
+        literal.set_span(span);
+        quote_spanned! {span=> #literal }
     }
 
     /// The Rust name an object is generated under.
@@ -2058,6 +2361,8 @@ impl<'a> Codegen<'a> {
                     self.zero_tokens(object.ty, ospan),
                 )
             };
+            let ty = self.binding_ty(local.object, ty, ospan);
+            let init = self.binding_init(local.object, init, ospan);
             out.extend(quote_spanned! {ospan=> let mut #name: #ty = #init; });
         }
         let state = self.state_ident();
@@ -2098,6 +2403,7 @@ impl<'a> Codegen<'a> {
         match &block.term {
             Terminator::Jump { range, .. }
             | Terminator::Switch { range, .. }
+            | Terminator::IndirectJump { range, .. }
             | Terminator::Return { range, .. } => self.sp(*range),
             Terminator::Branch { cond, .. } => self.sp(cond.range),
             Terminator::Unreachable => fallback,
@@ -2111,6 +2417,21 @@ impl<'a> Codegen<'a> {
             Terminator::Jump { target, range } => {
                 let jump = self.enter_block(*target, self.sp(*range));
                 out.extend(quote_spanned! {span=> #jump continue #label; });
+            }
+            // GNU's computed `goto *e`: the pointer *is* the state number the
+            // label's block was given, so the jump is a store and another turn
+            // round the dispatch. A value that names no block lands on the
+            // `unreachable!()` arm, which is the undefined behaviour C had.
+            Terminator::IndirectJump { target, range, .. } => {
+                let gspan = self.sp(*range);
+                let state = self.state_ident();
+                let pointer = self.expr(target).at(prec::CAST, gspan);
+                let usize_ty = primitive_ty("usize", gspan);
+                let u32_ty = primitive_ty("u32", gspan);
+                out.extend(quote_spanned! {gspan=>
+                    #state = #pointer as #usize_ty as #u32_ty;
+                    continue #label;
+                });
             }
             Terminator::Branch {
                 cond,
@@ -2208,11 +2529,14 @@ impl<'a> Codegen<'a> {
             Stmt::Nop => TokenStream::new(),
             Stmt::Expr(expr) => self.expr_stmt(expr),
             Stmt::Let { object, init, .. } => {
-                let name = self.object_ident(*object, self.sp(self.program.object(*object).range));
-                let object = self.program.object(*object);
+                let id = *object;
+                let name = self.object_ident(id, self.sp(self.program.object(id).range));
+                let object = self.program.object(id);
                 let span = self.sp(object.range);
-                let ty = self.ty(object.ty, span);
-                let init = self.expr_at(init, object.ty);
+                let object_ty = object.ty;
+                let ty = self.binding_ty(id, self.ty(object_ty, span), span);
+                let init = self.expr_at(init, object_ty);
+                let init = self.binding_init(id, init, span);
                 quote_spanned! {span=> let mut #name: #ty = #init; }
             }
             Stmt::Vla(def) => self.vla_def(def),
@@ -2324,7 +2648,9 @@ impl<'a> Codegen<'a> {
             // The CFG lowering consumes these; nothing can jump to a label in
             // the structured mode, so only the statement under it is left.
             Stmt::Label { body, .. } | Stmt::Case { body, .. } => self.stmt(body),
-            Stmt::Goto { .. } => TokenStream::new(),
+            // Both are consumed by the CFG lowering, which is the only mode a
+            // function containing one is generated in.
+            Stmt::Goto { .. } | Stmt::GotoPtr { .. } => TokenStream::new(),
             Stmt::SwitchTree(switch) => self.stmt(&switch.body),
             Stmt::Break { target, range } => {
                 let span = self.sp(*range);
@@ -2485,7 +2811,8 @@ impl<'a> Codegen<'a> {
             | Stmt::Return { range, .. }
             | Stmt::Label { range, .. }
             | Stmt::Case { range, .. }
-            | Stmt::Goto { range, .. } => *range,
+            | Stmt::Goto { range, .. }
+            | Stmt::GotoPtr { range, .. } => *range,
             Stmt::Switch(switch) => switch.range,
             Stmt::SwitchTree(switch) => switch.range,
             Stmt::Block(items) => return items.iter().find_map(|s| self.stmt_range(s)),
@@ -2553,8 +2880,9 @@ impl<'a> Codegen<'a> {
             let object = self.program.object(*id);
             let ospan = self.sp(object.range);
             let name = self.object_ident(*id, ospan);
-            let ty = self.ty(object.ty, ospan);
+            let ty = self.binding_ty(*id, self.ty(object.ty, ospan), ospan);
             let zero = self.zero_tokens(object.ty, ospan);
+            let zero = self.binding_init(*id, zero, ospan);
             hoisted.extend(quote_spanned! {ospan=> let mut #name: #ty = #zero; });
         }
 
@@ -2779,12 +3107,7 @@ impl<'a> Codegen<'a> {
             ExprKind::Zeroed => Value::new(self.zero_tokens(expr.ty, span), zero_prec(expr.ty)),
             // Reading a `va_list` copies it: Rust's is not `Copy`, and C says
             // a list passed on is indeterminate afterwards anyway.
-            ExprKind::Load(place) if place.ty.is_va_list() => {
-                // A `va_list` place is always a plain object — nothing may
-                // point at one or keep one as a member — so it needs no setup.
-                let access = self.place(place, false).access;
-                Value::new(quote_spanned! {span=> #access.clone() }, prec::CALL)
-            }
+            ExprKind::Load(place) if place.ty.is_va_list() => self.va_list_load(place, span),
             ExprKind::Load(place) => {
                 let lowered = self.place(place, false);
                 let value = self.read(&lowered, span);
@@ -2806,6 +3129,11 @@ impl<'a> Codegen<'a> {
                     prec::CALL,
                 )
             }
+            // GNU's `&&label`. The value is the state number the label's block
+            // was given, cast to the pointer type the expression has — which
+            // is what makes `goto *` a store to the state variable, and what
+            // lets a dispatch table be an ordinary array of `void *`.
+            ExprKind::LabelAddr(id) => self.label_address(*id, expr.ty, span),
             ExprKind::Assign { .. } => self.assign_chain(expr),
             ExprKind::CompoundAssign {
                 place,
@@ -2906,6 +3234,16 @@ impl<'a> Codegen<'a> {
                 let base = self.expr(ptr).at(prec::CALL, span);
                 let offset = self.scaled_offset(pointee, index, *sub, span);
                 Value::new(quote_spanned! {span=> #base.offset(#offset) }, prec::CALL)
+            }
+            // GNU's label difference, `&&a - &&b`. Both operands are state
+            // numbers rather than addresses, so the subtraction is done on the
+            // numbers: `offset_from` would want two pointers into one object,
+            // and a `static` table of such differences — which is the whole
+            // idiom — needs an expression a `const` can fold.
+            ExprKind::PtrDiff { lhs, rhs }
+                if label_state(lhs).is_some() && label_state(rhs).is_some() =>
+            {
+                self.label_difference(lhs, rhs, expr.ty, span)
             }
             ExprKind::PtrDiff { lhs, rhs } => {
                 let pointee = self.program.types.pointee(lhs.ty).unwrap_or(Ty::Void);
@@ -3213,7 +3551,24 @@ impl<'a> Codegen<'a> {
     /// literal becomes a block.
     fn record_literal(&mut self, record: ir::RecordId, fields: &[Expr], span: Span) -> Value {
         let def = self.program.types.record(record).clone();
-        let name = c_ident(&def.rust_name, span);
+        // An initialised flexible array member makes the value the *companion*
+        // type's rather than the record's: the tail is as long as the
+        // initialiser, and the member's value carries that length.
+        let tail = def
+            .fields
+            .iter()
+            .position(|field| field.flexible)
+            .and_then(|index| {
+                Some((
+                    index,
+                    array_len(&self.program.types, fields.get(index)?.ty)?,
+                ))
+            })
+            .filter(|(_, len)| *len > 0);
+        let name = match tail {
+            Some((_, len)) => flexible_ident(&def.rust_name, len, span),
+            None => c_ident(&def.rust_name, span),
+        };
         let mut packed: HashMap<String, Vec<u8>> = HashMap::new();
         let mut dynamic: Vec<usize> = Vec::new();
         for rust_field in &def.rust_fields {
@@ -3239,7 +3594,14 @@ impl<'a> Codegen<'a> {
                 ir::RustField::Member(index) => {
                     let field = &def.fields[*index];
                     let fname = c_ident(&field.name, span);
-                    let tokens = self.expr_at(&fields[*index], field.ty);
+                    // The flexible member's value is longer than its own type,
+                    // and the companion's field is what it fills.
+                    let value = &fields[*index];
+                    let want = match tail {
+                        Some((flexible, _)) if flexible == *index => value.ty,
+                        _ => field.ty,
+                    };
+                    let tokens = self.expr_at(value, want);
                     items.extend(quote_spanned! {span=> #fname: #tokens, });
                 }
                 ir::RustField::Bits { name, .. } => {
@@ -4468,7 +4830,7 @@ impl<'a> Codegen<'a> {
                 // The object is the caller's own.
                 None => {
                     let object = self.program.object(entry.owner);
-                    let name = self.object_ident(entry.owner, span);
+                    let name = self.object_access(entry.owner, span);
                     tokens.extend(if object.is_const {
                         quote_spanned! {span=> &raw const #name }
                     } else {
@@ -5386,6 +5748,12 @@ impl<'a> Codegen<'a> {
                     base_align
                 }
             }
+            // An `_Alignas` on the declaration is a promise about the object
+            // that the wrapper really keeps.
+            PlaceKind::Object(id) => self
+                .object_align(*id)
+                .unwrap_or(1)
+                .max(self.type_align(place.ty)),
             _ => self.type_align(place.ty),
         }
     }
@@ -5441,16 +5809,21 @@ impl<'a> Codegen<'a> {
                 let name = self.object_ident(*id, span);
                 let tmp = self.temporary();
                 let cell = Ident::new("__cinrs_cell", Span::mixed_site());
+                // The cell holds whatever wrappers the storage carries, and
+                // the object is reached through them exactly as it is for
+                // every other storage class.
+                let object = parenthesize(quote_spanned! {span=> *#tmp }, span);
+                let object = self.through_storage(*id, object, span);
                 LoweredPlace::plain(
                     quote_spanned! {span=>
                         let #tmp = #name.with(|#cell| ::core::cell::UnsafeCell::get(#cell));
                     },
-                    parenthesize(quote_spanned! {span=> *#tmp }, span),
+                    object,
                 )
             }
             PlaceKind::Object(id) => {
-                let name = self.object_ident(*id, span);
-                LoweredPlace::plain(TokenStream::new(), quote_spanned! {span=> #name })
+                let access = self.object_access(*id, span);
+                LoweredPlace::plain(TokenStream::new(), access)
             }
             PlaceKind::Deref(ptr) => self.deref_place(ptr, place.ty, mutable, span),
             PlaceKind::Index { base, index } => {

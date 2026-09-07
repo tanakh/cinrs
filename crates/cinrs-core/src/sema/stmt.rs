@@ -324,10 +324,33 @@ impl Sema<'_> {
                     }
                 }
                 None => {
-                    self.report_missing_label(label);
+                    self.report_missing_label(label, false);
                     Stmt::Nop
                 }
             },
+            // GNU's computed `goto *e;`. Every label whose address was taken
+            // is a possible target, so there is nothing to check about *which*
+            // one it is — only that the operand is a pointer at all, which is
+            // what GCC asks too.
+            ast::StmtKind::GotoPtr(target) => {
+                let Some(value) = self.expr(target) else {
+                    return Stmt::Nop;
+                };
+                if !value.ty.is_pointer() {
+                    self.error(
+                        target.range,
+                        format!(
+                            "the operand of a computed 'goto' must be a pointer, not '{}'",
+                            self.tyname(value.ty)
+                        ),
+                    );
+                    return Stmt::Nop;
+                }
+                Stmt::GotoPtr {
+                    target: value,
+                    range: stmt.range,
+                }
+            }
             ast::StmtKind::Break => {
                 let target = match self.breakables.last() {
                     Some(Breakable::Loop(id)) => BreakTarget::Loop(*id),
@@ -484,28 +507,53 @@ impl Sema<'_> {
         }
     }
 
-    /// Reports a `goto` whose label this function does not have.
+    /// GNU's `&&label`, whose value is the state number the label stands for.
+    ///
+    /// Taking the address is what *pins* the label: its block keeps a number
+    /// of its own, and is a possible target of every computed `goto` in the
+    /// function. See [`crate::cfg`].
+    pub(super) fn label_address(&mut self, label: &ast::Ident, range: SourceRange) -> Option<Expr> {
+        let Some(entry) = self.labels.get(&label.name) else {
+            self.report_missing_label(label, true);
+            return None;
+        };
+        let id = entry.id;
+        self.label_addrs.insert(id);
+        let ty = self.ptr_to(Ty::Void, false);
+        Some(Expr::new(ExprKind::LabelAddr(id), ty, range))
+    }
+
+    /// Reports a `goto` — or a `&&label` — whose label this function does not
+    /// have.
     ///
     /// When an *enclosing* function has it, the jump is GNU's nonlocal goto:
     /// it unwinds to the enclosing frame, which GCC arranges with the frame
     /// pointer the nested function was handed. Lambda lifting keeps no such
     /// pointer, so the construct is named rather than reported as a label
-    /// nobody wrote.
-    fn report_missing_label(&mut self, label: &ast::Ident) {
+    /// nobody wrote. `&&label` naming an enclosing function's label is the
+    /// same thing one step earlier: GCC lets the address be computed and the
+    /// jump through it is the nonlocal one.
+    fn report_missing_label(&mut self, label: &ast::Ident, taking_address: bool) {
         let nonlocal = self.nest.split_last().is_some_and(|(_, enclosing)| {
             enclosing
                 .iter()
                 .any(|frame| frame.labels.contains(&label.name))
         });
         if nonlocal {
+            let what = if taking_address {
+                format!("'&&{}' names a label of the enclosing function", label.name)
+            } else {
+                format!(
+                    "'goto {}' leaves this nested function for a label of the enclosing one",
+                    label.name
+                )
+            };
             self.error(
                 label.range,
                 format!(
-                    "'goto {}' leaves this nested function for a label of the enclosing one; \
-                     GNU C calls that a nonlocal goto and reaches it through the enclosing \
-                     frame, which cinrs cannot do. Return a value the enclosing function can \
-                     branch on instead",
-                    label.name
+                    "{what}; GNU C calls that a nonlocal goto and reaches it through the \
+                     enclosing frame, which cinrs cannot do. Return a value the enclosing \
+                     function can branch on instead"
                 ),
             );
             return;
@@ -943,13 +991,18 @@ impl Sema<'_> {
     /// Whether a function's body has to be lowered through a control-flow
     /// graph.
     ///
-    /// Two things force it: a `goto`, which Rust has nothing to offer for, and
-    /// a `case` or `default` label that is not a direct child of its `switch`
-    /// body, which the fallthrough-group lowering cannot express. Everything
-    /// else keeps the structured form, whose output reads like the C it came
-    /// from.
-    pub(super) fn needs_cfg(block: &ast::Block) -> bool {
-        block_needs_cfg(block, 0, false)
+    /// Three things force it: a `goto` — computed or not — which Rust has
+    /// nothing to offer for; GNU's `&&label`, whose *value* is the state
+    /// number the label stands for; and a `case` or `default` label that is
+    /// not a direct child of its `switch` body, which the fallthrough-group
+    /// lowering cannot express. Everything else keeps the structured form,
+    /// whose output reads like the C it came from.
+    ///
+    /// The first two are read off the statements, and `&&label` off
+    /// [`ast::FunctionDef::uses_label_addrs`], because it is an expression and
+    /// may stand anywhere one may.
+    pub(super) fn needs_cfg(def: &ast::FunctionDef) -> bool {
+        def.uses_label_addrs || block_needs_cfg(&def.body, 0, false)
     }
 
     /// Evaluates a `case` label and converts it to the switch's type.
@@ -1053,6 +1106,7 @@ fn escaping_jumps(stmt: &ast::Stmt, depth: u32, out: &mut Vec<(SourceRange, Esca
             out.push((stmt.range, Escape::Leaves("a 'continue'")));
         }
         ast::StmtKind::Goto(_) => out.push((stmt.range, Escape::Label("a 'goto'"))),
+        ast::StmtKind::GotoPtr(_) => out.push((stmt.range, Escape::Label("a computed 'goto'"))),
         ast::StmtKind::Labeled { body, .. } => {
             out.push((stmt.range, Escape::Label("a label")));
             escaping_jumps(body, depth, out);
@@ -1127,7 +1181,7 @@ fn block_needs_cfg(block: &ast::Block, switch_depth: u32, at_top: bool) -> bool 
 
 fn stmt_needs_cfg(stmt: &ast::Stmt, switch_depth: u32, at_top: bool) -> bool {
     match &stmt.kind {
-        ast::StmtKind::Goto(_) => true,
+        ast::StmtKind::Goto(_) | ast::StmtKind::GotoPtr(_) => true,
         // A chain of labels on one statement is as much a direct child of the
         // `switch` as the statement itself.
         ast::StmtKind::Case { body, .. }

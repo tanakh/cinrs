@@ -33,8 +33,8 @@ Run it with `cargo run --example fact`.
   published had no such macro; `gnu89!`, `gnu99!`, `gnu11!`, `gnu17!` and
   `gnu23!` are the same five with the
   GNU extensions switched on. `c11!` adds
-  `_Static_assert`, `_Generic`, `_Alignof`, `_Alignas` (on the members of a
-  `struct` or `union`), `_Noreturn` and anonymous `struct`/`union` members;
+  `_Static_assert`, `_Generic`, `_Alignof`, `_Alignas`, `_Noreturn` and
+  anonymous `struct`/`union` members;
   `c17!` is `c11!` with a different version macro; `c23!` adds the keywords C23
   promoted (`bool`, `true`, `false`, `nullptr`, `static_assert`, `alignof`,
   `alignas`, `thread_local`, `constexpr`, `typeof`), `[[…]]` attributes,
@@ -120,7 +120,10 @@ Run it with `cargo run --example fact`.
   `__attribute__((packed))` and `aligned` with the layout GCC gives them,
   `__attribute__((cleanup(f)))` — `f(&x)` on every way out of the scope, which
   is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
-  `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members,
+  `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members
+  (initialised ones included, for an object with static storage duration),
+  **labels as values** — `&&label` and the computed `goto *e`, which fall out
+  of the state machine a jumping function is already lowered into —
   `asm` labels, `constructor`/`destructor`, `__func__`, casts to a union type,
   **nested functions** — lambda-lifted to a private file-scope item that takes
   a pointer to each enclosing local it uses, so a store inside one is visible
@@ -236,7 +239,7 @@ Run it with `cargo run --example fact`.
   (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
   C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
-  the GNU side: inline assembly, computed `goto` and the vector extensions.
+  the GNU side: inline assembly and the vector extensions.
   One of C11's four `__STDC_NO_*` macros is predefined, which is the
   standard's own way of saying that threads are left out;
   `__STDC_NO_THREADS__` stays defined although `_Thread_local` works, because
@@ -255,8 +258,12 @@ Run it with `cargo run --example fact`.
 * `_Alignas` and `__attribute__((aligned(N)))` are honoured on the members of a
   `struct` or `union`: the member moves to the boundary it asks for and the
   generated Rust item gets explicit padding so that both sides agree about
-  where it went. On an *object* an alignment specifier is not supported at
-  all.
+  where it went. On an **object** — automatic, `static`, at file scope or
+  `_Thread_local` — Rust can over-align a *type* and nothing else, so the
+  binding is generated inside a one-field wrapper that carries the alignment
+  (`#[repr(C, align(64))] struct __cinrs_align_64<T>(pub T);`) and every use of
+  it goes through the field: **Rust code reads `buf.0`**. The C program sees
+  none of it — `sizeof buf` is the object's own size.
 * A `constexpr` object is a *constant*: its value is folded wherever the name
   is used (so it may be an array bound or a `case` label), and there is
   nothing to take the address of. Only the arithmetic types are accepted.
@@ -265,7 +272,8 @@ Run it with `cargo run --example fact`.
   it, are not there.
 * `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or
   returned; the usual uses — `va_start`, `va_arg`, `va_copy`, passing a list to
-  `vprintf` — are fine.
+  `vprintf` — are fine, and so is a **`va_list *`** parameter or local, which
+  is what lets a helper advance the caller's list.
 * The platform's include directories are never searched. A real `<stdio.h>` is
   not C, so anything outside the bundled set is declared by hand or pointed at
   with an include path.
@@ -420,10 +428,11 @@ as unimplemented or not planned, case by case.
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
   suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
-  and 216 of 220 under `c11!`, `c23!` and every GNU dialect. **Not one error in
-  this corpus is a bug**: three are constructs `cinrs` has not implemented — a
-  `goto` out of a statement expression, `va_arg` with a struct, an initialised
-  flexible array member — and the fourth needs a newer Rust than 1.97. Strict
+  216 of 220 under `c11!` and 217 of 220 under `c23!` and every GNU dialect.
+  **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
+  implemented — a `goto` out of a statement expression and `va_arg` with a
+  struct — one is C23's empty initialiser `{}` in a block a strict `c99!` or
+  `c11!` refuses it in, and the last needs a newer Rust than 1.97. Strict
   `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
   use something C99 added and a strict C89 entry point is required to refuse
   them. The corpus is a git submodule, so a fresh checkout skips the suite
@@ -431,22 +440,22 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
 * **[GCC's C torture tests](doc/gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,501 of the 1,769 run are correct (84.9 %)** under
-  `gnu11!` — 1,397 passing and 104 refused as C99 requires — and 1,494
-  (84.5 %) under `gnu89!`, which is the language these C89-era programs were
-  written in and refuses none of them. **Not one of the 268 errors is a
+  exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
+  `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
+  (85.2 %) under `gnu89!`, which is the language these C89-era programs were
+  written in and refuses none of them. **Not one of the 254 errors is a
   bug**; they are inline assembly, the vector extensions, the complex
-  *integer* types, computed `goto`, the two corners of nested functions that
-  need a trampoline or a nonlocal `goto`, the handful of `__builtin_*` forms
-  this crate does not implement, the variadic definitions that need Rust 1.99,
-  and five programs that built and then did the wrong thing, which the document
-  names one by one.
+  *integer* types, the corners of nested functions that need a trampoline or a
+  nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
+  implement, the definitions and `va_list`s that need Rust 1.99, and five
+  programs that built and then did the wrong thing, which the document names
+  one by one.
 * **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **165 of the 203 revisions run are correct
   (81.3 %)** — 138 answered exactly and 27 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
-  **554 are diagnosed on the right line**. This is the only suite that measures
+  **557 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and **not
   one of its 38 errors is a bug** either: they are the features the document
   lists as not yet implemented, and the places where `cinrs` and Clang

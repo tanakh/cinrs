@@ -46,7 +46,7 @@ cinrs::c99! {
     void alignment(int len) {
         _Alignas(16) int values[len];
         //~^ ERROR: '_Alignas' requires C11 or later
-        //~| ERROR: an alignment specifier on an object is not supported yet
+        //~| ERROR: an alignment specifier is not supported on a variable length array
         (void)values;
     }
 

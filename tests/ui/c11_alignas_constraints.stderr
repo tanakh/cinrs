@@ -1,0 +1,44 @@
+error: the requested alignment 2 is weaker than the alignment 4 that 'int' already has
+  --> tests/ui/c11_alignas_constraints.rs:18:5
+   |
+18 |     _Alignas(2) int weaker;
+   |     ^^^^^^^^
+
+error: the requested alignment 3 is not a power of two
+  --> tests/ui/c11_alignas_constraints.rs:21:5
+   |
+21 |     _Alignas(3) char not_a_power;
+   |     ^^^^^^^^
+
+error: an alignment specifier is not allowed on a 'typedef'
+  --> tests/ui/c11_alignas_constraints.rs:27:5
+   |
+27 |     _Alignas(16) typedef int aligned_int;
+   |     ^^^^^^^^
+
+error: an alignment specifier is not allowed on a function
+  --> tests/ui/c11_alignas_constraints.rs:29:5
+   |
+29 |     _Alignas(16) void a_function(void);
+   |     ^^^^^^^^
+
+error: '_Alignas' cannot be applied to a bit-field
+  --> tests/ui/c11_alignas_constraints.rs:31:19
+   |
+31 |     struct Bits { _Alignas(16) int b : 3; };
+   |                   ^^^^^^^^
+
+error: an alignment specifier is not allowed on a parameter; the argument is placed by the calling convention
+  --> tests/ui/c11_alignas_constraints.rs:33:20
+   |
+33 |     void takes_one(_Alignas(16) int x);
+   |                    ^^^^^^^^
+
+error: an alignment specifier is not allowed on an object declared 'register'
+  --> tests/ui/c11_alignas_constraints.rs:36:18
+   |
+36 |         register _Alignas(16) int x = 0;
+   |                  ^^^^^^^^
+
+error: aborting due to 7 previous errors
+

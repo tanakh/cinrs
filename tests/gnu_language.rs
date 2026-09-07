@@ -382,6 +382,83 @@ fn a_flexible_array_member_costs_nothing_and_indexes_past_the_end() {
     unsafe { buffer_free(b) };
 }
 
+// GNU C lets an object with *static* storage duration initialise the member:
+// its storage is the compiler's to make as large as the initialiser asks.
+c99! {
+    struct Table { int n; int data[]; };
+    struct Text { char tag; char body[]; };
+    struct Pair { int a; int b; };
+    struct Nest { int n; struct Pair pairs[]; };
+
+    /* File scope, with and without internal linkage. */
+    struct Table exported = { 4, { 10, 20, 30, 40 } };
+    static struct Table private_table = { 2, { 5, 6 } };
+    /* A designated flexible member, and one whose braces were left out. */
+    struct Table designated = { .n = 3, .data = { 7, 8, 9 } };
+    struct Table unbraced = { 3, 1, 2, 3 };
+    /* A string literal fills a `char` tail, NUL and all. */
+    struct Text greeting = { 'g', "hi" };
+    /* An aggregate element type, with the inner braces left out. */
+    struct Nest nested = { 2, { 1, 2, 3, 4 } };
+
+    int file_scope_sums(void) {
+        return exported.data[3] + private_table.data[1] + designated.data[2]
+             + unbraced.data[2] + nested.pairs[1].b;
+    }
+
+    /* A block-scope `static` has static storage duration too. */
+    int block_static(void) {
+        static struct Table counts = { 3, { 100, 200, 300 } };
+        counts.data[0]++;
+        return counts.n * 1000 + counts.data[0] + counts.data[2];
+    }
+
+    /* `sizeof` is the *type's* size, which the tail is no part of. */
+    unsigned long table_size(void) { return sizeof(struct Table); }
+    unsigned long object_size(void) { return sizeof exported; }
+
+    /* The object is an ordinary one: its address may be taken and passed. */
+    int through_a_pointer(const struct Table *t) { return t->data[t->n - 1]; }
+    int last_of_exported(void) { return through_a_pointer(&exported); }
+
+    /* No tail initialiser at all leaves the object exactly its own type. */
+    struct Table nothing_extra = { 9 };
+    int just_the_head(void) { return nothing_extra.n; }
+}
+
+#[test]
+fn a_static_object_may_initialize_its_flexible_array_member() {
+    unsafe {
+        assert_eq!(file_scope_sums(), 40 + 6 + 9 + 3 + 4);
+        assert_eq!(block_static(), 3401);
+        // Called again: it is one object, not a fresh one per call.
+        assert_eq!(block_static(), 3402);
+        assert_eq!((&raw const greeting.tag).read(), b'g' as core::ffi::c_char);
+        assert_eq!(last_of_exported(), 40);
+        assert_eq!(just_the_head(), 9);
+        // `sizeof` leaves the tail out, which is what GCC says too.
+        assert_eq!(table_size(), 4);
+        assert_eq!(object_size(), 4);
+    }
+    // Rust reaches such an object through the *companion* item, whose fields
+    // are the record's with the tail sized by the initialiser; the crate
+    // documentation says so.
+    unsafe {
+        let storage = (&raw const exported).read();
+        assert_eq!(storage.n, 4);
+        assert_eq!(storage.data, [10, 20, 30, 40]);
+        assert_eq!(
+            (&raw const greeting).read().body,
+            [b'h' as core::ffi::c_char, b'i' as _, 0]
+        );
+        // …and the C type is what a pointer to it points at.
+        let as_table = (&raw const exported).cast::<Table>();
+        assert_eq!((*as_table).n, 4);
+        // The storage really is as long as the initialiser asked.
+        assert!(size_of_val(&storage) >= 4 + 4 * 4);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // empty records, incomplete enums, function pointers and `void *`
 // ---------------------------------------------------------------------------

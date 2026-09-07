@@ -215,20 +215,26 @@ The report counts the `expected-error` *lines* as well as the revisions:
 ```
   annotations, over the 203 revisions run
       620  lines carry a required `expected-error`
-      554  of them were diagnosed (89.4%)
-       66  were not
-      450  errors landed on a line no directive names
+      557  of them were diagnosed (89.8%)
+       63  were not
+      441  errors landed on a line no directive names
            162 of those are on the 27 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
-620 lines are asked about and **554 are answered on the right line**. The last
+620 lines are asked about and **557 are answered on the right line**. The last
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
-of them. 162 of the 450 are on the 27 revisions that are conforming refusals
-outright; the other 288 are on the 38 error revisions, where the same effect
+of them. 162 of the 441 are on the 27 revisions that are conforming refusals
+outright; the other 279 are on the 38 error revisions, where the same effect
 piles up behind whichever refusal came first.
+
+The last three came from `_Alignas` on an *object*, which is now honoured
+rather than refused: `drs/dr4xx.c` asks for the other five things C11 6.7.5p2
+forbids it on — a `typedef`, a function, a bit-field, a parameter and a
+`register` object — and each of those is a constraint violation of its own,
+diagnosed where it is written.
 
 ### The errors, by category
 
@@ -332,8 +338,10 @@ them as correct is what took the headline from 64.5 % to 77.8 % without
 changing a line of the compiler; the round that answered six of the eight
 `[bug]` root causes took it to 78.8 %, and **the round that took the `[bug]`
 count to zero** took it to 81.3 % — five more revisions, and sixty-three more
-annotations answered on the line the test names (79.2 % of them to 89.4 %).
-That last round is the list at the end of this document. It began with five
+annotations answered on the line the test names (79.2 % of them to 89.4 %; the
+round after it left the revision count alone and took the annotations to
+89.8 %).
+That round is the list at the end of this document. It began with five
 `[bug]` root causes: two of them — `drs/dr1xx.c` and `C23/n3007.c` — came out
 as required, and the other three were reclassified with the reason, which is
 what the phrase is *for*. `drs/dr2xx.c` and `drs/dr0xx.c` are left on a

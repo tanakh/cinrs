@@ -157,6 +157,7 @@ pub fn parse(
         records: Vec::new(),
         enums: Vec::new(),
         typeofs: Vec::new(),
+        label_addrs: 0,
     };
     parser.parse_translation_unit(unit_range)
 }
@@ -235,6 +236,18 @@ struct Parser<'a> {
     enums: Vec<EnumSpec>,
     /// The `typeof` operands seen so far.
     typeofs: Vec<TypeofOperand>,
+    /// How many `&&label` operands have been parsed.
+    ///
+    /// A function that takes a label's address has to be lowered through a
+    /// [control-flow graph](crate::cfg), because the value of `&&label` *is*
+    /// the state number the label stands for. That decision is made from the
+    /// statements of the body ([`crate::sema::Sema::needs_cfg`]), and
+    /// `&&label` is an expression — it can sit in an initialiser, a call
+    /// argument or a `static` table — so the one place that sees all of them
+    /// is here. Counting rather than flagging is what lets a nested function
+    /// definition put the count back where it found it, so that its own
+    /// `&&label` says nothing about the function it was written in.
+    label_addrs: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +571,7 @@ impl Parser<'_> {
                 let range = self.span_to_here(start);
                 attrs.aligned = Some(Alignment {
                     kind: alignment,
+                    from_attribute: true,
                     range,
                 });
                 return Ok(());
@@ -1020,6 +1034,7 @@ impl Parser<'_> {
             }
         };
 
+        let before = self.label_addrs;
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
             Err(bail) => {
@@ -1037,6 +1052,7 @@ impl Parser<'_> {
             attrs: declarator.attrs,
             asm_label: declarator.asm_label,
             body,
+            uses_label_addrs: self.label_addrs != before,
             range: self.span_to_here(start),
         }))
     }
@@ -1282,6 +1298,7 @@ impl Parser<'_> {
             }
         };
 
+        let before = self.label_addrs;
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
             Err(bail) => {
@@ -1290,6 +1307,10 @@ impl Parser<'_> {
             }
         };
         self.pop_scope();
+        let uses_label_addrs = self.label_addrs != before;
+        // A nested function's `&&label` names a label of its *own* body, so
+        // the count goes back to what the enclosing function had.
+        self.label_addrs = before;
 
         Ok(FunctionDef {
             specifiers: specs,
@@ -1299,6 +1320,7 @@ impl Parser<'_> {
             attrs: declarator.attrs,
             asm_label: declarator.asm_label,
             body,
+            uses_label_addrs,
             range: self.span_to_here(start),
         })
     }
@@ -1489,7 +1511,7 @@ impl Parser<'_> {
         let mut thread_local: Option<SourceRange> = None;
         let mut inline = false;
         let mut noreturn: Option<SourceRange> = None;
-        let mut alignas: Option<Alignment> = None;
+        let mut alignas: Vec<Alignment> = Vec::new();
         let mut attributes = Attributes::default();
         let mut quals = TypeQualifiers::NONE;
         let mut counts = SpecCounts::default();
@@ -1663,10 +1685,11 @@ impl Parser<'_> {
                     continue;
                 }
                 if matches!(k, Keyword::Alignas | Keyword::AlignasName) {
+                    // C11 6.7.5p6 allows several, and makes the strictest of
+                    // them the one that holds; sema is where that is decided,
+                    // since only it can evaluate the operands.
                     let spec = self.parse_alignment_specifier(k)?;
-                    if alignas.is_none() {
-                        alignas = Some(spec);
-                    }
+                    alignas.push(spec);
                     consumed_any = true;
                     continue;
                 }
@@ -1846,7 +1869,9 @@ impl Parser<'_> {
         };
         // `__attribute__((aligned(N)))` on a declaration says exactly what
         // `_Alignas(N)` says, so the two go through one path.
-        let alignas = alignas.or_else(|| attributes.aligned.clone());
+        if let Some(aligned) = attributes.aligned.clone() {
+            alignas.push(aligned);
+        }
 
         Ok(DeclSpecifiers {
             storage,
@@ -1875,6 +1900,7 @@ impl Parser<'_> {
         self.expect_punct(Punct::RParen, &format!(" after the operand of '{name}'"))?;
         Ok(Alignment {
             kind,
+            from_attribute: false,
             range: self.span_to_here(start),
         })
     }
@@ -2877,6 +2903,12 @@ impl Parser<'_> {
                                 if let BlockItem::Decl(decl) = &mut item {
                                     decl.specifiers.noreturn =
                                         decl.specifiers.noreturn.or(attrs.noreturn);
+                                    // The sequence belongs to the declaration
+                                    // that follows it, exactly as one written
+                                    // among the specifiers does — which is
+                                    // where `parse_declaration_head` finds the
+                                    // same attributes at file scope.
+                                    decl.specifiers.attrs.merge(attrs);
                                 }
                                 item
                             })
@@ -3045,6 +3077,16 @@ impl Parser<'_> {
                 Keyword::For => return self.parse_for_stmt(),
                 Keyword::Goto => {
                     self.advance();
+                    // GNU's computed `goto *expr;`, whose operand is a label
+                    // address rather than a label name.
+                    if self.eat_punct(Punct::Star).is_some() {
+                        let target = self.parse_expr()?;
+                        self.expect_punct(Punct::Semi, " after 'goto' statement")?;
+                        return Ok(Stmt {
+                            kind: StmtKind::GotoPtr(target),
+                            range: self.span_to_here(start),
+                        });
+                    }
                     let label = self.expect_ident(" after 'goto'")?;
                     self.expect_punct(Punct::Semi, " after 'goto' statement")?;
                     return Ok(Stmt {
@@ -3560,6 +3602,20 @@ impl Parser<'_> {
                         op,
                         operand: Box::new(operand),
                     },
+                    range,
+                });
+            }
+            // GNU's `&&label`, the address of a label of this function. It is
+            // an rvalue of type `void *` and the only operand `goto *` has;
+            // `&&` can never open an expression otherwise, so there is nothing
+            // to disambiguate.
+            if p == Punct::AmpAmp {
+                self.advance();
+                let label = self.expect_ident(" after '&&'")?;
+                self.label_addrs += 1;
+                let range = start.join(label.range);
+                return Ok(Expr {
+                    kind: ExprKind::LabelAddr(label),
                     range,
                 });
             }

@@ -1,0 +1,51 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr\"\n        _Alignas(64) char buf[8];\n        static _Alignas(16) float v[4] = { 1, 2, 3, 4 };\n\n        int use_them(void) {\n            _Alignas(32) int local = 1;\n            char *p = buf;\n            return local + (int) v[0] + *p;\n        }\n        \")"
+---
+mod __cinrs_unit_d922206a {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
+    #[allow(…)]
+    #[repr(C, align(32))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_32<T>(pub T);
+    #[allow(…)]
+    #[repr(C, align(64))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_64<T>(pub T);
+    #[allow(…)]
+    pub static mut buf: __cinrs_align_64<[::core::ffi::c_char; 8]> = __cinrs_align_64(
+        [0; 8],
+    );
+    #[allow(…)]
+    static mut v: __cinrs_align_16<[::core::ffi::c_float; 4]> = __cinrs_align_16([
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ]);
+    #[allow(…)]
+    pub unsafe extern "C" fn use_them() -> ::core::ffi::c_int {
+        unsafe {
+            let mut local: __cinrs_align_32<::core::ffi::c_int> = __cinrs_align_32(1);
+            let mut p: *mut ::core::ffi::c_char = (&raw mut buf.0)
+                .cast::<::core::ffi::c_char>();
+            return local
+                .0
+                .wrapping_add(
+                    ({
+                        let __cinrs_tmp0 = (&raw mut v.0)
+                            .cast::<::core::ffi::c_float>()
+                            .offset(0);
+                        (*__cinrs_tmp0)
+                    }) as ::core::ffi::c_int,
+                )
+                .wrapping_add((*p) as ::core::ffi::c_int);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_d922206a::*;

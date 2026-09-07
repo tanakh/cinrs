@@ -284,12 +284,34 @@ impl Sema<'_> {
     }
 
     /// Reports `va_list` used where the generated Rust could not name it.
+    ///
+    /// A *pointer* to one counts: `*mut core::ffi::VaList<'f>` carries the
+    /// same lifetime the value does, and elision only supplies it inside a
+    /// function — a `struct` member, a `static` and a return type would each
+    /// have to name it.
     pub(super) fn reject_va_list(&mut self, ty: Ty, range: SourceRange) -> bool {
-        if !ty.is_va_list() {
+        if !self.mentions_va_list(ty) {
             return false;
         }
         self.error(range, VA_LIST_PLACEMENT);
         true
+    }
+
+    /// Whether a type is `va_list *` — a pointer straight to a list.
+    pub(super) fn points_to_va_list(&self, ty: Ty) -> bool {
+        self.types()
+            .pointee(ty)
+            .is_some_and(|pointee| pointee.is_va_list())
+    }
+
+    /// Whether `va_list` appears anywhere inside a type.
+    pub(super) fn mentions_va_list(&self, ty: Ty) -> bool {
+        match ty {
+            Ty::VaList => true,
+            Ty::Pointer(id) => self.mentions_va_list(self.types().pointer_type(id).pointee),
+            Ty::Array(id) => self.mentions_va_list(self.types().array_type(id).elem),
+            _ => false,
+        }
     }
 }
 

@@ -44,4 +44,3 @@
 00204   [unimplemented]  unsupported: `va_arg` with a struct type
 !00209                   error: "too many arguments to function call"  conforming: C23 removed function declarators without a prototype (N2841), so the `int (*fp)();` this case calls with an argument takes none and the call has one argument too many; `gcc -std=c23` refuses it in the same words
 00213   [unimplemented]  unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
-00216   [unimplemented]  unsupported: initializing a flexible array member; under `c99!` also the C23 empty initializer `{}`

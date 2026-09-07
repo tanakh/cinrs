@@ -48,23 +48,20 @@
 execute/20000822-1                    [not-planned]    compile error: the address of the nested function 'f2' cannot be taken: it uses the enclosing function's 'i', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'f2' to file scope and pass what it uses as parameters
 execute/20001009-2                    [not-planned]    compile error: inline assembly is not supported
 execute/20010122-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20010924-1                    [unimplemented]  compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20020107-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20020412-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20021127-1                    [not-planned]    runtime: killed by signal 6 — the case *defines* `long long llabs(long long)` as a function that aborts and requires the builtin to be expanded inline rather than called. Defining a standard library function is undefined behaviour (7.1.3p2), and cinrs calls what the program defined
-execute/20030109-1                    [unimplemented]  compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/20030125-1                    [not-planned]    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
 execute/20030222-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20030323-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030811-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ?execute/20030914-2                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/20040302-1                    [unimplemented]  compile error: expected expression, found '&&'
 execute/20040308-1                    [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/20040423-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 ?execute/20041113-1                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20041124-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20041201-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/20041214-1                    [unimplemented]  compile error: expected expression, found '&&'
+?execute/20041214-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/20041218-2                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20050121-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20050203-1                    [not-planned]    compile error: inline assembly is not supported
@@ -77,7 +74,6 @@ execute/20060420-1                    [not-planned]    compile error: 'vector_si
 execute/20061031-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20061220-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20070919-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/20071210-1                    [unimplemented]  compile error: expected expression, found '&&'
 execute/20071211-1                    [not-planned]    compile error: inline assembly is not supported
 ?execute/20071213-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/20071220-1                    [not-planned]    compile error: inline assembly is not supported
@@ -88,16 +84,13 @@ execute/20101011-1                    [not-planned]    runtime: killed by signal
 execute/20210505-1                    [not-planned]    compile error: expected ';' after declaration, found identifier 'buf' — `<setjmp.h>`, which cinrs does not bundle, so `jmp_buf` is not a type here. Nothing in Rust unwinds a C `longjmp`
 execute/20230630-2                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/20230630-4                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
-execute/920302-1                      [unimplemented]  compile error: expected expression, found '&&'
-execute/920415-1                      [unimplemented]  compile error: expected expression, found '&&' — computed goto
+execute/920302-1                      [not-planned]    compile error: passing 'short[5] *' to parameter 1 of 'execute', of incompatible type 'short *' — the case calls `execute(&p)` with `p` a `short[5]`, which is a constraint violation C requires a diagnostic for and which GCC only warned about until GCC 14. Its computed gotos work
+execute/920415-1                      [not-planned]    compile error: '&&l' names a label of the enclosing function; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/920428-2                      [not-planned]    compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
-execute/920501-3                      [unimplemented]  compile error: expected identifier after 'goto', found '*'
-execute/920501-4                      [unimplemented]  compile error: expected expression, found '&&'
-execute/920501-5                      [unimplemented]  compile error: expected expression, found '&&'
 execute/920501-7                      [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 ?execute/920501-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/920625-1                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
-execute/920721-4                      [unimplemented]  compile error: expected expression, found '&&' — computed goto, and a nonlocal one at that: the nested function returns the address of a label of the enclosing one
+execute/920721-4                      [not-planned]    compile error: '&&lab1' names a label of the enclosing function; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 ?execute/920726-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/920908-1                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
 execute/921017-1                      [unimplemented]  compile error: a nested function cannot use 'a': it is a variable length array, whose length lives in the enclosing frame, and cinrs does not capture that yet. Pass the array and its length as parameters
@@ -111,11 +104,9 @@ execute/931004-6                      [unimplemented]  compile error: va_arg wit
 execute/931004-8                      [unimplemented]  compile error: va_arg with a struct type is not supported yet
 execute/960312-1                      [not-planned]    compile error: inline assembly is not supported
 ?execute/980205                                        compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/980526-1                      [unimplemented]  compile error: expected expression, found '&&'
 ?execute/980608-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/980716-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/990130-1                      [not-planned]    compile error: inline assembly is not supported
-execute/990208-1                      [unimplemented]  compile error: expected expression, found '&&'
 execute/990413-2                      [not-planned]    compile error: inline assembly is not supported
 execute/991014-1                      [not-planned]    compile error: values of the type `[i16; 4611686018427387648]` are too big for the target architecture — the case asks only for `sizeof` of a quarter-of-the-address-space array, and `rustc` will not name the type at all
 ?execute/991216-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -127,8 +118,7 @@ execute/align-nest                    [not-planned]    compile error: a record c
 execute/bitfld-5                      [not-planned]    compile error: inline assembly is not supported
 execute/built-in-setjmp               [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/builtin-types-compatible-p    [not-planned]    runtime: killed by signal 6 — it requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous enums to answer no; `long double` is `double` here and an untagged `enum` is `int`, both documented mappings
-execute/comp-goto-1                   [unimplemented]  compile error: expected expression, found '&&'
-execute/comp-goto-2                   [unimplemented]  compile error: expected expression, found '&&' — computed goto
+execute/comp-goto-2                   [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/complex-6                     [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/eeprof-1                      [not-planned]    runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
 ?execute/fprintf-chk-1                                 compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -170,9 +160,8 @@ execute/pr126405-3                    [not-planned]    compile error: 'vector_si
 execute/pr17377                       [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr23135                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr24135                       [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
-execute/pr28865                       [unimplemented]  compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
+execute/pr28865                       [unimplemented]  compile error: initialization of flexible array member in a nested context — GCC takes it inside a `union` whose other member already makes the object big enough, which cinrs does not
 execute/pr30314                       [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-execute/pr33382                       [unimplemented]  compile error: a flexible array member cannot be initialized; allocate the object with room for the elements and fill them in
 execute/pr38151                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr38533                       [not-planned]    compile error: inline assembly is not supported
 execute/pr40022                       [not-planned]    compile error: inline assembly is not supported
@@ -191,7 +180,7 @@ execute/pr47925                       [not-planned]    compile error: inline ass
 execute/pr49218                       [not-planned]    compile error: inline assembly is not supported
 execute/pr49279                       [not-planned]    compile error: inline assembly is not supported
 execute/pr49390                       [not-planned]    compile error: inline assembly is not supported
-execute/pr51447                       [unimplemented]  compile error: expected expression, found '&&' — computed goto; the nested function then makes a nonlocal jump to that label
+execute/pr51447                       [not-planned]    compile error: 'goto nonlocal_lab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/pr51581-1                     [not-planned]    compile error: inline assembly is not supported
 execute/pr51581-2                     [not-planned]    compile error: inline assembly is not supported
 execute/pr51877                       [not-planned]    compile error: inline assembly is not supported
@@ -213,7 +202,7 @@ execute/pr60003                       [not-planned]    compile error: '__builtin
 execute/pr60960                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr63641                       [not-planned]    compile error: inline assembly is not supported
 execute/pr64242                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr64979                       [unimplemented]  compile error: pointers to va_list are not supported yet
+?execute/pr64979                                       compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/pr65053-1                     [not-planned]    compile error: inline assembly is not supported
 execute/pr65053-2                     [not-planned]    compile error: inline assembly is not supported
 execute/pr65427                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -221,12 +210,9 @@ execute/pr65648                       [not-planned]    compile error: inline ass
 execute/pr65956                       [not-planned]    compile error: inline assembly is not supported
 execute/pr68328                       [not-planned]    compile error: inline assembly is not supported
 ?execute/pr68390                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr68532                       [unimplemented]  compile error: an alignment specifier on an object is not supported yet; '_Alignas' and '__attribute__((aligned))' are honoured on the members of a struct or union, where the generated Rust type can carry the alignment
 execute/pr69320-2                     [not-planned]    compile error: inline assembly is not supported
 execute/pr69691                       [not-planned]    compile error: inline assembly is not supported
-execute/pr70460                       [unimplemented]  compile error: expected expression, found '&&'
 execute/pr70903                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr71494                       [unimplemented]  compile error: expected expression, found '&&'
 execute/pr71626-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-2                     [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr78438                       [not-planned]    compile error: inline assembly is not supported
@@ -288,7 +274,7 @@ execute/va-arg-14                     [not-planned]    compile error: va_list is
 ?execute/va-arg-19                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-20                                     compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/va-arg-21                     [unimplemented]  compile error: pointers to va_list are not supported yet
+execute/va-arg-21                     [not-planned]    compile error: invalid application of 'sizeof' to 'va_list' — the case `malloc`s a `va_list` and keeps the pointers in an array, and Rust's `VaList` is a value with a lifetime rather than a size. The `va_list *` half of it works
 execute/va-arg-22                     [unimplemented]  compile error: va_arg with a struct type is not supported yet
 ?execute/va-arg-23                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/va-arg-24                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)

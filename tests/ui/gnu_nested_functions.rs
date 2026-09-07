@@ -80,6 +80,16 @@ cinrs::gnu11! {
         return 1;
     }
 
+    /* The address of a label of the enclosing function is the same thing one
+       step earlier: it is what a nonlocal jump would go through. */
+    void *label_of_the_enclosing(int n)
+    {
+        void *where(void) { return &&outside; } //~ ERROR: '&&outside' names a label of the enclosing function
+        if (n) return where();
+    outside:
+        return 0;
+    }
+
     /* A variable length array of the enclosing function: its length lives in a
        hidden object of that frame, which is not captured yet. */
     int reads_a_vla(int n)

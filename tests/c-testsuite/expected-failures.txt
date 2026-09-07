@@ -43,5 +43,5 @@
 ?00140                   variadic function definition; needs Rust 1.99, so it passes there and not before
 00204   [unimplemented]  unsupported: `va_arg` with a struct type
 00213   [unimplemented]  unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
-00216   [unimplemented]  unsupported: initializing a flexible array member; under `c99!` also the C23 empty initializer `{}`
+00216   [unimplemented]  unsupported: the C23 empty initializer `{}`, which this case writes as `(empty_s){}` under `c99!`
 !00219                   error: "'_Generic' requires C11 or later"  conforming: `_Generic` is C11, so strict C99 is required to refuse it; write `c11!`

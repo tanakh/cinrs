@@ -1,0 +1,26 @@
+error: non-static initialization of a flexible array member; only an object with static storage duration can be made larger than its type
+  --> tests/ui/flexible_array_initializer.rs:23:27
+   |
+23 |         struct W w = { 1, { 5 } };
+   |                           ^
+
+error: initialization of flexible array member in a nested context
+  --> tests/ui/flexible_array_initializer.rs:29:32
+   |
+29 |     struct W table[2] = { { 1, { 5 } }, { 0 } };
+   |                                ^
+
+error: initialization of flexible array member in a nested context
+  --> tests/ui/flexible_array_initializer.rs:33:29
+   |
+33 |     struct Outer o = { { 1, { 5 } } };
+   |                             ^
+
+error: initialization of flexible array member in a nested context
+  --> tests/ui/flexible_array_initializer.rs:38:41
+   |
+38 |     struct W *literal = &(struct W){ 1, { 5 } };
+   |                                         ^
+
+error: aborting due to 4 previous errors
+

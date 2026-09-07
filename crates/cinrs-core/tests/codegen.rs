@@ -1457,3 +1457,79 @@ fn a_wide_bit_field_reads_through_a_u128_window() {
         "
     ));
 }
+
+#[test]
+fn an_over_aligned_object_lives_inside_a_wrapper() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        _Alignas(64) char buf[8];
+        static _Alignas(16) float v[4] = { 1, 2, 3, 4 };
+
+        int use_them(void) {
+            _Alignas(32) int local = 1;
+            char *p = buf;
+            return local + (int) v[0] + *p;
+        }
+        "
+    ));
+}
+
+#[test]
+fn a_computed_goto_is_a_store_to_the_state() {
+    insta::assert_snapshot!(generate(
+        r"
+        int interp(int n) {
+            static void *table[] = { &&add, &&done };
+            int total = 0;
+            int i = 0;
+            goto *table[i];
+        add:
+            total += n;
+            i = 1;
+            goto *table[i];
+        done:
+            return total;
+        }
+        "
+    ));
+}
+
+#[test]
+fn a_va_list_pointer_is_a_raw_pointer_to_the_list() {
+    insta::assert_snapshot!(generate(
+        r"
+        #include <stdarg.h>
+
+        int two(va_list *ap) {
+            int a = va_arg(*ap, int);
+            int b = va_arg(*ap, int);
+            return a + b;
+        }
+
+        int total(int n, ...) {
+            va_list ap;
+            va_start(ap, n);
+            va_list *p = &ap;
+            int s = two(p);
+            s += va_arg(*p, int);
+            va_end(ap);
+            return s;
+        }
+        "
+    ));
+}
+
+#[test]
+fn an_initialised_flexible_array_member_gets_a_companion_type() {
+    insta::assert_snapshot!(generate(
+        r#"
+        struct W { int n; int data[]; };
+
+        static struct W w = { 3, { 1, 2, 3 } };
+        struct W shared = { 2, { 7, 8 } };
+
+        int read(void) { return w.data[2] + shared.data[1] + (int) sizeof w; }
+        "#
+    ));
+}

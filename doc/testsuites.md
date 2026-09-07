@@ -5,8 +5,8 @@ questions, which is why there are three of them and not one:
 
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
-| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **84.9 %** (`gnu11!`), 84.5 % (`gnu89!`) | 268: 0 bug, 36 unimplemented, 185 not planned, 47 toolchain |
+| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.6 %** (`gnu11!`), 85.2 % (`gnu89!`) | 254: 0 bug, 16 unimplemented, 189 not planned, 49 toolchain |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **81.3 %** of the 203 run | 38: 0 bug, 8 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -171,14 +171,14 @@ report breaks its error count down into them, in this order:
 | **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
 | **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
 | **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: inline assembly, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
-| **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. Today that is `c_variadic`, stable in 1.99 — a variadic *definition* or a `va_list` object. |
+| **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. Today that is `c_variadic`, stable in 1.99 — a variadic *definition*, a `va_list` object, or a `va_list *`. |
 
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1501/1769 correct (84.9%) — 1397 passed, 104 rejected as the standard requires
-  errors: 268 — bug 0, unimplemented 36, not planned 185, toolchain 47
-  (7 not generated) — 4 m 30 s
+gcc.c-torture/execute through `gnu11!`: 1515/1769 correct (85.6%) — 1411 passed, 104 rejected as the standard requires
+  errors: 254 — bug 0, unimplemented 16, not planned 189, toolchain 49
+  (7 not generated) — 4 m 22 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.

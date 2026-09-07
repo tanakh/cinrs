@@ -32,38 +32,44 @@ error: 'goto done' leaves this nested function for a label of the enclosing one;
 74 |             if (n) goto done;
    |                         ^^^^
 
-error: a nested function cannot use 'cells': it is a variable length array, whose length lives in the enclosing frame, and cinrs does not capture that yet. Pass the array and its length as parameters
-       note: 'cells' is declared here at line 87
-  --> tests/ui/gnu_nested_functions.rs:88:34
+error: '&&outside' names a label of the enclosing function; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
+  --> tests/ui/gnu_nested_functions.rs:87:38
    |
-88 |         int first(void) { return cells[0]; }
+87 |         void *where(void) { return &&outside; }
+   |                                      ^^^^^^^
+
+error: a nested function cannot use 'cells': it is a variable length array, whose length lives in the enclosing frame, and cinrs does not capture that yet. Pass the array and its length as parameters
+       note: 'cells' is declared here at line 97
+  --> tests/ui/gnu_nested_functions.rs:98:34
+   |
+98 |         int first(void) { return cells[0]; }
    |                                  ^^^^^
 
 error: a nested function cannot use 'ap': a 'va_list' belongs to the function whose arguments it walks, and cinrs does not capture one yet. Read the arguments in the enclosing function and pass the values
-       note: 'ap' is declared here at line 96
+       note: 'ap' is declared here at line 106
        note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:20
-  --> tests/ui/gnu_nested_functions.rs:98:40
-   |
-98 |         int take(void) { return va_arg(ap, int); }
-   |                                        ^^
+   --> tests/ui/gnu_nested_functions.rs:108:40
+    |
+108 |         int take(void) { return va_arg(ap, int); }
+    |                                        ^^
 
 error: 'static' is not allowed on a nested function definition: a nested function has no linkage, and 'auto' is the only storage class GNU C accepts on one
-   --> tests/ui/gnu_nested_functions.rs:108:9
+   --> tests/ui/gnu_nested_functions.rs:118:9
     |
-108 |         static int g(int x) { return x; }
+118 |         static int g(int x) { return x; }
     |         ^^^^^^
 
 error: the nested function 'missing' is declared but never defined; a nested function has no linkage, so nothing outside this function can define it
-   --> tests/ui/gnu_nested_functions.rs:116:18
+   --> tests/ui/gnu_nested_functions.rs:126:18
     |
-116 |         auto int missing(int);
+126 |         auto int missing(int);
     |                  ^^^^^^^
 
 error: 'auto' is not allowed on a file-scope function; it declares a nested function, which only a block may hold
-   --> tests/ui/gnu_nested_functions.rs:121:5
+   --> tests/ui/gnu_nested_functions.rs:131:5
     |
-121 |     auto int at_file_scope(int);
+131 |     auto int at_file_scope(int);
     |     ^^^^
 
-error: aborting due to 10 previous errors
+error: aborting due to 11 previous errors
 

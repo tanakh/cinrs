@@ -1668,7 +1668,7 @@ pub struct SwitchId(pub u32);
 /// C gives labels function scope and their own namespace, so every label of a
 /// function is collected before its body is checked — that is what lets a
 /// `goto` jump forwards.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct LabelId(pub u32);
 
 /// Identifies a string literal inside a [`Program`].
@@ -1764,6 +1764,32 @@ pub struct Object {
     /// storage is dropped when the block ends, which is the lifetime C gives
     /// the array.
     pub vla_storage: bool,
+    /// The alignment `_Alignas(N)` or `__attribute__((aligned(N)))` asked for,
+    /// when it is stricter than the one the type already has.
+    ///
+    /// Rust has no way to over-align a binding, so the object is generated
+    /// inside a one-field wrapper that carries the alignment —
+    /// `#[repr(C, align(N))] struct __cinrs_align_N<T>(pub T);` — and every
+    /// access to it goes through the field. The C object's *type* is unchanged:
+    /// `sizeof` is the type's size and the wrapper is invisible to everything
+    /// but the generated binding. See [`codegen`](crate::codegen).
+    ///
+    /// `None` is the ordinary case, and also what a request no stricter than
+    /// the natural alignment leaves behind — there is nothing for a wrapper to
+    /// say.
+    pub align: Option<u64>,
+    /// How many elements the object's storage gives the record's [flexible
+    /// array member](Field::flexible), when an initialiser filled it in.
+    ///
+    /// GNU C lets an object with *static* storage duration initialise the
+    /// member (`static struct W w = { 3, { 1, 2, 3 } };`), which makes the
+    /// object larger than its own type — something Rust has no way to say
+    /// about a value of type `W`. The item is therefore given a *companion*
+    /// type with the same leading layout and a tail of this length,
+    /// `__cinrs_W_3`, and every use of the object is a place reached through
+    /// `(*(&raw mut w).cast::<W>())`. `sizeof w` is still `sizeof(struct W)`,
+    /// which is what GCC says too. See [`codegen`](crate::codegen).
+    pub flexible_len: Option<u64>,
     /// The symbol `__asm__("name")` renamed the object to.
     pub asm_label: Option<String>,
     /// The section `__attribute__((section("…")))` asked for.
@@ -2763,6 +2789,15 @@ pub enum ExprKind {
     AddrOf(Place),
     /// The address of a function, whose type is a pointer to it.
     FuncAddr(FuncId),
+    /// GNU's `&&label`: the address of a label of the enclosing function, of
+    /// type `void *`.
+    ///
+    /// A function that takes one is lowered through a [control-flow
+    /// graph](crate::cfg), and the value is the *state number* the label's
+    /// block was given, cast to a pointer — which is what makes
+    /// `goto *e` a store to the state variable. It is an *address constant*,
+    /// so a `static void *table[] = { &&a, &&b };` holds a table of them.
+    LabelAddr(LabelId),
     /// `place = value`, whose value is the value stored.
     Assign {
         /// The assigned-to location.
@@ -3075,6 +3110,17 @@ pub enum Stmt {
         /// Where the statement was written.
         range: SourceRange,
     },
+    /// GNU's computed `goto *e;`, whose operand is a [label
+    /// address](ExprKind::LabelAddr).
+    ///
+    /// Only produced in [CFG mode](crate::cfg), which is the only mode a
+    /// function containing one is lowered in.
+    GotoPtr {
+        /// The pointer jumped through.
+        target: Expr,
+        /// Where the statement was written.
+        range: SourceRange,
+    },
     /// `break;`
     Break {
         /// What the `break` leaves.
@@ -3314,6 +3360,7 @@ pub fn calls_a_function(expr: &Expr) -> bool {
         | ExprKind::Float(_)
         | ExprKind::Zeroed
         | ExprKind::FuncAddr(_)
+        | ExprKind::LabelAddr(_)
         | ExprKind::VaListPristine
         | ExprKind::Unreachable
         | ExprKind::VaEnd => false,
@@ -3381,6 +3428,7 @@ pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
         | ExprKind::Float(_)
         | ExprKind::Zeroed
         | ExprKind::FuncAddr(_)
+        | ExprKind::LabelAddr(_)
         | ExprKind::VaListPristine
         | ExprKind::Unreachable
         | ExprKind::VaEnd => false,

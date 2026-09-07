@@ -361,3 +361,184 @@ fn a_switch_inside_a_loop_with_a_jump_out_of_both() {
         assert_eq!(scan(values.as_ptr(), 2), 101);
     }
 }
+
+// ---------------------------------------------------------------------------
+// labels as values (GNU computed goto)
+// ---------------------------------------------------------------------------
+
+/// The construct's reason for existing: a threaded interpreter, whose dispatch
+/// is a jump through a table of label addresses rather than a `switch`.
+#[test]
+fn a_threaded_dispatch_loop() {
+    c99! {
+        enum { OP_PUSH, OP_ADD, OP_DUP, OP_HALT };
+
+        int run(const int *code, int n) {
+            static void *table[] = { &&do_push, &&do_add, &&do_dup, &&do_halt };
+            int stack[16];
+            int sp = 0;
+            int pc = 0;
+            (void) n;
+            goto *table[code[pc]];
+
+        do_push:
+            stack[sp++] = code[++pc];
+            pc++;
+            goto *table[code[pc]];
+
+        do_add:
+            stack[sp - 2] = stack[sp - 2] + stack[sp - 1];
+            sp--;
+            pc++;
+            goto *table[code[pc]];
+
+        do_dup:
+            stack[sp] = stack[sp - 1];
+            sp++;
+            pc++;
+            goto *table[code[pc]];
+
+        do_halt:
+            return stack[sp - 1];
+        }
+    }
+
+    // push 3, push 4, add, dup, add, halt  =>  (3 + 4) * 2
+    let code = [0, 3, 0, 4, 1, 2, 1, 3];
+    assert_eq!(unsafe { run(code.as_ptr(), 8) }, 14);
+}
+
+/// `&&label` is an ordinary rvalue: it goes into a variable, through a `?:`,
+/// and into a function's own `void *` parameter-shaped local.
+#[test]
+fn a_label_address_is_an_ordinary_value() {
+    c99! {
+        int pick(int c) {
+            void *p = c ? &&yes : &&no;
+            goto *p;
+        yes:
+            return 1;
+        no:
+            return 0;
+        }
+
+        /* Straight through the conditional, with no variable in between. */
+        int pick_inline(int c) {
+            goto *(c ? &&hit : &&miss);
+        hit:
+            return 10;
+        miss:
+            return 20;
+        }
+
+        /* Reassigned in a loop, which is the "next state" idiom. */
+        int walk(int steps) {
+            void *next = &&step;
+            int seen = 0;
+            goto *next;
+        step:
+            seen++;
+            next = (seen < steps) ? &&step : &&out;
+            goto *next;
+        out:
+            return seen;
+        }
+    }
+
+    unsafe {
+        assert_eq!(pick(1), 1);
+        assert_eq!(pick(0), 0);
+        assert_eq!(pick_inline(1), 10);
+        assert_eq!(pick_inline(0), 20);
+        assert_eq!(walk(4), 4);
+    }
+}
+
+/// A label whose address is taken keeps a state of its own, and ordinary
+/// `goto`, `switch` and loops still reach it in the same function.
+#[test]
+fn label_addresses_mix_with_the_ordinary_jumps() {
+    c99! {
+        int mixed(int which, int n) {
+            void *target = &&fallback;
+            int total = 0;
+            switch (which) {
+            case 0:
+                target = &&doubled;
+                break;
+            case 1:
+                target = &&halved;
+                break;
+            default:
+                goto fallback;
+            }
+            goto *target;
+
+        doubled:
+            total = n * 2;
+            goto done;
+        halved:
+            total = n / 2;
+            goto done;
+        fallback:
+            for (int i = 0; i < n; i++) {
+                total += i;
+            }
+        done:
+            return total;
+        }
+    }
+
+    unsafe {
+        assert_eq!(mixed(0, 21), 42);
+        assert_eq!(mixed(1, 42), 21);
+        assert_eq!(mixed(7, 4), 6);
+    }
+}
+
+/// A label address may be taken without any `goto *` being written at all, and
+/// two different labels never share a value.
+#[test]
+fn a_label_address_is_a_value_of_its_own() {
+    c99! {
+        int distinct(void) {
+            void *a = &&first;
+            void *b = &&second;
+            if (a == b) return 0;
+            if (a == 0 || b == 0) return 0;
+            goto *a;
+        first:
+            if (&&first != a) return 0;
+            goto *b;
+        second:
+            return 1;
+        }
+    }
+
+    assert_eq!(unsafe { distinct() }, 1);
+}
+
+/// GCC makes the *difference* of two label addresses an integer constant, so a
+/// jump table can be a `static` array of offsets rather than of pointers.
+#[test]
+fn a_table_of_label_differences() {
+    c99! {
+        int offsets(int x) {
+            static int table[] = { &&second - &&first, &&third - &&first };
+            void *target = &&first + table[x];
+            int out = 0;
+            goto *target;
+        second:
+            out += 2;
+        third:
+            out += 1;
+        first:
+            return out;
+        }
+    }
+
+    unsafe {
+        assert_eq!(offsets(0), 3);
+        assert_eq!(offsets(1), 1);
+    }
+}

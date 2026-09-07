@@ -1,0 +1,55 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r#\"\n        struct W { int n; int data[]; };\n\n        static struct W w = { 3, { 1, 2, 3 } };\n        struct W shared = { 2, { 7, 8 } };\n\n        int read(void) { return w.data[2] + shared.data[1] + (int) sizeof w; }\n        \"#)"
+---
+mod __cinrs_unit_4591bf1b {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct W {
+        pub n: ::core::ffi::c_int,
+        pub data: [::core::ffi::c_int; 0],
+    }
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_W_2 {
+        pub n: ::core::ffi::c_int,
+        pub data: [::core::ffi::c_int; 2],
+    }
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_W_3 {
+        pub n: ::core::ffi::c_int,
+        pub data: [::core::ffi::c_int; 3],
+    }
+    #[allow(…)]
+    static mut w: __cinrs_W_3 = __cinrs_W_3 {
+        n: 3,
+        data: [1, 2, 3],
+    };
+    #[allow(…)]
+    pub static mut shared: __cinrs_W_2 = __cinrs_W_2 { n: 2, data: [7, 8] };
+    #[allow(…)]
+    pub unsafe extern "C" fn read() -> ::core::ffi::c_int {
+        unsafe {
+            return ({
+                let __cinrs_tmp0 = (&raw mut (*(&raw mut w).cast::<W>()).data)
+                    .cast::<::core::ffi::c_int>()
+                    .offset(2);
+                (*__cinrs_tmp0)
+            })
+                .wrapping_add({
+                    let __cinrs_tmp1 = (&raw mut (*(&raw mut shared).cast::<W>()).data)
+                        .cast::<::core::ffi::c_int>()
+                        .offset(1);
+                    (*__cinrs_tmp1)
+                })
+                .wrapping_add(4);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_4591bf1b::*;

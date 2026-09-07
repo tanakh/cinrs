@@ -669,6 +669,87 @@
 //! `static mut` item of its own, so its initialiser has to be a constant
 //! expression like any other.
 //!
+//! ## Over-aligned objects
+//!
+//! `_Alignas(N)` and `__attribute__((aligned(N)))` are honoured on an
+//! *object* — automatic, `static`, at file scope or `_Thread_local` — as well
+//! as on a type or a member. Rust has no way to over-align a *binding*, only a
+//! type, so the object is generated inside a one-field wrapper that carries
+//! the alignment, one per distinct alignment in the unit:
+//!
+//! ```text
+//! #[repr(C, align(64))] #[derive(Copy, Clone)]
+//! pub struct __cinrs_align_64<T>(pub T);
+//!
+//! pub static mut buf: __cinrs_align_64<[c_char; 256]> = __cinrs_align_64([0; 256]);
+//! ```
+//!
+//! Every use of the object in the generated code goes through the field —
+//! `&buf` is `&raw mut buf.0` — and **Rust code that reaches such an object
+//! reads `buf.0`** for the same reason. Nothing about the C program changes:
+//! `sizeof buf` is the array's size, the wrapper is invisible to it, and
+//! `_Alignof buf` answers what the declaration asked for.
+//!
+//! ```
+//! cinrs::c11! {
+//!     #include <stdint.h>
+//!
+//!     _Alignas(64) char buf[256];
+//!
+//!     int aligned(void) { return (uintptr_t) &buf % 64 == 0; }
+//! }
+//!
+//! assert_eq!(unsafe { aligned() }, 1);
+//! assert_eq!(unsafe { (&raw const buf.0) as usize % 64 }, 0);
+//! ```
+//!
+//! The strictest of several specifiers wins, `_Alignas(T)` asks for a type's
+//! alignment, and bare `aligned` for the target's `max_align_t`. An `_Alignas`
+//! *weaker* than the type's own alignment is the constraint violation C11
+//! 6.7.5p4 makes it; GCC's `aligned` "can only increase alignment", so a
+//! weaker one there is quietly not applied. The five declarations C11 6.7.5p2
+//! forbids the specifier in — a `typedef`, a bit-field, a function, a
+//! parameter and an object declared `register` — are each refused where they
+//! are written, and so is a variable length array, whose storage is allocated
+//! at run time.
+//!
+//! ## Initialising a flexible array member
+//!
+//! C99 forbids it, because the object would have to be larger than its type.
+//! GNU C allows it for an object with **static storage duration**, whose
+//! storage the compiler can make that large, and so does this: the item is
+//! given a *companion* type with the record's leading layout and a tail as
+//! long as the initialiser, and the C object is the record at its address.
+//!
+//! ```text
+//! #[repr(C)] pub struct __cinrs_W_3 { pub n: c_int, pub data: [c_int; 3] }
+//! pub static mut w: __cinrs_W_3 = __cinrs_W_3 { n: 3, data: [1, 2, 3] };
+//! // every use of `w` in the C program is  (*(&raw mut w).cast::<W>())
+//! ```
+//!
+//! `sizeof w` is still `sizeof(struct W)`, which is what GCC says too, and
+//! `#pragma cinrs export` exports the storage — the full size — under the C
+//! name. **Rust code reads the companion**, whose fields are the record's with
+//! the tail sized by the initialiser:
+//!
+//! ```
+//! cinrs::c99! {
+//!     struct W { int n; int data[]; };
+//!
+//!     struct W w = { 3, { 1, 2, 3 } };
+//!
+//!     int last(void) { return w.data[w.n - 1]; }
+//! }
+//!
+//! assert_eq!(unsafe { last() }, 3);
+//! assert_eq!(unsafe { (&raw const w).read().data }, [1, 2, 3]);
+//! ```
+//!
+//! An **automatic** object cannot be made larger than its type, and neither
+//! can a record nested inside another aggregate — an array of them, a member,
+//! or a compound literal — whose own size already fixes the room there is.
+//! Both are refused, in GCC's own words.
+//!
 //! ## Variably modified types and `alloca`
 //!
 //! `T a[n];` where `n` is not a constant is an ordinary C99 declaration, and
@@ -1186,6 +1267,51 @@
 //! forms compute exactly what the C did; only the second is unpleasant to
 //! read, and only the functions that need it get it.
 //!
+//! ## Labels as values
+//!
+//! GNU C's computed `goto` is supported, and it is why the state machine is
+//! worth having: `&&label` is an rvalue of type `void *` whose value is the
+//! *state number* the label's block was given, and `goto *e` stores that
+//! number and goes round the dispatch again. A function that takes a label's
+//! address is therefore always lowered through the state machine.
+//!
+//! ```
+//! cinrs::c99! {
+//!     int run(const int *code, int n) {
+//!         static void *table[] = { &&push, &&add, &&halt };
+//!         int stack[8], sp = 0, pc = 0;
+//!         (void) n;
+//!         goto *table[code[pc]];
+//!     push:
+//!         stack[sp++] = code[++pc];
+//!         pc++;
+//!         goto *table[code[pc]];
+//!     add:
+//!         stack[sp - 2] += stack[sp - 1];
+//!         sp--;
+//!         pc++;
+//!         goto *table[code[pc]];
+//!     halt:
+//!         return stack[sp - 1];
+//!     }
+//! }
+//!
+//! // push 3, push 4, add, halt
+//! let code = [0, 3, 0, 4, 1, 2];
+//! assert_eq!(unsafe { run(code.as_ptr(), 6) }, 7);
+//! ```
+//!
+//! A label address is an *address constant*, so the dispatch table may be a
+//! block-scope `static` as it is above; it goes into a `void *` variable, a
+//! `?:`, or straight into `goto *`, and a label whose address is taken keeps
+//! a block — and therefore a number — of its own. GCC's label difference
+//! `&&a - &&b` is a constant here too. What such a value is *not* is a real
+//! address: nothing may be read through it, arithmetic on one only means
+//! anything inside its own function, and `&&label` naming a label of an
+//! **enclosing** function — GCC's nonlocal label address, which needs a frame
+//! pointer a lifted [nested function](#nested-functions) does not have — is a
+//! located error.
+//!
 //! # The preprocessor
 //!
 //! A full C99 preprocessor runs before the parser: object-like and
@@ -1452,6 +1578,42 @@
 //! use `va_list` and `va_end` as names of its own. On a toolchain older than
 //! 1.99 a variadic *definition* is a clear error rather than an expansion the
 //! compiler would reject.
+//!
+//! ## Pointers to `va_list`
+//!
+//! `va_list *` is `*mut core::ffi::VaList<'_>`, and works as a parameter and
+//! as a local — which is what lets a helper *advance the caller's list*:
+//!
+//! ```
+//! # #[rustversion::since(1.99)]
+//! # fn main() {
+//! cinrs::c99! {
+//!     #include <stdarg.h>
+//!
+//!     int two(va_list *ap) { return va_arg(*ap, int) + va_arg(*ap, int); }
+//!
+//!     int drive(int n, ...) {
+//!         va_list ap;
+//!         va_start(ap, n);
+//!         int first = two(&ap);
+//!         int third = va_arg(ap, int);   /* carries on where `two` stopped */
+//!         va_end(ap);
+//!         return first * 100 + third;
+//!     }
+//! }
+//!
+//! assert_eq!(unsafe { drive(3, 1, 2, 3) }, 303);
+//! # }
+//! # #[rustversion::before(1.99)]
+//! # fn main() {}
+//! ```
+//!
+//! A `va_list` local inside such a helper starts out as a copy of `*ap`, so
+//! `va_copy(copy, *ap)` works there too. The lifetime `VaList` carries is
+//! elided, which a function signature and a `let` can do and nothing else
+//! can: a `struct` member, a file-scope object and a return type of that type
+//! are each refused, with the same "only a local variable or parameter"
+//! message a bare `va_list` gets there.
 //!
 //! # Error reporting
 //!

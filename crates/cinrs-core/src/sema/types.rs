@@ -344,15 +344,12 @@ impl Sema<'_> {
                 // `int (*p)[n]` is a pointer to a variably modified type: the
                 // arithmetic on it scales by a run-time size, which the
                 // pointee type carries. See [`ir::Types::vm_dims`].
-                if pointee.is_va_list() {
-                    // Some code passes `va_list *` around to work with the
-                    // array form of `va_list`; Rust's is a value, so there is
-                    // nothing honest to point at.
-                    return Err(TypeError::at(
-                        range,
-                        "pointers to va_list are not supported yet",
-                    ));
-                }
+                //
+                // `va_list *` is `*mut core::ffi::VaList<'_>`: a raw pointer
+                // may hold the lifetime a member or a `static` could not name,
+                // so the type itself is fine wherever the *object* holding it
+                // is a local or a parameter. `Sema::reject_va_list` is what
+                // keeps it out of the other places.
                 Ok(self.ptr_to(pointee, inner.qualifiers.is_const))
             }
             ast::TypeKind::Array { elem, size, .. } => {
@@ -1123,13 +1120,19 @@ impl Sema<'_> {
             if self.reject_va_list(ty, field.range) {
                 continue;
             }
-            let requested = field
-                .attrs
-                .aligned
-                .as_ref()
-                .or(field.specifiers.alignas.as_ref());
-            let align_request = self.alignment_of(requested);
-            let align_range = requested.map(|a| a.range);
+            let strictest =
+                self.strictest_alignment(&field.specifiers.alignas, field.attrs.aligned.as_ref());
+            let align_request = strictest.map(|(value, _)| value);
+            let align_range = strictest.map(|(_, spec)| spec.range).or_else(|| {
+                // A specifier whose operand was refused still says that one was
+                // written, which is what the bit-field check below asks.
+                field
+                    .specifiers
+                    .alignas
+                    .first()
+                    .or(field.attrs.aligned.as_ref())
+                    .map(|spec| spec.range)
+            });
             // Only the member's *own* `packed` makes it one-byte aligned; a
             // `#pragma pack(N)` caps every member at N instead, which
             // `packing` says on its own.
@@ -1137,7 +1140,11 @@ impl Sema<'_> {
 
             if let Some(width) = &field.bit_width {
                 if let Some(range) = align_range
-                    && field.specifiers.alignas.is_some()
+                    && field
+                        .specifiers
+                        .alignas
+                        .iter()
+                        .any(|spec| !spec.from_attribute)
                 {
                     // Which is what GCC says too: `_Alignas` may not be
                     // applied to a bit-field. Its own `aligned` attribute may,
@@ -1679,6 +1686,39 @@ impl Sema<'_> {
             return None;
         }
         Some(value)
+    }
+
+    /// The strictest of the alignment specifiers written on one declaration.
+    ///
+    /// C11 6.7.5p6: "if several alignment specifiers appear in the same
+    /// declaration, the effective alignment requirement is the strictest one
+    /// among them", and GCC folds an `aligned` attribute in with them. `specs`
+    /// are the ones written among the declaration specifiers — an `aligned`
+    /// there included, which is why `attr` is filtered against them rather than
+    /// resolved a second time — and `attr` is the one written on the
+    /// declarator.
+    ///
+    /// Every one of them is resolved, so that a bad operand is reported where
+    /// it stands and not only when it happens to be the strictest.
+    pub(super) fn strictest_alignment<'a>(
+        &mut self,
+        specs: &'a [ast::Alignment],
+        attr: Option<&'a ast::Alignment>,
+    ) -> Option<(u64, &'a ast::Alignment)> {
+        let mut best: Option<(u64, &'a ast::Alignment)> = None;
+        let written = specs
+            .iter()
+            .chain(attr.filter(|a| !specs.contains(a)))
+            .collect::<Vec<_>>();
+        for spec in written {
+            let Some(value) = self.alignment_of(Some(spec)) else {
+                continue;
+            };
+            if best.is_none_or(|(best, _)| value > best) {
+                best = Some((value, spec));
+            }
+        }
+        best
     }
 
     /// Places the members and builds both views of the record: the C member

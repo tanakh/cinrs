@@ -60,6 +60,6 @@
 !00212                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
 00213   [unimplemented]  unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
 !00214                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
-!00216                   error: "a compound literal requires C99 or later"  conforming: a compound literal is C99, so strict C89 is required to refuse it; write `c99!`. Behind that the case wants an initialised flexible array member, which is the `[unimplemented]` line every other entry point has
+!00216                   error: "a compound literal requires C99 or later"  conforming: a compound literal is C99, so strict C89 is required to refuse it; write `c99!`. Behind that the case wants the C23 empty initializer `{}`, which is the `[unimplemented]` line `c99!` and `c11!` have and which `c23!` and the GNU dialects take
 !00217                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
 !00219                   error: "'_Generic' requires C11 or later"  conforming: `_Generic` is C11, so strict C89 is required to refuse it; write `c11!`

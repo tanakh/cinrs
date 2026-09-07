@@ -43,4 +43,3 @@
 ?00140                   variadic function definition; needs Rust 1.99, so it passes there and not before
 00204   [unimplemented]  unsupported: `va_arg` with a struct type
 00213   [unimplemented]  unsupported: a `goto` out of a statement expression. The `?:` with one `void` operand it also writes now works
-00216   [unimplemented]  unsupported: initializing a flexible array member

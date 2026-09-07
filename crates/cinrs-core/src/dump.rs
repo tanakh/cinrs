@@ -446,6 +446,7 @@ impl<'a> Dumper<'a> {
                 d.under("body", |dd| dd.stmt(body));
             }),
             StmtKind::Goto(label) => self.line(format!("goto '{}'", label.name)),
+            StmtKind::GotoPtr(target) => self.under("goto-ptr", |d| d.expr(target)),
             StmtKind::Continue => self.line("continue"),
             StmtKind::Break => self.line("break"),
             StmtKind::Return(None) => self.line("return"),
@@ -553,6 +554,7 @@ impl<'a> Dumper<'a> {
             ExprKind::Cast { ty, expr } => {
                 self.under(&format!("cast to {}", self.ty(&ty.ty)), |d| d.expr(expr));
             }
+            ExprKind::LabelAddr(label) => self.line(format!("label-addr '{}'", label.name)),
             ExprKind::SizeofExpr(inner) => self.under("sizeof-expr", |d| d.expr(inner)),
             ExprKind::SizeofType(ty) => {
                 self.line(format!("sizeof-type {}", self.ty(&ty.ty)));

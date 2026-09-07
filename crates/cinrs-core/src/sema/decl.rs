@@ -23,6 +23,23 @@ enum ThreadLocal {
     Rejected,
 }
 
+/// What the alignment specifiers of one declarator ask of the object.
+///
+/// See [`Sema::align_request`], which builds it, and
+/// [`Sema::apply_object_alignment`], which decides what the object does with
+/// it.
+#[derive(Clone, Copy, Debug)]
+struct AlignRequest {
+    /// The strictest alignment asked for, in bytes; already checked to be a
+    /// power of two.
+    want: u64,
+    /// Where the specifier that asked for it was written.
+    range: SourceRange,
+    /// Whether an `_Alignas` specifier is among the requests, rather than only
+    /// GCC's `aligned` attribute.
+    standard: bool,
+}
+
 impl Sema<'_> {
     // -- static assertions --------------------------------------------------
 
@@ -156,6 +173,7 @@ impl Sema<'_> {
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
             self.reject_cleanup(&attrs, "a 'typedef'");
+            self.reject_alignas(&decl.specifiers, "a 'typedef'");
             return self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
         }
 
@@ -166,6 +184,7 @@ impl Sema<'_> {
             if let Some(range) = decl.specifiers.thread_local {
                 self.error(range, "'_Thread_local' is not allowed on a function");
             }
+            self.reject_alignas(&decl.specifiers, "a function");
             let mut attrs = declarator.attrs.clone();
             attrs.merge(decl.specifiers.attrs.clone());
             // GNU spells the forward declaration of a nested function
@@ -207,18 +226,37 @@ impl Sema<'_> {
         if let Some(range) = decl.specifiers.noreturn {
             self.error(range, "'_Noreturn' is only allowed on a function");
         }
-        if let Some(alignment) = &decl.specifiers.alignas {
-            self.error(
-                alignment.range,
-                "an alignment specifier on an object is not supported yet; '_Alignas' and \
-                 '__attribute__((aligned))' are honoured on the members of a struct or \
-                 union, where the generated Rust type can carry the alignment",
-            );
-        }
         let mut attrs = declarator.attrs.clone();
         attrs.merge(decl.specifiers.attrs.clone());
         if let Some(range) = attrs.packed {
             self.error(range, "'packed' is only meaningful on a record or a member");
+        }
+        // `_Alignas(N)`, `_Alignas(T)` and `__attribute__((aligned(N)))` on the
+        // object itself; see [`Sema::align_request`]. The operand is checked
+        // here, where it is written; whether the object can carry the answer
+        // depends on its type, and is [`Sema::apply_object_alignment`]'s
+        // question.
+        let mut requested = self.align_request(&decl.specifiers, &attrs);
+        if let Some(request) = &requested
+            && let Some(what) = match storage {
+                // C11 6.7.5p2: the address of a `register` object cannot be
+                // taken, so there is nothing an alignment could describe.
+                Some(ast::StorageClass::Register) => Some("an object declared 'register'"),
+                Some(ast::StorageClass::Constexpr) => {
+                    Some("a 'constexpr' object, which becomes a constant rather than storage")
+                }
+                // The object is defined in another translation unit and this
+                // declaration reserves no storage, so there is nothing here to
+                // align; GCC's own attribute is equally inert on one.
+                Some(ast::StorageClass::Extern) => None,
+                _ => None,
+            }
+        {
+            self.error(
+                request.range,
+                format!("an alignment specifier is not allowed on {what}"),
+            );
+            requested = None;
         }
         // GCC drops `cleanup` on anything but an automatic object, with
         // "'cleanup' attribute ignored"; dropping it silently would change
@@ -332,6 +370,17 @@ impl Sema<'_> {
         // plain `let`, and the one C hedges around with rules about where it
         // may be declared at all. It may not have an initialiser at all.
         if self.types().is_vm(ty) {
+            // The object is a pointer into a heap allocation whose alignment
+            // is the element type's, and there is no wrapper that could carry
+            // a stricter one.
+            if let Some(request) = &requested {
+                self.error(
+                    request.range,
+                    "an alignment specifier is not supported on a variable length array; \
+                     its storage is allocated at run time and carries the alignment of the \
+                     element type",
+                );
+            }
             let mut out = self.declare_vla(name, decl, declarator, ty, bounds, file_scope);
             if let Some(Stmt::Vla(def)) = out.last() {
                 let object = def.object;
@@ -369,13 +418,20 @@ impl Sema<'_> {
                 declarator,
             );
             if !inferred {
+                // An object with static storage duration is the only one GNU C
+                // lets initialise a flexible array member: its storage is the
+                // compiler's to make as large as the initialiser asks. See
+                // `Sema::flexible_member_init`.
+                self.flexible_init = super::init::FlexibleInit::Allowed;
                 init = self.late_initializer(declarator, ty, &name.name);
+                self.flexible_init = super::init::FlexibleInit::Automatic;
             }
             if let (Some(id), Some(init)) = (object, init) {
                 self.initialize_static_object(id, declarator, init);
             }
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 self.apply_object_attributes(id, &attrs, declarator);
+                self.apply_object_alignment(id, ty, requested);
             }
             return Vec::new();
         }
@@ -405,13 +461,15 @@ impl Sema<'_> {
         if ty.is_error() {
             return Vec::new();
         }
+        self.apply_object_alignment(id, ty, requested);
         if !inferred {
             init = self.late_initializer(declarator, ty, &name.name);
         }
         // A `va_list` has no zero value: it starts out as a copy of the list
         // the function was called with, which is also what `va_start` puts
-        // back into it.
-        if ty.is_va_list() {
+        // back into it. A `va_list *` local has one — a null pointer — but its
+        // type still names `core::ffi::VaList`.
+        if self.mentions_va_list(ty) {
             self.gate_va_list(declarator.range);
         }
         if ty.is_va_list() && init.is_none() {
@@ -770,6 +828,104 @@ impl Sema<'_> {
         if let Some(section) = &attrs.section {
             self.program.objects[id.0 as usize].section = Some(section.node.clone());
         }
+    }
+
+    /// Reports an `_Alignas` on one of the declarations C11 6.7.5p2 forbids it
+    /// in: "a typedef, or a bit-field, or a function, or a parameter, or an
+    /// object declared with the `register` storage-class specifier".
+    ///
+    /// Only the `_Alignas` spelling: GCC's `aligned` attribute is *allowed* on
+    /// a `typedef` and on a function, and each of those has an answer of its
+    /// own — [`Sema::align_typedef_record`](super::Sema::align_typedef_record)
+    /// for the one shape a `typedef` can carry, and a diagnostic of its own
+    /// for a function, Rust having no way to align code.
+    fn reject_alignas(&mut self, specifiers: &ast::DeclSpecifiers, what: &str) {
+        let Some(spec) = specifiers.alignas.iter().find(|s| !s.from_attribute) else {
+            return;
+        };
+        self.error(
+            spec.range,
+            format!("an alignment specifier is not allowed on {what}"),
+        );
+    }
+
+    /// What the alignment specifiers of one declarator ask for, together.
+    ///
+    /// The strictest of them wins (C11 6.7.5p6), whether they were spelled
+    /// `_Alignas` or `aligned` and whether they stood among the declaration
+    /// specifiers or on the declarator; see
+    /// [`Sema::strictest_alignment`](super::Sema::strictest_alignment), which
+    /// is the same fold a record's member goes through.
+    ///
+    /// [`AlignRequest::standard`] records whether an `_Alignas` is among them,
+    /// because the two spellings differ on one point and only one: an
+    /// `_Alignas` weaker than the type's own alignment is a constraint
+    /// violation (6.7.5p4), while GCC's `aligned` "can only increase
+    /// alignment" and a weaker one is simply not applied.
+    fn align_request(
+        &mut self,
+        specifiers: &ast::DeclSpecifiers,
+        attrs: &ast::Attributes,
+    ) -> Option<AlignRequest> {
+        let standard = specifiers.alignas.iter().any(|spec| !spec.from_attribute);
+        let (want, spec) = self.strictest_alignment(&specifiers.alignas, attrs.aligned.as_ref())?;
+        Some(AlignRequest {
+            want,
+            range: spec.range,
+            standard,
+        })
+    }
+
+    /// Gives an object the alignment its declaration asked for.
+    ///
+    /// Nothing is recorded when the request is no stricter than the alignment
+    /// the type already has: there would be nothing for the generated wrapper
+    /// to say, and `_Alignof` answers the same either way. A *weaker* one is
+    /// C11 6.7.5p4's constraint violation when it was spelled `_Alignas`, and
+    /// GCC's silent no-op when it was spelled `aligned`; see
+    /// [`Sema::align_request`].
+    fn apply_object_alignment(&mut self, id: ObjectId, ty: Ty, requested: Option<AlignRequest>) {
+        let Some(request) = requested else { return };
+        if ty.is_error() {
+            return;
+        }
+        let natural = self.natural_align(ty).unwrap_or(1);
+        if request.want < natural {
+            if request.standard {
+                self.error(
+                    request.range,
+                    format!(
+                        "the requested alignment {} is weaker than the alignment {natural} \
+                         that '{}' already has",
+                        request.want,
+                        self.tyname(ty)
+                    ),
+                );
+            }
+            return;
+        }
+        if request.want == natural {
+            return;
+        }
+        // Several declarations of one file-scope object each get a say, and
+        // the strictest of them wins, exactly as several specifiers on one
+        // declaration do.
+        let slot = &mut self.program.objects[id.0 as usize].align;
+        *slot = Some(slot.unwrap_or(0).max(request.want));
+    }
+
+    /// The alignment a type has of its own.
+    ///
+    /// An array's is its element's, which is also the answer for the one array
+    /// whose length is not known yet — a tentative definition's `int a[];`.
+    fn natural_align(&self, ty: Ty) -> Option<u64> {
+        if let Ty::Array(id) = ty {
+            let elem = self.types().array_type(id).elem;
+            return self.natural_align(elem);
+        }
+        self.types()
+            .size_align(ty, &self.target)
+            .map(|layout| layout.align)
     }
 
     /// Declares a C23 `constexpr` object.
@@ -1167,9 +1323,33 @@ impl Sema<'_> {
         let value = self
             .static_init(init, "initializer")
             .unwrap_or_else(|| self.zero(ty, declarator.range));
+        // An initialised flexible array member makes the *object* larger than
+        // its type; the item is generated with a companion type whose tail is
+        // that long. See [`ir::Object::flexible_len`].
+        if let Some(len) = self.flexible_tail_of(&value) {
+            self.program.objects[id.0 as usize].flexible_len = Some(len);
+        }
         if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
             entry.init = value;
         }
+    }
+
+    /// How many elements an initialiser gave a record's flexible array member,
+    /// when it gave it any.
+    fn flexible_tail_of(&self, value: &Expr) -> Option<u64> {
+        let ExprKind::RecordLit { record, fields } = &value.kind else {
+            return None;
+        };
+        let def = self.types().record(*record);
+        if !def.flexible {
+            return None;
+        }
+        let tail = fields.last()?;
+        let Ty::Array(id) = tail.ty else {
+            return None;
+        };
+        let len = self.types().array_type(id).len;
+        (len > 0).then_some(len)
     }
 
     /// Handles a repeated file-scope declaration of the same object.
@@ -1568,6 +1748,16 @@ impl Sema<'_> {
             }
             if let Some(range) = param.specifiers.thread_local {
                 self.error(range, "'_Thread_local' is not allowed on a parameter");
+            }
+            // C11 6.7.5p2 names the parameter as one of the five declarations
+            // an alignment specifier may not appear in: the argument is placed
+            // by the calling convention, which nothing here can change.
+            if let Some(range) = param.specifiers.alignas.first().map(|spec| spec.range) {
+                self.error(
+                    range,
+                    "an alignment specifier is not allowed on a parameter; the argument is \
+                     placed by the calling convention",
+                );
             }
             let ty = match self.resolve_param_ty(&param.ty) {
                 Ok(ty) => ty,
@@ -2030,7 +2220,7 @@ impl Sema<'_> {
                             thread_local: None,
                             inline: false,
                             noreturn: None,
-                            alignas: None,
+                            alignas: Vec::new(),
                             attrs: ast::Attributes::default(),
                             base: implicit_int_type(ident.range),
                             range: ident.range,
@@ -2155,10 +2345,14 @@ impl Sema<'_> {
         self.func_uses_alloca = false;
         self.next_loop = 0;
         self.next_switch = 0;
-        self.next_label = 0;
+        // `next_label` is *not* reset: a label's identity is unique across the
+        // unit, so that a `&&label` in a block-scope `static`'s initialiser —
+        // which becomes an item at module level — can be resolved without
+        // knowing whose function it came from.
+        //
         // Whether the body can keep Rust's own control flow is decided before
         // it is checked, because it changes how `switch` is lowered.
-        self.cfg_mode = Self::needs_cfg(&def.body);
+        self.cfg_mode = Self::needs_cfg(def);
         self.collect_labels(&def.body);
         // A `goto` in a function nested inside this one that names one of
         // these labels is GNU's nonlocal goto, which is refused by name rather
@@ -2231,13 +2425,16 @@ impl Sema<'_> {
                 name.range,
             );
             self.insert(&name.name, Entry::Object(object));
-            if ty.is_va_list() {
-                // A parameter of a *definition*: the generated signature has
-                // to name `core::ffi::VaList`.
+            // A parameter of a *definition*: the generated signature has to
+            // name `core::ffi::VaList`, whether by value or through a pointer.
+            if self.mentions_va_list(ty) {
                 self.gate_va_list(name.range);
-                if self.va_param.is_none() {
-                    self.va_param = Some(object);
-                }
+            }
+            // Either spelling is a list this function may copy: a `va_list`
+            // parameter holds the caller's list, and a `va_list *` points at
+            // it, so `va_list x;` inside has something to start from.
+            if (ty.is_va_list() || self.points_to_va_list(ty)) && self.va_param.is_none() {
+                self.va_param = Some(object);
             }
             params.push(object);
         }
@@ -2307,7 +2504,24 @@ impl Sema<'_> {
         self.pop_scope();
 
         let body = if self.cfg_mode {
-            ir::Body::Cfg(crate::cfg::lower(body, &params, &self.program.objects))
+            // The labels of *this* function whose address a `&&label` took.
+            // `Sema::label_addrs` is unit-wide, so it is `Sema::labels` — which
+            // holds only this function's — that picks them out; sorting is
+            // what keeps the numbering of a graph that has such a block
+            // reachable through nothing else from depending on a hash order.
+            let mut pinned: Vec<ir::LabelId> = self
+                .labels
+                .values()
+                .map(|label| label.id)
+                .filter(|id| self.label_addrs.contains(id))
+                .collect();
+            pinned.sort_unstable();
+            ir::Body::Cfg(crate::cfg::lower(
+                body,
+                &params,
+                &self.program.objects,
+                &pinned,
+            ))
         } else {
             ir::Body::Structured(body)
         };
@@ -2365,7 +2579,6 @@ impl Sema<'_> {
             cleanup_depth: std::mem::take(&mut self.cleanup_depth),
             next_loop: self.next_loop,
             next_switch: self.next_switch,
-            next_label: self.next_label,
         })
     }
 
@@ -2388,7 +2601,6 @@ impl Sema<'_> {
         self.cleanup_depth = saved.cleanup_depth;
         self.next_loop = saved.next_loop;
         self.next_switch = saved.next_switch;
-        self.next_label = saved.next_label;
     }
 
     // -- static initialisers ------------------------------------------------
@@ -2396,6 +2608,14 @@ impl Sema<'_> {
     /// Reduces an initialiser for an object with static storage duration to
     /// something the generated `static mut` item can hold.
     pub(super) fn static_init(&mut self, expr: Expr, what: &str) -> Option<Expr> {
+        // GNU's *label difference*, `&&a - &&b`: an integer constant in GCC,
+        // and the difference of two state numbers here. Neither is known until
+        // the [control-flow graph](crate::cfg) has been numbered, so it goes
+        // through unevaluated and code generation folds it — which Rust does
+        // in a `const` too, the two operands being literals by then.
+        if is_label_difference(&expr) {
+            return Some(expr);
+        }
         let (ty, range) = (expr.ty, expr.range);
         match expr.kind {
             // `int i = (1, 2);` — a comma operator is not part of a *constant
@@ -2618,7 +2838,12 @@ impl Sema<'_> {
     /// torture suite.
     fn is_address_constant(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Zeroed | ExprKind::FuncAddr(_) | ExprKind::Int(_) => true,
+            // GNU makes `&&label` an address constant, which is what lets a
+            // dispatch table be a block-scope `static void *t[] = { &&a };`.
+            ExprKind::Zeroed
+            | ExprKind::FuncAddr(_)
+            | ExprKind::LabelAddr(_)
+            | ExprKind::Int(_) => true,
             ExprKind::Cast(inner) => self.is_address_constant(inner),
             ExprKind::AddrOf(place) => self.is_static_place(place),
             ExprKind::PtrOffset { ptr, index, .. } => {
@@ -2651,6 +2876,30 @@ impl Sema<'_> {
             // file scope is an ordinary `Object` with static storage.
             PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => false,
         }
+    }
+}
+
+/// Whether an expression is GNU's difference of two label addresses.
+///
+/// `&&a - &&b` is an integer constant expression in GCC — the whole point of
+/// the idiom being a `static` table of offsets — and here it is the difference
+/// of two state numbers, which nothing knows until the graph has been
+/// numbered. A conversion around it changes nothing: the array the table goes
+/// into is usually narrower than `ptrdiff_t`.
+fn is_label_difference(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Cast(inner) => is_label_difference(inner),
+        ExprKind::PtrDiff { lhs, rhs } => is_label_address(lhs) && is_label_address(rhs),
+        _ => false,
+    }
+}
+
+/// Whether an expression is a label address, through any conversions.
+fn is_label_address(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::LabelAddr(_) => true,
+        ExprKind::Cast(inner) => is_label_address(inner),
+        _ => false,
     }
 }
 

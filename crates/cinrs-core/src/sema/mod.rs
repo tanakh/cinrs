@@ -394,7 +394,6 @@ struct SavedFunc {
     cleanup_depth: usize,
     next_loop: u32,
     next_switch: u32,
-    next_label: u32,
 }
 
 /// Why a type could not be resolved, and where to say so.
@@ -643,6 +642,17 @@ struct Sema<'a> {
     cfg_mode: bool,
     /// The labels of the function being checked, collected before its body is.
     labels: HashMap<String, Label>,
+    /// Whether the initialiser being checked may give a flexible array member
+    /// a value; see [`init::FlexibleInit`].
+    flexible_init: init::FlexibleInit,
+    /// Every label of the unit whose address a `&&label` has taken.
+    ///
+    /// Such a label keeps a block — and therefore a state number — of its own
+    /// through the [CFG](crate::cfg) lowering's clean-up passes, and is a
+    /// possible target of every computed `goto` in its function. The set is
+    /// unit-wide, since a [`ir::LabelId`] is; the labels of *one* function are
+    /// what [`Sema::labels`] holds at the moment its body is lowered.
+    label_addrs: HashSet<ir::LabelId>,
     breakables: Vec<Breakable>,
     /// The `switch` statements enclosing the statement being checked, in CFG
     /// mode. Empty in the structured mode, which splits a `switch` body into
@@ -650,6 +660,13 @@ struct Sema<'a> {
     switch_stack: Vec<SwitchState>,
     next_loop: u32,
     next_switch: u32,
+    /// Numbers the `goto` labels of the whole unit, function after function.
+    ///
+    /// A [`ir::LabelId`] is unique across the translation unit rather than
+    /// within a function, which is what lets code generation look one up
+    /// without knowing whose it is — a block-scope `static void *t[] = {
+    /// &&a };` becomes an item at module level, and the state number its
+    /// initialiser holds belongs to a function the item says nothing about.
     next_label: u32,
     next_anon: u32,
 }
@@ -713,6 +730,8 @@ impl<'a> Sema<'a> {
             va_param: None,
             cfg_mode: false,
             labels: HashMap::new(),
+            flexible_init: init::FlexibleInit::Automatic,
+            label_addrs: HashSet::new(),
             breakables: Vec::new(),
             switch_stack: Vec::new(),
             next_loop: 0,
@@ -1374,6 +1393,8 @@ impl<'a> Sema<'a> {
             is_const,
             is_register: false,
             vla_storage: false,
+            align: None,
+            flexible_len: None,
             asm_label: None,
             section: None,
             range,

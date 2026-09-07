@@ -3,8 +3,10 @@
 //! What the state machine *computes* is covered by the integration tests that
 //! run it, and what it *reads* like by the code-generation snapshots. This file
 //! covers the invariants that hold between the two: which functions take the
-//! CFG path at all, and that the cleanups leave a graph with no block that
-//! only forwards to another and none that cannot be reached.
+//! CFG path at all, that the cleanups leave a graph with no block that only
+//! forwards to another and none that cannot be reached, and that a label whose
+//! address GNU's `&&label` took keeps a block — and therefore a number — of
+//! its own through all three.
 
 use std::str::FromStr;
 
@@ -66,16 +68,30 @@ fn check_invariants(cfg: &Cfg) {
     let mut reachable = vec![false; count];
     reachable[0] = true;
     let mut stack = vec![0usize];
+    // A label whose address was taken keeps a block of its own, which a
+    // computed `goto` may be the only way into — and a function may take an
+    // address without ever jumping through it. Such a block is a root of the
+    // walk, exactly as it is in the lowering.
+    let pinned: Vec<usize> = cfg.labels.values().map(|block| block.0 as usize).collect();
+    for index in &pinned {
+        reachable[*index] = true;
+        stack.push(*index);
+    }
     while let Some(index) = stack.pop() {
         let block = &cfg.blocks[index];
         let successors: Vec<usize> = match &block.term {
             Terminator::Jump { target, .. } => {
                 assert!(
-                    !block.stmts.is_empty() || target.0 as usize == index,
+                    !block.stmts.is_empty()
+                        || target.0 as usize == index
+                        || pinned.contains(&index),
                     "block {index} only forwards to {}; jump threading missed it",
                     target.0
                 );
                 vec![target.0 as usize]
+            }
+            Terminator::IndirectJump { blocks, .. } => {
+                blocks.iter().map(|blk| blk.0 as usize).collect()
             }
             Terminator::Branch {
                 then_blk, else_blk, ..
@@ -277,4 +293,50 @@ fn a_switch_with_more_groups_than_rustc_can_nest_takes_the_graph() {
     let one_group =
         format!("int g(int x) {{ int t = 0; switch (x) {{ {labels} t = 1; break; }} return t; }}");
     assert!(is_structured(&one_group, "g"));
+}
+
+#[test]
+fn a_label_whose_address_is_taken_keeps_a_block_of_its_own() {
+    // `&&label` is a *state number*, so the label's block may not be threaded
+    // past, merged into its predecessor or dropped for being unreachable —
+    // and the function is lowered through the graph even without a `goto`.
+    let source = "
+        int f(int n) {
+            void *table[2];
+            table[0] = &&one;
+            table[1] = &&two;
+            goto *table[n];
+        one:
+            return 1;
+        two:
+            return 2;
+        }";
+    assert!(!is_structured(source, "f"));
+    let cfg = cfg_of(source, "f");
+    check_invariants(&cfg);
+    assert_eq!(cfg.labels.len(), 2, "both labels are pinned");
+    let mut states: Vec<u32> = cfg.labels.values().map(|block| block.0).collect();
+    states.sort_unstable();
+    states.dedup();
+    assert_eq!(states.len(), 2, "two labels, two distinct states");
+    assert!(
+        cfg.blocks
+            .iter()
+            .any(|b| matches!(b.term, Terminator::IndirectJump { .. }))
+    );
+
+    // Taking an address without ever jumping through it is enough on its own:
+    // the label's block is nothing else's successor, and must survive anyway.
+    let unjumped = "
+        int g(void) {
+            void *p = &&here;
+            if (p == 0) return 1;
+            return 0;
+        here:
+            return 2;
+        }";
+    assert!(!is_structured(unjumped, "g"));
+    let cfg = cfg_of(unjumped, "g");
+    check_invariants(&cfg);
+    assert_eq!(cfg.labels.len(), 1);
 }

@@ -37,6 +37,34 @@ use super::{ConvContext, Sema, place_of};
 /// nothing could compile.
 const MAX_INIT_ELEMENTS: u64 = 1 << 20;
 
+/// Whether the initialiser being checked may give a [flexible array
+/// member](crate::ir::Field::flexible) a value, and why not when it may not.
+///
+/// C99 6.7.2.1p18 forbids it outright; GNU C allows it where the compiler can
+/// make the object's storage as large as the initialiser asks, which is an
+/// object with static storage duration and nothing else. See
+/// [`Sema::flexible_member_init`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FlexibleInit {
+    /// The object has automatic storage duration, whose size is its type's.
+    Automatic,
+    /// The object has static storage duration and this is its own initialiser.
+    Allowed,
+    /// The record is nested inside another aggregate, whose size already fixes
+    /// how much room there is.
+    Nested,
+}
+
+impl FlexibleInit {
+    /// What a subobject one level down is allowed.
+    fn inside(self) -> Self {
+        match self {
+            FlexibleInit::Automatic => FlexibleInit::Automatic,
+            FlexibleInit::Allowed | FlexibleInit::Nested => FlexibleInit::Nested,
+        }
+    }
+}
+
 /// A position in one braced initialiser list.
 struct Cursor<'a> {
     items: &'a [ast::InitItem],
@@ -162,6 +190,10 @@ impl Sema<'_> {
             kind: ast::InitializerKind::List(items.to_vec()),
             range,
         };
+        // A compound literal's size is its *type name's*, whatever it is
+        // written inside, so a flexible array member of it may not be
+        // initialised even when the enclosing object could have one.
+        self.flexible_init = FlexibleInit::Nested;
         // `(T[]){ … }` takes its length from the initialiser, exactly as
         // `T x[] = { … }` does.
         let inferred = matches!(
@@ -323,6 +355,14 @@ impl Sema<'_> {
         range: SourceRange,
         elided: bool,
     ) -> Option<Expr> {
+        // Only the object *itself* may have its flexible array member
+        // initialised: descending one level is what stops a record nested in
+        // an array or in another record from seeing the permission, which is
+        // GCC's rule too. The state decays and is never put back, so a
+        // *sibling* of a nested aggregate does not see it either; the entry
+        // point that granted it is what resets it.
+        let flexible_ok = self.flexible_init;
+        self.flexible_init = flexible_ok.inside();
         match ty {
             Ty::Array(id) => {
                 let array = self.types().array_type(id);
@@ -339,7 +379,7 @@ impl Sema<'_> {
                     self.fill_array(array.elem, Some(array.len), cursor, name, range, elided)?;
                 Some(self.assemble_array(values, array.elem, len, range))
             }
-            Ty::Record(id) => self.fill_record(id, cursor, name, range, elided),
+            Ty::Record(id) => self.fill_record(id, cursor, name, range, elided, flexible_ok),
             _ => {
                 let Some(item) = cursor.peek() else {
                     return Some(self.zero(ty, range));
@@ -662,6 +702,7 @@ impl Sema<'_> {
         name: &str,
         range: SourceRange,
         elided: bool,
+        flexible_ok: FlexibleInit,
     ) -> Option<Expr> {
         let ty = Ty::Record(record);
         let def = self.types().record(record);
@@ -748,14 +789,16 @@ impl Sema<'_> {
                 }
             }
             // C99 6.7.2.1p18 says a flexible array member cannot be
-            // initialized, and GCC agrees.
+            // initialized. GNU C allows it for an object with *static* storage
+            // duration, whose storage the compiler can make as large as the
+            // initialiser asks; see [`Sema::flexible_member_init`].
             if fields.get(index).is_some_and(|(_, flexible)| *flexible) {
-                self.error(
-                    item_range,
-                    "a flexible array member cannot be initialized; allocate the object with \
-                     room for the elements and fill them in",
-                );
-                cursor.advance();
+                let member_ty = fields[index].0;
+                match self.flexible_member_init(member_ty, cursor, name, item_range, flexible_ok) {
+                    Some(value) => slots[index] = Some(value),
+                    None => cursor.advance(),
+                }
+                live = Some(index);
                 index += 1;
                 sub.clear();
                 continue;
@@ -822,6 +865,75 @@ impl Sema<'_> {
             ty,
             range,
         ))
+    }
+
+    /// Initialises a record's flexible array member, which only an object with
+    /// static storage duration may have.
+    ///
+    /// C99 6.7.2.1p18 forbids it outright, because the object would have to be
+    /// larger than its type. GNU C allows it where the compiler can make the
+    /// storage that large — a file-scope object or a block-scope `static` —
+    /// and refuses it for an automatic one and for a record nested inside
+    /// another aggregate, whose size is already fixed by what surrounds it.
+    /// Those are the two [`FlexibleInit`] states that are not `Allowed`, and
+    /// the diagnostics are GCC's own words.
+    ///
+    /// The value is an array of the length the initialiser gives, which is
+    /// wider than the member's own `[T; 0]` type: the object's item is
+    /// generated with a [companion type](crate::ir::Object::flexible_len)
+    /// whose tail is that long.
+    fn flexible_member_init(
+        &mut self,
+        member_ty: Ty,
+        cursor: &mut Cursor,
+        name: &str,
+        range: SourceRange,
+        flexible_ok: FlexibleInit,
+    ) -> Option<Expr> {
+        match flexible_ok {
+            FlexibleInit::Allowed => {}
+            FlexibleInit::Nested => {
+                self.error(
+                    range,
+                    "initialization of flexible array member in a nested context",
+                );
+                return None;
+            }
+            FlexibleInit::Automatic => {
+                self.error(
+                    range,
+                    "non-static initialization of a flexible array member; only an object \
+                     with static storage duration can be made larger than its type",
+                );
+                return None;
+            }
+        }
+        let Ty::Array(id) = member_ty else {
+            return None;
+        };
+        let array = self.types().array_type(id);
+        let (elem, elem_const) = (array.elem, array.elem_const);
+        let item = cursor.peek()?;
+        // `{ 3, { 1, 2, 3 } }` and `{ 3, "wx" }` give the member an
+        // initialiser of its own, whose length is inferred exactly as
+        // `T a[] = …` infers one.
+        let braced = matches!(item.init.kind, ast::InitializerKind::List(_));
+        let string = matches!(
+            &item.init.kind,
+            ast::InitializerKind::Expr(ast::Expr {
+                kind: ast::ExprKind::Str(lit),
+                ..
+            }) if fills_array(elem, lit, &self.target)
+        );
+        if braced || string {
+            let (_, value) = self.init_array_inferred(&item.init, elem, elem_const, name)?;
+            cursor.advance();
+            return Some(value);
+        }
+        // `{ 3, 1, 2, 3 }` — the braces around the member were left out, so
+        // everything that is left belongs to it.
+        let (values, len) = self.fill_array(elem, None, cursor, name, range, false)?;
+        Some(self.assemble_array(values, elem, len, range))
     }
 
     /// Fills the subobject `steps` reaches inside an object of type `top` from

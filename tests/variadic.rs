@@ -294,4 +294,99 @@ mod definitions {
             assert_eq!(sum_with_goto(0), 0);
         }
     }
+
+    /// A `va_list *` parameter is `*mut core::ffi::VaList<'_>`, and the point
+    /// of it is that the helper's reading *advances the caller's list*: what
+    /// the caller reads next is what the helper left behind.
+    #[test]
+    fn a_helper_taking_a_va_list_pointer_advances_the_callers_list() {
+        c99! {
+            #include <stdarg.h>
+
+            /* Consumes exactly two arguments through the pointer. */
+            int two(va_list *ap) {
+                int a = va_arg(*ap, int);
+                int b = va_arg(*ap, int);
+                return a * 10 + b;
+            }
+
+            /* The whole reason for passing a pointer: the caller carries on
+               where the helper stopped. */
+            int drive(int n, ...) {
+                va_list ap;
+                va_start(ap, n);
+                int first = two(&ap);
+                int third = va_arg(ap, int);
+                int fourth = va_arg(ap, int);
+                va_end(ap);
+                return first * 10000 + third * 100 + fourth;
+            }
+
+            /* A `va_list *` local, and a call through it. */
+            int through_a_local(int n, ...) {
+                va_list ap;
+                va_start(ap, n);
+                va_list *p = &ap;
+                int first = two(p);
+                int third = va_arg(*p, int);
+                va_end(ap);
+                return first * 100 + third;
+            }
+
+            /* A null `va_list *` is an ordinary null pointer; `pr64979` in the
+               GCC torture suite is exactly this shape. */
+            int maybe(int n, va_list *ap) {
+                if (ap == 0) return -1;
+                return va_arg(*ap, int) + n;
+            }
+
+            int with_null(void) { return maybe(5, 0); }
+
+            int with_a_list(int n, ...) {
+                va_list ap;
+                va_start(ap, n);
+                int out = maybe(5, (va_list *) &ap);
+                va_end(ap);
+                return out;
+            }
+        }
+
+        unsafe {
+            assert_eq!(drive(4, 1, 2, 3, 4), 120304);
+            assert_eq!(through_a_local(3, 1, 2, 3), 1203);
+            assert_eq!(with_null(), -1);
+            assert_eq!(with_a_list(1, 37), 42);
+        }
+    }
+
+    /// `va_copy` through the pointer: the helper takes a copy of the caller's
+    /// list, reads it to the end, and leaves the caller's own where it was.
+    #[test]
+    fn va_copy_through_a_va_list_pointer() {
+        c99! {
+            #include <stdarg.h>
+
+            int sum_without_consuming(int n, va_list *ap) {
+                va_list copy;
+                int total = 0;
+                va_copy(copy, *ap);
+                for (int i = 0; i < n; i++) total += va_arg(copy, int);
+                va_end(copy);
+                return total;
+            }
+
+            int twice_over(int n, ...) {
+                va_list ap;
+                va_start(ap, n);
+                int once = sum_without_consuming(n, &ap);
+                /* The caller's list is untouched, so it reads the same values. */
+                int again = 0;
+                for (int i = 0; i < n; i++) again += va_arg(ap, int);
+                va_end(ap);
+                return once * 1000 + again;
+            }
+        }
+
+        assert_eq!(unsafe { twice_over(3, 1, 2, 3) }, 6006);
+    }
 }

@@ -235,7 +235,18 @@ impl Sema<'_> {
                 self.sizeof_with(target?, supplied, ty.range, range)
             }
             ast::ExprKind::AlignofExpr(operand) => {
-                let (_, ty) = self.operand_place(operand, "_Alignof")?;
+                let (place, ty) = self.operand_place(operand, "_Alignof")?;
+                // GCC's `__alignof__ expr` asks about the *object*, not about
+                // its type, so an `_Alignas` on the declaration is the answer.
+                if let Some(Place {
+                    kind: PlaceKind::Object(id),
+                    ..
+                }) = place
+                    && let Some(align) = self.program.object(id).align
+                {
+                    let size_ty = self.size_ty();
+                    return Some(Expr::int(i128::from(align), size_ty, range));
+                }
                 self.alignof(ty, operand.range, range)
             }
             ast::ExprKind::AlignofType(name) => {
@@ -258,6 +269,10 @@ impl Sema<'_> {
                 let ty = self.ptr_to(Ty::Void, false);
                 Some(Expr::new(ExprKind::Zeroed, ty, range))
             }
+            // GNU's `&&label`: an address constant of type `void *`, whose
+            // value is the state number the label's block was given. It is
+            // what `goto *` jumps through and what a dispatch table holds.
+            ast::ExprKind::LabelAddr(label) => self.label_address(label, range),
             // A compound literal is an object, so reading one goes through its
             // place — and an array one decays, just as a named array does.
             ast::ExprKind::CompoundLiteral { ty, init } => {
@@ -1334,10 +1349,6 @@ impl Sema<'_> {
                     range,
                     format!("cannot take the address of '{name}', which is declared 'register'"),
                 );
-                return None;
-            }
-            if place.ty.is_va_list() {
-                self.error(range, "pointers to va_list are not supported yet");
                 return None;
             }
             // `&a` on an array is a pointer *to the array*, not to its first

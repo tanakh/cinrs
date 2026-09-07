@@ -1,15 +1,27 @@
 error: use of undeclared label 'dnoe'
- --> tests/ui/sema_labels.rs:6:18
+ --> tests/ui/sema_labels.rs:9:18
   |
-6 |             goto dnoe;
+9 |             goto dnoe;
   |                  ^^^^
 
 error: redefinition of label 'again'
-       note: previous definition of label 'again' is at line 14
-  --> tests/ui/sema_labels.rs:17:5
+       note: previous definition of label 'again' is at line 17
+  --> tests/ui/sema_labels.rs:20:5
    |
-17 |     again:
+20 |     again:
    |     ^^^^^
 
-error: aborting due to 2 previous errors
+error: use of undeclared label 'nowhere'
+  --> tests/ui/sema_labels.rs:25:18
+   |
+25 |         return &&nowhere;
+   |                  ^^^^^^^
+
+error: the operand of a computed 'goto' must be a pointer, not 'int'
+  --> tests/ui/sema_labels.rs:29:15
+   |
+29 |         goto *n;
+   |               ^
+
+error: aborting due to 4 previous errors
 

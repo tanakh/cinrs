@@ -487,6 +487,14 @@ impl StorageClass {
 pub struct Alignment {
     /// What was written inside the parentheses.
     pub kind: AlignmentKind,
+    /// Whether this came from `__attribute__((aligned(N)))` rather than from an
+    /// `_Alignas` specifier.
+    ///
+    /// The two ask for the same thing and are folded into one list, but they
+    /// differ on one point: an `_Alignas` weaker than the type's own alignment
+    /// is a constraint violation (C11 6.7.5p4), while GCC's `aligned` "can only
+    /// increase alignment" and a weaker one is simply not applied.
+    pub from_attribute: bool,
     /// Where the specifier was written.
     pub range: SourceRange,
 }
@@ -589,8 +597,14 @@ pub struct DeclSpecifiers {
     /// Whether the declaration was marked `_Noreturn`, `[[noreturn]]` or
     /// `__cinrs_noreturn`.
     pub noreturn: Option<SourceRange>,
-    /// The alignment specifier, if one was written.
-    pub alignas: Option<Alignment>,
+    /// The alignment specifiers written among these declaration specifiers, in
+    /// the order they were written.
+    ///
+    /// C11 6.7.5p6 allows several and makes the strictest of them the one that
+    /// holds, so they are all kept; `__attribute__((aligned(N)))` written here
+    /// asks for the same thing and is folded in, with
+    /// [`Alignment::from_attribute`] saying which spelling each one came from.
+    pub alignas: Vec<Alignment>,
     /// What `__attribute__((…))` and `[[…]]` asked for.
     pub attrs: Attributes,
     /// The base type built from the type specifiers and qualifiers.
@@ -815,6 +829,8 @@ pub enum StmtKind {
     },
     /// `goto label;`
     Goto(Ident),
+    /// GNU's computed `goto *expr;`, whose operand is a label address.
+    GotoPtr(Expr),
     /// `continue;`
     Continue,
     /// `break;`
@@ -1059,6 +1075,9 @@ pub enum ExprKind {
         /// The operand.
         expr: Box<Expr>,
     },
+    /// GNU's `&&label`: the address of a label of the enclosing function, of
+    /// type `void *`, which `goto *` jumps to.
+    LabelAddr(Ident),
     /// `sizeof expr`
     SizeofExpr(Box<Expr>),
     /// `sizeof(T)`
@@ -1176,6 +1195,17 @@ pub struct FunctionDef {
     pub asm_label: Option<Spanned<String>>,
     /// The body.
     pub body: Block,
+    /// Whether the body takes the address of a label — GNU's `&&label`.
+    ///
+    /// Such a function is lowered through a [control-flow
+    /// graph](crate::cfg), because the value of `&&label` is the state number
+    /// its block was given. The parser records it because `&&label` is an
+    /// *expression* and may sit anywhere one may — an initialiser, an
+    /// argument, a block-scope `static`'s table — while the rest of the
+    /// decision is read off the statements; see
+    /// [`Parser::label_addrs`](crate::parse). A nested function's own
+    /// `&&label` is its own business and does not set this.
+    pub uses_label_addrs: bool,
     /// Where the definition was written.
     pub range: SourceRange,
 }

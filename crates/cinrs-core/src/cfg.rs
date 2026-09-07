@@ -2,15 +2,17 @@
 //!
 //! Nearly every C function's control flow maps onto Rust's own — that is what
 //! [`codegen`](crate::codegen) does by default, and it is what makes an
-//! expansion readable. Two constructs do not map:
+//! expansion readable. Three constructs do not map:
 //!
 //! * `goto`, which may jump anywhere in the function, forwards or backwards,
-//!   into or out of any block; and
+//!   into or out of any block;
 //! * a `case` (or `default`) label that is not a direct child of its `switch`
 //!   body — Duff's device, where the labels sit inside a loop the `switch`
-//!   wraps.
+//!   wraps; and
+//! * GNU's `&&label` and the computed `goto *e` it feeds, whose *value* is the
+//!   state number the label's block was given.
 //!
-//! A function containing either is lowered here instead: its whole body becomes
+//! A function containing any of them is lowered here instead: its whole body becomes
 //! a list of [basic blocks](BasicBlock) — straight-line statements ending in a
 //! [`Terminator`] — which codegen emits as a state machine:
 //!
@@ -30,8 +32,9 @@
 //! body or past it, `break` and `continue` are jumps to blocks the loop
 //! registered, a `switch` is one [`Terminator::Switch`] whose table the `case`
 //! labels fill in wherever they are found, and `goto` is a jump like any other.
-//! Expressions are untouched — codegen emits them exactly as it does in the
-//! structured mode.
+//! A computed `goto` is a [`Terminator::IndirectJump`], whose successors are
+//! the blocks of every label the function took the address of. Expressions are
+//! untouched — codegen emits them exactly as it does in the structured mode.
 //!
 //! # Hoisting and renaming
 //!
@@ -74,6 +77,11 @@
 //!    keeps straight-line code in one arm.
 //! 3. **Reverse-postorder numbering**, so the states read top to bottom, with
 //!    unreachable blocks dropped on the way.
+//!
+//! All three leave a **pinned** block alone: one a `&&label` named has a number
+//! the program computed, so it is never threaded past, never merged into a
+//! predecessor and never dropped — a computed `goto` can still enter it even
+//! when no edge does. [`Cfg::labels`] is what the numbers come back as.
 //!
 //! There is deliberately no relooper: the point is a correct, obvious lowering
 //! of the functions that need it, not to reconstruct the loops of a function
@@ -140,6 +148,23 @@ pub enum Terminator {
         /// Entered otherwise.
         else_blk: BlockId,
     },
+    /// GNU's computed `goto *e`: control moves to the block whose *number* the
+    /// pointer holds.
+    ///
+    /// The blocks it can enter are the ones of every label whose address the
+    /// function took, which is what keeps them reachable, numbered and
+    /// unmerged; see [`Cfg::labels`]. The generated code stores the number in
+    /// the state variable and goes round the dispatch again, so a value that
+    /// is not one of them lands on the `unreachable!()` arm — which is the
+    /// undefined behaviour C already had.
+    IndirectJump {
+        /// The pointer jumped through.
+        target: Expr,
+        /// Every block a label's address could name.
+        blocks: Vec<BlockId>,
+        /// Where the statement was written.
+        range: SourceRange,
+    },
     /// A `switch` dispatch.
     Switch {
         /// The controlling expression, after the integer promotions.
@@ -178,6 +203,7 @@ impl Terminator {
                 out.push(*default);
                 out
             }
+            Terminator::IndirectJump { blocks, .. } => blocks.clone(),
             Terminator::Return { .. } | Terminator::Unreachable => Vec::new(),
         }
     }
@@ -198,6 +224,11 @@ impl Terminator {
                 }
                 *default = f(*default);
             }
+            Terminator::IndirectJump { blocks, .. } => {
+                for blk in blocks.iter_mut() {
+                    *blk = f(*blk);
+                }
+            }
             Terminator::Return { .. } | Terminator::Unreachable => {}
         }
     }
@@ -210,16 +241,27 @@ pub struct Cfg {
     pub locals: Vec<Local>,
     /// The blocks, in the order they should be emitted; block 0 is the entry.
     pub blocks: Vec<BasicBlock>,
+    /// The block each label whose address was taken stands for, after the
+    /// numbering — which is the value GNU's `&&label` has.
+    ///
+    /// Only those labels are in it: every other one may be threaded away or
+    /// merged into its predecessor, which is what keeps an ordinary `goto`
+    /// readable. See [`ir::ExprKind::LabelAddr`].
+    ///
+    /// [`ir::ExprKind::LabelAddr`]: crate::ir::ExprKind::LabelAddr
+    pub labels: HashMap<LabelId, BlockId>,
 }
 
 /// Lowers a checked function body into a control-flow graph.
 ///
 /// `params` are the function's parameters, whose names the hoisted locals must
-/// not collide with, and `objects` is the program's object table.
+/// not collide with, `objects` is the program's object table, and `pinned` are
+/// the labels a `&&label` took the address of — in a fixed order, since it
+/// decides the numbering of blocks nothing else reaches.
 ///
 /// The body must end in a statement that always terminates — sema appends a
 /// `return` when the source does not — so that no block falls off the end.
-pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object]) -> Cfg {
+pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object], pinned: &[LabelId]) -> Cfg {
     let mut used: HashSet<String> = params
         .iter()
         .map(|id| objects[id.0 as usize].name.clone())
@@ -237,10 +279,18 @@ pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object]) -> Cfg {
         used,
         cleanups: Vec::new(),
         label_cleanups: HashMap::new(),
+        pinned: Vec::new(),
     };
     // A `goto` has to know how many cleanups its *target* is inside, and a
     // forward one names a label the walk below has not reached yet.
     lowerer.collect_label_cleanups(&body, 0);
+    // The blocks of the address-taken labels are made first, so that they are
+    // known before any of them is mentioned: every one of them is a possible
+    // target of every computed `goto`, and none may be merged away.
+    for id in pinned {
+        let block = lowerer.label_block(*id);
+        lowerer.pinned.push((*id, block));
+    }
     let entry = lowerer.new_block();
     lowerer.current = Some(entry);
     lowerer.stmts(body);
@@ -291,6 +341,13 @@ struct Lowerer<'a> {
     /// How many cleanups are owed where each label stands, from the pre-pass
     /// over the same tree; see [`Lowerer::collect_label_cleanups`].
     label_cleanups: HashMap<LabelId, usize>,
+    /// The labels a `&&label` took the address of, and the blocks they stand
+    /// for, in the order they were given.
+    ///
+    /// A pinned block keeps its identity through every clean-up pass — it is
+    /// never threaded past, never merged into a predecessor and never dropped
+    /// as unreachable — because its *number* is a value the program computed.
+    pinned: Vec<(LabelId, BlockId)>,
 }
 
 impl Lowerer<'_> {
@@ -489,6 +546,7 @@ impl Lowerer<'_> {
                 self.leave_cleanups(depth.min(self.cleanups.len()));
                 self.jump(block, range);
             }
+            Stmt::GotoPtr { target, range } => self.goto_ptr(target, range),
             Stmt::Break { target, range } => {
                 let block = match target {
                     BreakTarget::Loop(id) => self.loops.get(&id).map(|l| (l.brk, l.brk_cleanups)),
@@ -525,6 +583,31 @@ impl Lowerer<'_> {
                 unreachable!("sema lowers every switch into a SwitchTree in CFG mode")
             }
         }
+    }
+
+    /// GNU's computed `goto *e`.
+    ///
+    /// Which label it enters is a run-time value, so which scopes it leaves is
+    /// one too. What is certain is that every possible target is a label whose
+    /// address was taken, so the scopes *no* target is inside are left on the
+    /// way — that is the shallowest of their depths, and it is exactly right
+    /// in the ordinary case where every such label stands at the top of the
+    /// function. Anything deeper is owed by a scope some target may still be
+    /// in, and is left to the end of that scope, as a `goto` into one is.
+    fn goto_ptr(&mut self, target: Expr, range: SourceRange) {
+        let depth = self
+            .pinned
+            .iter()
+            .map(|(id, _)| self.label_cleanups.get(id).copied().unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        self.leave_cleanups(depth.min(self.cleanups.len()));
+        let blocks = self.pinned.iter().map(|(_, block)| *block).collect();
+        self.terminate(Terminator::IndirectJump {
+            target,
+            blocks,
+            range,
+        });
     }
 
     /// Hoists a local's definition and leaves its initialiser behind.
@@ -786,6 +869,16 @@ impl Lowerer<'_> {
         self.renumber(entry)
     }
 
+    /// Whether a block's identity has to survive the clean-up passes.
+    ///
+    /// A block a `&&label` named has a *number* the program computed, so it
+    /// may not be threaded past, merged into a predecessor or dropped for
+    /// being unreachable — nothing else reaches it, and a computed `goto`
+    /// still can.
+    fn is_pinned(&self, block: BlockId) -> bool {
+        self.pinned.iter().any(|(_, pinned)| *pinned == block)
+    }
+
     /// Removes blocks that only jump somewhere else, re-pointing every edge.
     fn thread_jumps(&mut self, entry: BlockId) -> BlockId {
         let resolved: Vec<BlockId> = (0..self.blocks.len())
@@ -802,7 +895,7 @@ impl Lowerer<'_> {
         let mut seen = HashSet::new();
         while seen.insert(block) {
             let candidate = &self.blocks[block.index()];
-            if !candidate.stmts.is_empty() {
+            if !candidate.stmts.is_empty() || self.is_pinned(block) {
                 break;
             }
             match candidate.term {
@@ -815,7 +908,7 @@ impl Lowerer<'_> {
 
     /// Appends a block to its predecessor when that is the only way in.
     fn merge_chains(&mut self, entry: BlockId) {
-        let reachable = self.reachable(entry);
+        let reachable = self.reachable(&self.roots(entry));
         let mut predecessors = vec![0usize; self.blocks.len()];
         for id in &reachable {
             for successor in self.blocks[id.index()].term.successors() {
@@ -824,7 +917,11 @@ impl Lowerer<'_> {
         }
         for id in &reachable {
             while let Terminator::Jump { target, .. } = self.blocks[id.index()].term {
-                if target == *id || target == entry || predecessors[target.index()] != 1 {
+                if target == *id
+                    || target == entry
+                    || predecessors[target.index()] != 1
+                    || self.is_pinned(target)
+                {
                     break;
                 }
                 let mut stmts = std::mem::take(&mut self.blocks[target.index()].stmts);
@@ -839,10 +936,23 @@ impl Lowerer<'_> {
         }
     }
 
-    /// The blocks control can reach from `entry`.
-    fn reachable(&self, entry: BlockId) -> Vec<BlockId> {
+    /// Where the walks start: the entry, and then every pinned block.
+    ///
+    /// A pinned block may be reachable through no edge at all — nothing but a
+    /// computed `goto` enters it, and a function may take a label's address
+    /// without ever jumping through it — so it is a root of its own. They come
+    /// after the entry so that the numbering still reads top to bottom for
+    /// everything the entry reaches.
+    fn roots(&self, entry: BlockId) -> Vec<BlockId> {
+        let mut roots = vec![entry];
+        roots.extend(self.pinned.iter().map(|(_, block)| *block));
+        roots
+    }
+
+    /// The blocks control can reach from `roots`.
+    fn reachable(&self, roots: &[BlockId]) -> Vec<BlockId> {
         let mut seen = HashSet::new();
-        let mut stack = vec![entry];
+        let mut stack = roots.to_vec();
         let mut out = Vec::new();
         while let Some(id) = stack.pop() {
             if !seen.insert(id) {
@@ -863,25 +973,32 @@ impl Lowerer<'_> {
     fn renumber(mut self, entry: BlockId) -> Cfg {
         let mut order = Vec::with_capacity(self.blocks.len());
         let mut visited = vec![false; self.blocks.len()];
-        let mut stack = vec![(entry, 0usize)];
-        visited[entry.index()] = true;
-        while let Some((id, next)) = stack.pop() {
-            let successors = self.blocks[id.index()].term.successors();
-            // Successors are pushed in reverse so that the first one is
-            // explored last and therefore ends up first once the postorder is
-            // reversed.
-            if next < successors.len() {
-                stack.push((id, next + 1));
-                let successor = successors[successors.len() - 1 - next];
-                if !visited[successor.index()] {
-                    visited[successor.index()] = true;
-                    stack.push((successor, 0));
-                }
+        for root in self.roots(entry) {
+            if visited[root.index()] {
                 continue;
             }
-            order.push(id);
+            let mut postorder = Vec::new();
+            let mut stack = vec![(root, 0usize)];
+            visited[root.index()] = true;
+            while let Some((id, next)) = stack.pop() {
+                let successors = self.blocks[id.index()].term.successors();
+                // Successors are pushed in reverse so that the first one is
+                // explored last and therefore ends up first once the postorder
+                // is reversed.
+                if next < successors.len() {
+                    stack.push((id, next + 1));
+                    let successor = successors[successors.len() - 1 - next];
+                    if !visited[successor.index()] {
+                        visited[successor.index()] = true;
+                        stack.push((successor, 0));
+                    }
+                    continue;
+                }
+                postorder.push(id);
+            }
+            postorder.reverse();
+            order.extend(postorder);
         }
-        order.reverse();
 
         let mut index_of = vec![None; self.blocks.len()];
         for (index, id) in order.iter().enumerate() {
@@ -901,9 +1018,19 @@ impl Lowerer<'_> {
             });
             blocks.push(block);
         }
+        let labels = self
+            .pinned
+            .iter()
+            .map(|(id, block)| {
+                let numbered = index_of[block.index()]
+                    .expect("a pinned block is a root of the walk and is always numbered");
+                (*id, numbered)
+            })
+            .collect();
         Cfg {
             locals: self.locals,
             blocks,
+            labels,
         }
     }
 }
