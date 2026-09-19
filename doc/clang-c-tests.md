@@ -186,8 +186,9 @@ is where the rule and the four error categories are set out.
 out as the test asks is either a feature this crate has not got to yet or a
 place where it and Clang disagree on purpose, and the list says which.
 
-The C23 row is the honest one: `c23!` implements the parts of C23 the README
-lists and not the rest, and this directory is one file per C23 paper.
+The C23 row is the honest one: `c23!` implements the parts of C23
+[`doc/features.md`](features.md#standards-and-entry-points) lists and not the
+rest, and this directory is one file per C23 paper.
 
 ### Why the revision number is the lowest of the three suites
 

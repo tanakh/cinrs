@@ -13,7 +13,8 @@ follows [Semantic Versioning][semver].
 First release. A procedural macro that takes a C translation unit and
 translates it to Rust, with every generated token carrying the span of the C it
 came from, so that `cargo` and an IDE put the caret on the C. The
-[README](README.md) is the long form; this is what is in it.
+[README](README.md) and the documents under `doc/` are the long form; this is
+what is in it.
 
 ### The language
 

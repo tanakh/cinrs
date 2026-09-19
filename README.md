@@ -1,6 +1,87 @@
-# cinrs: Write C code in Rust
+# cinrs — write C inside Rust
 
-This is a library that implements a procedural macro allowing C code to be written within Rust code.
+[![CI](https://github.com/tanakh/cinrs/actions/workflows/ci.yml/badge.svg)](https://github.com/tanakh/cinrs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cinrs.svg)](https://crates.io/crates/cinrs)
+[![docs.rs](https://docs.rs/cinrs/badge.svg)](https://docs.rs/cinrs)
+
+`cinrs` is a procedural macro that takes C source written directly in a Rust
+file — C89 to C23, with the GNU extensions — translates it to Rust while the
+crate compiles, and hands you what it defines as ordinary Rust items.
+
+```rust
+use cinrs::c99;
+
+c99! {
+    #include <stdio.h>
+
+    typedef struct { double x, y; } Vec2;
+
+    double dot(Vec2 a, Vec2 b) {
+        return a.x * b.x + a.y * b.y;
+    }
+
+    void greet(const char *name) {
+        printf("hello, %s\n", name);
+    }
+
+    __attribute__((cinrs_safe)) int fact(int n) {
+        return n == 0 ? 1 : n * fact(n - 1);
+    }
+}
+
+fn main() {
+    // C functions are foreign functions: calling one is `unsafe`…
+    let d = unsafe { dot(Vec2 { x: 1.0, y: 2.0 }, Vec2 { x: 3.0, y: 4.0 }) };
+    unsafe { greet(c"cinrs".as_ptr()) };
+
+    // …unless the C says `cinrs_safe`, and then `rustc` checks the body.
+    println!("dot = {d}, fact(10) = {}", fact(10));
+}
+```
+
+That is `examples/readme.rs`: `cargo run --example readme`.
+
+## Why
+
+* **No C toolchain in the build.** The macro *is* the compiler: no `build.rs`,
+  no `cc`, no `bindgen`, nothing to install on the build machine. The standard
+  headers are bundled, and a call such as `printf` links against the platform's
+  C library like any other `extern "C"` declaration.
+* **What the C defines is Rust.** A `struct` is a `#[repr(C)]` type you can
+  construct, a function is an `extern "C" fn` you can call, a global is a
+  `static`. Nothing is declared twice, and nothing crosses an FFI boundary that
+  the optimiser cannot see through.
+* **Errors point at the C.** Every generated token carries the span of the C
+  token it came from, so `cargo` and rust-analyzer put the caret where the
+  mistake is — for this crate's diagnostics and for `rustc`'s own:
+
+  ```text
+  error: use of undeclared identifier 'j'
+   --> src/main.rs:7:25
+    |
+  7 |             total += xs[j];
+    |                         ^
+  ```
+
+* **Real C, not a subset.** `goto` (computed ones too), `switch` with
+  fallthrough, bit-fields with GCC's layout, variable length arrays, variadic
+  functions, `_Complex`, `_Atomic`, `<threads.h>`, K&R definitions, the whole
+  preprocessor with `#include` and `#embed` — and the GNU extensions real code
+  uses: statement expressions, `typeof`, `__attribute__((cleanup))`, nested
+  functions, `__int128`, `__builtin_*`. What has no honest translation (inline
+  assembly, `setjmp`) is a located error, never a guess.
+* **Measured, not claimed.** 98 % of [c-testsuite], 86–89 % of [GCC's torture
+  tests][gcc-torture] and 82 % of [Clang's C conformance tests][clang-c-tests]
+  — about 2,270 cases, every failure listed by name with its reason, and **not
+  one of them a known bug**. See [Conformance and speed](#conformance-and-speed).
+* **As fast as a C compiler.** Over 39 whole programs the median run time is
+  **1.01×** that of `gcc -O2`, with byte-identical output.
+* **Safety you can opt into.** Mark a function `[[cinrs::safe]]` (or
+  `__attribute__((cinrs_safe))`) and it is generated *without* `unsafe`, so
+  `rustc` checks the translation and Rust calls it as `fact(10)`.
+* **`core`-only output.** The expansion names nothing but `core` — a variable
+  length array needs `alloc`, and a `_Thread_local` object needs `std` — so it
+  works in a `#![no_std]` crate.
 
 ## Installation
 
@@ -8,734 +89,151 @@ This is a library that implements a procedural macro allowing C code to be writt
 cargo add cinrs
 ```
 
-**Rust 1.88 or later** — the release that stabilised
-`proc_macro::Span::local_file`, which is how the macro finds the `.rs` file its
-own invocation is written in. Verified on 1.88.0, 1.90.0 and current stable.
-One thing needs a newer compiler: *defining* a variadic function needs Rust
-1.99's `c_variadic`, and below that it is a located error naming the version
-rather than a mysterious failure — *declaring* and *calling* one, `printf`
-included, works on every supported version. Two features: `complex` is on by
-default and is C's complex types (`default-features = false` drops it and the
-`cinrs-rt` dependency with it), and `nightly`, which needs a nightly compiler,
-moves a diagnostic about a string-literal body from the message text onto a
-caret inside the literal.
+Rust **1.88** or later. One thing needs a newer compiler: *defining* a variadic
+function needs Rust 1.99's `c_variadic` and is a clear error before that —
+declaring and calling one, `printf` included, works everywhere.
 
-## Status
+Two features: `complex` (on by default) is C's complex types, as
+[`num_complex::Complex`](https://docs.rs/num-complex) — `default-features =
+false` drops it and its one small dependency; `nightly` moves a diagnostic about
+a string-literal body onto a caret inside the literal.
 
-`cinrs` is new, and every claim it makes is measured. As of this release:
+## Using it
 
-* **Conformance** — 98.2 % of c-testsuite's `single-exec` suite is correct under
-  `c99!` (214 of the 218 cases that entry point is eligible for); 85.6 % of
-  GCC's C torture tests under `gnu11!` (1,515 of the 1,769 run, and 88.9 % on a
-  toolchain that has `c_variadic`); 82.3 % of Clang's C conformance tests (167
-  of the 203 revisions run, with 557 of the 620 `expected-error` lines
-  diagnosed on the right line). About 2,270 cases in about ten minutes, and
-  **not one of them is tagged `[bug]`**: every remaining failure is named, case
-  by case, as unimplemented, not planned, or needing a newer toolchain. See
-  [Conformance](#conformance).
-* **Speed** — over 39 whole C programs built three ways (`gcc -O2`,
-  `clang -O2`, and a `cinrs` block through `rustc -C opt-level=3`) the median
-  `cinrs`/`gcc -O2` ratio is **1.01×**, and 30 of the 39 are within 10 % of
-  `gcc -O2` or faster. Every program's output is identical across the three
-  builds, so the suite is a differential test as well as a benchmark. See
-  [Speed](#speed).
-* **API** — `0.1` means the macro surface may still change; the companion
-  crates `cinrs-core`, `cinrs-macros` and `cinrs-rt` are implementation details
-  of this one and carry no stability promise at all.
+### Pick the language
 
-## Example
+| | C89 | C99 | C11 | C17 | C23 |
+| --- | --- | --- | --- | --- | --- |
+| ISO C | `c89!` | `c99!` | `c11!` | `c17!` | `c23!` |
+| with GNU extensions | `gnu89!` | `gnu99!` | `gnu11!` | `gnu17!` | `gnu23!` |
+| a whole `.c` file | `include_c89!` | `include_c99!` | `include_c11!` | `include_c17!` | `include_c23!` |
 
-```rust
-use cinrs::c99;
+`include_gnu89!` … `include_gnu23!` exist too. A feature of a later revision
+used in an earlier block is an error that names the macro to write instead.
+Everything spelled with a leading double underscore (`__attribute__`,
+`__typeof__`, `__builtin_*`) works in the strict macros as well, exactly as in
+`gcc -std=c99`.
 
-c99! {
-    __attribute__((cinrs_safe)) int fact(int n) {
-        if (n == 0) {
-            return 1;
-        } else {
-            return n * fact(n - 1);
-        }
-    }
-}
-
-// `cinrs_safe` (also spelled `[[cinrs::safe]]`) generates the function
-// without `unsafe` and lets `rustc` check its body, so the call needs none
-// either. Without it a C function is a foreign function like any other and a
-// call to it is `unsafe`, which is the default.
-let v = fact(10);
-println!("fact(10) = {v}");
-```
-
-Run it with `cargo run --example fact`.
-
-A C file that already exists goes in whole, with the same translation:
+### Three ways to write the C
 
 ```rust,ignore
-cinrs::include_c99!("vendor/parser.c");
+cinrs::c99! { int twice(int x) { return 2 * x; } }          // raw tokens
+
+cinrs::c99! { r#" double eight(void) { return 0x1p3; } "# } // a string literal
+
+cinrs::include_c99!("vendor/parser.c");                     // a file
 ```
 
-## What works
+Raw tokens give the best diagnostics. The few things Rust's lexer refuses —
+hexadecimal floats, `'ab'`, `L"…"`, `\` line continuations, `##` — go in a
+string literal, and C that already lives in a file goes in whole. Details:
+[input forms][input-forms], [including a C file][include-c].
 
-* **Five standards, twice over.** `c89!` (also spelled `c90!`), `c99!`, `c11!`,
-  `c17!` and `c23!` are the
-  same macro for five revisions of the language, and `__STDC_VERSION__`
-  follows — except in `c89!`, which leaves it undefined, because C89 as
-  published had no such macro; `gnu89!`, `gnu99!`, `gnu11!`, `gnu17!` and
-  `gnu23!` are the same five with the
-  GNU extensions switched on. `c11!` adds
-  `_Static_assert`, `_Generic`, `_Alignof`, `_Alignas`, `_Noreturn` and
-  anonymous `struct`/`union` members;
-  `c17!` is `c11!` with a different version macro; `c23!` adds the keywords C23
-  promoted (`bool`, `true`, `false`, `nullptr`, `static_assert`, `alignof`,
-  `alignas`, `thread_local`, `constexpr`, `typeof`), `[[…]]` attributes,
-  `__VA_OPT__`, `#elifdef`/`#elifndef`, binary constants, digit separators,
-  empty initialisers, `auto` type inference, enumerations with a fixed
-  underlying type or a value too wide for `int`, unnamed parameters in a
-  definition, a label anywhere in a compound statement, improved tag
-  compatibility — a tag defined twice with the same members is one type —
-  `<stdckdint.h>` and `unreachable()`. A feature from a later revision used in
-  an earlier block is a diagnostic that says which macro to write instead — and
-  `c89!` is that rule pointed the other way, refusing everything C99 added
-  (`//` comments, mixed declarations and code, `long long`, designated
-  initializers, variable length arrays, `_Bool`, `restrict`, `inline`, …) with
-  the same message. The
-  revision also decides what `int f();` means: the parameters are *unspecified*
-  before C23, so a call may pass any number of arguments and each gets the
-  default argument promotions, while `c23!` and `gnu23!` read the empty list as
-  `(void)` — which is exactly where the standard moved it.
-* **The C of the 1980s.** Old-style (K&R) function definitions —
-  `int f(a, b) int a; char *b; { … }` — work in every entry point below
-  `c23!`, which is the revision that removed them. Their type has no
-  prototype, so a caller applies the default argument promotions, and the
-  generated item takes the promoted types and converts to the declared ones on
-  entry. `c89!` and `gnu89!` add the two rules C99 deleted: **implicit `int`**
-  (`static x;`, `f() { … }`) and **implicit function declarations**, where
-  calling an undeclared `abs` declares `extern int abs();` and the linker
-  resolves it. `gnu89!` is otherwise `gnu99!`: `gcc -std=gnu89` takes every
-  later feature as an extension, and so does this.
-* **The C99 language.** All the arithmetic types, pointers, arrays, `struct`,
-  `union`, `enum`, bit-fields, `typedef`, string literals, function pointers,
-  `sizeof` with
-  the real layout, casts, aggregate and designated initialisers — designator
-  *lists* included, so `{ .a.b = 1 }`, `{ .arr[2].x = 3 }` and the elements
-  that carry on from where one of them landed all work — compound
-  literals — `&(struct S){ 1, 2 }`, whose object lives as long as the block it
-  is written in — variable length arrays, file-scope,
-  `static` and `extern` objects, every operator, every control structure —
-  `if`, `while`, `do`/`while`, `for`, `switch` with fallthrough, `break`,
-  `continue`, `return`, and `goto` — an outward one becomes a labelled block
-  or a labelled loop named after the C label, so `goto done` is `break 'done`
-  and `goto retry` is `continue 'retry`; a jump Rust cannot make at all (into
-  a block, or through a computed `goto`) puts the function through a state
-  machine over basic blocks instead.
-* **Every character set C has.** Digraphs, the bundled `<iso646.h>`, and the
-  nine **trigraphs**, replaced in translation phase 1 wherever the revision
-  still has them — every strict entry point below `c23!`, which is where C
-  removed them, and no GNU dialect, which is the line GCC draws.
-  **Extended identifiers**: `int café(void)` and `int café(void)` are
-  one function, in Unicode Annex #31's character set, refused when the name is
-  not in Normalization Form C. And the **Unicode literals** — `u8"…"`, `u"…"`
-  and `U"…"` with their `char8_t`, `char16_t` and `char32_t`, `u'x'`, `U'x'`
-  and C23's `u8'x'`, surrogate pairs and all — with `<uchar.h>` bundled.
-* **Names Rust would not take.** A C name that is a Rust keyword becomes a raw
-  identifier (`int match(int)` is called as `r#match`); the five Rust cannot
-  write even as raw ones — `self`, `Self`, `super`, `crate` and `_` — get an
-  underscore appended, and a `$`, which C takes as an identifier character, is
-  written `_dollar_`. Where the program already uses the result for something
-  else the spelling grows another `_` until it is free, so a unit with both
-  `self` and `self_` calls them `self__` and `self_`; one C name is that one
-  Rust name everywhere it appears, and the symbol still links by the C name.
-* **Variably modified types and `alloca`.** `int a[n];` with a bound that is
-  not a constant does what C99 says: the bound is evaluated once, at the
-  declaration; the object lives to the end of the block and is made afresh on
-  every pass through a loop; `sizeof a` is a run-time value. So does every
-  type built on one — `double a[n][m]` and `int a[3][n]`, `int (*p)[n]`,
-  `typedef int T[n];`, and the parameter form `void f(int n, int m, double
-  a[n][m])` that adjusts to `double (*a)[m]` and reads its bounds on entry
-  (6.9.1p10). `a[i][j]`, `p + 1`, `sizeof a / sizeof a[0]` and `sizeof *p` are
-  all computed from the bounds the declaration evaluated. `alloca` — the
-  bundled `<alloca.h>`, or `__builtin_alloca` — gives memory that lives until
-  the *function* returns. Both are emulated on the heap, since Rust cannot move
-  the stack pointer by an amount chosen at run time, so the storage is not the
-  stack and the two of them are the only constructs whose expansion needs more
-  than `core`. What a C program can observe — the elements, the lifetimes, the
-  run-time `sizeof` — is unchanged. A `goto` or a `case` that would jump into
-  the scope of one is a located error, as C requires.
-* **The C99 preprocessor.** Object-like and function-like macros with `#`,
-  `##`, `__VA_ARGS__` and the standard's rescanning rules, every conditional
-  directive, `#error`, `#warning`, `#pragma` (the catalogue is
-  [`doc/pragmas.md`][pragmas]), and `#line` — which redirects
-  `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
-  the C token that was really written.
-* **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
-  `<string.h>`, `<math.h>`, `<signal.h>`, `<wchar.h>`, `<uchar.h>`,
-  `<iso646.h>`, C11's `<stdatomic.h>` and `<threads.h>`, C23's `<stdckdint.h>`
-  and the rest) are
-  bundled with the crate, written in plain C99 rather than read from the
-  platform, and the calls link against the real C library. So are five POSIX
-  ones a small program actually reaches for — `<sys/types.h>`, `<unistd.h>`,
-  `<fcntl.h>`, `<strings.h>` and `<alloca.h>` — whose types and constants come
-  from the same target model everything else does. Your own headers are found
-  next to the `.rs` file that includes them, and editing one rebuilds the
-  crate. The platform's *own* headers — `/usr/include` and its like, and so
-  `struct stat`, `DIR` and `pthread_mutex_t` — are one pragma away; see
-  [System headers](#system-headers). `#embed "logo.png"` puts the bytes
-  of a file into the program — with `limit`, `prefix`, `suffix`, `if_empty`
-  and `__has_embed` — and editing *that* rebuilds the crate too.
-* **The GNU extensions.** Statement expressions (`({ … })`), `typeof`,
-  `__attribute__((packed))` and `aligned` with the layout GCC gives them,
-  `__attribute__((cleanup(f)))` — `f(&x)` on every way out of the scope, which
-  is what systemd's `_cleanup_free_` and glib's `g_autofree` are made of —
-  `#pragma pack`, `case 1 ... 5:`, range designators, flexible array members
-  (initialised ones included, for an object with static storage duration),
-  **labels as values** — `&&label` and the computed `goto *e`, whose value is
-  the state number the label stands for in the machine such a function is
-  lowered into —
-  `asm` labels, `constructor`/`destructor`, `__func__`, casts to a union type,
-  **nested functions** — lambda-lifted to a private file-scope item that takes
-  a pointer to each enclosing local it uses, so a store inside one is visible
-  outside it, and no trampoline is written onto the stack (the address of a
-  nested function that *does* use the enclosing frame is the one thing a
-  trampoline is for, and is refused by name) —
-  `__attribute__((mode(DI)))`, the `__builtin_*`
-  family — bit counting, checked overflow, `__builtin_expect`,
-  `__builtin_types_compatible_p`, the floating classifications
-  (`__builtin_isnan`, `signbit`, `fpclassify`, `isunordered` and the rest,
-  answered in `core` with no maths library involved), and a `__builtin_X` for
-  a library function X that declares X itself, so `__builtin_printf` works
-  without `<stdio.h>` — `, ## __VA_ARGS__`, `__COUNTER__`,
-  `__has_include`, `__has_attribute` and the rest. Everything spelled with a
-  leading double underscore works in `c99!` too, exactly as it does in GCC's
-  own `-std=c99`; only the plain spellings `typeof` and `asm`, and the features
-  of later revisions, need `gnu99!`. Inline *assembly* is a clear error rather
-  than a guess, and so is every other extension with no honest translation.
-  [`doc/gnu-extensions.md`][gnu-extensions] is the catalogue, row by
-  row.
-* **`__int128`.** GCC's 128-bit integers, in every entry point, as Rust's
-  `i128` and `u128` — whose x86-64 ABI has matched `__int128`'s since Rust
-  1.77. Sixteen bytes, ranked above `long long`, so `(__int128) a * b` really
-  is a 128-bit multiplication; `__int128_t` and `__uint128_t` are predefined
-  names for the same two types and `__SIZEOF_INT128__` is `16`. Bit-fields of
-  them work, wider than sixty-four bits included. C has no 128-bit *literal*
-  and neither does this: `((__int128) 1) << 100` is the idiom.
-  Two gaps: `__builtin_add_overflow` and its relatives compute their check one
-  width up from the operands, and there is nothing above 128 bits, so a
-  128-bit *operand* is refused (a 128-bit *result* is fine); and
-  `va_arg(ap, __int128)` needs a `VaArgSafe` implementation Rust still keeps
-  unstable, though *passing* one through `...` works — and a 128-bit *member*
-  of a `struct` is fine, since `va_arg` of a record is read eightbyte by
-  eightbyte.
-* **Thread-local objects.** `_Thread_local`, C23's `thread_local` and GNU's
-  `__thread` become a `std::thread_local!` holding an `UnsafeCell`, so a C
-  counter really is one per thread and `&x` is a pointer to *this* thread's
-  copy. C's own placement rules apply: file scope, or a block-scope `static`,
-  with a constant initialiser. An `extern` thread-local object and exporting
-  one under `#pragma cinrs export` are refused — both would need Rust's
-  unstable `#[thread_local]`.
-* **C11's threads.** `<threads.h>` (7.26) is bundled, and the threads it makes
-  are the C library's own: `thrd_create`, `mtx_*`, `cnd_*`, `tss_*` and
-  `call_once` are that library's functions, and `mtx_t` and `cnd_t` are laid
-  out as its `pthread_mutex_t` and `pthread_cond_t` — which a differential
-  test against the host's `cc` checks. Two libraries are modelled, glibc (2.28
-  and later) and musl, both on Linux; on Apple and Windows, whose runtimes have
-  no such header at all, and on the platforms whose layouts cinrs does not
-  know, the header is an `#error` naming the reason and
-  `__STDC_NO_THREADS__` says so.
-* **Atomics.** C11's `_Atomic` — the qualifier and the `_Atomic(T)` specifier
-  — the bundled `<stdatomic.h>`, GCC's memory-order-aware `__atomic_*`
-  builtins, the older sequentially consistent `__sync_*` ones and Clang's
-  `__c11_atomic_*`, all of them on `core::sync::atomic` reached with
-  `AtomicX::from_ptr` over the object's address (stable since Rust 1.75). An
-  `_Atomic` object is a
-  plain one of the underlying type whose every read is a `SeqCst` load, every
-  write a `SeqCst` store, and every `+=`, `++` and `--` a single
-  read-modify-write, exactly as 6.5.16.2 says; its alignment is its size,
-  which is what makes `_Atomic long long` eight-byte aligned. The scalars are
-  covered — the 1-, 2-, 4- and 8-byte integers, `_Bool`, `float` and `double`
-  (through the integer atomic of the same width and `to_bits`), and object
-  pointers as an `AtomicPtr`. An `_Atomic` `struct` and a 128-bit one are
-  refused: neither has a lock-free counterpart, and there is nothing here to
-  be a lock. The one deliberate difference between the two builtin families
-  is pointer arithmetic: `__atomic_fetch_add` counts **bytes**, as GCC's does,
-  and `atomic_fetch_add` from the header counts **elements**, as C11 7.17.7.5
-  requires.
-* **Pragmas that configure the unit.**
-  `#pragma cinrs target "…"` picks the machine the unit is translated for, over
-  the `CINRS_TARGET` a build script sets — see
-  [Cross-compilation](#cross-compilation);
-  `#pragma cinrs include_path "…"` adds a search directory;
-  `#pragma cinrs link "…"` links a library;
-  `#pragma cinrs export` gives everything with external linkage a real C
-  symbol, so that another block — or a C library — can call it by name (with
-  C's own risk: two exported units defining one name is a duplicate symbol);
-  `#pragma cinrs safe f g` generates those functions without `unsafe` and lets
-  `rustc` check them;
-  `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
-  needs from `alloc` rather than from `std`, and refuses a thread-local object,
-  which needs `std` outright;
-  `#pragma cinrs module "…"` names the module the expansion goes into;
-  `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a
-  renamed dependency — the generated code names it only for complex numbers,
-  and `::cinrs` is the default.
-  `#pragma cinrs system_include` is the ninth and has a
-  [section](#system-headers) of its own.
-  [`doc/pragmas.md`][pragmas] is the reference: every option's exact syntax,
-  how far it reaches, what is an error, and the environment variable that does
-  the same thing — together with the pragmas the preprocessor itself knows
-  (`once`, `pack`, `push_macro`, `#pragma GCC …`) and what happens to one it
-  does not.
-* **Safe functions.** A C function is a foreign function, so calling one is
-  `unsafe` — unless it is marked `[[cinrs::safe]]`,
-  `__attribute__((cinrs_safe))` or named by `#pragma cinrs safe f g`. Such a
-  function is generated as a plain `pub extern "C" fn` whose body is *not*
-  wrapped in an `unsafe` block, so `rustc` checks the whole translation: a raw
-  pointer dereference, a read of a C global or of a `union` member, a call to
-  the C library or to a function of the unit that is not itself safe are each
-  an error with the caret on the C that asked for it. What is left compiles and
-  is a useful language — arithmetic, control flow (`goto` included), locals,
-  records and `enum`s by value, bit-fields, and calls to other safe functions —
-  and Rust calls it as `fact(10)`.
-* **Three input forms.** C the Rust lexer accepts is written as raw tokens —
-  `int café(void)` included, since Rust's identifiers are UAX #31's too; C it
-  refuses (hexadecimal floating constants, `'ab'`, the prefixed literals
-  `L"…"`, `u8"…"`, `u"…"`, `U"…"` and `u8'x'`, a universal character name,
-  `\` line
-  continuations, C23's digit separators such as `1'000'000`) goes in a string
-  literal instead. `##` cannot be written in
-  raw-token form either, so a replacement list spells the pasting operator
-  `a # # b`. The third form is a **file**: `include_c99!("parser.c")` and one
-  such macro per entry point — see [Including a C file](#including-a-c-file).
-* **Errors that point at the C.** Every generated token carries the span of the
-  C token it came from, so both `cargo` and an IDE put the caret on the C code
-  — for the front end's own diagnostics and for `rustc`'s. Pointing *inside* a
-  string literal needs `Literal::subspan`, which is unstable, so there the
-  position is appended to the message instead; the crate's `nightly` feature
-  turns it back into a caret.
-* **Variadic functions.** Declaring and calling one works anywhere; *defining*
-  one needs Rust 1.99's `c_variadic`, and is a clear error before that.
-* **Complex numbers.** `float _Complex` and `double _Complex` are
-  `cinrs::rt::Complex<f32>` and `Complex<f64>` — which is
-  [`num_complex::Complex`](https://docs.rs/num-complex), the type the numeric
-  half of crates.io already speaks, so a complex value crosses the boundary
-  without a conversion. `long double _Complex` is `double _Complex`, the same
-  mapping `long double` has and the same ABI caveat. The arithmetic is C's,
-  Annex G.5.1's infinity recovery included, and is checked against the host's
-  own C compiler over a hundred and thirty thousand operand pairs. GNU's
-  `__real__`, `__imag__`, `~z` and the `2.0i` suffix are there, and so are
-  `<complex.h>`, `CMPLX` and `_Generic` over the complex types.
+### Calling it from Rust
 
-  This is the one thing `cinrs` generates that names a crate rather than
-  `core`, so it lives behind the **`complex` feature**, which is on by
-  default. `default-features = false` drops the `cinrs-rt` dependency,
-  predefines `__STDC_NO_COMPLEX__` and makes `_Complex` a diagnostic naming
-  the feature. `cinrs-rt` is itself `#![no_std]`, so having it on costs a
-  `#![no_std]` crate nothing.
+* Functions are `pub unsafe extern "C" fn`; [safe functions][safe-functions]
+  drop the `unsafe`.
+* A C name that is a Rust keyword is a raw identifier: `int match(int)` is
+  called as `r#match(1)`. [More on names][names].
+* A bit-field has no address, so it is a pair of methods: `h.length()` and
+  `h.set_length(200)`.
+* Each invocation is one translation unit, expanded into a private module and
+  re-exported. `#pragma cinrs module "packet"` names the module;
+  `#pragma cinrs export` gives its functions real C symbols, so another block
+  — or a C library — can call them.
 
-## Including a C file
+### Headers
 
-C that already lives in a file goes in whole, with one macro per entry point:
-`include_c89!`, `include_c90!`, `include_c99!`, `include_c11!`, `include_c17!`,
-`include_c23!` and the five `include_gnu…!` forms.
+The standard headers, and the handful of POSIX ones small programs reach for,
+are bundled and written against a model of the target, so a block means the
+same thing on every machine. Your own headers are found next to the `.rs` file
+(`#pragma cinrs include_path "…"` adds directories), and editing one rebuilds
+the crate. The platform's own headers — `struct stat`, `DIR`,
+`pthread_mutex_t` — are one pragma away:
 
-```rust,ignore
-cinrs::include_c99!("c/geometry.c");
-
-let p = Point { x: -3, y: 4 };
-assert_eq!(point_manhattan(p), 7);
+```c
+#pragma cinrs system_include
+#include <sys/stat.h>
 ```
 
-The file is read while the macro expands and translated exactly as the same
-text inside a `c99!` block would be: it is one translation unit, so every
-construct is accepted (a file is text, and the lexemes Rust's own lexer refuses
-are no trouble there), `#pragma cinrs …` inside it configures the unit,
-`#include "…"` in it searches **its own** directory first, and the expansion is
-a module plus a glob re-export like any other invocation's. `__FILE__` and
-`__LINE__` name the `.c` file and its own lines, and the file is mentioned with
-`include_str!` in the expansion, so editing it rebuilds the crate.
+See [system headers][system-headers], and [the pragma reference][pragmas] for
+all nine `#pragma cinrs` options and the environment variables that go with
+them.
 
-A **relative path is resolved against the directory of the `.rs` file the macro
-is written in** — the same rule `#include "…"` follows — and an absolute one is
-used as it stands.
+### Cross-compilation
 
-The one thing that is not as good as writing the C inline is where a diagnostic
-can point. There is no C in the `.rs` file, so **every error lands on the macro
-invocation**: a message of this crate's carries the position inside the file in
-its text —
-
-```text
-error: c/geometry.c:12:5: use of undeclared identifier 'wrong'
- --> src/lib.rs:3:21
-  |
-3 | cinrs::include_c99!("c/geometry.c");
-  |                     ^^^^^^^^^^^^^^
-```
-
-— and so does an error `rustc` raises about the generated code. Neither `cargo`
-nor `rust-analyzer` will jump into the `.c` file: they show the location in the
-message rather than under the caret. A call written in *Rust* is unaffected —
-the caret is on the call, where it always was.
-
-## System headers
-
-The bundled headers are enough for the standard library, and being written in
-plain C99 against the [target model](#cross-compilation) is what makes a `c99!`
-block mean the same thing on every machine. What they cannot give is a type
-whose *layout* only the platform knows: `struct stat`, `DIR`,
-`pthread_mutex_t`, `regex_t`, `struct utsname`, the real `FILE`. Those come
-from the platform's own headers, and one pragma puts them on the search path:
-
-```rust,ignore
-cinrs::gnu11! {
-    #pragma cinrs system_include
-
-    #include <sys/stat.h>
-
-    long file_size(const char *path) {
-        struct stat st;
-        return stat(path, &st) == 0 ? (long) st.st_size : -1;
-    }
-}
-```
-
-**The switch is off by default.** With it on the search order becomes
-
-1. the directory of the file the `#include "…"` is written in;
-2. `#pragma cinrs include_path`, then `Options::include_paths`, then
-   `CINRS_INCLUDE_PATH`;
-3. the **bundled** headers;
-4. the **platform's** directories.
-
-so a name cinrs bundles still comes from cinrs, and only what it does not carry
-— `<sys/stat.h>`, `<pthread.h>`, `<dirent.h>`, `<regex.h>` — comes from the
-machine. `#pragma cinrs system_include first` swaps 3 and 4, which is how a
-program asks for the platform's `<stdio.h>` and so for a `FILE` it can take the
-`sizeof` of. `CINRS_SYSTEM_INCLUDE=1` (or `=first`) is the same switch for a
-whole crate, and a pragma in a unit overrides it.
-
-A header *found* in one of those directories resolves its own `#include`s
-there first, whichever mode is in force. That is what keeps the platform's set
-self-consistent: glibc's `<pthread.h>` gets glibc's `<time.h>`, and the program
-ends up with one `struct timespec` rather than two.
-
-**Which directories.** `CINRS_SYSTEM_INCLUDE_PATH` when it is set — split the
-way the platform splits `PATH` — and otherwise, on Linux, `/usr/local/include`,
-the multiarch directory (`/usr/include/x86_64-linux-gnu` and its like, when it
-exists) and `/usr/include`. GCC's and Clang's own private directories are
-**never** searched: their `limits.h`, `stdint.h`, `stddef.h` and `stdarg.h` are
-that compiler's, chain onward with `#include_next`, and are bundled here
-anyway. Apple's platforms and Windows have no default — the macOS SDK path is
-knowable only from `xcrun --show-sdk-path` — so there
-`CINRS_SYSTEM_INCLUDE_PATH` is the only way in.
-
-**Cross builds get no default.** Those directories hold the *host's* headers,
-and a `struct stat` laid out for another architecture is worse than no
-`struct stat` at all, so a unit whose target is not the host is an error unless
-`CINRS_SYSTEM_INCLUDE_PATH` points at the sysroot.
-
-**Rebuilds.** Your own headers are recorded with `include_str!`, so editing one
-rebuilds the crate. A system header is not: it belongs to the machine rather
-than to the crate, and upgrading libc would otherwise rebuild every unit that
-ever read one.
-
-**Feature test macros are glibc's, and the entry point sets them.** A strict
-`c11!` defines `__STRICT_ANSI__`, as `gcc -std=c11` does, and glibc then
-withholds everything outside C — no `sigset_t`, no `struct sigaction`. A
-`gnu11!` does not, so `_DEFAULT_SOURCE` is on and POSIX is there. Writing
-`#define _GNU_SOURCE 1` ahead of the first `#include` works in either.
-
-GNU's **`#include_next`** works, with GCC's semantics — the search goes on from
-the entry *after* the one the current file was found under — because the
-platform's headers use it; so does `__has_include_next`.
-
-[`doc/system-headers.md`][system-headers] has the table of what glibc's headers
-do in the front end, header by header and entry point by entry point, and what
-the remaining gaps are.
-
-## Known limitations
-
-* Not supported, each as a located error rather than a silent mistranslation:
-  `setjmp`/`longjmp`, `_BitInt`, `_Imaginary`, a complex *integer* type
-  (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
-  C, and there is nothing in the generated Rust to be the lock it needs), and
-  C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
-  the GNU side: inline assembly and the vector extensions.
-  Two of C11's four `__STDC_NO_*` macros depend on how the expansion was
-  configured, which is the standard's own way of saying that a part is left
-  out. `__STDC_NO_THREADS__` follows the *target*: `<threads.h>` declares the
-  platform's own threads, so it is bundled for the C libraries whose objects
-  cinrs can lay out — glibc and musl, both on Linux — and refuses on the rest,
-  which is where the macro is predefined. `__STDC_NO_COMPLEX__` follows the
-  `complex` feature below and is normally *not* defined; neither are
-  `__STDC_NO_ATOMICS__` and `__STDC_NO_VLA__`, atomics and variably modified
-  types being here. The one
-  corner of the latter that is left is a bound written in a *type name* —
-  `(double (*)[m])p` — where there is no declaration to keep the length in, so
-  an expression that needs it is refused.
-* A bit-field has no address, so it is not a field of the generated Rust
-  `struct`: a run of them shares one `pub __cinrs_bitsN: [u8; K]`, and each
-  named member becomes a pair of inherent methods — `s.level()` reads it and
-  `s.set_level(v)` writes it, in the member's declared C type. The C itself is
-  unchanged (`s.level = 3`, `p->flags |= 1`, `switch (s.kind)`); the accessors
-  are what *Rust* code on the other side uses.
-* `_Alignas` and `__attribute__((aligned(N)))` are honoured on the members of a
-  `struct` or `union`: the member moves to the boundary it asks for and the
-  generated Rust item gets explicit padding so that both sides agree about
-  where it went. On an **object** — automatic, `static`, at file scope or
-  `_Thread_local` — Rust can over-align a *type* and nothing else, so the
-  binding is generated inside a one-field wrapper that carries the alignment
-  (`#[repr(C, align(64))] struct __cinrs_align_64<T>(pub T);`) and every use of
-  it goes through the field: **Rust code reads `buf.0`**. The C program sees
-  none of it — `sizeof buf` is the object's own size.
-* A `constexpr` object is a *constant*: its value is folded wherever the name
-  is used (so it may be an array bound or a `case` label), and there is
-  nothing to take the address of. Only the arithmetic types are accepted.
-  `nullptr` has type `void *` rather than a `nullptr_t` of its own.
-* `long double` is `double`: the extended precision, and the ABI that goes with
-  it, are not there.
-* `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or
-  returned; the usual uses — `va_start`, `va_arg`, `va_copy`, passing a list to
-  `vprintf` — are fine, and so is a **`va_list *`** parameter or local, which
-  is what lets a helper advance the caller's list. `va_arg` of a `struct`, a
-  `union` or a complex value is rebuilt from the eightbytes the ABI passed it
-  in, so it works for records of **at most sixteen bytes on x86-64 System V**
-  and is a located error anywhere else.
-* The platform's include directories are not searched *by default*, which is
-  what keeps a unit self-contained and portable across target models. A program
-  that needs `struct stat` or the real `FILE` asks for them with
-  `#pragma cinrs system_include`; see [System headers](#system-headers) for
-  what that costs, and [`doc/system-headers.md`][system-headers] for the one
-  header of the standard set glibc will not hand over (`<tgmath.h>`).
-* `setjmp` and `longjmp` are refused where they are *called*, whichever header
-  declared them: they resume a saved machine context, and the state a
-  `longjmp` would return into is the generated Rust's. Declaring them, and
-  declaring a `jmp_buf`, are fine — half of POSIX pulls `<setjmp.h>` in.
-* The extended floating types — `__float128`, `_Float128`, `_Float16` and the
-  rest of TS 18661-3's set — are refused with the reason rather than mapped
-  onto `double`.
-* Sizes and alignments come from a model of the target rather than from the
-  target's own C compiler. Cross-compiling needs one line in a build script;
-  see [Cross-compilation](#cross-compilation) below, and note that without it
-  a cross build is a failed compile-time assertion rather than a program that
-  computes the wrong thing.
-* Each invocation is one translation unit. Two blocks may share a header, but
-  the types it declares are then two distinct Rust types — one per unit.
-
-## Cross-compilation
-
-`sizeof`, `_Alignof`, member offsets, bit-field storage, the type an integer
-constant gets, the value of an `#if`, the predefined macros and therefore which
-branch each bundled header takes are all worked out while the macro is
-expanding — from a model of the machine the code will *run* on. A procedural
-macro cannot ask `rustc` what that machine is, so the crate being built says
-so, from its own build script:
+`sizeof`, layouts and `#if` are worked out while the macro expands, from a
+model of the target. A procedural macro cannot ask `rustc` what the target is,
+so a crate that is cross-compiled says so from its build script:
 
 ```rust
 // build.rs
 fn main() {
-    println!(
-        "cargo:rustc-env=CINRS_TARGET={}",
-        std::env::var("TARGET").expect("Cargo sets TARGET for a build script")
-    );
+    println!("cargo:rustc-env=CINRS_TARGET={}", std::env::var("TARGET").unwrap());
 }
 ```
 
-`cargo:rustc-env` reaches the very `rustc` process that runs the macro, and
-Cargo makes the value part of the crate's fingerprint, so changing `--target`
-rebuilds. That is the whole recipe: with it, `cargo build --target
-i686-unknown-linux-gnu` translates the C for a 32-bit machine, and
-`--target x86_64-pc-windows-msvc` for one where `long` is four bytes and
-`wchar_t` is two.
+Without it a cross build fails a compile-time assertion instead of computing
+the wrong thing. [Cross-compilation][cross] has the supported targets.
 
-A single unit can override it:
+## What is supported
 
-```c
-#pragma cinrs target "aarch64-unknown-linux-gnu"
-```
+[What works][features] is the tour, construct by construct.
+[C standard status][c-status] is the table — every feature of C89 to C23 with
+its state, in the style of Clang's `c_status` — and [GNU
+extensions][gnu-extensions] is the same for GCC's.
 
-which has to be written in that unit's own text, before any `#include` or
-`#if` — the model is settled before the first directive is read, so a pragma
-after one would be a lie, and cinrs says so instead of half-applying it.
+## Limitations
 
-With neither, the model is the machine the macro itself was compiled for.
+The ones most likely to matter; [the full list][limitations] has the rest.
 
-### The supported families
+* Not supported, each as a located error: `setjmp`/`longjmp`, inline assembly,
+  the vector extensions, `_BitInt`, `_Imaginary`, an `_Atomic` aggregate.
+* `long double` is `double`.
+* Variable length arrays and `alloca` live on the heap (Rust cannot move the
+  stack pointer); what the C can observe is unchanged.
+* `va_arg` of a `struct` works for records up to sixteen bytes on x86-64
+  System V only.
+* Each invocation is its own translation unit: two blocks that include one
+  header get two distinct Rust types for each `struct` in it.
+* The platform's include directories are not searched unless the unit asks.
 
-| Data model | Targets |
+## Conformance and speed
+
+| Corpus | Correct | Entry point |
+| --- | --- | --- |
+| [c-testsuite] — whole programs with expected output | **214 of 218 (98.2 %)** | `c99!` |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,515 of 1,769 (85.6 %)**, 88.9 % on Rust 1.99 | `gnu11!` |
+| [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **167 of 203 (82.3 %)** | per test |
+| glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
+
+"Correct" means the case passed, or the entry point is required to refuse it
+and did. Every remaining case is listed by name as unimplemented, not planned
+or needing a newer toolchain — **not one is tagged as a bug**.
+[The conformance suites][testsuites] says how they are run.
+
+[Benchmarks][benchmarks]: 39 whole C programs — the single-threaded C entries
+of the Benchmarks Game, Dhrystone, Whetstone and two dozen kernels that isolate
+one construct each — built as `gcc -O2`, `clang -O2` and a `cinrs` block under
+`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.01×**, 30 of the
+39 are within 10 % of `gcc` or faster, and every output is identical across the
+three builds. The one systematic cost is a `goto` that jumps *into* a block,
+which needs a state machine; an outward `goto` (`goto done`, `goto retry`) is
+free.
+
+## Documentation
+
+| | |
 | --- | --- |
-| **LP64** — 64-bit `long` and pointers | `x86_64-*`, `aarch64-*`, `riscv64*`, `powerpc64*`, `s390x-*`, `loongarch64-*`, `mips64*`, `sparc64-*` on Linux, Darwin, the BSDs or bare metal |
-| **LLP64** — 64-bit pointers, 32-bit `long`, 16-bit `wchar_t` | `*-windows-msvc`, `*-windows-gnu`, `*-uwp-windows-*` at 64 bits |
-| **ILP32** — 32 bits throughout | `i686-*`, `i586-*`, `armv7*`, `thumb*`, `riscv32*`, `wasm32-*`, `mips-*`, `powerpc-*`, `sparc-*`, and `x86_64-*-gnux32` |
-
-Plain `char`'s signedness follows `core::ffi::c_char`: unsigned on AArch64,
-Arm, PowerPC, RISC-V and s390x, **except** on Windows and Apple's platforms,
-which make it signed; signed everywhere else, wasm32 and LoongArch included.
-`long long` and `double` are eight-byte aligned everywhere but 32-bit x86 off
-Windows, where the i386 System V ABI makes them four — which changes how a
-`struct` is laid out, and which `rustc` splits the same way.
-
-Three things are refused rather than guessed at: `__int128` on a 32-bit
-architecture (as GCC refuses it, leaving `__SIZEOF_INT128__` undefined so a
-program can guard on it), a **bit-field on a big-endian target** (cinrs
-allocates from the least significant end, which is not how a big-endian ABI
-does it), and an architecture whose data model is none of the three —
-`avr`, with its 16-bit `int`, is named in the diagnostic. A triple the table
-does not know is an error listing the families that are in it.
-
-[`doc/c-status.md`][c-status] has the full table, family by family.
-
-### The assertion that guards it
-
-Every expansion opens with a `const _: () = { assert!(…); };` block stating
-the model it was translated for — one assertion per width, one for plain
-`char`'s signedness, one for the alignment of `long long` and `double`, and,
-in a unit that uses `__int128`, one for its alignment. They are written over
-the `core::ffi` aliases, which follow the *real* target, so a build that forgot
-the build script fails like this:
-
-```text
-error[E0080]: evaluation panicked: cinrs: 'long' is 8 bytes in the data model
-this unit was translated for, and is not on this target. Translated for LP64
-(x86_64-linux, signed 'char', 32-bit 'wchar_t'), chosen from the host,
-CINRS_TARGET being unset; set CINRS_TARGET from a build script
-(cargo:rustc-env=CINRS_TARGET=$TARGET) or write #pragma cinrs target.
-```
-
-with the caret on the C, rather than compiling into a program whose every
-`sizeof` is wrong.
-
-The C library is still the platform's, and nothing here can check that the
-library on the other end agrees with the header cinrs bundled. The Windows
-branch keeps to the portable UCRT subset — `__acrt_iob_func` for `stdin` and
-its two siblings, `_errno()` for `errno` — which both the Microsoft library
-and mingw-w64 export; it is compiled for by the test suite and has not been
-*run*. The same is true of every target but the host.
-
-## `no_std`
-
-Everything generated is `core`-only: `core::ffi` types, `#[repr(C)]` items, raw
-pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
-`core::mem::offset_of!` for `offsetof`, `core::sync::atomic` for `_Atomic` and
-the atomic builtins, and the C library's own `abort` for `__builtin_trap` and
-`assert`. The C library is still *linked*, because the C code calls it — that
-is a link-time dependency of the program rather than a Rust one.
-
-A complex type is the one thing that names another crate — `cinrs::rt`, the
-re-export of `cinrs-rt` — and `cinrs-rt` is itself `#![no_std]`, so it changes
-nothing here. `default-features = false` drops it, and `_Complex` with it.
-
-Three constructs are the exception. Two of them are variable length arrays and
-`alloca`, whose storage is a `Vec`. Nothing in the C says which kind of crate
-the expansion is going into, so that `Vec` is `::std::vec::Vec` unless the unit
-says otherwise:
-
-```c
-#pragma cinrs no_std
-```
-
-which makes it `::alloc::vec::Vec` instead. The crate then has to contain
-`extern crate alloc;` itself — an expansion is items, and a crate-level
-directive is not one of them. Without the pragma, a variable length array in a
-`#![no_std]` crate is `rustc`'s own "cannot find `std`", with the caret on the
-declaration that needed it.
-
-The third is a **thread-local object**, and the pragma does not help there:
-`thread_local!` is a `std` macro and `core` has no thread-local storage at all,
-so `_Thread_local` under `#pragma cinrs no_std` is a located error saying
-exactly that.
-
-## Conformance
-
-`cinrs` is measured against three public corpora — about 2,270 cases in about
-ten minutes. [`doc/testsuites.md`][testsuites] is the overview: how to
-fetch them, the three modes each harness has, the expected-failure lists with
-their markers and **category tags**, and **the memory ceilings a run has to be
-given**, which are not optional.
-
-The number each suite leads with is its **correct** rate — a case that passed,
-plus one this entry point is *required* to refuse and did refuse — and what is
-left over is broken down into four kinds of error: a `cinrs` **bug**, something
-**unimplemented**, something **not planned** (inline assembly, the vector
-extensions, `setjmp`, and the rest of what has no Rust counterpart), and the
-**toolchain** being older than Rust 1.99. Across all three corpora there is now
-**not one case tagged `[bug]`**: what is left is what the documents below name
-as unimplemented or not planned, case by case.
-
-* **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
-  programs with the output each must produce. Of the 220 in its `single-exec`
-  suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
-  216 of 220 under `c11!` and 217 of 220 under `c23!` and every GNU dialect.
-  **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
-  implemented — a `goto` out of a statement expression, and a `va_arg` of a
-  `struct` too large for the argument registers — one is C23's empty
-  initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in, and the
-  last needs a newer Rust than 1.98. Strict
-  `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
-  use something C99 added and a strict C89 entry point is required to refuse
-  them. The corpus is a git submodule, so a fresh checkout skips the suite
-  until `git submodule update --init third_party/c-testsuite` fetches it.
-  [`doc/c-testsuite.md`][c-testsuite-doc] has the details.
-* **[GCC's C torture tests][gcc-torture]** — 1,776 self-checking
-  programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
-  `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
-  (85.2 %) under `gnu89!`, which is the language these C89-era programs were
-  written in and refuses none of them; on `beta`, where a variadic definition
-  compiles, the same runs are 1,573 (88.9 %) and 1,566 (88.5 %). **Not one of
-  the 254 errors is a bug**; they are inline assembly, the vector extensions,
-  the complex
-  *integer* types, the corners of nested functions that need a trampoline or a
-  nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
-  implement, the definitions and `va_list`s that need Rust 1.99, and five
-  programs that built and then did the wrong thing, which the document names
-  one by one.
-* **[Clang's C conformance tests][clang-c-tests]** — one file per WG14
-  paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **167 of the 203 revisions run are correct
-  (82.3 %)** — 139 answered exactly and 28 refused because the entry point
-  requires it — and of the 620 `expected-error` lines the suite asks about,
-  **557 are diagnosed on the right line**. This is the only suite that measures
-  what `cinrs` *refuses*, which is half of what a front end is for, and **not
-  one of its 36 errors is a bug** either: they are the features the document
-  lists as not yet implemented, and the places where `cinrs` and Clang
-  disagree on purpose — usually with GCC on `cinrs`'s side.
-
-The last two are fetched by `scripts/fetch-testsuites.sh`, not checked in, and
-each harness skips itself with a note when its corpus is missing.
-
-A fourth corpus needs no fetching, because it is already on the machine: **the
-platform's own headers**. `tests/system_headers.rs` puts each of the C standard
-headers and the POSIX set through the front end alone, in `gnu11!` and `c11!`,
-with the platform's copies preferred over the bundled ones — **66 of the 67 go
-through unchanged** against glibc 2.43, the exception being `<tgmath.h>` — and
-then compiles and runs ordinary programs against those declarations, comparing
-`sizeof(struct stat)` and its like against the host's own `cc`.
-[`doc/system-headers.md`][system-headers] is the table.
-
-## Speed
-
-Getting C right is half of it; running at the speed a C compiler would is the
-other half. [`doc/benchmarks.md`][benchmarks] is the measurement: 39
-whole C programs — the single-threaded C entries from [The Computer Language
-Benchmarks Game][bg], Dhrystone 2.1 and Whetstone, and two dozen kernels
-written to isolate one construct each (bit-fields, heap-emulated variable
-length arrays, `goto` lowering, `switch` against computed `goto`, `_Complex`,
-wrapping arithmetic, division) — built three times over, as `gcc -O2`, as
-`clang -O2`, and as a `cinrs` block compiled by `rustc -C opt-level=3`, and
-timed. Every program's output is compared byte for byte across the three
-builds, so the suite is a differential test as well as a benchmark.
-
-Two of those kernels are a pair: `statemachine`, a lexer written as a dozen
-labels that jump into one another, and `statemachine-structured`, the same
-lexer with `while` and `switch`. `gcc` and `clang` take the same time over
-both; what separates them for `cinrs` is the state machine an unstructurable
-`goto` still needs. An *outward* `goto` needs none — it is a labelled block or
-a labelled loop — which is why `whetstone` and `interp-switch`, whose jumps are
-of that kind, sit on `gcc -O2`.
-
-`benches/cinrs-bench` is the harness; its [README][bench-readme] says how to run
-it and how to add a program.
-
-[bg]: https://benchmarksgame-team.pages.debian.net/benchmarksgame/
+| [What works][features] | the language, the preprocessor, the extensions, construct by construct |
+| [Limitations][limitations] | what is refused, and what differs from a C compiler |
+| [C standard status][c-status] · [GNU extensions][gnu-extensions] | feature tables |
+| [Pragmas][pragmas] | `#pragma cinrs …`, the other pragmas, the attributes, the environment variables |
+| [Including a C file][include-c] | `include_c99!` and its siblings |
+| [System headers][system-headers] | `/usr/include` and what glibc's headers do here |
+| [Cross-compilation][cross] · [`no_std`][no-std] | targets and data models; what the expansion needs |
+| [Conformance][testsuites] · [Benchmarks][benchmarks] | how the numbers above are measured |
+| [API documentation](https://docs.rs/cinrs) | the crate docs, including what is generated for each construct |
 
 ## How it works
 
@@ -745,12 +243,12 @@ offsets back to `proc_macro2` spans, then runs a C front end over it — lexer,
 preprocessor, parser, semantic analysis with C's conversion rules made
 explicit — and emits Rust, `c2rust`-style: `#[repr(C)]` records, raw pointers,
 wrapping arithmetic where C defines wrap-around, `pub unsafe extern "C" fn` for
-each function. Each expansion goes into a private module of its own with a glob
-re-export, so two blocks in one Rust module never collide. Every token it emits
-is stamped with the span of the C it came from, which is what makes the errors
-land where they should.
+each function. Every token it emits is stamped with the span of the C it came
+from, which is what makes the errors land where they should.
 
-See the [crate documentation](https://docs.rs/cinrs) for the details.
+`0.1` means the macro surface may still change. The companion crates
+`cinrs-core`, `cinrs-macros` and `cinrs-rt` are implementation details of this
+one and carry no stability promise.
 
 ## License
 
@@ -771,13 +269,20 @@ dual licensed as above, without any additional terms or conditions.
      are absolute links: a README rendered on crates.io or docs.rs has no
      doc/ directory next to it. -->
 
-[gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
-[pragmas]: https://github.com/tanakh/cinrs/blob/master/doc/pragmas.md
-[system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
-[c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
-[testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md
-[c-testsuite-doc]: https://github.com/tanakh/cinrs/blob/master/doc/c-testsuite.md
+[c-testsuite]: https://github.com/tanakh/cinrs/blob/master/doc/c-testsuite.md
 [gcc-torture]: https://github.com/tanakh/cinrs/blob/master/doc/gcc-torture.md
 [clang-c-tests]: https://github.com/tanakh/cinrs/blob/master/doc/clang-c-tests.md
+[testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md
 [benchmarks]: https://github.com/tanakh/cinrs/blob/master/doc/benchmarks.md
-[bench-readme]: https://github.com/tanakh/cinrs/blob/master/benches/cinrs-bench/README.md
+[features]: https://github.com/tanakh/cinrs/blob/master/doc/features.md
+[input-forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms
+[safe-functions]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#safe-functions
+[names]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#names-rust-would-not-take
+[limitations]: https://github.com/tanakh/cinrs/blob/master/doc/limitations.md
+[c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
+[gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
+[pragmas]: https://github.com/tanakh/cinrs/blob/master/doc/pragmas.md
+[include-c]: https://github.com/tanakh/cinrs/blob/master/doc/include-c.md
+[system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
+[cross]: https://github.com/tanakh/cinrs/blob/master/doc/cross-compilation.md
+[no-std]: https://github.com/tanakh/cinrs/blob/master/doc/no-std.md

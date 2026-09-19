@@ -13,10 +13,17 @@ real `FILE`. A bundled header that guessed at one of those would not fail to
 compile — it would corrupt memory. So they are not guessed at. They are read
 from the machine, when a unit asks:
 
-```c
-#pragma cinrs system_include
+```rust,ignore
+cinrs::gnu11! {
+    #pragma cinrs system_include
 
-#include <sys/stat.h>
+    #include <sys/stat.h>
+
+    long file_size(const char *path) {
+        struct stat st;
+        return stat(path, &st) == 0 ? (long) st.st_size : -1;
+    }
+}
 ```
 
 ## The switch
@@ -26,6 +33,10 @@ from the machine, when a unit asks:
 | nothing (the default) | including file's directory → `include_path` → `Options::include_paths` → `CINRS_INCLUDE_PATH` → **bundled** |
 | `#pragma cinrs system_include` | … → **bundled** → **platform** |
 | `#pragma cinrs system_include first` | … → **platform** → **bundled** |
+
+**The switch is off by default.** With it on, a name cinrs bundles still comes
+from cinrs, and only what it does not carry — `<sys/stat.h>`, `<pthread.h>`,
+`<dirent.h>`, `<regex.h>` — comes from the machine.
 
 `CINRS_SYSTEM_INCLUDE=1` and `CINRS_SYSTEM_INCLUDE=first` are the same two
 settings for a whole crate — `on`, `true` and `yes` all mean `1`; `0`, `off`,

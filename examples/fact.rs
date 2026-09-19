@@ -1,4 +1,4 @@
-//! The example from the README, as a program you can run:
+//! The smallest complete example — one safe C function called from Rust:
 //!
 //! ```text
 //! cargo run --example fact

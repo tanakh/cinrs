@@ -6,6 +6,16 @@ by `rustc -C opt-level=3` — and run 5 times per build with the median wall clo
 reported. The outputs of all three builds are compared byte for byte, so a
 miscompilation shows up here as loudly as a slowdown.
 
+The programs are the single-threaded C entries from [The Computer Language
+Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/),
+Dhrystone 2.1 and Whetstone, and two dozen kernels written to isolate one
+construct each (bit-fields, heap-emulated variable length arrays, `goto`
+lowering, `switch` against computed `goto`, `_Complex`, wrapping arithmetic,
+division). That comparison makes the suite a differential test as well as a
+benchmark, and `benches/cinrs-bench` is the harness: its
+[README](../benches/cinrs-bench/README.md) says how to run it and how to add a
+program.
+
 Regenerate with
 
 ```text
@@ -225,7 +235,7 @@ The `clang` column is what separates the two kinds of difference. `cinrs` and `c
 
 ### Why, construct by construct
 
-What the expansion does with each of these is in the crate's README; what it costs is here.
+What the expansion does with each of these is in [What works](features.md); what it costs is here.
 
 * **Arithmetic wraps for free.** C's unsigned arithmetic is modular, so the expansion is `wrapping_add`, `wrapping_mul` and their relatives rather than Rust's `+` and `*`. Those are `#[inline]` intrinsics that lower to the bare instruction, and `prng` — a loop that is nothing but a multiply, an add and three shifts — and `wrapping`, which does the same at every width C has, are the measurement: both land on `gcc`. If they did not, every arithmetic row in the table would be paying for it.
 * **There are no bounds checks.** A C array is a raw pointer and a subscript is `.offset()`, which is plain address arithmetic with no check in it — `sieve`, `matmul`, `life`, `crc32` and `binsearch` are where that shows, and none of them has a Rust tax to pay.

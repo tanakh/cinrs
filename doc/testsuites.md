@@ -20,6 +20,56 @@ means and what the four kinds of error are; between the three suites there is
 now **not one case tagged `[bug]`**. What is left is what each document lists
 as unimplemented or not planned, case by case.
 
+## Results at a glance
+
+* **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
+  programs with the output each must produce. Of the 220 in its `single-exec`
+  suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
+  216 of 220 under `c11!` and 217 of 220 under `c23!` and every GNU dialect.
+  **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
+  implemented — a `goto` out of a statement expression, and a `va_arg` of a
+  `struct` too large for the argument registers — one is C23's empty
+  initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in, and the
+  last needs a newer Rust than 1.98. Strict
+  `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
+  use something C99 added and a strict C89 entry point is required to refuse
+  them. The corpus is a git submodule, so a fresh checkout skips the suite
+  until `git submodule update --init third_party/c-testsuite` fetches it.
+  [`doc/c-testsuite.md`](c-testsuite.md) has the details.
+* **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
+  programs, each a bug report distilled into twenty lines, where success is
+  exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
+  `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
+  (85.2 %) under `gnu89!`, which is the language these C89-era programs were
+  written in and refuses none of them; on `beta`, where a variadic definition
+  compiles, the same runs are 1,573 (88.9 %) and 1,566 (88.5 %). **Not one of
+  the 254 errors is a bug**; they are inline assembly, the vector extensions,
+  the complex
+  *integer* types, the corners of nested functions that need a trampoline or a
+  nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
+  implement, the definitions and `va_list`s that need Rust 1.99, and five
+  programs that built and then did the wrong thing, which the document names
+  one by one.
+* **[Clang's C conformance tests](clang-c-tests.md)** — one file per WG14
+  paper or defect report, with `// expected-error` comments saying exactly
+  which lines must be diagnosed. **167 of the 203 revisions run are correct
+  (82.3 %)** — 139 answered exactly and 28 refused because the entry point
+  requires it — and of the 620 `expected-error` lines the suite asks about,
+  **557 are diagnosed on the right line**. This is the only suite that measures
+  what `cinrs` *refuses*, which is half of what a front end is for, and **not
+  one of its 36 errors is a bug** either: they are the features the document
+  lists as not yet implemented, and the places where `cinrs` and Clang
+  disagree on purpose — usually with GCC on `cinrs`'s side.
+
+A fourth corpus needs no fetching, because it is already on the machine: **the
+platform's own headers**. `tests/system_headers.rs` puts each of the C standard
+headers and the POSIX set through the front end alone, in `gnu11!` and `c11!`,
+with the platform's copies preferred over the bundled ones — **66 of the 67 go
+through unchanged** against glibc 2.43, the exception being `<tgmath.h>` — and
+then compiles and runs ordinary programs against those declarations, comparing
+`sizeof(struct stat)` and its like against the host's own `cc`.
+[`doc/system-headers.md`](system-headers.md#the-table) is the table.
+
 Each suite has a document of its own with its baseline, its failures by cause
 and how to reproduce the numbers. What follows is what they have in common.
 

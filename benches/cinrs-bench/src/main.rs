@@ -1597,6 +1597,18 @@ fn write_report(
          miscompilation shows up here as loudly as a slowdown.\n",
         o.runs
     )?;
+    writeln!(
+        out,
+        "The programs are the single-threaded C entries from [The Computer Language\n\
+         Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/),\n\
+         Dhrystone 2.1 and Whetstone, and two dozen kernels written to isolate one\n\
+         construct each (bit-fields, heap-emulated variable length arrays, `goto`\n\
+         lowering, `switch` against computed `goto`, `_Complex`, wrapping arithmetic,\n\
+         division). That comparison makes the suite a differential test as well as a\n\
+         benchmark, and `benches/cinrs-bench` is the harness: its\n\
+         [README](../benches/cinrs-bench/README.md) says how to run it and how to add a\n\
+         program.\n"
+    )?;
     writeln!(out, "Regenerate with\n")?;
     writeln!(out, "```text")?;
     writeln!(out, "( ulimit -v 8000000; timeout -k 10 3600 \\")?;
@@ -1977,8 +1989,8 @@ fn write_interpretation(
     writeln!(
         out,
         "### Why, construct by construct\n\n\
-         What the expansion does with each of these is in the crate's README; what it costs is \
-         here.\n\n\
+         What the expansion does with each of these is in [What works](features.md); what it \
+         costs is here.\n\n\
          * **Arithmetic wraps for free.** C's unsigned arithmetic is modular, so the expansion \
            is `wrapping_add`, `wrapping_mul` and their relatives rather than Rust's `+` and `*`. \
            Those are `#[inline]` intrinsics that lower to the bare instruction, and `prng` — a \

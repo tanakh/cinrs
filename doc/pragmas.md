@@ -98,7 +98,7 @@ over it, and with neither, the model is the host's. Programmatically it is
 `Options::for_target`. Every expansion states the model it was translated for
 as a block of `assert!`s over the `core::ffi` aliases, so a wrong answer is a
 message at compile time rather than a wrong `sizeof` at run time; see
-[Cross-compilation](../README.md#cross-compilation).
+[Cross-compilation](cross-compilation.md).
 
 ### `include_path "<dir>"`
 
@@ -250,7 +250,7 @@ names `core` alone except the storage a variable length array or `alloca`
 needs, which is a `Vec`; this decides whether that `Vec` is spelled
 `::std::vec::Vec` or `::alloc::vec::Vec`. A unit that uses neither construct
 needs neither the pragma nor an allocator. See
-[`no_std`](../README.md#no_std).
+[`no_std`](no-std.md).
 
 It takes no argument and reaches the whole unit wherever it is written. An
 argument is reported and the option is still honoured. A `_Thread_local`

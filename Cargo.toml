@@ -61,14 +61,14 @@ categories = ["development-tools::ffi", "compilers", "no-std"]
 # otherwise follow into the tarball — and the conformance corpora and their
 # expected-failure lists, which are useless without corpora nobody downloads
 # from a `.crate`. So the package is an allowlist rather than a deny-list: the
-# library, the one example the README tells you to run, the README itself, the
-# changelog and the licences.
+# library, the examples (one of which is the README's own), the README itself,
+# the changelog and the licences.
 #
 # Every pattern is anchored with a leading `/`: these are gitignore globs, and
 # an unanchored `README.md` would match `third_party/c-testsuite/README.md` too.
 include = [
     "/src/**/*.rs",
-    "/examples/fact.rs",
+    "/examples/*.rs",
     "/README.md",
     "/CHANGELOG.md",
     "/LICENSE",
