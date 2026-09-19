@@ -1,0 +1,8 @@
+error: a '//' comment requires C99 or later (this block is c89!)
+  --> tests/ui-nightly/c89_line_comment.rs:12:21
+   |
+12 |     int first;      // before a directive
+   |                     ^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

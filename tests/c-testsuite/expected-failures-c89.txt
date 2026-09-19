@@ -54,6 +54,7 @@
 !00187                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
 !00198                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
 !00200                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
+!00201                   error: "a '//' comment requires C99 or later"  conforming: a `//` comment is C99, which took it from C++ (N644), so strict C89 is required to refuse it; write `c99!`. This one is at the end of the case's `#include` line, so the token carrying the diagnostic is the `#` of the `#define` below it
 !00203                   error: "'long long' requires C99 or later"  conforming: `long long` is C99, so strict C89 is required to refuse it; write `c99!`
 !00207                   error: "a variable length array requires C99 or later"  conforming: a variable length array is C99, so strict C89 is required to refuse it; write `c99!`
 !00210                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`

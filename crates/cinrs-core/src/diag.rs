@@ -55,17 +55,23 @@ pub struct Diagnostic {
     pub range: SourceRange,
     /// Additional remarks.
     pub notes: Vec<Note>,
-    /// Whether the *spelling* of a preprocessing token is what is wrong —
-    /// something translation phase 3 decided while the token was being formed.
+    /// Whether the *text* is what is wrong — the spelling of a preprocessing
+    /// token, or the comments before it — rather than the token itself;
+    /// something translation phase 3 decided as the token was being formed.
     ///
     /// The lexer's findings are normally held on the token and reported only
     /// if it survives into the preprocessor's output, because C99 6.4p3 makes
     /// any character that fits nothing else a preprocessing token of its own:
     /// a stray `\` or `$` handed to a macro that drops its argument is not an
-    /// error at all. A constraint on the spelling is different — a universal
+    /// error at all. A constraint on the text is different — a universal
     /// character name that names a character 6.4.3p2 forbids is ill-formed
     /// where it is *written*, and throwing the token away does not make it
-    /// well-formed — so these are reported as soon as the token is read.
+    /// well-formed; nor does an unterminated comment, or a `//` one in C89,
+    /// stop being wrong because the token after it opened a directive — so
+    /// these are reported as soon as the token is read.
+    ///
+    /// "As soon as it is read" is still not inside a group `#if 0` skips: that
+    /// text is never read at all.
     pub lexical: bool,
 }
 

@@ -33,7 +33,7 @@ use cinrs_core::{Options, Standard, Subspan};
 /// says so:
 ///
 /// ```text
-/// error: '//' comments require C99 or later (this block is c89!)
+/// error: a '//' comment requires C99 or later (this block is c89!)
 /// ```
 ///
 /// What is gated: `//` comments, mixed declarations and code, a declaration in

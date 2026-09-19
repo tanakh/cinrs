@@ -31,9 +31,10 @@ as unimplemented or not planned, case by case.
   `struct` too large for the argument registers — one is C23's empty
   initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in, and the
   last needs a newer Rust than 1.98. Strict
-  `c89!` is 173 of the 175 it selects, because 21 cases the corpus tags `c89`
-  use something C99 added and a strict C89 entry point is required to refuse
-  them. The corpus is a git submodule, so a fresh checkout skips the suite
+  `c89!` is 173 of the 175 it selects, because 22 of the cases it takes — the
+  corpus tags them for portability rather than for strict C90 — use something
+  C99 or C11 added, and a strict C89 entry point is required to refuse them.
+  The corpus is a git submodule, so a fresh checkout skips the suite
   until `git submodule update --init third_party/c-testsuite` fetches it.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking

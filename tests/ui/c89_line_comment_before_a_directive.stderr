@@ -1,0 +1,14 @@
+error: a '//' comment requires C99 or later (this block is c89!)
+  --> tests/ui/c89_line_comment_before_a_directive.rs:21:14
+   |
+21 |     int first;
+   |              ^
+
+error: a '//' comment requires C99 or later (this block is c89!)
+  --> tests/ui/c89_line_comment_before_a_directive.rs:25:17
+   |
+25 |     #define TWO 2
+   |                 ^
+
+error: aborting due to 2 previous errors
+

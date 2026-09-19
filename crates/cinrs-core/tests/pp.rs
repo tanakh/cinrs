@@ -961,6 +961,143 @@ fn a_lexical_error_is_reported_only_where_it_survives() {
     );
 }
 
+/// Every error a strict `c89!` block finds in `src`, as `(the text the
+/// diagnostic points at, the message)`.
+///
+/// Where a diagnostic points matters as much as what it says here, so the text
+/// under its range is what this returns — from `src` itself, or from whichever
+/// header the range turns out to be in. `search` is the include path, and a
+/// relative `#include` looks in `HEADERS`.
+fn c89_errors(src: &str, search: &[&str]) -> Vec<(String, String)> {
+    let mut options = Options::new(Standard::C89);
+    options.include_paths = search.iter().map(PathBuf::from).collect();
+    let ctx = Context {
+        dir: Some(PathBuf::from(HEADERS)),
+        ..Context::new(src, 0)
+    };
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &LexOptions::new(Standard::C89));
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    // One global offset space: the unit's own text starts at 0, and every
+    // included file says where its own was placed.
+    let mut files: Vec<(usize, &str)> = vec![(0, src)];
+    files.extend(out.included.iter().map(|f| (f.base as usize, &*f.text)));
+    diags
+        .sorted()
+        .into_iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| {
+            let (start, end) = (d.range.start as usize, d.range.end as usize);
+            let at = files
+                .iter()
+                .find(|(base, text)| start >= *base && end <= base + text.len())
+                .map(|(base, text)| text[start - base..end - base].to_owned())
+                .unwrap_or_else(|| "<nowhere>".to_owned());
+            (at, d.message.clone())
+        })
+        .collect()
+}
+
+/// The one diagnostic `c89!` has about a comment.
+const NOT_C89: &str = "a '//' comment requires C99 or later (this block is c89!)";
+
+#[test]
+fn a_comment_is_diagnosed_wherever_the_token_after_it_ends_up() {
+    // A comment is text, not a token: the lexer has nowhere to hang what is
+    // wrong with one but the token that follows it, and everything about that
+    // token — whether it survives, opens a directive, names a macro or is an
+    // argument that is dropped — is beside the point.
+    // In each of these the comment is the last thing before the token named,
+    // which is what makes that token the one carrying the diagnostic.
+    let ordinary = "int a; // one\nint b;\n";
+    let hash_of_a_directive = "int a; // one\n#define X 1\nint b = X;\n";
+    let object_like_name = "#define OBJ int b;\nint a; // one\nOBJ\n";
+    let function_like_name = "#define F(x) int b = x;\nint a; // one\nF(1)\n";
+    let dropped_argument = "#define FIRST(a, b) a\nint b = FIRST(1, // one\n2);\n";
+    let end_of_the_unit = "int a; // one";
+    let hash_of_the_next_directive = "#define X 1 // one\n#define Y 2\nint b = X + Y;\n";
+    for src in [
+        ordinary,
+        hash_of_a_directive,
+        object_like_name,
+        function_like_name,
+        dropped_argument,
+        end_of_the_unit,
+        hash_of_the_next_directive,
+    ] {
+        assert_eq!(
+            c89_errors(src, &[]),
+            [("// one".to_owned(), NOT_C89.to_owned())],
+            "for:\n{src}"
+        );
+    }
+    // The other thing a comment can be wrong about, which always runs to the
+    // end of the file and so is always the last thing in it.
+    assert_eq!(
+        c89_errors("int a; /* one", &[]),
+        [("/* one".to_owned(), "unterminated comment".to_owned())]
+    );
+}
+
+#[test]
+fn a_comment_in_a_skipped_group_is_not_diagnosed() {
+    // A skipped group is not even lexically C, and the directive that closes
+    // one is the token the comments inside it are attached to.
+    assert!(c89_errors("#if 0\nint a; // one\n#endif\nint b;\n", &[]).is_empty());
+    assert!(c89_errors("#if 0\n// one\n#else\n#endif\nint b;\n", &[]).is_empty());
+    assert!(c89_errors("#if 1\n#else\nint a; // one\n#endif\nint b;\n", &[]).is_empty());
+    // A group nothing ever closes is skipped too, so the conditional itself is
+    // the only thing wrong with this.
+    assert_eq!(
+        c89_errors("#if 0\nint a; /* one\n", &[]),
+        [(
+            "#if".to_owned(),
+            "unterminated conditional directive".to_owned()
+        )]
+    );
+    // The group the `#else` takes is read, and the one before it is not.
+    assert_eq!(
+        c89_errors("#if 0\nint a; // one\n#else\nint b; // two\n#endif\n", &[]),
+        [("// two".to_owned(), NOT_C89.to_owned())]
+    );
+    // And a comment *after* the `#endif` is live text, directive or not.
+    assert_eq!(
+        c89_errors("#if 0\n#endif // one\n#define X 1\nint b = X;\n", &[]),
+        [("// one".to_owned(), NOT_C89.to_owned())]
+    );
+}
+
+#[test]
+fn a_comment_at_the_end_of_a_header_is_diagnosed() {
+    // The header's own end-of-file token is the one carrying it, and that token
+    // never reaches the output: only the unit's does.
+    assert_eq!(
+        c89_errors("#include \"tail_comment.h\"\nint b;\n", &[]),
+        [(
+            "// the last thing in the file, with no token after it".to_owned(),
+            NOT_C89.to_owned()
+        )]
+    );
+}
+
+#[test]
+fn a_comment_is_diagnosed_once() {
+    // Whatever the token it is attached to goes through — being read, being
+    // pre-expanded as an argument, being substituted twice and rescanned — the
+    // comment was written once.
+    assert_eq!(
+        c89_errors(
+            "#define TWICE(a) ((a) + (a))\nint x = TWICE( // one\n1);\n",
+            &[]
+        ),
+        [("// one".to_owned(), NOT_C89.to_owned())]
+    );
+    assert_eq!(
+        c89_errors("#define OBJ 1 // one\nint a = OBJ, b = OBJ;\n", &[]),
+        [("// one".to_owned(), NOT_C89.to_owned())]
+    );
+}
+
 #[test]
 fn a_keyword_may_be_a_macro_name() {
     // Keywords are ordinary identifiers in translation phase 4, and

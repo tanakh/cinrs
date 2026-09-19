@@ -850,6 +850,17 @@ fn every_problem_rides_on_the_token_it_was_found_in() {
     assert!(eof.is_eof());
     assert_eq!(eof.errors.len(), 1);
     assert_eq!(eof.errors[0].message, "unterminated comment");
+    // The two are not reported the same way, and the flag is what says so. The
+    // constant is only wrong if something parses it (6.4p3), while the comment
+    // was written whatever becomes of the token carrying it, so the
+    // preprocessor reports the comment as soon as it reads that token.
+    assert!(!constant.errors[0].lexical);
+    assert!(eof.errors[0].lexical);
+    // The `//` comment C89 does not have is the same kind of finding.
+    let c89 = lex_text("a // b\nc", 0, &LexOptions::new(Standard::C89));
+    assert_eq!(c89[1].errors.len(), 1);
+    assert!(c89[1].errors[0].message.contains("a '//' comment requires"));
+    assert!(c89[1].errors[0].lexical);
 }
 
 #[test]

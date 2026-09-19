@@ -218,8 +218,8 @@ The report counts the `expected-error` *lines* as well as the revisions:
       620  lines carry a required `expected-error`
       557  of them were diagnosed (89.8%)
        63  were not
-      448  errors landed on a line no directive names
-           176 of those are on the 31 revisions this entry point is required
+      463  errors landed on a line no directive names
+           191 of those are on the 31 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
@@ -227,7 +227,7 @@ The report counts the `expected-error` *lines* as well as the revisions:
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
-of them. 176 of the 448 are on the 31 revisions that are conforming refusals
+of them. 191 of the 463 are on the 31 revisions that are conforming refusals
 outright; the other 272 are on the 36 error revisions, where the same effect
 piles up behind whichever refusal came first.
 

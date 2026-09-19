@@ -815,12 +815,16 @@ pub struct Token {
     /// Whether whitespace or a comment preceded it (needed by the
     /// preprocessor's stringification and macro replacement).
     pub preceded_by_space: bool,
-    /// Everything wrong with this token, reported by the
-    /// [preprocessor](crate::pp) if and only if the token reaches its output.
+    /// Everything wrong with this token, and with the text between it and the
+    /// token before it.
     ///
-    /// An error found in the whitespace *before* a token — an unterminated
-    /// comment — is attached to that token, which is why this is never lost:
-    /// the end-of-input token always survives.
+    /// The [preprocessor](crate::pp) reports what is wrong with the token
+    /// *itself* if and only if the token reaches its output. What stands
+    /// whatever becomes of the token — its spelling, and the comments that
+    /// preceded it — is reported as soon as the token is read from the file,
+    /// which is what keeps it from being lost when the token opens a directive,
+    /// names a macro or is an argument the macro drops; see
+    /// [`Diagnostic::lexical`].
     pub errors: Vec<Diagnostic>,
 }
 
@@ -981,8 +985,9 @@ impl<'a> Lexer<'a> {
         self.pending.push(Diagnostic::error(range, message));
     }
 
-    /// Records a problem with the token's *spelling*, which stands whether or
-    /// not the token ever reaches the parser; see [`Diagnostic::lexical`].
+    /// Records a problem that stands whether or not the token being scanned
+    /// ever reaches the parser: one with its *spelling*, or one in the text
+    /// between it and the token before it. See [`Diagnostic::lexical`].
     fn lexical_error(&mut self, range: SourceRange, message: impl Into<String>) {
         self.pending
             .push(Diagnostic::error(range, message).at_lexing());
@@ -1081,8 +1086,17 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                     if !closed {
+                        // Both of the problems a *comment* can have belong to
+                        // the token that follows it for want of anywhere else
+                        // to put them, and neither is about that token: whether
+                        // a comment is terminated, and whether this revision
+                        // has `//`, is settled in translation phase 3 by the
+                        // text alone. So they are recorded as lexical, and
+                        // reported wherever the token ends up — including
+                        // nowhere, which is what a `#` opening a directive and
+                        // a macro name do with it.
                         let range = self.range(start, self.bytes.len());
-                        self.error(range, "unterminated comment");
+                        self.lexical_error(range, "unterminated comment");
                     }
                     space = true;
                 }
@@ -1101,14 +1115,16 @@ impl<'a> Lexer<'a> {
                     }
                     // C99 took the `//` comment from C++ (N644); before that
                     // `a //* b */ c` was a division, which is why the gate is
-                    // here rather than being a warning.
+                    // here rather than being a warning. Lexical for the reason
+                    // above: a `c89!` block that writes one has to be told so
+                    // whatever follows it.
                     if let Some(message) = self
                         .options
                         .gating
                         .requires("a '//' comment", Standard::C99)
                     {
                         let range = self.range(start, self.pos);
-                        self.error(range, message);
+                        self.lexical_error(range, message);
                     }
                     space = true;
                 }

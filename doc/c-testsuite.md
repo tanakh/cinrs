@@ -156,7 +156,7 @@ there is no escape, so it cannot itself contain a `"`.
 
 `00140` is the `?` entry: it defines a variadic function, which needs Rust
 1.99, so it passes on a new enough compiler and not on an older one. The `!`
-entries are `00209` under `c23!` and `gnu23!`, `00219` under `c99!` — and 21
+entries are `00209` under `c23!` and `gnu23!`, `00219` under `c99!` — and 22
 more under `c89!`, which is [the row](#the-c89-row-which-is-the-corpuss-own-tag-being-generous)
 where a strict C89 entry point refuses what C99 added.
 
@@ -275,7 +275,7 @@ are.
 
 | entry point | selected | correct | rate | passed | rejected | errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `c89!` | 175 | **173** | **98.9 %** | 152 | 21 | 2 |
+| `c89!` | 175 | **173** | **98.9 %** | 151 | 22 | 2 |
 | `c99!` | 218 | **214** | **98.2 %** | 213 | 1 | 4 |
 | `c11!` | 220 | **216** | **98.2 %** | 216 | — | 4 |
 | `c23!` | 220 | **217** | **98.6 %** | 216 | 1 | 3 |
@@ -317,21 +317,21 @@ it):
 
 ### The `c89!` row, which is the corpus's own tag being generous
 
-`c89!` is the entry point that *refuses* the most, and **21 of its 23
-non-passes are cases that use something a later revision added** — twenty of
-them tagged `c89`, and the twenty-first (`00216`) tagged with no revision at
-all: nine mix declarations and code, four write `long long`, three end an
-enumerator list with a comma, two define a variadic macro, and one each uses a
-variable length array, a compound literal and `_Generic`. The tag says the
-program is meant to be portable, not that it is strict C90, and running it
-through the entry point that *means* strict C90 is what shows the difference —
-which is the useful thing this row measures.
+`c89!` is the entry point that *refuses* the most, and **22 of its 24
+non-passes are cases that use something a later revision added** — twenty-one
+of them tagged `c89`, and the twenty-second (`00216`) tagged with no revision
+at all: nine mix declarations and code, four write `long long`, three end an
+enumerator list with a comma, two define a variadic macro, and one each writes
+a `//` comment, a variable length array, a compound literal and `_Generic`. The
+tag says the program is meant to be portable, not that it is strict C90, and
+running it through the entry point that *means* strict C90 is what shows the
+difference — which is the useful thing this row measures.
 
-Every one of those 21 is an `!` line naming the diagnostic it has to be
+Every one of those 22 is an `!` line naming the diagnostic it has to be
 refused with, so guard mode asserts the refusal rather than tolerating a
 failure, and they count as **correct**: a strict C89 entry point that accepted
 `long long` would be the news. That is why the row reads 173/175 (98.9 %)
-rather than the 152/175 (86.9 %) it did when a conforming refusal was filed
+rather than the 151/175 (86.3 %) it did when a conforming refusal was filed
 next to a gap. The two errors that are left are `00140` (the Rust 1.99
 variadic gap) and `00213`, which every entry point fails.
 
@@ -377,7 +377,7 @@ translated (`tests/vla.rs` covers the same shape).
 **`[bug]` (0), `[not-planned]` (0).** Nothing in this corpus is either.
 
 The cases that want a *later entry point* — `00219`'s `_Generic` under `c99!`,
-and twenty more under `c89!` — are not errors at all: refusing them is what
+and twenty-one more under `c89!` — are not errors at all: refusing them is what
 those entry points owe the standard, and they are counted under
 [rejected as the standard requires](#rejected-as-the-standard-requires) below.
 
@@ -404,11 +404,11 @@ same words.
 is tagged `c89` by a corpus that means "portable" rather than "strict C90".
 Every entry point from `c11!` up passes it, and so does every GNU dialect.
 
-**Twenty more, under `c89!` only** — nine mixing declarations and code, four
+**Twenty-one more, under `c89!` only** — nine mixing declarations and code, four
 writing `long long`, three ending an enumerator list with a comma, two
-defining a variadic macro, and one each with a variable length array, a
-compound literal and (with `00219`) `_Generic`. A strict C89 entry point is
-required to refuse all of them, and each line names the diagnostic:
+defining a variadic macro, and one each with a `//` comment, a variable length
+array, a compound literal and (with `00219`) `_Generic`. A strict C89 entry
+point is required to refuse all of them, and each line names the diagnostic:
 
 ```
 !00200  error: "'long long' requires C99 or later"  conforming: `long long` is C99, …

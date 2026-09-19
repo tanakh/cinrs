@@ -792,8 +792,11 @@ impl PackMap {
 /// Runs the preprocessor over a lexed translation unit.
 ///
 /// The returned list always ends with [`TokenKind::Eof`]. Problems the lexer
-/// found are reported here — but only for the tokens that survive, because a
-/// group skipped by `#if 0` may hold anything at all.
+/// found are reported here: what is wrong with a token itself only when that
+/// token survives, and what is wrong with the *text* — its spelling, and the
+/// comments before it — as soon as the token is read. Neither is reported for a
+/// group skipped by `#if 0`, whose text is never read at all and may hold
+/// anything.
 pub fn preprocess(
     tokens: &[lex::Token],
     ctx: &Context,
@@ -1304,6 +1307,20 @@ impl<'a> Pp<'a> {
     /// macro invocation left unfinished there is reported instead of quietly
     /// swallowing what follows the directive. [`Pp::run`] is what closes a
     /// file.
+    ///
+    /// Reading a token out of the file is also where what is wrong with its
+    /// *text* is reported, whatever becomes of the token itself: the comment
+    /// before it was written, and an ill-formed universal character name is
+    /// ill-formed where it stands (6.4.3p2), so neither waits to see whether
+    /// the token reaches the output, is the name of a macro that replaces it,
+    /// or is an argument the macro drops. Every UCN in Clang's own
+    /// `C99/n717.c` is written as the argument of a macro that expands to
+    /// nothing, and each one still has to be diagnosed. What is wrong with the
+    /// *token* waits: a stray `\` or `$` is a preprocessing token like any
+    /// other until something tries to parse it (6.4p3). Nothing here runs over
+    /// a skipped group — [`Pp::run`] discards those tokens without reading
+    /// them — and `Pp::reported` keeps a token that is read and then also
+    /// emitted, or read twice, to one diagnostic.
     fn bump(&mut self, allow_input: bool) -> Option<PTok> {
         if let Some(t) = self.pending.pop() {
             return Some(t);
@@ -1315,6 +1332,7 @@ impl<'a> Pp<'a> {
         if !tok.is_eof() {
             self.cur_mut().pos += 1;
         }
+        self.report_lexical_errors(&tok);
         Some(tok)
     }
 
@@ -1414,6 +1432,15 @@ impl<'a> Pp<'a> {
 
     /// Leaves an `#include`d file, reporting the conditionals it left open.
     fn close_file(&mut self) {
+        // A header's own end-of-file token goes nowhere — only the unit's
+        // reaches the output — so this is the last chance to say what the text
+        // at the end of it did wrong. An `#include`d file that ends in a `//`
+        // comment is the case: there is no token after it to carry the
+        // diagnostic anywhere else.
+        if !self.skipping() {
+            let eof = self.ahead().clone();
+            self.report_lexical_errors(&eof);
+        }
         let base = self.cur().cond_base;
         for cond in self.conds.drain(base..).collect::<Vec<_>>() {
             self.diags
@@ -1424,12 +1451,19 @@ impl<'a> Pp<'a> {
 
     /// Reports what never closed and emits the end-of-input token.
     fn finish(&mut self) {
+        // A conditional the unit never closed is an error, and the group it
+        // opened is still a skipped one: what the lexer found in the text it
+        // swallowed is not reported, exactly as inside a closed `#if 0`.
+        let skipped = self.skipping();
         for cond in std::mem::take(&mut self.conds) {
             self.diags
                 .error(cond.range, "unterminated conditional directive");
         }
         let file = self.cur();
-        let eof = file.input[file.input.len() - 1].clone();
+        let mut eof = file.input[file.input.len() - 1].clone();
+        if skipped {
+            eof.errors.clear();
+        }
         self.emit(eof);
     }
 
@@ -1471,8 +1505,9 @@ impl<'a> Pp<'a> {
         self.report_token_diags(tok, false);
     }
 
-    /// Reports only what is wrong with a token's *spelling*, which stands
-    /// whether or not the token goes anywhere; see [`Diagnostic::lexical`].
+    /// Reports only what is wrong with the *text* a token was formed from — its
+    /// spelling, and the comments before it — which stands whether or not the
+    /// token goes anywhere; see [`Diagnostic::lexical`].
     fn report_lexical_errors(&mut self, tok: &PTok) {
         self.report_token_diags(tok, true);
     }
@@ -1755,16 +1790,6 @@ impl Pp<'_> {
                 );
                 return None;
             };
-            // An argument's tokens were formed in translation phase 3, and a
-            // universal character name that is ill formed there is ill formed
-            // whatever the macro does with it — including nothing. Every UCN
-            // in Clang's own `C99/n717.c` is written as the argument of a
-            // macro that expands to nothing, and each one still has to be
-            // diagnosed. Only what is wrong with the *spelling* travels this
-            // way; a stray `\` or `$` is a preprocessing token like any other
-            // until something tries to parse it (6.4p3). `Pp::reported` keeps
-            // it to one diagnostic if the token survives as well.
-            self.report_lexical_errors(&tok);
             if tok.is_punct(Punct::LParen) {
                 depth += 1;
             } else if tok.is_punct(Punct::RParen) {
@@ -2258,6 +2283,19 @@ impl Pp<'_> {
         }
         let file = self.cur();
         let line: Vec<PTok> = file.input[start..file.pos].to_vec();
+        // The line is read here rather than through `Pp::bump`, so what is
+        // wrong with its text is reported here too — most of all on the `#`
+        // itself, which carries the comments of the line above it and is the
+        // one token of a directive that can never carry anything else. Only
+        // when the group is being processed: the text before an `#endif` that
+        // closes a skipped group is inside it, and a skipped group may hold
+        // anything at all.
+        if !self.skipping() {
+            self.report_lexical_errors(&hash);
+            for tok in &line {
+                self.report_lexical_errors(tok);
+            }
+        }
 
         let Some(first) = line.first() else {
             // The null directive, which does nothing at all.
