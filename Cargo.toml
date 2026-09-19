@@ -16,18 +16,14 @@ repository = "https://github.com/tanakh/cinrs"
 homepage = "https://github.com/tanakh/cinrs"
 description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
 
-# Every requirement in this workspace — here, and in each member's own
-# dependencies and dev-dependencies — is written as the **full three-part
-# version this release is developed and tested against**: the latest compatible
-# release at the time, which is what `cargo add` writes. It is still a caret
-# requirement rather than a pin, so it costs a user nothing and only promises
-# that no build ever gets a combination older than the tested one — for
-# `unicode-ident` that also means at least the tested Unicode tables, which are
-# what decide whether an extended identifier is accepted.
 [workspace.dependencies]
-cinrs-core = { path = "crates/cinrs-core", version = "0.1.0" }
-cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
-cinrs-rt = { path = "crates/cinrs-rt", version = "0.1.0" }
+# The four crates are released together and only work together, so these are
+# exact requirements and always equal to `workspace.package.version` above:
+# Cargo cannot inherit that number here, but with `=` a bump that forgets one
+# of these is an immediate resolution error rather than a silent mismatch.
+cinrs-core = { path = "crates/cinrs-core", version = "=0.1.0" }
+cinrs-macros = { path = "crates/cinrs-macros", version = "=0.1.0" }
+cinrs-rt = { path = "crates/cinrs-rt", version = "=0.1.0" }
 # `Complex<T>` is `#[repr(C)]` and `Copy`, which is what makes it C's
 # `_Complex`; `default-features = false` is what keeps `cinrs-rt` `no_std`.
 num-complex = { version = "0.4.6", default-features = false }
