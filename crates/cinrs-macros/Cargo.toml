@@ -5,7 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "The procedural macros of the cinrs crate: c99!, gnu11!, include_c99! and the other entry points"
 documentation = "https://docs.rs/cinrs-macros"
 readme = "README.md"

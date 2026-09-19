@@ -43,3 +43,30 @@ jobs:
           cc --version | head -1
           clang --version | head -1
       - run: scripts/ci.sh
+
+  portability:
+    # The job above is the whole test suite, on the platform `cinrs` is
+    # developed on. This one answers a narrower question on the other two:
+    # does what the README shows build, link against the platform's C library
+    # and run? The examples call `printf`; the test files are the ones with no
+    # platform in them — arithmetic, control flow, aggregates, pointers and the
+    # string functions of the C library.
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - run: rustc -vV
+      - run: cargo run --locked --example readme
+      - run: cargo run --locked --example fact
+      - run: >-
+          cargo test --locked -p cinrs
+          --test smoke --test execute --test goto --test safe
+          --test aggregates --test pointers
+          -- --test-threads=2

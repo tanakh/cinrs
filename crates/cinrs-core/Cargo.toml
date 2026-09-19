@@ -5,7 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 description = "The C front end behind the cinrs crate: lexer, preprocessor, parser, semantic analysis, code generation"
 documentation = "https://docs.rs/cinrs-core"
 readme = "README.md"
