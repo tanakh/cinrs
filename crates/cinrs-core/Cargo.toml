@@ -54,9 +54,9 @@ unicode-ident.workspace = true
 unicode-normalization.workspace = true
 
 [dev-dependencies]
-insta = "1"
-prettyplease = "0.2"
-syn = { version = "2", features = ["full", "parsing", "printing"] }
+insta = "1.48.0"
+prettyplease = "0.3.0"
+syn = { version = "3.0.6", features = ["full", "parsing", "printing"] }
 
 [package.metadata.docs.rs]
 features = ["complex"]

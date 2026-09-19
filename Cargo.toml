@@ -16,30 +16,28 @@ repository = "https://github.com/tanakh/cinrs"
 homepage = "https://github.com/tanakh/cinrs"
 description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
 
+# Every requirement in this workspace — here, and in each member's own
+# dependencies and dev-dependencies — is written as the **full three-part
+# version this release is developed and tested against**: the latest compatible
+# release at the time, which is what `cargo add` writes. It is still a caret
+# requirement rather than a pin, so it costs a user nothing and only promises
+# that no build ever gets a combination older than the tested one — for
+# `unicode-ident` that also means at least the tested Unicode tables, which are
+# what decide whether an extended identifier is accepted.
 [workspace.dependencies]
 cinrs-core = { path = "crates/cinrs-core", version = "0.1.0" }
 cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
 cinrs-rt = { path = "crates/cinrs-rt", version = "0.1.0" }
 # `Complex<T>` is `#[repr(C)]` and `Copy`, which is what makes it C's
 # `_Complex`; `default-features = false` is what keeps `cinrs-rt` `no_std`.
-#
-# A *caret* requirement, deliberately: `Complex` is re-exported as
-# `cinrs::rt::Complex`, so a user who names `num_complex::Complex` from their
-# own code must end up with the same type. `^0.4.6` unifies with every other
-# `0.4` requirement in a build; an `=` pin would not.
 num-complex = { version = "0.4.6", default-features = false }
-# 1.0.100 is the first release where `Span::local_file` — the call that finds
-# the `.rs` file an invocation is written in — is behind the `span-locations`
-# feature rather than `procmacro2_semver_exempt`. Verified by building against
-# exactly 1.0.100.
-proc-macro2 = { version = "1.0.100", features = ["span-locations"] }
-quote = "1.0"
-rustversion = "1.0.22"
-# Any `1.0` carries the API used (`is_xid_start`, `is_xid_continue`); a *newer*
-# one carries newer Unicode tables, which is what decides whether an extended
-# identifier is accepted, so Cargo picking the latest is the wanted behaviour.
-unicode-ident = "1.0"
-unicode-normalization = { version = "0.1.24", default-features = false }
+# `span-locations` is what puts `Span::local_file` — the call that finds the
+# `.rs` file an invocation is written in — within reach.
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+quote = "1.0.47"
+rustversion = "1.0.23"
+unicode-ident = "1.0.26"
+unicode-normalization = { version = "0.1.25", default-features = false }
 
 [package]
 name = "cinrs"
@@ -81,7 +79,8 @@ default = ["complex"]
 
 # C's complex types. On by default; switching it off — `default-features =
 # false` — drops the `cinrs-rt` dependency, predefines `__STDC_NO_COMPLEX__`,
-# and makes `_Complex` a diagnostic again. See the crate documentation.
+# and makes `_Complex` a diagnostic again. See doc/features.md, "Complex
+# numbers".
 #
 # `cinrs-core` is named twice over: `cinrs-macros` is a procedural macro and is
 # therefore built for the *host*, which Cargo's feature resolver keeps apart
@@ -89,7 +88,7 @@ default = ["complex"]
 # drive directly needs the feature said again.
 complex = ["dep:cinrs-rt", "cinrs-macros/complex", "cinrs-core/complex"]
 
-# Exact spans inside string-literal input; see the crate documentation.
+# Exact spans inside string-literal input; see doc/features.md, "Diagnostics".
 # Needs a nightly compiler.
 nightly = ["cinrs-macros/nightly"]
 

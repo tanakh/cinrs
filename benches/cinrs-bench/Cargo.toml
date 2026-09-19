@@ -28,4 +28,4 @@ path = "src/main.rs"
 # This crate is `publish = false` and is not in `cinrs`'s dependency graph, so
 # nothing a user of the library builds is affected.
 [dependencies]
-libc = "0.2"
+libc = "0.2.189"
