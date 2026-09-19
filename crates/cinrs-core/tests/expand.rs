@@ -850,3 +850,236 @@ fn a_link_pragma_puts_a_link_attribute_on_the_extern_block() {
     let plain = expand(stream("int helper(int);"), &options()).to_string();
     assert!(!plain.contains("link (name"), "{plain}");
 }
+
+// ---------------------------------------------------------------------------
+// the Microsoft library's inline printf family
+// ---------------------------------------------------------------------------
+//
+// In the Universal CRT `printf` and its relatives are inline functions in
+// `<stdio.h>` rather than exported symbols, so an `extern "C"` declaration of
+// one does not link without `legacy_stdio_definitions.lib`; codegen's
+// `LEGACY_STDIO` is the rule and the reason. Only the *expansion* can be
+// checked here — whether the library really resolves the symbol is a question
+// for a Windows linker, which `.github/workflows/ci.yml`'s `portability` job
+// asks.
+
+/// The attribute the rule adds, as the expansion's own token spacing writes it.
+const LEGACY_LINK: &str = "# [link (name = \"legacy_stdio_definitions\")]";
+
+/// Options translating for `triple`, which the table must know.
+fn options_for(triple: &str) -> Options {
+    let target = cinrs_core::TargetModel::from_triple(triple).expect("a known triple");
+    options().for_target(target)
+}
+
+/// The expansion of `source` for `triple`, which must have no errors in it.
+fn expand_for(triple: &str, source: &str) -> String {
+    let output = expand(stream(source), &options_for(triple)).to_string();
+    assert!(!output.contains("compile_error"), "{triple}: {output}");
+    output
+}
+
+/// A unit that calls `printf` through the bundled header links the library on
+/// an MSVC target — and on no other, since everywhere else the C library
+/// exports the symbol and the Rust runtime has already linked it.
+#[test]
+fn an_msvc_target_links_the_legacy_stdio_definitions() {
+    let source = "#include <stdio.h>\nvoid greet(const char *n) { printf(\"hi %s\\n\", n); }";
+    let msvc = expand_for("x86_64-pc-windows-msvc", source);
+    assert!(msvc.contains(LEGACY_LINK), "{msvc}");
+    // One attribute, and it is on the `extern` block rather than anywhere else.
+    assert_eq!(
+        msvc.matches("legacy_stdio_definitions").count(),
+        1,
+        "{msvc}"
+    );
+    for triple in [
+        // mingw-w64 is Windows and has its own out-of-line definitions; the
+        // library is not there to link at all.
+        "x86_64-pc-windows-gnu",
+        "x86_64-pc-windows-gnullvm",
+        "i686-pc-windows-gnu",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+    ] {
+        let other = expand_for(triple, source);
+        assert!(!other.contains("link (name"), "{triple}: {other}");
+    }
+    // Every MSVC target, not only the 64-bit one.
+    for triple in [
+        "i686-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
+        "x86_64-uwp-windows-msvc",
+    ] {
+        let msvc = expand_for(triple, source);
+        assert!(msvc.contains(LEGACY_LINK), "{triple}: {msvc}");
+    }
+}
+
+/// A unit whose `extern` block holds none of the family asks for nothing, even
+/// on an MSVC target: the rule is keyed on the declarations, not on the target
+/// alone.
+#[test]
+fn an_msvc_target_without_the_printf_family_links_nothing() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "#include <string.h>\nunsigned long n(const char *s) { return strlen(s); }",
+    );
+    assert!(!output.contains("link (name"), "{output}");
+    // Including `<stdio.h>` is enough on its own, though, whether the unit
+    // calls one of the family or not: every function a header declares and the
+    // unit does not define reaches the `extern` block, so `printf` is declared
+    // there even in a unit that only says `puts`. Linking the library for a
+    // declaration nothing calls costs nothing, and the alternative — asking
+    // which declarations are *used* — would make the attribute depend on
+    // dead-code elimination.
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "#include <stdio.h>\nint say(const char *s) { return puts(s); }",
+    );
+    assert!(output.contains(LEGACY_LINK), "{output}");
+}
+
+/// The rule reads the symbols the `extern` block declares, so a unit that
+/// declares `printf` itself — no `<stdio.h>` anywhere — needs the library just
+/// as much.
+#[test]
+fn a_self_declared_printf_links_the_library_too() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "int printf(const char *, ...);\nvoid greet(void) { printf(\"hi\\n\"); }",
+    );
+    assert!(output.contains(LEGACY_LINK), "{output}");
+    // The same C for a target whose library exports `printf`.
+    let output = expand_for(
+        "x86_64-unknown-linux-gnu",
+        "int printf(const char *, ...);\nvoid greet(void) { printf(\"hi\\n\"); }",
+    );
+    assert!(!output.contains("link (name"), "{output}");
+}
+
+/// `__builtin_printf` declares `printf` on the spot, as GCC does, and the
+/// declaration it writes is the one that has to be linked.
+#[test]
+fn a_builtin_printf_links_the_library_too() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "void greet(void) { __builtin_printf(\"hi\\n\"); }",
+    );
+    assert!(output.contains(LEGACY_LINK), "{output}");
+    assert!(output.contains("link_name = \"printf\""), "{output}");
+}
+
+/// The target a unit chose *itself* decides it too: the model reaching the code
+/// generator is the one the pragma settled on, not the one the caller handed in.
+#[test]
+fn a_target_pragma_is_enough_to_ask_for_the_library() {
+    let output = expand(
+        stream(
+            "#pragma cinrs target \"x86_64-pc-windows-msvc\"\n#include <stdio.h>\n\
+             void greet(const char *n) { printf(\"hi %s\\n\", n); }",
+        ),
+        // A host's options, as an ordinary `c99!` invocation has them.
+        &options(),
+    )
+    .to_string();
+    assert!(!output.contains("compile_error"), "{output}");
+    assert!(output.contains(LEGACY_LINK), "{output}");
+}
+
+/// The rule follows the **symbol**, which an `__asm__` label is free to change
+/// in either direction: a declaration renamed *onto* `printf` needs the library,
+/// and one named `printf` that links as something else does not.
+#[test]
+fn an_asm_label_decides_it_rather_than_the_c_name() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "int say(const char *, ...) __asm__(\"printf\");\nvoid greet(void) { say(\"hi\\n\"); }",
+    );
+    assert!(output.contains(LEGACY_LINK), "{output}");
+    assert!(output.contains("link_name = \"printf\""), "{output}");
+
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "int printf(const char *, ...) __asm__(\"my_printf\");\n\
+         void greet(void) { printf(\"hi\\n\"); }",
+    );
+    assert!(!output.contains("link (name"), "{output}");
+    assert!(output.contains("link_name = \"my_printf\""), "{output}");
+}
+
+/// A unit that names the library itself gets it once, not twice: the pragma and
+/// the rule ask for the same thing.
+#[test]
+fn a_pragma_naming_the_library_is_not_doubled() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "#pragma cinrs link \"legacy_stdio_definitions\"\n#include <stdio.h>\n\
+         void greet(const char *n) { printf(\"hi %s\\n\", n); }",
+    );
+    assert_eq!(
+        output.matches("legacy_stdio_definitions").count(),
+        1,
+        "{output}"
+    );
+    // And a library the unit asks for on a target where the rule says nothing
+    // is still emitted.
+    let output = expand_for(
+        "x86_64-unknown-linux-gnu",
+        "#pragma cinrs link \"mylib\"\n#include <stdio.h>\n\
+         void greet(const char *n) { printf(\"hi %s\\n\", n); }",
+    );
+    assert!(output.contains("# [link (name = \"mylib\")]"), "{output}");
+    assert!(!output.contains("legacy_stdio"), "{output}");
+}
+
+/// The whole family, one name at a time, each declared by the unit itself so
+/// that the table rather than a header is what is being tested.
+#[test]
+fn every_name_of_the_family_asks_for_the_library() {
+    // The prototypes are the bundled headers' own, with `FILE` and `va_list`
+    // declared here because no header is included.
+    const PROLOGUE: &str = "typedef struct _iobuf FILE; typedef __builtin_va_list va_list; \
+                            typedef unsigned long long size_t; typedef unsigned short wchar_t;\n";
+    for name in [
+        "printf",
+        "fprintf",
+        "sprintf",
+        "snprintf",
+        "vprintf",
+        "vfprintf",
+        "vsprintf",
+        "vsnprintf",
+        "scanf",
+        "fscanf",
+        "sscanf",
+        "vscanf",
+        "vfscanf",
+        "vsscanf",
+        "wprintf",
+        "fwprintf",
+        "swprintf",
+        "vwprintf",
+        "vfwprintf",
+        "vswprintf",
+        "wscanf",
+        "fwscanf",
+        "swscanf",
+        "vwscanf",
+        "vfwscanf",
+        "vswscanf",
+    ] {
+        let source = format!("{PROLOGUE}int {name}(const char *, ...);\n");
+        let output = expand_for("x86_64-pc-windows-msvc", &source);
+        assert!(output.contains(LEGACY_LINK), "{name}: {output}");
+        let output = expand_for("x86_64-unknown-linux-gnu", &source);
+        assert!(!output.contains("link (name"), "{name}: {output}");
+    }
+    // A name that is not in the family, declared the same way, asks for
+    // nothing — so what the test above shows is the table and not the shape of
+    // the declaration.
+    let source = format!("{PROLOGUE}int printf_like(const char *, ...);\n");
+    let output = expand_for("x86_64-pc-windows-msvc", &source);
+    assert!(!output.contains("link (name"), "{output}");
+}

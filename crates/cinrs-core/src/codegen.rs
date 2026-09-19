@@ -354,6 +354,86 @@ fn bracketed(tokens: TokenStream, span: Span) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
+// the Microsoft library's inline printf family
+// ---------------------------------------------------------------------------
+
+/// The library that has out-of-line definitions of the `printf` and `scanf`
+/// families for the Microsoft C runtime.
+///
+/// It is part of the MSVC toolset —
+/// `VC/Tools/MSVC/<version>/lib/<arch>/legacy_stdio_definitions.lib`, one copy
+/// per architecture — so it is there on every `*-windows-msvc` target and on no
+/// other, which is why [`TargetModel::is_msvc`](crate::TargetModel::is_msvc) and
+/// not merely Windows is what asks for it.
+const LEGACY_STDIO_DEFINITIONS: &str = "legacy_stdio_definitions";
+
+/// The names that need [`LEGACY_STDIO_DEFINITIONS`] on an MSVC target, each with
+/// the library that defines it.
+///
+/// In the Universal CRT — the Microsoft C library from Visual Studio 2015 on —
+/// the `printf` and `scanf` families are **inline functions in `<stdio.h>` and
+/// `<wchar.h>`**, written over `__stdio_common_vfprintf` and its relatives, so
+/// the import library exports no `printf` at all: an `extern "C" { fn printf(…);
+/// }` is `LNK2019: unresolved external symbol printf` at link time. Microsoft
+/// ships `legacy_stdio_definitions.lib` with out-of-line definitions for exactly
+/// that case, and it is what Rust's own `libc` crate links for the same
+/// declarations (`#[cfg_attr(all(windows, target_env = "msvc"), link(name =
+/// "legacy_stdio_definitions"))]`). See "The printf and scanf family of
+/// functions are now defined inline" in Microsoft's change history:
+/// <https://learn.microsoft.com/en-us/cpp/porting/visual-cpp-change-history-2003-2015>
+///
+/// The rule this table serves is [`Codegen::legacy_stdio_libraries`], and it is
+/// keyed on the **symbol a generated declaration links by** rather than on a
+/// header: a unit may declare `int printf(const char *, ...);` itself, or reach
+/// the function through `__builtin_printf`, and never include `<stdio.h>` at
+/// all.
+///
+/// One row per name, so that a name can be given a different answer on its own
+/// should a toolchain ever disagree: a row may name a different library, or go,
+/// and nothing else changes. What it must never become is an alias to
+/// `_snprintf`, whose truncation semantics are not C's.
+///
+/// Every name here was read out of a real copy of the library —
+/// `dumpbin`/`nm` over `legacy_stdio_definitions.lib` from MSVC 14.44.35207,
+/// x64 and x86 both — so the list is the library's own contents and not a
+/// guess. `snprintf` and `vsnprintf` are in it, which is worth saying because
+/// they are C99 additions the Microsoft library had no out-of-line form of
+/// *before* the UCRT and so, unlike the rest, never "became" inline; `libc`
+/// declares `snprintf` in the very block it links this library for. The library
+/// also holds the `_l`, `_p`, `_s` and `_snprintf` variants, which are
+/// deliberately not here: they are Microsoft's functions rather than C's, and a
+/// unit that declares one has named the platform already and can say
+/// `#pragma cinrs link "legacy_stdio_definitions"` itself.
+const LEGACY_STDIO: &[(&str, &str)] = &[
+    ("printf", LEGACY_STDIO_DEFINITIONS),
+    ("fprintf", LEGACY_STDIO_DEFINITIONS),
+    ("sprintf", LEGACY_STDIO_DEFINITIONS),
+    ("snprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vfprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vsprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vsnprintf", LEGACY_STDIO_DEFINITIONS),
+    ("scanf", LEGACY_STDIO_DEFINITIONS),
+    ("fscanf", LEGACY_STDIO_DEFINITIONS),
+    ("sscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vfscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vsscanf", LEGACY_STDIO_DEFINITIONS),
+    ("wprintf", LEGACY_STDIO_DEFINITIONS),
+    ("fwprintf", LEGACY_STDIO_DEFINITIONS),
+    ("swprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vwprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vfwprintf", LEGACY_STDIO_DEFINITIONS),
+    ("vswprintf", LEGACY_STDIO_DEFINITIONS),
+    ("wscanf", LEGACY_STDIO_DEFINITIONS),
+    ("fwscanf", LEGACY_STDIO_DEFINITIONS),
+    ("swscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vwscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vfwscanf", LEGACY_STDIO_DEFINITIONS),
+    ("vswscanf", LEGACY_STDIO_DEFINITIONS),
+];
+
+// ---------------------------------------------------------------------------
 // identifiers
 // ---------------------------------------------------------------------------
 
@@ -1935,6 +2015,11 @@ impl<'a> Codegen<'a> {
         }
         let span = self.map.span(SourceRange::at(0));
         let mut items = TokenStream::new();
+        // The symbols this block links by, which is what decides whether it
+        // needs a library of its own; see [`LEGACY_STDIO`]. Collected here
+        // rather than asked of the program a second time, so that what the
+        // attribute answers for and what the block declares cannot drift apart.
+        let mut symbols: Vec<&str> = Vec::new();
         for id in &self.program.externs {
             let object = self.program.object(*id);
             let Storage::Extern { item_name } = &object.storage else {
@@ -1946,6 +2031,7 @@ impl<'a> Codegen<'a> {
             // An `__asm__("symbol")` label renames the declaration, which is
             // exactly what `#[link_name]` already says.
             let symbol = object.asm_label.as_deref().unwrap_or(item_name);
+            symbols.push(symbol);
             let link = link_name(symbol, ospan);
             items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
         }
@@ -1963,24 +2049,62 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {fspan=> -> #ty }
             };
             let symbol = func.asm_label.as_deref().unwrap_or(&func.name);
+            symbols.push(symbol);
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
         }
         let attrs = allow_attr(span);
-        let links = self.link_attrs(span);
+        let links = self.link_attrs(&symbols, span);
         quote_spanned! {span=> #attrs #links unsafe extern "C" { #items } }
     }
 
-    /// `#[link(name = "…")]` for every `#pragma cinrs link` the unit wrote.
+    /// `#[link(name = "…")]` for every `#pragma cinrs link` the unit wrote, and
+    /// for the library an MSVC target needs to resolve the `printf` family.
     ///
     /// Nothing here is needed for the C library itself, which the Rust runtime
-    /// already links; this is for the program that calls into something else.
-    fn link_attrs(&self, span: Span) -> TokenStream {
-        let mut out = TokenStream::new();
+    /// already links; the pragma is for the program that calls into something
+    /// else, and [`LEGACY_STDIO`] is the one library cinrs asks for on its own
+    /// initiative. `symbols` is what the declarations in this very block link
+    /// by, which is what decides the second of those.
+    ///
+    /// A library named by both — `#pragma cinrs link "legacy_stdio_definitions"`
+    /// written out by hand — is emitted once.
+    fn link_attrs(&self, symbols: &[&str], span: Span) -> TokenStream {
+        let mut libraries: Vec<&str> = Vec::new();
         for name in &self.program.link_libraries {
+            if !libraries.contains(&name.as_str()) {
+                libraries.push(name);
+            }
+        }
+        for library in self.legacy_stdio_libraries(symbols) {
+            if !libraries.contains(&library) {
+                libraries.push(library);
+            }
+        }
+        let mut out = TokenStream::new();
+        for name in libraries {
             let mut literal = Literal::string(name);
             literal.set_span(span);
             out.extend(quote_spanned! {span=> #[link(name = #literal)] });
+        }
+        out
+    }
+
+    /// The libraries the `printf` and `scanf` declarations among `symbols` have
+    /// to be linked against, in the order [`LEGACY_STDIO`] lists them.
+    ///
+    /// Empty on every target but an MSVC one: everywhere else the platform's
+    /// library exports those functions as ordinary symbols and there is nothing
+    /// to ask for. See [`LEGACY_STDIO`] for why the Microsoft library differs.
+    fn legacy_stdio_libraries(&self, symbols: &[&str]) -> Vec<&'static str> {
+        if !self.options.target.is_msvc() {
+            return Vec::new();
+        }
+        let mut out: Vec<&'static str> = Vec::new();
+        for (symbol, library) in LEGACY_STDIO {
+            if symbols.contains(symbol) && !out.contains(library) {
+                out.push(library);
+            }
         }
         out
     }

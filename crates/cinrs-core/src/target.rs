@@ -800,6 +800,22 @@ impl TargetModel {
         })
     }
 
+    /// Whether the C library is the Microsoft one: an `-msvc` environment on
+    /// Windows.
+    ///
+    /// True of `*-windows-msvc` and `*-uwp-windows-msvc`, and of a host this
+    /// crate was itself compiled for with `target_env = "msvc"`. **Not** true of
+    /// mingw-w64 — `*-windows-gnu` and `*-windows-gnullvm` — which is Windows
+    /// with its own runtime libraries in front of the system's, so a rule that
+    /// holds for the Microsoft toolchain must not reach it.
+    ///
+    /// The one such rule is the `printf` family, which the UCRT defines inline
+    /// rather than exporting; see `codegen`'s `LEGACY_STDIO`. The *data model*
+    /// is the same either way, which is why nothing else here asks.
+    pub fn is_msvc(&self) -> bool {
+        self.os == Os::Windows && self.env == Env::Msvc
+    }
+
     /// The name of the data model this is: `LP64`, `LLP64` or `ILP32`.
     pub fn data_model(&self) -> &'static str {
         match (self.int_bits, self.long_bits, self.ptr_bits) {
@@ -1072,6 +1088,46 @@ mod tests {
             assert!(t.char_signed, "{triple}");
             assert_eq!(t.max_scalar_align, 8, "{triple}");
         }
+    }
+
+    /// Which Windows targets are the *Microsoft* library, which is what decides
+    /// whether a unit calling `printf` links `legacy_stdio_definitions`.
+    #[test]
+    fn the_msvc_environment() {
+        for triple in [
+            "x86_64-pc-windows-msvc",
+            "i686-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "x86_64-uwp-windows-msvc",
+            "thumbv7a-pc-windows-msvc",
+        ] {
+            assert!(model(triple).is_msvc(), "{triple} is MSVC");
+        }
+        // mingw-w64 is Windows and is not the Microsoft library; neither is
+        // anything that is not Windows at all.
+        for triple in [
+            "x86_64-pc-windows-gnu",
+            "i686-pc-windows-gnu",
+            "x86_64-pc-windows-gnullvm",
+            "aarch64-pc-windows-gnullvm",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-unknown-freebsd",
+            "wasm32-unknown-unknown",
+            "thumbv7em-none-eabihf",
+        ] {
+            assert!(!model(triple).is_msvc(), "{triple} is not MSVC");
+        }
+        assert!(TargetModel::LLP64.is_msvc());
+        assert!(!TargetModel::LP64.is_msvc());
+        assert!(!TargetModel::ILP32.is_msvc());
+        // And the host, which is what an expansion with no `CINRS_TARGET` and
+        // no pragma is translated for.
+        assert_eq!(
+            TargetModel::host().is_msvc(),
+            cfg!(all(windows, target_env = "msvc"))
+        );
     }
 
     #[test]

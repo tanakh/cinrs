@@ -81,9 +81,80 @@ CINRS_TARGET being unset; set CINRS_TARGET from a build script
 with the caret on the C, rather than compiling into a program whose every
 `sizeof` is wrong.
 
-The C library is still the platform's, and nothing here can check that the
-library on the other end agrees with the header cinrs bundled. The Windows
-branch keeps to the portable UCRT subset — `__acrt_iob_func` for `stdin` and
-its two siblings, `_errno()` for `errno` — which both the Microsoft library
-and mingw-w64 export; it is compiled for by the test suite and has not been
-*run*. The same is true of every target but the host.
+## The Microsoft library's inline `printf`
+
+The C library is still the platform's, and the one thing cinrs has to do about
+*which* library that is concerns the `printf` family. In the Universal CRT — the
+Microsoft C library from Visual Studio 2015 on — `printf` and `scanf` and their
+relatives are **inline functions in `<stdio.h>`**, written over
+`__stdio_common_vfprintf` and its siblings, so the import library exports no
+`printf` at all and a declaration of one is `LNK2019: unresolved external symbol
+printf` at link time. Microsoft ships `legacy_stdio_definitions.lib` with
+out-of-line definitions for exactly this case, and it is what Rust's own `libc`
+crate links for the same declarations.
+
+So a unit translated for an MSVC target whose generated `extern` block declares
+any of
+
+```text
+printf  fprintf  sprintf  snprintf  vprintf  vfprintf  vsprintf  vsnprintf
+scanf   fscanf   sscanf   vscanf    vfscanf  vsscanf
+```
+
+or any of the twelve wide forms (`wprintf`, `fwprintf`, `swprintf`, … ,
+`vswscanf`) carries `#[link(name = "legacy_stdio_definitions")]` exactly as
+`#pragma cinrs link "legacy_stdio_definitions"` would have — and a unit that
+writes that pragma itself gets the attribute once rather than twice. The rule
+lives in the code generator rather than in `<stdio.h>`, because a program may
+declare `int printf(const char *, ...);` itself, or reach the function through
+`__builtin_printf`, and never include a header: it is keyed on the symbols the
+block links by. It applies to `*-windows-msvc` and `*-uwp-windows-msvc`, and
+**not** to mingw-w64 — `*-windows-gnu` and `*-windows-gnullvm` — which has its
+own out-of-line definitions and no such library to link. Nothing else about the
+C library needs asking for: the Rust runtime already links it.
+
+The list is the library's own contents, read out of a real
+`legacy_stdio_definitions.lib` (MSVC 14.44, x64 and x86 alike) rather than
+inferred — `snprintf` and `vsnprintf` included, which is worth knowing because
+they are C99 additions that never had an out-of-line form before the UCRT.
+
+The Windows branch of the bundled headers keeps to the portable UCRT subset
+otherwise — `__acrt_iob_func` for `stdin` and its two siblings, `_errno()` for
+`errno` — which both the Microsoft library and mingw-w64 export.
+
+Three groups of functions **are** in the same position as `printf` and are *not*
+worked around: a bundled header declares the C name, and no library on an MSVC
+link line has it, so a unit that calls one fails with `LNK2019`. They are
+
+* `<math.h>`'s `fabsf`, `frexpf`, `ldexpf` and `hypotf`, which Microsoft's
+  `<math.h>` makes inline over the `double` forms — the other float functions
+  (`sinf`, `sqrtf`, `powf`, `floorf`, …) are exported and work;
+* `<wchar.h>`'s `wmemcpy`, `wmemmove`, `wmemset`, `wmemcmp` and `wmemchr`, plus
+  `mbsinit` and `fwide`, inline for the same reason — `wcslen` and the rest of
+  the header are exported;
+* the whole of `<time.h>` but `clock`, `asctime` and `strftime`. The Windows
+  SDK's `ucrt.lib` exports `_time64`, `_difftime64`, `_mktime64`, `_localtime64`,
+  `_gmtime64`, `_ctime64` and `_timespec64_get`, and none of `time`, `difftime`,
+  `mktime`, `localtime`, `gmtime`, `ctime` or `timespec_get`, which Microsoft's
+  own `<time.h>` renames onto the first set with a macro.
+
+mingw-w64 is unaffected by all three: `ucrtbase.dll` exports the plain names and
+mingw's import libraries expose them. On an MSVC target a program can ask for
+the real symbol by hand, which is what an `__asm__` label is for —
+`long long now(long long *t) __asm__("_time64");` — and `tests/portability.rs`
+leaves the `<time.h>` calls out on Windows, with the reason written where it
+does so.
+
+## What is run where
+
+Nothing above says that the library on the other end agrees with the header
+cinrs bundled; only a program built, linked and run on the platform does. That
+is what `tests/portability.rs` is for, and this is how far each platform is
+taken:
+
+| Platform | How far |
+| --- | --- |
+| **`x86_64-unknown-linux-gnu`** | the development platform: the whole test suite, the three conformance corpora, and the differential tests that compile the same C with `gcc` and `clang` and compare |
+| **macOS (arm64) and Windows (x86-64, MSVC)** | built, linked and **run** on every push by the `portability` job in `.github/workflows/ci.yml`: both examples, and `tests/portability.rs` — the C library through the bundled headers, every value asserted from Rust — beside six behavioural files |
+| **`i686-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `wasm32-unknown-unknown`** | compile-checked with a real `cargo check --target` — `tests/cross_targets.rs`, which also shows the data-model assertion firing when `CINRS_TARGET` is left out |
+| **everything else in the table above** | the front end only: every bundled header is compiled for a model of each family, and the widths, alignments, layouts and predefined macros are asserted in-process |

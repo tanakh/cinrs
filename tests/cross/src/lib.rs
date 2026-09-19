@@ -135,6 +135,21 @@ cinrs::c11! { r#"
         for (unsigned long i = 0; i < n; i++) total += xs[i];
         return total;
     }
+
+    /* The platform's own C library, which is where the target's *library*
+     * rather than its data model comes in: the `extern` block cinrs generates
+     * for these declarations carries whatever link attribute the target needs
+     * — `legacy_stdio_definitions` on an MSVC target, where the UCRT's
+     * `printf` family is inline rather than exported, and nothing anywhere
+     * else — and `cargo check` is what says that the block, attribute
+     * included, is one `rustc` accepts for this machine. Whether the symbols
+     * really resolve is a question only a linker can answer; that is the
+     * `portability` job in `.github/workflows/ci.yml`. */
+    #include <stdio.h>
+
+    int describe(char *buf, size_t size, long value) {
+        return snprintf(buf, size, "%ld", value);
+    }
 "# }
 
 /// C's own layout rule, recomputed from `rustc`'s alignments for the real

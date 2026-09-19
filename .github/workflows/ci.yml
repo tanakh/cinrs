@@ -30,7 +30,7 @@ jobs:
       matrix:
         rust: [stable, beta]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@master
@@ -50,7 +50,15 @@ jobs:
     # does what the README shows build, link against the platform's C library
     # and run? The examples call `printf`; the test files are the ones with no
     # platform in them — arithmetic, control flow, aggregates, pointers and the
-    # string functions of the C library.
+    # string functions of the C library — plus `tests/portability.rs`, which is
+    # the one written for this job: the bundled headers are cinrs's and the C
+    # library is the platform's, and only a program built, linked and run here
+    # says whether the two agree.
+    #
+    # Every step after the toolchain runs even when an earlier one failed, so
+    # that one run reports everything that is wrong on a platform rather than
+    # the first thing: a link error in the examples would otherwise hide
+    # whatever the tests have to say about the same library.
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -58,15 +66,19 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-      - run: rustc -vV
-      - run: cargo run --locked --example readme
-      - run: cargo run --locked --example fact
-      - run: >-
+      - if: ${{ !cancelled() }}
+        run: rustc -vV
+      - if: ${{ !cancelled() }}
+        run: cargo run --locked --example readme
+      - if: ${{ !cancelled() }}
+        run: cargo run --locked --example fact
+      - if: ${{ !cancelled() }}
+        run: >-
           cargo test --locked -p cinrs
           --test smoke --test execute --test goto --test safe
-          --test aggregates --test pointers
+          --test aggregates --test pointers --test portability
           -- --test-threads=2

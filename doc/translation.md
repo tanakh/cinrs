@@ -86,7 +86,12 @@ unsafe extern "C" {
 ```
 
 so Rust code calls the C library through its own declaration, not through this
-one. `#pragma cinrs link "name"` puts `#[link(name = "name")]` on that block.
+one. `#pragma cinrs link "name"` puts `#[link(name = "name")]` on that block —
+and so does cinrs itself in one case: a unit translated for a `*-windows-msvc`
+target whose block declares one of the `printf` or `scanf` family gets
+`#[link(name = "legacy_stdio_definitions")]`, because the Universal CRT defines
+those functions inline in `<stdio.h>` and exports no symbol for them (see
+[Cross-compilation](cross-compilation.md#the-microsoft-librarys-inline-printf)).
 
 ## Objects
 

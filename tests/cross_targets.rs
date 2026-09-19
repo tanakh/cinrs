@@ -38,10 +38,26 @@ const TARGETS: &[(&str, &str)] = &[
         "x86_64-pc-windows-gnu",
         "LLP64: a 64-bit pointer with a 32-bit 'long', and a 16-bit 'wchar_t'",
     ),
+    (
+        "x86_64-pc-windows-msvc",
+        "LLP64 again, with the Microsoft C library: the one target where a unit \
+         that calls 'printf' links 'legacy_stdio_definitions'",
+    ),
     ("wasm32-unknown-unknown", "ILP32 with no operating system"),
     (
         "aarch64-unknown-linux-gnu",
         "LP64 with an unsigned plain 'char' and an unsigned 'wchar_t'",
+    ),
+    (
+        "aarch64-apple-darwin",
+        "LP64 where Apple overrides the architecture: a signed plain 'char' and \
+         a signed 'wchar_t' on AArch64",
+    ),
+    (
+        "x86_64-apple-darwin",
+        "LP64 with the __APPLE__ branch of every bundled header — the streams, \
+         'mbstate_t', 'struct tm' — on the architecture the model otherwise \
+         shares with Linux",
     ),
 ];
 
