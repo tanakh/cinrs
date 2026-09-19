@@ -1341,6 +1341,100 @@ fn the_module_pragma_names_the_unit() {
 }
 
 #[test]
+fn the_crate_pragma_says_where_the_facade_crate_is() {
+    let (tokens, errors, out) =
+        run_including("#pragma cinrs crate \"crate::vendor::cinrs\"\nkept", &[]);
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(tokens, ["kept"]);
+    assert_eq!(out.crate_path.as_deref(), Some("crate::vendor::cinrs"));
+
+    // The value is pasted into the expansion as tokens, so it has to be a Rust
+    // path; `crate`, `self` and `super` are the three keywords a segment may be.
+    for good in [
+        "::cinrs",
+        "cinrs",
+        "crate::a::b",
+        "self::c",
+        "super::super::d",
+    ] {
+        let (_, errors, out) = run_including(&format!("#pragma cinrs crate \"{good}\""), &[]);
+        assert!(errors.is_empty(), "{good}: {errors:#?}");
+        assert_eq!(out.crate_path.as_deref(), Some(good), "{good}");
+    }
+    for bad in ["", "a b", "::", "a::", "1st", "a::struct::b", "a-b"] {
+        let (_, errors, out) = run_including(&format!("#pragma cinrs crate \"{bad}\""), &[]);
+        assert_eq!(errors.len(), 1, "{bad}: {errors:#?}");
+        assert!(
+            errors[0].contains("is not usable as a Rust path to a crate")
+                || errors[0].ends_with("was given an empty string"),
+            "{bad}: {errors:#?}"
+        );
+        assert_eq!(out.crate_path, None, "{bad}");
+    }
+
+    // The same rule as `module`: saying it twice is harmless, saying two
+    // different things is a mistake and the first one stands.
+    let (_, errors, out) = run_including(
+        "#pragma cinrs crate \"::a\"\n#pragma cinrs crate \"::a\"",
+        &[],
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(out.crate_path.as_deref(), Some("::a"));
+
+    let (_, errors, out) = run_including(
+        "#pragma cinrs crate \"::a\"\n#pragma cinrs crate \"::b\"",
+        &[],
+    );
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].starts_with("this unit already reaches the cinrs crate as '::a'"),
+        "{errors:#?}"
+    );
+    assert_eq!(out.crate_path.as_deref(), Some("::a"));
+}
+
+/// `#pragma GCC error` and `#pragma GCC warning`, which are `#error` and
+/// `#warning` spelled as pragmas — the two `#pragma GCC` forms that say
+/// something rather than being accepted and ignored.
+#[test]
+fn the_gcc_message_pragmas_report_what_they_are_given() {
+    let mut options = Options::new(Standard::C99);
+    options.dialect = cinrs_core::Dialect::Gnu;
+    let src = "#pragma GCC warning \"untested\"\n\
+               #pragma GCC error \"unsupported\"\n\
+               #pragma GCC diagnostic error \"-Wall\"\n\
+               kept";
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &lex_options());
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    let said: Vec<(Level, String)> = diags
+        .items()
+        .iter()
+        .map(|d| (d.level, d.message.clone()))
+        .collect();
+    // The text is reported as it was written, quotes and all — and the
+    // `diagnostic` form is the one that is ignored.
+    assert_eq!(
+        said,
+        [
+            (
+                Level::Warning,
+                "#pragma GCC warning \"untested\"".to_owned()
+            ),
+            (Level::Error, "#pragma GCC error \"unsupported\"".to_owned()),
+        ]
+    );
+    let spellings: Vec<String> = out
+        .tokens
+        .iter()
+        .filter(|t| !t.is_eof())
+        .map(|t| t.kind.spelling().to_owned())
+        .collect();
+    assert_eq!(spellings, ["kept"]);
+}
+
+#[test]
 fn an_include_inside_a_skipped_group_is_not_read() {
     let (tokens, errors, out) = run_including("#if 0\n#include \"nowhere.h\"\n#endif\nkept", &[]);
     assert!(errors.is_empty(), "{errors:#?}");

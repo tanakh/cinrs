@@ -101,6 +101,146 @@ fn a_dollar_sign_is_an_identifier_character() {
 }
 
 // ---------------------------------------------------------------------------
+// names Rust spells differently
+// ---------------------------------------------------------------------------
+
+// A C name that is a Rust keyword becomes a raw identifier, which is a token of
+// its own and can collide with nothing. Two rules do change the spelling: the
+// five names Rust cannot write even as raw identifiers — `self`, `Self`,
+// `super`, `crate` and `_` — grow an underscore, and a `$` is written
+// `_dollar_`. A program is entitled to use the result itself, so the spelling
+// is settled once for the whole translation unit: a name whose spelling is
+// already taken grows another `_` until it is not.
+//
+// Untreated, the first of these is a *silent* miscompilation — two locals
+// become one binding — which is why it has a test of its own for every name
+// space.
+
+c99! {
+    /* Two locals. Untreated, both are `self_`, the second binding shadows the
+       first, and the function quietly returns 22. */
+    int colliding_locals(void) {
+        int self = 1;
+        int self_ = 2;
+        return self * 10 + self_;
+    }
+
+    /* The same for two parameters. */
+    int colliding_params(int self, int self_) { return self * 10 + self_; }
+
+    /* Members, reached through `.`, through `->` and by a designator. */
+    struct with_self { int self; int self_; int super; int super_; };
+
+    int colliding_members(void) {
+        struct with_self s = { .self = 1, .self_ = 2, .super = 3, .super_ = 4 };
+        struct with_self *p = &s;
+        return s.self * 1000 + s.self_ * 100 + p->super * 10 + p->super_;
+    }
+
+    /* Two file-scope functions: `E0428` rather than a wrong answer, but the
+       same collision. */
+    int crate(void) { return 7; }
+    int crate_(void) { return 8; }
+
+    /* Two file-scope objects, read from Rust below by their Rust names. */
+    int Self = 11;
+    int Self_ = 12;
+
+    /* A bit-field next to a plain member of the changed spelling. */
+    struct bit_self { unsigned int self : 4; int self_; };
+
+    int read_bit_self(void) {
+        struct bit_self b;
+        b.self = 5;
+        b.self_ = 6;
+        return b.self * 10 + b.self_;
+    }
+}
+
+#[test]
+fn a_changed_spelling_never_collides_with_a_name_the_program_uses() {
+    unsafe {
+        assert_eq!(colliding_locals(), 12);
+        assert_eq!(colliding_params(1, 2), 12);
+        assert_eq!(colliding_members(), 1234);
+        assert_eq!(crate__(), 7);
+        assert_eq!(crate_(), 8);
+        assert_eq!(read_bit_self(), 56);
+    }
+}
+
+#[test]
+fn the_two_spellings_name_two_things_from_rust_as_well() {
+    // `self` is spelled `self__` because the unit has a `self_` of its own,
+    // and the members read the same way everywhere: as an item's fields here,
+    // through a designator inside the C.
+    let s = with_self {
+        self__: 1,
+        self_: 2,
+        super__: 3,
+        super_: 4,
+    };
+    assert_eq!(
+        s.self__ * 1000 + s.self_ * 100 + s.super__ * 10 + s.super_,
+        1234
+    );
+    unsafe {
+        assert_eq!({ Self__ }, 11);
+        assert_eq!({ Self_ }, 12);
+    }
+    // The bit-field's accessors are named after the member, so they take the
+    // same underscore the plain member of that name forced on it.
+    let mut b = bit_self {
+        __cinrs_bits0: [0; 1],
+        self_: 6,
+    };
+    b.set_self(5);
+    assert_eq!(b.self__(), 5);
+    assert_eq!(b.self_, 6);
+}
+
+// `$` is the same story, and needs the string-literal entry point because
+// Rust's own lexer would not hand `a$b` over as one token.
+c99! { r##"
+int dollars(void) {
+    int a$b = 1;
+    int a_dollar_b = 2;
+    return a$b * 10 + a_dollar_b;
+}
+"## }
+
+#[test]
+fn a_dollar_that_is_spelled_out_does_not_take_a_name_the_program_has() {
+    assert_eq!(unsafe { dollars() }, 12);
+}
+
+// Every Rust keyword that C allows as an identifier, as a local of one
+// function. `const`, `continue`, `do`, `else`, `enum`, `extern`, `for`, `if`,
+// `return`, `static`, `struct`, `while` and `break` are C's own keywords and
+// are therefore left out; everything else in Rust's list, strict and reserved,
+// is here.
+c99! {
+    int every_keyword(void) {
+        int abstract = 1, as = 1, async = 1, await = 1, become = 1, box = 1;
+        int crate = 1, dyn = 1, final = 1, fn = 1, gen = 1, impl = 1, in = 1;
+        int let = 1, loop = 1, macro = 1, match = 1, mod = 1, move = 1;
+        int override = 1, priv = 1, pub = 1, ref = 1, self = 1, trait = 1;
+        int true = 1, try = 1, type = 1, typeof = 1, unsafe = 1, unsized = 1;
+        int use = 1, virtual = 1, where = 1, yield = 1, Self = 1, _ = 1;
+        return abstract + as + async + await + become + box + crate + dyn
+             + final + fn + gen + impl + in + let + loop + macro + match + mod
+             + move + override + priv + pub + ref + self + trait + true + try
+             + type + typeof + unsafe + unsized + use + virtual + where + yield
+             + Self + _;
+    }
+}
+
+#[test]
+fn every_rust_keyword_c_allows_is_usable_as_a_name() {
+    assert_eq!(unsafe { every_keyword() }, 37);
+}
+
+// ---------------------------------------------------------------------------
 // what is refused
 // ---------------------------------------------------------------------------
 

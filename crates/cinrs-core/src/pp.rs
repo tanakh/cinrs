@@ -87,22 +87,26 @@
 //! #pragma cinrs safe gcd fact
 //! #pragma cinrs no_std
 //! #pragma cinrs module "geometry"
+//! #pragma cinrs crate "crate::vendor::cinrs"
 //! ```
 //!
-//! The first picks the data model the unit is translated for, overriding
-//! `CINRS_TARGET`; the second adds a directory to the search path (relative
-//! paths resolve against `CARGO_MANIFEST_DIR`); the third puts the platform's
-//! own include directories on that path, after the bundled headers or — with
-//! `first` — before them (see [`crate::include`]); the fourth puts
-//! `#[link(name = "mylib")]` on the generated `extern` block; the fifth gives
+//! `target` picks the data model the unit is translated for, overriding
+//! `CINRS_TARGET`; `include_path` adds a directory to the search path (relative
+//! paths resolve against `CARGO_MANIFEST_DIR`); `system_include` puts the
+//! platform's own include directories on that path, after the bundled headers
+//! or — with `first` — before them (see [`crate::include`]); `link` puts
+//! `#[link(name = "mylib")]` on the generated `extern` block; `export` gives
 //! everything with external linkage a real C symbol, so that another unit can
-//! link to it; the sixth generates those functions without `unsafe`, so that
-//! `rustc` checks them (see [`crate::sema::check_safe`]); the last names the
-//! module the expansion goes into. Being
+//! link to it; `safe` generates those functions without `unsafe`, so that
+//! `rustc` checks them (see [`crate::sema::check_safe`]); `no_std` takes the
+//! `Vec` a variable length array or `alloca` needs from `alloc` rather than
+//! from `std`; `module` names the module the expansion goes into; and `crate`
+//! says where the `cinrs` facade crate is, for the generated code that names
+//! the runtime. Being
 //! directives rather than attributes or macro arguments is what makes them
 //! mean the same thing in raw-token and in string-literal input. An unknown
 //! `#pragma cinrs` option is an error; every other pragma is ignored, as
-//! 6.10.6 asks.
+//! 6.10.6 asks. `doc/pragmas.md` is the reference page.
 //!
 //! `target` is the one that cannot be handled where it stands: the predefined
 //! macros are built from the model before the first directive is read, so

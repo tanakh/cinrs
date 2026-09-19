@@ -222,6 +222,10 @@ spellings work, and so does C23's `[[gnu::name]]`.
 
 ## Preprocessor extensions
 
+The pragma rows below are summarised here and spelled out — exact syntax, scope,
+what is an error — in [`doc/pragmas.md`](pragmas.md), together with this crate's
+own `#pragma cinrs`.
+
 | Extension | Frequency | Status | Notes |
 | --- | --- | --- | --- |
 | `#pragma once` | very common | 🟢 supported | |

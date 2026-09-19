@@ -101,6 +101,12 @@ pub const NEVER_RAW: &[&str] = &["self", "Self", "super", "crate", "_"];
 ///
 /// Only the names [`NEVER_RAW`] lists change; a name that collides with an
 /// ordinary keyword becomes a raw identifier, which is the same identifier.
+///
+/// This is the rule as it stands before the translation unit is taken into
+/// account — enough to tell two accessor names of one record apart, which is
+/// all [`crate::sema`] needs it for. The spelling the generated code actually
+/// carries is [`crate::codegen`]'s, which also keeps a changed spelling clear
+/// of every other name the unit uses.
 pub fn rust_name_of(name: &str) -> String {
     if NEVER_RAW.contains(&name) {
         return format!("{name}_");

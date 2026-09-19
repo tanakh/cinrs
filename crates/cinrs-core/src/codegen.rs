@@ -167,7 +167,7 @@
 //! [`crate::sema`]'s `va` module for the model.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 
 use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
@@ -419,7 +419,8 @@ pub fn is_crate_path(path: &str) -> bool {
         .all(|segment| PATH_KEYWORDS.contains(&segment) || is_module_name(segment))
 }
 
-/// Turns a C identifier into the Rust identifier that stands for it.
+/// Turns a C identifier into the Rust identifier that stands for it, before
+/// the rest of the translation unit is taken into account.
 ///
 /// C names are kept as they are, because that is what makes the expansion
 /// readable and what lets Rust call the functions by the names their author
@@ -427,6 +428,10 @@ pub fn is_crate_path(path: &str) -> bool {
 /// identifier (`match` → `r#match`); the five names that cannot even be raw
 /// get an underscore appended instead. A `$` — which C takes as an identifier
 /// character and Rust has no spelling for — is written [`DOLLAR`].
+///
+/// The last two rules are the only ones that can hand two different C names
+/// the same Rust one, which is what [`Names`] exists to prevent: everything
+/// the generator emits goes through [`Names::ident`] rather than through this.
 fn c_ident(name: &str, span: Span) -> Ident {
     let spelled = rust_spelling(name);
     let name = spelled.as_ref();
@@ -457,6 +462,165 @@ fn rust_spelling(name: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(name)
     }
+}
+
+/// Whether Rust spells `name` as something other than itself, so that another
+/// C name could be spelled the same way.
+///
+/// A keyword is not one of these: `r#match` is a token of its own and no name
+/// but `match` is written that way.
+fn respelled(name: &str) -> bool {
+    name.contains('$') || NEVER_RAW.contains(&name)
+}
+
+/// The text [`c_ident`] gives a name, without the `r#` a raw identifier is
+/// written with.
+fn plain_spelling(name: &str) -> String {
+    let spelled = rust_spelling(name);
+    if NEVER_RAW.contains(&spelled.as_ref()) {
+        return format!("{spelled}_");
+    }
+    spelled.into_owned()
+}
+
+/// The Rust spelling of every name the translation unit gives to something,
+/// made unique across the whole unit.
+///
+/// Two of the rules in [`c_ident`] change the spelling of a name, and a
+/// program is free to use the changed spelling itself:
+///
+/// ```c
+/// int f(void) { int self = 1; int self_ = 2; return self * 10 + self_; }
+/// ```
+///
+/// Both locals would be `self_`, the second binding would shadow the first,
+/// and `f` would quietly return 22 instead of 12. The same collision between
+/// two members is `E0124`, between two file-scope items `E0428`, and `a$b`
+/// next to `a_dollar_b` is the same story again.
+///
+/// So the spelling is settled once, here, for the unit as a whole. Every name
+/// the unit spells is collected — objects, functions and their parameters,
+/// tags, members, bit-field accessors, enumerators and `typedef` names, in
+/// every name space at once, because one C name must read as one Rust name
+/// wherever it appears. A name Rust spells as it is written keeps it; a name
+/// whose spelling changes takes the usual one and grows another `_` for as
+/// long as something else already has it. Nothing moves for a program that
+/// does not have the collision, which is very nearly every program.
+///
+/// Labels are left out: `'self_` is in a name space of its own, and
+/// [`Codegen::name_regions`] already keeps the labels of a function apart.
+struct Names {
+    /// The Rust spelling of each name whose spelling is not the name itself.
+    ///
+    /// Empty for a unit that writes no such name, which is the usual case.
+    renamed: HashMap<String, String>,
+}
+
+impl Names {
+    /// Works out the spellings of one translation unit.
+    fn new(program: &Program) -> Self {
+        let mut spelled: Vec<&str> = Vec::new();
+        for object in &program.objects {
+            spelled.push(&object.name);
+            match &object.storage {
+                Storage::Static { item_name, .. }
+                | Storage::ThreadLocal { item_name, .. }
+                | Storage::Extern { item_name } => spelled.push(item_name),
+                Storage::Automatic => {}
+            }
+        }
+        for func in &program.functions {
+            spelled.push(&func.name);
+            spelled.push(func.item_name());
+            spelled.extend(func.param_names.iter().flatten().map(String::as_str));
+            // The names the state-machine lowering hoists the locals under,
+            // which are what a CFG body's bindings are generated from.
+            if let Some(Body::Cfg(cfg)) = &func.body {
+                spelled.extend(cfg.locals.iter().map(|local| local.rust_name.as_str()));
+            }
+        }
+        for record in program.types.records() {
+            spelled.extend(record.tag.as_deref());
+            spelled.push(&record.rust_name);
+            for field in &record.fields {
+                spelled.push(&field.name);
+                if let Some(bits) = &field.bits {
+                    spelled.push(&bits.getter);
+                    spelled.push(&bits.setter);
+                }
+            }
+            for field in &record.rust_fields {
+                match field {
+                    ir::RustField::Bits { name, .. }
+                    | ir::RustField::Pad { name, .. }
+                    | ir::RustField::Align { name, .. } => spelled.push(name),
+                    ir::RustField::Member(_) => {}
+                }
+            }
+        }
+        for def in program.types.enums() {
+            spelled.extend(def.tag.as_deref());
+            spelled.push(&def.rust_name);
+        }
+        for constant in &program.enum_constants {
+            spelled.push(&constant.name);
+            spelled.push(&constant.rust_name);
+        }
+        for typedef in &program.typedefs {
+            spelled.push(&typedef.rust_name);
+        }
+
+        Self {
+            renamed: unique_spellings(spelled),
+        }
+    }
+
+    /// The Rust identifier a C name is generated as, everywhere it appears.
+    fn ident(&self, name: &str, span: Span) -> Ident {
+        match self.renamed.get(name) {
+            Some(unique) => Ident::new(unique, span),
+            None => c_ident(name, span),
+        }
+    }
+
+    /// The same as text, without the `r#` a raw identifier is written with.
+    fn spelling<'n>(&'n self, name: &'n str) -> std::borrow::Cow<'n, str> {
+        match self.renamed.get(name) {
+            Some(unique) => std::borrow::Cow::Borrowed(unique.as_str()),
+            None => std::borrow::Cow::Owned(plain_spelling(name)),
+        }
+    }
+}
+
+/// The rule [`Names`] is built on: what each name whose Rust spelling is not
+/// itself is spelled as, given everything the unit spells.
+///
+/// A name Rust writes as it stands claims that spelling first — two such
+/// names are distinct exactly when the C names are — and what is left grows
+/// another `_` for as long as something already has its spelling. The names
+/// that need one are settled in sorted order, so that the answer never
+/// depends on the order the arenas happen to be in.
+fn unique_spellings<'n>(spelled: impl IntoIterator<Item = &'n str>) -> HashMap<String, String> {
+    let mut taken: HashSet<&str> = HashSet::new();
+    let mut changing: BTreeSet<&str> = BTreeSet::new();
+    for name in spelled {
+        if respelled(name) {
+            changing.insert(name);
+        } else {
+            taken.insert(name);
+        }
+    }
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    let mut assigned: HashSet<String> = HashSet::new();
+    for name in changing {
+        let mut candidate = plain_spelling(name);
+        while taken.contains(candidate.as_str()) || assigned.contains(&candidate) {
+            candidate.push('_');
+        }
+        assigned.insert(candidate.clone());
+        renamed.insert(name.to_owned(), candidate);
+    }
+    renamed
 }
 
 /// Whether `name` can stand as the label of a Rust block or loop.
@@ -589,12 +753,6 @@ fn label_state(expr: &Expr) -> Option<ir::LabelId> {
 /// inside; see [`Codegen::align_wrapper_items`].
 fn align_wrapper_ident(align: u64, span: Span) -> Ident {
     Ident::new(&format!("__cinrs_align_{align}"), span)
-}
-
-/// The name of the companion type a record whose flexible array member holds
-/// `len` elements is generated under; see [`Codegen::flexible_items`].
-fn flexible_ident(rust_name: &str, len: u64, span: Span) -> Ident {
-    c_ident(&format!("__cinrs_{rust_name}_{len}"), span)
 }
 
 /// The length of an array type, or `None` for anything else.
@@ -797,6 +955,9 @@ struct Codegen<'a> {
     env: HashMap<ir::ObjectId, ir::ObjectId>,
     /// The names a `let` binding or a parameter must not use.
     reserved: HashSet<String>,
+    /// The Rust spelling of every C name the unit gives to something; see
+    /// [`Names`].
+    names: Names,
     va_source: VaSource,
     ret_ty: Ty,
     /// Whether the function being generated is a [state
@@ -865,6 +1026,7 @@ impl<'a> Codegen<'a> {
             local_names: HashMap::new(),
             env: HashMap::new(),
             reserved,
+            names: Names::new(program),
             va_source: VaSource::None,
             ret_ty: Ty::Void,
             in_cfg: false,
@@ -909,6 +1071,36 @@ impl<'a> Codegen<'a> {
 
     fn sp(&self, range: SourceRange) -> Span {
         self.map.span(range)
+    }
+
+    /// The Rust identifier a C name is generated as; see [`Names`].
+    ///
+    /// Every name the generator writes goes through here, so that one C name
+    /// reads as one Rust name wherever it appears — as an item, as a member,
+    /// as a designator, in `offsetof`, in a bit-field accessor.
+    fn c_ident(&self, name: &str, span: Span) -> Ident {
+        self.names.ident(name, span)
+    }
+
+    /// The name of the companion type a record whose flexible array member
+    /// holds `len` elements is generated under; see [`Codegen::flexible_items`].
+    fn flexible_ident(&self, rust_name: &str, len: u64, span: Span) -> Ident {
+        Ident::new(
+            &format!("__cinrs_{}_{len}", self.names.spelling(rust_name)),
+            span,
+        )
+    }
+
+    /// The name of the item an externally linked symbol is declared under.
+    ///
+    /// The symbol itself is what `#[link_name]` says; this is only the Rust
+    /// side of it, and it is spelled the same way every other C name is so
+    /// that two symbols never end up under one item.
+    fn extern_ident(&self, symbol: &str, span: Span) -> Ident {
+        Ident::new(
+            &self.program.extern_name(&self.names.spelling(symbol)),
+            span,
+        )
     }
 
     /// A name no C identifier can collide with.
@@ -1037,11 +1229,11 @@ impl<'a> Codegen<'a> {
             }
             Ty::Func(id) => return self.fn_ty(id, span),
             Ty::Record(id) => {
-                let name = c_ident(&self.program.types.record(id).rust_name, span);
+                let name = self.c_ident(&self.program.types.record(id).rust_name, span);
                 return quote_spanned! {span=> #name };
             }
             Ty::Enum(id) => {
-                let name = c_ident(&self.program.types.enum_def(id).rust_name, span);
+                let name = self.c_ident(&self.program.types.enum_def(id).rust_name, span);
                 return quote_spanned! {span=> #name };
             }
             // An `_Atomic T` object *is* a `T` in the generated Rust: the
@@ -1170,7 +1362,7 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             let span = self.sp(def.range);
-            let name = c_ident(&def.rust_name, span);
+            let name = self.c_ident(&def.rust_name, span);
             let int = self.ty(Ty::Int, span);
             let attrs = allow_attr(span);
             // C says an enumerated type is compatible with an implementation
@@ -1179,7 +1371,7 @@ impl<'a> Codegen<'a> {
         }
         for constant in &self.program.enum_constants {
             let span = self.sp(constant.range);
-            let name = c_ident(&constant.rust_name, span);
+            let name = self.c_ident(&constant.rust_name, span);
             let ty = self.ty(constant.ty, span);
             let value = bare_int_literal(constant.value, constant.ty, span);
             let attrs = allow_attr(span);
@@ -1195,7 +1387,7 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             let span = self.sp(typedef.range);
-            let name = c_ident(&typedef.rust_name, span);
+            let name = self.c_ident(&typedef.rust_name, span);
             let ty = self.ty(typedef.ty, span);
             let attrs = allow_attr(span);
             out.extend(quote_spanned! {span=> #attrs pub type #name = #ty; });
@@ -1277,7 +1469,7 @@ impl<'a> Codegen<'a> {
         for (record, len) in wanted {
             let def = self.program.types.record(record);
             let span = self.sp(def.range);
-            let name = flexible_ident(&def.rust_name, len, span);
+            let name = self.flexible_ident(&def.rust_name, len, span);
             out.extend(self.record_body(def, &name, Some(len)));
         }
         out
@@ -1285,7 +1477,7 @@ impl<'a> Codegen<'a> {
 
     fn record_item(&self, record: &ir::RecordDef) -> TokenStream {
         let span = self.sp(record.range);
-        let name = c_ident(&record.rust_name, span);
+        let name = self.c_ident(&record.rust_name, span);
         let item = self.record_body(record, &name, None);
         let accessors = self.bit_field_accessors(record, span);
         quote_spanned! {span=> #item #accessors }
@@ -1339,7 +1531,7 @@ impl<'a> Codegen<'a> {
                 ir::RustField::Member(index) => {
                     let field = &record.fields[*index];
                     let fspan = self.sp(field.range);
-                    let fname = c_ident(&field.name, fspan);
+                    let fname = self.c_ident(&field.name, fspan);
                     let fty = match (tail, field.flexible) {
                         (Some(len), true) => {
                             let elem = self
@@ -1400,7 +1592,7 @@ impl<'a> Codegen<'a> {
         if methods.is_empty() {
             return TokenStream::new();
         }
-        let name = c_ident(&record.rust_name, span);
+        let name = self.c_ident(&record.rust_name, span);
         let attrs = allow_attr(span);
         quote_spanned! {span=> #attrs impl #name { #methods } }
     }
@@ -1464,7 +1656,7 @@ impl<'a> Codegen<'a> {
             ..
         } = self.bit_field_window(bits, span);
         let ty = self.ty(field.ty, span);
-        let name = c_ident(&bits.getter, span);
+        let name = self.c_ident(&bits.getter, span);
         let mask = word_literal(mask_of(bits.width, word_bits), word_bits, span);
         let shifted = if shift == 0 {
             quote_spanned! {span=> raw & #mask }
@@ -1514,7 +1706,7 @@ impl<'a> Codegen<'a> {
             word_bits,
         } = self.bit_field_window(bits, span);
         let ty = self.ty(field.ty, span);
-        let name = c_ident(&bits.setter, span);
+        let name = self.c_ident(&bits.setter, span);
         let storage = Ident::new(&bits.storage, span);
         let value = Ident::new("value", span);
         let field_mask = word_literal(mask, word_bits, span);
@@ -1747,7 +1939,7 @@ impl<'a> Codegen<'a> {
                 continue;
             };
             let ospan = self.sp(object.range);
-            let rust_name = Ident::new(&self.program.extern_name(item_name), ospan);
+            let rust_name = self.extern_ident(item_name, ospan);
             let ty = self.ty(object.ty, ospan);
             // An `__asm__("symbol")` label renames the declaration, which is
             // exactly what `#[link_name]` already says.
@@ -1760,7 +1952,7 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             let fspan = self.sp(func.range);
-            let rust_name = Ident::new(&self.program.extern_name(&func.name), fspan);
+            let rust_name = self.extern_ident(&func.name, fspan);
             let params = self.extern_params(func, fspan);
             let ret = if func.sig.ret.is_void() {
                 TokenStream::new()
@@ -1800,7 +1992,7 @@ impl<'a> Codegen<'a> {
             let ty = self.ty(*ty, span);
             match func.param_names.get(index).and_then(|n| n.as_ref()) {
                 Some(name) => {
-                    let name = c_ident(name, span);
+                    let name = self.c_ident(name, span);
                     params.extend(quote_spanned! {span=> #name: #ty });
                 }
                 None => params.extend(quote_spanned! {span=> _: #ty }),
@@ -1828,7 +2020,7 @@ impl<'a> Codegen<'a> {
         else {
             return TokenStream::new();
         };
-        let name = c_ident(item_name, span);
+        let name = self.c_ident(item_name, span);
         let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
         let init = self.binding_init(var.object, init, span);
@@ -1893,7 +2085,7 @@ impl<'a> Codegen<'a> {
             // `rustc`'s own "cannot find `std`" on top of it.
             return TokenStream::new();
         }
-        let name = c_ident(item_name, span);
+        let name = self.c_ident(item_name, span);
         let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
         let init = self.binding_init(var.object, init, span);
@@ -1967,7 +2159,7 @@ impl<'a> Codegen<'a> {
 
     fn signature(&mut self, func: &Function) -> TokenStream {
         let span = self.sp(func.range);
-        let name = c_ident(func.item_name(), span);
+        let name = self.c_ident(func.item_name(), span);
         let mut params = TokenStream::new();
         // A lifted nested function takes the objects it uses from the
         // enclosing frame as pointers, in front of everything the program
@@ -2095,7 +2287,7 @@ impl<'a> Codegen<'a> {
     /// told so rather than quietly built without it.
     fn init_array_item(&mut self, func: &Function, kind: ir::InitKind) -> TokenStream {
         let span = self.sp(func.range);
-        let name = c_ident(func.item_name(), span);
+        let name = self.c_ident(func.item_name(), span);
         let signature = self.function_pointer_ty(func, span);
         let item = Ident::new(
             &format!(
@@ -2291,12 +2483,21 @@ impl<'a> Codegen<'a> {
     /// The new name is the C one with `_1`, `_2`, … appended, the same shape
     /// the [CFG lowering](crate::cfg) uses when it hoists two locals of the
     /// same name into one scope, and it is checked against the function's
-    /// other bindings so that a rename never captures one of them.
+    /// other bindings so that a rename never captures one of them. The check
+    /// is against their Rust *spellings* (see [`Names`]), which is what two
+    /// bindings collide in.
     fn rename_shadowing(&mut self, bound: &[ir::ObjectId]) {
         if self.reserved.is_empty() {
             return;
         }
-        let mut used: HashSet<String> = bound.iter().map(|id| self.plain_local_name(*id)).collect();
+        let mut used: HashSet<String> = bound
+            .iter()
+            .map(|id| {
+                self.names
+                    .spelling(&self.plain_local_name(*id))
+                    .into_owned()
+            })
+            .collect();
         for id in bound {
             let base = self.plain_local_name(*id);
             if !self.reserved.contains(&base) {
@@ -2304,9 +2505,11 @@ impl<'a> Codegen<'a> {
             }
             let name = (1u32..)
                 .map(|n| format!("{base}_{n}"))
-                .find(|c| !used.contains(c) && !self.reserved.contains(c))
+                .find(|c| {
+                    !used.contains(self.names.spelling(c).as_ref()) && !self.reserved.contains(c)
+                })
                 .expect("the sequence of candidates is unbounded");
-            used.insert(name.clone());
+            used.insert(self.names.spelling(&name).into_owned());
             self.local_names.insert(*id, name);
         }
     }
@@ -2378,7 +2581,8 @@ impl<'a> Codegen<'a> {
         let object = self.program.object(id);
         match (object.flexible_len, object.ty) {
             (Some(len), Ty::Record(record)) => {
-                let name = flexible_ident(&self.program.types.record(record).rust_name, len, span);
+                let name =
+                    self.flexible_ident(&self.program.types.record(record).rust_name, len, span);
                 quote_spanned! {span=> #name }
             }
             _ => self.ty(object.ty, span),
@@ -2479,15 +2683,15 @@ impl<'a> Codegen<'a> {
         let object = self.program.object(id);
         match &object.storage {
             Storage::Automatic => match self.local_names.get(&id) {
-                Some(name) => c_ident(name, span),
-                None => c_ident(&object.name, span),
+                Some(name) => self.c_ident(name, span),
+                None => self.c_ident(&object.name, span),
             },
             // A `static mut` is used as a place, never referenced, so
             // edition 2024's `static_mut_refs` lint has nothing to say.
             Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {
-                c_ident(item_name, span)
+                self.c_ident(item_name, span)
             }
-            Storage::Extern { item_name } => Ident::new(&self.program.extern_name(item_name), span),
+            Storage::Extern { item_name } => self.extern_ident(item_name, span),
         }
     }
 
@@ -3809,8 +4013,8 @@ impl<'a> Codegen<'a> {
             })
             .filter(|(_, len)| *len > 0);
         let name = match tail {
-            Some((_, len)) => flexible_ident(&def.rust_name, len, span),
-            None => c_ident(&def.rust_name, span),
+            Some((_, len)) => self.flexible_ident(&def.rust_name, len, span),
+            None => self.c_ident(&def.rust_name, span),
         };
         let mut packed: HashMap<String, Vec<u8>> = HashMap::new();
         let mut dynamic: Vec<usize> = Vec::new();
@@ -3836,7 +4040,7 @@ impl<'a> Codegen<'a> {
             match rust_field {
                 ir::RustField::Member(index) => {
                     let field = &def.fields[*index];
-                    let fname = c_ident(&field.name, span);
+                    let fname = self.c_ident(&field.name, span);
                     // The flexible member's value is longer than its own type,
                     // and the companion's field is what it fills.
                     let value = &fields[*index];
@@ -3876,7 +4080,7 @@ impl<'a> Codegen<'a> {
         for index in dynamic {
             let field = &def.fields[index];
             let bits = field.bits.as_ref().expect("only bit-fields are deferred");
-            let setter = c_ident(&bits.setter, span);
+            let setter = self.c_ident(&bits.setter, span);
             let value = self.expr_at(&fields[index], field.ty);
             stores.extend(quote_spanned! {span=> #tmp.#setter(#value); });
         }
@@ -3897,10 +4101,10 @@ impl<'a> Codegen<'a> {
         span: Span,
     ) -> Value {
         let def = self.program.types.record(record).clone();
-        let name = c_ident(&def.rust_name, span);
+        let name = self.c_ident(&def.rust_name, span);
         let field = &def.fields[index];
         let Some(bits) = &field.bits else {
-            let fname = c_ident(&field.name, span);
+            let fname = self.c_ident(&field.name, span);
             let tokens = self.expr_at(value, field.ty);
             let body = braced(quote_spanned! {span=> #fname: #tokens }, span);
             return Value::new(quote_spanned! {span=> #name #body }, prec::ATOM);
@@ -3927,7 +4131,7 @@ impl<'a> Codegen<'a> {
         }
         let tmp = self.temporary();
         let ty = self.ty(Ty::Record(record), span);
-        let setter = c_ident(&bits.setter, span);
+        let setter = self.c_ident(&bits.setter, span);
         let value = self.expr_at(value, field.ty);
         Value::new(
             quote_spanned! {span=>
@@ -5182,10 +5386,10 @@ impl<'a> Codegen<'a> {
     /// declaration in the `extern` block.
     fn function_path(&self, function: &Function, span: Span) -> TokenStream {
         if function.is_extern() {
-            let name = Ident::new(&self.program.extern_name(&function.name), span);
+            let name = self.extern_ident(&function.name, span);
             return quote_spanned! {span=> #name };
         }
-        let name = c_ident(function.item_name(), span);
+        let name = self.c_ident(function.item_name(), span);
         quote_spanned! {span=> #name }
     }
 
@@ -6128,7 +6332,7 @@ impl<'a> Codegen<'a> {
                 let lowered = self.place(base, mutable);
                 let access = lowered.access;
                 let Some(bits) = &field.bits else {
-                    let name = c_ident(&field.name, span);
+                    let name = self.c_ident(&field.name, span);
                     return LoweredPlace::plain(
                         lowered.setup,
                         quote_spanned! {span=> #access.#name },
@@ -6146,8 +6350,8 @@ impl<'a> Codegen<'a> {
                     setup: lowered.setup,
                     access,
                     bits: Some(BitAccess {
-                        getter: c_ident(&bits.getter, span),
-                        setter: c_ident(&bits.setter, span),
+                        getter: self.c_ident(&bits.getter, span),
+                        setter: self.c_ident(&bits.setter, span),
                     }),
                     unaligned: false,
                     atomic: None,
@@ -7009,5 +7213,101 @@ fn cmp_tokens(op: CmpOp, span: Span) -> TokenStream {
         CmpOp::Ge => quote_spanned! {span=> >= },
         CmpOp::Eq => quote_spanned! {span=> == },
         CmpOp::Ne => quote_spanned! {span=> != },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a unit spelling `names` gives each of them, as `(C, Rust)` pairs
+    /// of everything that does not keep its own name.
+    fn spellings(names: &[&str]) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = unique_spellings(names.iter().copied())
+            .into_iter()
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    /// Asserts that `names` are spelled as `expected` says, and that the unit
+    /// has no two names with one spelling.
+    fn assert_spellings(names: &[&str], expected: &[(&str, &str)]) {
+        let renamed = unique_spellings(names.iter().copied());
+        let want: Vec<(String, String)> = expected
+            .iter()
+            .map(|(c, rust)| ((*c).to_owned(), (*rust).to_owned()))
+            .collect();
+        assert_eq!(spellings(names), want);
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for name in names {
+            let spelling = match renamed.get(*name) {
+                Some(unique) => unique.clone(),
+                None => plain_spelling(name),
+            };
+            if let Some(other) = seen.insert(spelling.clone(), name) {
+                assert_eq!(
+                    other, *name,
+                    "{other} and {name} are both spelled {spelling}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_rust_can_spell_keeps_it() {
+        // Nothing at all is renamed in the program that has no collision,
+        // keywords included: `match` is `r#match`, which is a token of its
+        // own.
+        assert_spellings(&["counter", "match", "loop", "café"], &[]);
+    }
+
+    #[test]
+    fn the_five_names_that_cannot_be_raw_grow_an_underscore() {
+        assert_spellings(
+            &["self", "Self", "super", "crate", "_"],
+            &[
+                ("Self", "Self_"),
+                ("_", "__"),
+                ("crate", "crate_"),
+                ("self", "self_"),
+                ("super", "super_"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_dollar_is_spelled_out() {
+        assert_spellings(
+            &["a$b", "$", "x$"],
+            &[
+                ("$", "_dollar_"),
+                ("a$b", "a_dollar_b"),
+                ("x$", "x_dollar_"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_spelling_the_program_already_uses_grows_another_underscore() {
+        // The collision the whole mechanism exists for: `self` cannot be
+        // `self_`, because the program has a `self_` of its own.
+        assert_spellings(&["self", "self_"], &[("self", "self__")]);
+        assert_spellings(&["self", "self_", "self__"], &[("self", "self___")]);
+        assert_spellings(&["a$b", "a_dollar_b"], &[("a$b", "a_dollar_b_")]);
+    }
+
+    #[test]
+    fn the_answer_does_not_depend_on_the_order_the_names_arrive_in() {
+        let forwards = spellings(&["self", "self_", "crate", "crate_", "a$b", "a_dollar_b"]);
+        let backwards = spellings(&["a_dollar_b", "a$b", "crate_", "crate", "self_", "self"]);
+        assert_eq!(forwards, backwards);
+    }
+
+    #[test]
+    fn a_name_is_spelled_the_same_way_however_often_it_is_collected() {
+        // Every name space is collected into one list, so a tag, a member and
+        // a local all spelled `self` arrive several times over.
+        assert_spellings(&["self", "self", "self_", "self"], &[("self", "self__")]);
     }
 }

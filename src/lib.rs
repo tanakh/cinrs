@@ -518,6 +518,17 @@
 //! is the default, and [Safe functions](#safe-functions) is how a function
 //! stops being foreign.
 //!
+//! The five names Rust cannot write even as raw identifiers — `self`, `Self`,
+//! `super`, `crate` and `_` — get an underscore appended instead
+//! (`int self(void)` is called as `self_`), and a `$`, which C takes as an
+//! identifier character and Rust has no spelling for at all, is written
+//! `_dollar_` (`a$b` is `a_dollar_b`); the C name is still what the symbol
+//! links by. If the translation unit already uses the result for something
+//! else, the spelling grows another `_` until it is free — a unit with both
+//! `self` and `self_` calls them `self__` and `self_` — and one C name is then
+//! that one Rust name everywhere it appears, as an item, as a member, in a
+//! designator and in a bit-field accessor.
+//!
 //! Arithmetic follows C, not Rust: `+`, `-`, `*` and the shifts wrap instead
 //! of panicking (unsigned wrap-around is defined in C, and wrapping is the
 //! predictable choice for the signed overflow C leaves undefined), while `/`
@@ -642,8 +653,10 @@
 //! The getter is the member's own name and the setter is `set_` in front of
 //! it, both taking and returning the member's declared C type — so an `enum`
 //! field reads as the `enum`'s alias and a `_Bool` field as a `bool`. A member
-//! whose name is a Rust keyword becomes a raw identifier (`n.r#match()`), and
-//! where two names would collide — a member `x` next to a member `set_x` —
+//! whose name is a Rust keyword becomes a raw identifier (`n.r#match()`), one
+//! Rust cannot spell at all takes the underscore [What is
+//! generated](#what-is-generated) describes (`n.self_()` and `n.set_self()`),
+//! and where two names would collide — a member `x` next to a member `set_x` —
 //! every getter is claimed first, in declaration order, so a member's own name
 //! always reads it and the setter that finds its name taken grows `_2`, `_3`,
 //! …. The accessors take `&self` and `&mut self`, so a bit-field of a
@@ -1855,7 +1868,10 @@
 //! [`no_std`](#no_std),
 //! [`module`](#one-block-one-module) and
 //! [`crate`](#the-complex-feature), which says where the `cinrs` crate itself
-//! is for a renamed dependency.
+//! is for a renamed dependency. The repository's [`doc/pragmas.md`][pragmas]
+//! is the reference page for all nine, and for the pragmas the preprocessor
+//! itself knows — `once`, `pack`, `push_macro`, `#pragma GCC …` — and what
+//! happens to one it does not.
 //!
 //! Every user header read is named by a `const _: &str = include_str!(…);` in
 //! the expansion, so editing one rebuilds the crate that includes it. Include
@@ -2280,6 +2296,7 @@
 // docs.rs.
 //!
 //! [gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
+//! [pragmas]: https://github.com/tanakh/cinrs/blob/master/doc/pragmas.md
 //! [system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
 //! [c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
 

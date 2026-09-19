@@ -1,0 +1,28 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        struct obj { int self; int self_; };\n\n        int collide(void) {\n            int self = 1;\n            int self_ = 2;\n            struct obj o = { .self = self, .self_ = self_ };\n            return o.self * 10 + o.self_;\n        }\n        \")"
+---
+mod __cinrs_unit_ff18a244 {
+    const _: () = { /* the data-model check */ };
+    #[allow(…)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct obj {
+        pub self__: ::core::ffi::c_int,
+        pub self_: ::core::ffi::c_int,
+    }
+    #[allow(…)]
+    pub unsafe extern "C" fn collide() -> ::core::ffi::c_int {
+        unsafe {
+            let mut self__: ::core::ffi::c_int = 1;
+            let mut self_: ::core::ffi::c_int = 2;
+            let mut o: obj = obj {
+                self__: self__,
+                self_: self_,
+            };
+            return o.self__.wrapping_mul(10).wrapping_add(o.self_);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_ff18a244::*;

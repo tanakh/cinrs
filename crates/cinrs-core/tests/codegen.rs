@@ -689,6 +689,28 @@ fn a_name_that_would_shadow_a_file_scope_item_is_renamed() {
 }
 
 #[test]
+fn a_name_rust_cannot_spell_is_kept_apart_from_the_one_it_would_become() {
+    // `self` cannot be a Rust binding even as `r#self`, so it is generated as
+    // `self_` — and a program that has a `self_` of its own would then have two
+    // of them, which is a silent miscompilation for two locals and `E0124` for
+    // two members. The spelling is settled for the whole unit instead: the one
+    // that has to move grows another `_`, and one C name reads as one Rust name
+    // in every name space at once.
+    insta::assert_snapshot!(generate(
+        r"
+        struct obj { int self; int self_; };
+
+        int collide(void) {
+            int self = 1;
+            int self_ = 2;
+            struct obj o = { .self = self, .self_ = self_ };
+            return o.self * 10 + o.self_;
+        }
+        "
+    ));
+}
+
+#[test]
 fn offsetof_is_folded_to_a_constant() {
     // Sema knows the layout — `ir::Field::offset` is where it put every member
     // — so `offsetof` is an integer constant in the expansion rather than a

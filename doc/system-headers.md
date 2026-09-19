@@ -28,9 +28,12 @@ from the machine, when a unit asks:
 | `#pragma cinrs system_include first` | … → **platform** → **bundled** |
 
 `CINRS_SYSTEM_INCLUDE=1` and `CINRS_SYSTEM_INCLUDE=first` are the same two
-settings for a whole crate; `0`, `off`, `false`, `no` and the empty string turn
-it off again, and anything else is a diagnostic. A pragma in a unit overrides
-the variable. Programmatically it is `Options::system_include`.
+settings for a whole crate — `on`, `true` and `yes` all mean `1`; `0`, `off`,
+`false`, `no` and the empty string turn it off again, and anything else is a
+diagnostic. A pragma in a unit overrides the variable. Programmatically it is
+`Options::system_include`. The pragma's own rules — where it may stand, and why
+a `#pragma cinrs target` after it is an error — are in
+[`doc/pragmas.md`](pragmas.md#system_include-and-system_include-first).
 
 The plain form is for a program that wants **one** thing the bundled set does
 not carry — `<dirent.h>`, `<pthread.h>`, `<sys/mman.h>` — and keeps cinrs's

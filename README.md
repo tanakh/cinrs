@@ -137,6 +137,14 @@ cinrs::include_c99!("vendor/parser.c");
   not in Normalization Form C. And the **Unicode literals** — `u8"…"`, `u"…"`
   and `U"…"` with their `char8_t`, `char16_t` and `char32_t`, `u'x'`, `U'x'`
   and C23's `u8'x'`, surrogate pairs and all — with `<uchar.h>` bundled.
+* **Names Rust would not take.** A C name that is a Rust keyword becomes a raw
+  identifier (`int match(int)` is called as `r#match`); the five Rust cannot
+  write even as raw ones — `self`, `Self`, `super`, `crate` and `_` — get an
+  underscore appended, and a `$`, which C takes as an identifier character, is
+  written `_dollar_`. Where the program already uses the result for something
+  else the spelling grows another `_` until it is free, so a unit with both
+  `self` and `self_` calls them `self__` and `self_`; one C name is that one
+  Rust name everywhere it appears, and the symbol still links by the C name.
 * **Variably modified types and `alloca`.** `int a[n];` with a bound that is
   not a constant does what C99 says: the bound is evaluated once, at the
   declaration; the object lives to the end of the block and is made afresh on
@@ -155,7 +163,8 @@ cinrs::include_c99!("vendor/parser.c");
   the scope of one is a located error, as C requires.
 * **The C99 preprocessor.** Object-like and function-like macros with `#`,
   `##`, `__VA_ARGS__` and the standard's rescanning rules, every conditional
-  directive, `#error`, `#warning`, `#pragma`, and `#line` — which redirects
+  directive, `#error`, `#warning`, `#pragma` (the catalogue is
+  [`doc/pragmas.md`][pragmas]), and `#line` — which redirects
   `__LINE__` and `__FILE__` and nothing else, so a diagnostic still points at
   the C token that was really written.
 * **`#include`, and C23's `#embed`.** Standard headers (`<stdio.h>`,
@@ -268,6 +277,13 @@ cinrs::include_c99!("vendor/parser.c");
   `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a
   renamed dependency — the generated code names it only for complex numbers,
   and `::cinrs` is the default.
+  `#pragma cinrs system_include` is the ninth and has a
+  [section](#system-headers) of its own.
+  [`doc/pragmas.md`][pragmas] is the reference: every option's exact syntax,
+  how far it reaches, what is an error, and the environment variable that does
+  the same thing — together with the pragmas the preprocessor itself knows
+  (`once`, `pack`, `push_macro`, `#pragma GCC …`) and what happens to one it
+  does not.
 * **Safe functions.** A C function is a foreign function, so calling one is
   `unsafe` — unless it is marked `[[cinrs::safe]]`,
   `__attribute__((cinrs_safe))` or named by `#pragma cinrs safe f g`. Such a
@@ -756,6 +772,7 @@ dual licensed as above, without any additional terms or conditions.
      doc/ directory next to it. -->
 
 [gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
+[pragmas]: https://github.com/tanakh/cinrs/blob/master/doc/pragmas.md
 [system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
 [c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
 [testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md

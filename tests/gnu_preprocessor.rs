@@ -182,6 +182,17 @@ c99! { r#"
     #pragma endregion
     #pragma GCC diagnostic pop
     #pragma GCC visibility pop
+    #pragma redefine_extname old new
+
+    /* The standard's own three (C99 6.10.6 and 7.12.2) are ignored as well:
+     * what the generated Rust does is the `OFF` state of each, so a unit that
+     * asks for that gets it and one that asks for the other gets no change. */
+    #pragma STDC FP_CONTRACT OFF
+    #pragma STDC FENV_ACCESS OFF
+    #pragma STDC CX_LIMITED_RANGE ON
+
+    /* And a vendor's, which is what 6.10.6 is really about. */
+    #pragma omp parallel for
 
     #define DO_PRAGMA(x) _Pragma(#x)
     DO_PRAGMA(GCC diagnostic ignored "-Wall")

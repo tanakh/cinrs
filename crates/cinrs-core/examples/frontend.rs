@@ -116,9 +116,24 @@ fn main() {
     let parsed = started.elapsed();
     let unit_id = analysis.source.unit_id();
     let mut diagnostics = analysis.diagnostics;
-    let (_program, mut sema) = cinrs_core::sema::analyze(&analysis.unit, &options, unit_id);
+    // `analysis.options` rather than the ones handed in: `#pragma cinrs target`
+    // and `CINRS_TARGET` are resolved into those, and sema has to see the model
+    // the unit is really translated for.
+    let (mut program, mut sema) =
+        cinrs_core::sema::analyze(&analysis.unit, &analysis.options, unit_id);
     analysis.expansions.annotate(&mut sema);
     diagnostics.extend(sema);
+    // The pragmas that can only be checked once the program and the pragmas are
+    // together — which is where a `#pragma cinrs safe` naming nothing is found.
+    program.export = analysis.export;
+    program.no_std = analysis.no_std;
+    let mut pragmas = cinrs_core::sema::check_pragmas(&program);
+    pragmas.extend(cinrs_core::sema::check_safe(
+        &mut program,
+        &analysis.safe_functions,
+    ));
+    analysis.expansions.annotate(&mut pragmas);
+    diagnostics.extend(pragmas);
     let total = started.elapsed();
     let map = &analysis.source.map;
     let mut errors = 0;
