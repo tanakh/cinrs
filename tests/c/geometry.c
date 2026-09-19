@@ -1,11 +1,10 @@
 /* A translation unit in a file of its own, compiled by
  * `cinrs::include_c99!("c/geometry.c")` in `tests/include_c.rs`.
  *
- * Everything a `c99!` block may hold, this may hold: pragmas that configure
- * the unit, `#include` of a header beside it and of a bundled one, and any
- * number of definitions. */
+ * Everything a `c99!` block may hold, this may hold: pragmas that configure the
+ * unit, `#include` of a header beside it and of a bundled one, and any number of
+ * definitions. The `.rs` file wraps the invocation in a `mod`. */
 
-#pragma cinrs module "geometry"
 #pragma cinrs safe point_manhattan at_origin
 
 #include "geometry.h"   /* found next to this file */

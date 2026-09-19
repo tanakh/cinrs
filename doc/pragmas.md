@@ -17,8 +17,8 @@ raw-token and in string-literal input:
 
 ```rust,ignore
 cinrs::c99! {
-    #pragma cinrs module "geometry"
-    struct Point { int x; int y; };
+    #pragma cinrs safe gcd
+    int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
 }
 ```
 
@@ -38,19 +38,18 @@ to the last two, for a reason its own section gives.
 | [`export`](#export) | gives everything with external linkage a real C symbol | the whole unit |
 | [`safe f g h`](#safe-f-g-h) | generates those functions without `unsafe` | the whole unit |
 | [`no_std`](#no_std) | takes the `Vec` a VLA or `alloca` needs from `alloc` | the whole unit |
-| [`module "<name>"`](#module-name) | names the module the expansion goes into | the whole unit |
 | [`crate "<path>"`](#crate-path) | says where the `cinrs` facade crate is | the whole unit |
 
-An option that is not one of those nine is an error that lists them:
+An option that is not one of those eight is an error that lists them:
 
 ```text
 error: unknown #pragma cinrs option 'frobnicate'; the options are 'target',
-       'include_path', 'system_include', 'link', 'export', 'safe', 'no_std',
-       'module' and 'crate'
+       'include_path', 'system_include', 'link', 'export', 'safe', 'no_std'
+       and 'crate'
 ```
 
 and `#pragma cinrs` with nothing after it is the same error, differently
-worded. The five options that take a string want **one narrow string literal**:
+worded. The four options that take a string want **one narrow string literal**:
 a missing one, a token that is not a literal, a wide literal (`L"…"`) and an
 empty string are each their own message. A token *after* the value is reported
 too — and the option is still applied, since what the unit asked for was
@@ -260,30 +259,6 @@ object under it is a located error: `thread_local!` is a `std` macro and
 There is no environment variable for it, and no Cargo feature: the `cinrs`
 facade is `#![no_std]` already, and this is about the *generated code*.
 
-### `module "<name>"`
-
-```c
-#pragma cinrs module "geometry"
-
-struct Point { int x; int y; };
-```
-
-Names the module the expansion is generated into and makes it `pub`, so that
-Rust can write `geometry::Point`. Without the pragma the module is
-`__cinrs_unit_<hash>` — private, and glob re-exported into the module the
-invocation was written in. Naming it is how two blocks that both define a
-`struct Point` are told apart: the glob re-exports collide only when a name is
-*used* ambiguously, and this is what the user says which one they mean with.
-
-It reaches the whole unit wherever it is written. Saying the same name twice is
-harmless; saying two different names is an error on the second, and the first
-is the name the unit keeps.
-
-The name becomes a Rust identifier verbatim, so it has to be one: ASCII letters,
-digits and `_`, starting with a letter or `_`, not a Rust keyword and not one of
-`self`, `Self`, `super`, `crate` or `_`. Anything else — `"two words"`, `"1st"`,
-`"struct"`, `"café"` — is `'…' is not usable as a Rust module name`.
-
 ### `crate "<path>"`
 
 ```c
@@ -299,9 +274,9 @@ its own and cannot rely on anything being in scope there. The default is
 `::cinrs`; a dependency renamed in `Cargo.toml`, or one reached through a
 re-export, needs this.
 
-It reaches the whole unit wherever it is written, and repeats behave as
-`module`'s do: the same path twice is harmless, two different paths are an error
-on the second and the first wins.
+It reaches the whole unit wherever it is written, and repeats are forgiving one
+way only: the same path twice is harmless, two different paths are an error on
+the second and the first wins.
 
 The value is pasted into the expansion as tokens, so it is checked strictly: a
 sequence of identifier segments joined by `::`, optionally starting with one,
@@ -312,6 +287,29 @@ The related switch is the crate's **`complex`** Cargo feature, which is on by
 default. Without it `_Complex` is a diagnostic, the `cinrs-rt` dependency is
 gone, and nothing in an expansion names the facade crate at all — so the pragma
 has nothing to do.
+
+## Naming the module
+
+There is no pragma for this, because it is not a question about the C. Every
+expansion goes into a module of its own — `__cinrs_unit_<hash>`, **private**,
+followed by a **glob re-export** of it into the module the invocation was
+written in — because a translation unit is a namespace, and two of them written
+side by side must not collide. Rust already has the way to give that unit a path
+of its own: an ordinary `mod` around the invocation, which settles its
+visibility and its attributes at the same time.
+
+```rust,ignore
+pub(crate) mod packet {
+    cinrs::c99! { #include "packet.h" }
+}
+```
+
+`packet::Header` is then the type and `packet::decode` the function. That is
+also how two units that define the *same* name are told apart — the glob
+re-exports conflict only when Rust *uses* an ambiguous name, and one `mod` each
+is what says which is meant. Neither a relative `#include`, which is still
+looked for beside the `.rs` file, nor [`export`](#export), which still gives the
+unit's symbols their C names, cares how many `mod`s the invocation sits inside.
 
 ## The pragmas the preprocessor knows
 

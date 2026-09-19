@@ -3,9 +3,10 @@
 Every `.c` file in this directory is a **verbatim** copy of a program from
 [The Computer Language Benchmarks Game][bg], renamed from the upstream
 `<name>.gcc*` to `<name>.c` and otherwise byte for byte what upstream ships,
-contributor credit and all. Nothing in them is edited: the include path, the
-`#pragma cinrs module` and the `#define`s the harness needs are added *around*
-the file when it is wrapped, never inside it.
+contributor credit and all. Nothing in them is edited: the include path and the
+`#define`s the harness needs are added *around* the file when it is wrapped,
+never inside it, and the Rust `mod` that gives the unit a path is outside the
+string literal altogether.
 
 [bg]: https://benchmarksgame-team.pages.debian.net/benchmarksgame/
 

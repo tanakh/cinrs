@@ -397,18 +397,18 @@ mod disabled {
     }
 }
 
-c99! {
-    #pragma cinrs module "declarators"
+mod declarators {
+    cinrs::c99! {
+        /* An attribute after a `typedef`'d record's member list. */
+        typedef struct { char c; int x; } __attribute__((packed)) Packed;
+        unsigned long packed_size(void) { return sizeof(Packed); }
 
-    /* An attribute after a `typedef`'d record's member list. */
-    typedef struct { char c; int x; } __attribute__((packed)) Packed;
-    unsigned long packed_size(void) { return sizeof(Packed); }
-
-    /* And one *inside* a declarator, which is where GCC puts a calling
-     * convention — the position that used to garble the whole type. */
-    typedef int (__attribute__((stdcall)) *Fn)(int);
-    static int twice(int n) { return n * 2; }
-    int through_a_pointer(int n) { Fn f = twice; return f(n); }
+        /* And one *inside* a declarator, which is where GCC puts a calling
+         * convention — the position that used to garble the whole type. */
+        typedef int (__attribute__((stdcall)) *Fn)(int);
+        static int twice(int n) { return n * 2; }
+        int through_a_pointer(int n) { Fn f = twice; return f(n); }
+    }
 }
 
 #[test]

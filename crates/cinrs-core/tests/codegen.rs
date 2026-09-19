@@ -763,23 +763,6 @@ fn bit_fields_become_storage_bytes_and_accessors() {
 }
 
 #[test]
-fn a_named_module_holds_the_unit() {
-    // `#pragma cinrs module` replaces the generated name with one the user can
-    // write, which is how an ambiguous glob re-export is disambiguated.
-    insta::assert_snapshot!(generate(
-        r#"
-        #pragma cinrs module "geometry"
-
-        struct Point { int x; int y; };
-
-        int manhattan(struct Point p) {
-            return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);
-        }
-        "#
-    ));
-}
-
-#[test]
 fn an_exported_unit_defines_real_c_symbols() {
     // Everything with external linkage gets the C name as its symbol, so that
     // another unit — or a C library — can link against it. A `static` keeps

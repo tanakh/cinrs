@@ -137,10 +137,10 @@ string literal, and C that already lives in a file goes in whole. Details:
   called as `r#match(1)`. [More on names][names].
 * A bit-field has no address, so it is a pair of methods: `h.length()` and
   `h.set_length(200)`.
-* Each invocation is one translation unit, expanded into a private module and
-  re-exported. `#pragma cinrs module "packet"` names the module;
-  `#pragma cinrs export` gives its functions real C symbols, so another block
-  — or a C library — can call them.
+* Each invocation is one translation unit, expanded into a private module that
+  is glob re-exported; an ordinary Rust `mod` around the invocation gives its
+  items a path (`packet::Header`). `#pragma cinrs export` gives its functions
+  real C symbols, so another block — or a C library — can call them.
 
 ### Headers
 
@@ -157,7 +157,7 @@ the crate. The platform's own headers — `struct stat`, `DIR`,
 ```
 
 See [system headers][system-headers], and [the pragma reference][pragmas] for
-all nine `#pragma cinrs` options and the environment variables that go with
+all eight `#pragma cinrs` options and the environment variables that go with
 them.
 
 ### Cross-compilation

@@ -121,24 +121,28 @@ fn every_primitive_name_is_a_typedef() {
 /// that they stop existing.
 #[test]
 fn the_typedefs_are_usable_from_rust() {
-    c11! {
-        #pragma cinrs module "primitive_aliases"
-        typedef _Bool bool;
-        typedef unsigned int u32;
-        typedef unsigned long usize;
-        typedef double f64;
+    // A `mod` of its own, so that the aliases can be named by path — `u32` and
+    // `f64` are Rust's own primitives, and the point is that the unit's
+    // versions of them exist as items.
+    mod primitive_aliases {
+        cinrs::c11! {
+            typedef _Bool bool;
+            typedef unsigned int u32;
+            typedef unsigned long usize;
+            typedef double f64;
 
-        u32 twice(u32 x) { return x * 2; }
-        bool even(u32 x) { return x % 2 == 0; }
-        f64 scale(f64 x, usize n) { return x * (f64) n; }
+            u32 twice(u32 x) { return x * 2; }
+            bool even(u32 x) { return x % 2 == 0; }
+            f64 scale(f64 x, usize n) { return x * (f64) n; }
+        }
     }
 
     let x: primitive_aliases::u32 = 21;
-    let doubled: primitive_aliases::u32 = unsafe { twice(x) };
+    let doubled: primitive_aliases::u32 = unsafe { primitive_aliases::twice(x) };
     assert_eq!(doubled, 42);
-    let flag: primitive_aliases::bool = unsafe { even(doubled) };
+    let flag: primitive_aliases::bool = unsafe { primitive_aliases::even(doubled) };
     assert!(flag);
-    let scaled: primitive_aliases::f64 = unsafe { scale(1.5, 4) };
+    let scaled: primitive_aliases::f64 = unsafe { primitive_aliases::scale(1.5, 4) };
     assert_eq!(scaled, 6.0);
 }
 

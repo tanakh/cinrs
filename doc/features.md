@@ -258,11 +258,15 @@ two exported units defining one name is a duplicate symbol);
 `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
 needs from `alloc` rather than from `std`, and refuses a thread-local object,
 which needs `std` outright;
-`#pragma cinrs module "…"` names the module the expansion goes into;
 `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a renamed
 dependency — the generated code names it only for complex numbers, and
-`::cinrs` is the default. `#pragma cinrs system_include` is the ninth and has a
+`::cinrs` is the default. `#pragma cinrs system_include` is the eighth and has a
 [page](system-headers.md) of its own.
+
+There is no pragma for naming the module an expansion goes into: it is
+`__cinrs_unit_<hash>`, private and glob re-exported, and an ordinary Rust `mod`
+around the invocation is what gives its items a path — `packet::Header` — and
+what keeps two units that define the same name apart.
 
 [`doc/pragmas.md`](pragmas.md) is the reference: every option's exact syntax,
 how far it reaches, what is an error, and the environment variable that does the

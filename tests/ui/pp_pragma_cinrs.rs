@@ -9,9 +9,6 @@ cinrs::c99! {
     #pragma cinrs include_path //~ ERROR: #pragma cinrs include_path needs a string literal
     #pragma cinrs link 3 //~ ERROR: #pragma cinrs link needs a string literal, found integer constant
     #pragma cinrs export "everything" //~ ERROR: unexpected string literal after #pragma cinrs export
-    #pragma cinrs module "not an identifier" //~ ERROR: is not usable as a Rust module name
-    #pragma cinrs module "first"
-    #pragma cinrs module "second" //~ ERROR: this unit is already named 'first'
     int x;
 }
 

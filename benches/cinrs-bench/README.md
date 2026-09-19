@@ -139,10 +139,10 @@ about.
 
 Exactly the way `tests/c_testsuite.rs` does it: the whole translation unit goes
 into one raw string literal — the input form that accepts every C token,
-hexadecimal floating constants and `'ab'` included — with
-`#pragma cinrs module "bench"` appended, and a `fn main` that calls the C
-`main` through that module and exits with what it returned. Two things are
-*prepended* instead, because the preprocessor acts on them where it reads them
+hexadecimal floating constants and `'ab'` included — inside a `mod bench` of its
+own, and a `fn main` that calls the C `main` as `bench::main`, through the glob
+re-export inside that module, and exits with what it returned. Two things are
+*prepended* to the C, because the preprocessor acts on them where it reads them
 and they must be in force before the first `#include`: `#pragma cinrs
 include_path` pointing at the C file's own directory (a string literal has no
 directory of its own, and Dhrystone includes a second `.c` file next to it),
@@ -157,7 +157,7 @@ generates for a C file, which is the second.
 
 The crate has four tests, all cheap, and they are what `cargo test --workspace`
 runs from here: the program table names files that exist and no two rows share
-a name; the generator produces the `mod unit` wrapper; the raw-string hash
+a name; the generator produces the `mod bench` wrapper; the raw-string hash
 count is right; the output filter drops what it is told to. A fifth builds one
 small kernel with `gcc` and runs it, skipping itself when there is no `gcc` on
 the `PATH`, and is capped like everything else the harness starts. Nothing here

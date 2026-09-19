@@ -383,19 +383,20 @@ const RUST_KEYWORDS: &[&str] = &[
 /// ```
 const PRELUDE_PATTERNS: &[&str] = &["Some", "None", "Ok", "Err"];
 
-/// Whether `name` can be used as the name of the generated module.
+/// Whether `segment` is an ordinary Rust identifier — one that can stand as a
+/// path segment spelled verbatim rather than as `r#…`.
 ///
-/// `#pragma cinrs module "…"` writes it, and it becomes a Rust identifier
-/// verbatim: an ordinary one, since a module the user means to write
-/// `geometry::Point` through should not have to be spelled `r#…`.
-pub fn is_module_name(name: &str) -> bool {
-    let mut chars = name.chars();
+/// Its one caller is [`is_crate_path`], whose value is pasted into the
+/// expansion as tokens; the three keywords a segment may nevertheless be are
+/// allowed there rather than here.
+fn is_path_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
     chars
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !RUST_KEYWORDS.contains(&name)
-        && !NEVER_RAW.contains(&name)
+        && !RUST_KEYWORDS.contains(&segment)
+        && !NEVER_RAW.contains(&segment)
 }
 
 /// Whether a string is usable as the Rust path of a crate:
@@ -408,7 +409,8 @@ pub fn is_module_name(name: &str) -> bool {
 /// there would be a syntax error in generated code rather than a message about
 /// the pragma.
 pub fn is_crate_path(path: &str) -> bool {
-    /// The three keywords a path segment may be even though a module may not.
+    /// The three keywords a path segment may be even though an ordinary
+    /// identifier may not.
     const PATH_KEYWORDS: &[&str] = &["crate", "self", "super"];
 
     let body = path.strip_prefix("::").unwrap_or(path);
@@ -416,7 +418,7 @@ pub fn is_crate_path(path: &str) -> bool {
         return false;
     }
     body.split("::")
-        .all(|segment| PATH_KEYWORDS.contains(&segment) || is_module_name(segment))
+        .all(|segment| PATH_KEYWORDS.contains(&segment) || is_path_segment(segment))
 }
 
 /// Turns a C identifier into the Rust identifier that stands for it, before

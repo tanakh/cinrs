@@ -1,4 +1,4 @@
-error: unknown #pragma cinrs option 'unknown_option'; the options are 'target', 'include_path', 'system_include', 'link', 'export', 'safe', 'no_std', 'module' and 'crate'
+error: unknown #pragma cinrs option 'unknown_option'; the options are 'target', 'include_path', 'system_include', 'link', 'export', 'safe', 'no_std' and 'crate'
  --> tests/ui/pp_pragma_cinrs.rs:8:19
   |
 8 |     #pragma cinrs unknown_option "x"
@@ -22,17 +22,5 @@ error: unexpected string literal after #pragma cinrs export, which takes no argu
 11 |     #pragma cinrs export "everything"
    |                          ^^^^^^^^^^^^
 
-error: 'not an identifier' is not usable as a Rust module name
-  --> tests/ui/pp_pragma_cinrs.rs:12:26
-   |
-12 |     #pragma cinrs module "not an identifier"
-   |                          ^^^^^^^^^^^^^^^^^^^
-
-error: this unit is already named 'first' by an earlier #pragma cinrs module
-  --> tests/ui/pp_pragma_cinrs.rs:14:26
-   |
-14 |     #pragma cinrs module "second"
-   |                          ^^^^^^^^
-
-error: aborting due to 6 previous errors
+error: aborting due to 4 previous errors
 

@@ -31,20 +31,22 @@ cinrs::c89! {
     }
 }
 
-cinrs::gnu89! {
-    #pragma cinrs module "gnu89_block"
-
-    /* Everything a later revision added is accepted here as an extension —
-       and the C89 rules are still C89's. */
-    main(argc, argv)
-        int argc;
-        char **argv;
-    {
-        long long wide = 1LL << 40;   // a `//` comment, too
-        int total = argc;
-        for (int i = 0; i < 3; i++) total += i;
-        if (argv == 0) return 1;
-        return total + (int)(wide >> 40);
+/// A unit that defines `main` goes in a `mod` of its own, so that the glob
+/// re-export does not put a second `main` beside this file's.
+mod gnu89_block {
+    cinrs::gnu89! {
+        /* Everything a later revision added is accepted here as an extension —
+           and the C89 rules are still C89's. */
+        main(argc, argv)
+            int argc;
+            char **argv;
+        {
+            long long wide = 1LL << 40;   // a `//` comment, too
+            int total = argc;
+            for (int i = 0; i < 3; i++) total += i;
+            if (argv == 0) return 1;
+            return total + (int)(wide >> 40);
+        }
     }
 }
 

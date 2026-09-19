@@ -1303,44 +1303,6 @@ fn the_no_std_pragma_is_unit_wide_and_takes_no_argument() {
 }
 
 #[test]
-fn the_module_pragma_names_the_unit() {
-    let (tokens, errors, out) = run_including("#pragma cinrs module \"geometry\"\nkept", &[]);
-    assert!(errors.is_empty(), "{errors:#?}");
-    assert_eq!(tokens, ["kept"]);
-    assert_eq!(out.module.as_deref(), Some("geometry"));
-
-    // The name becomes a Rust identifier, so it has to be one.
-    for bad in ["two words", "1st", "struct", "self", "e\u{301}"] {
-        let (_, errors, out) = run_including(&format!("#pragma cinrs module \"{bad}\""), &[]);
-        assert_eq!(errors.len(), 1, "{bad}: {errors:#?}");
-        assert!(
-            errors[0].ends_with("is not usable as a Rust module name"),
-            "{bad}: {errors:#?}"
-        );
-        assert_eq!(out.module, None, "{bad}");
-    }
-
-    // Saying the same name twice is harmless; saying two is a mistake.
-    let (_, errors, out) = run_including(
-        "#pragma cinrs module \"a\"\n#pragma cinrs module \"a\"",
-        &[],
-    );
-    assert!(errors.is_empty(), "{errors:#?}");
-    assert_eq!(out.module.as_deref(), Some("a"));
-
-    let (_, errors, out) = run_including(
-        "#pragma cinrs module \"a\"\n#pragma cinrs module \"b\"",
-        &[],
-    );
-    assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert!(
-        errors[0].starts_with("this unit is already named 'a'"),
-        "{errors:#?}"
-    );
-    assert_eq!(out.module.as_deref(), Some("a"));
-}
-
-#[test]
 fn the_crate_pragma_says_where_the_facade_crate_is() {
     let (tokens, errors, out) =
         run_including("#pragma cinrs crate \"crate::vendor::cinrs\"\nkept", &[]);
@@ -1372,8 +1334,8 @@ fn the_crate_pragma_says_where_the_facade_crate_is() {
         assert_eq!(out.crate_path, None, "{bad}");
     }
 
-    // The same rule as `module`: saying it twice is harmless, saying two
-    // different things is a mistake and the first one stands.
+    // Saying it twice is harmless; saying two different things is a mistake,
+    // and the first one stands.
     let (_, errors, out) = run_including(
         "#pragma cinrs crate \"::a\"\n#pragma cinrs crate \"::a\"",
         &[],

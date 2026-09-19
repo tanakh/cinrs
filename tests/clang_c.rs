@@ -111,9 +111,6 @@ const GEN_DIR: &str = "target/clang-c";
 /// Where `ui_test` puts what it builds.
 const BUILD_DIR: &str = "target/clang-c-build";
 
-/// The module the expansion of every accept case goes into.
-const MODULE: &str = "clangtest";
-
 // ---------------------------------------------------------------------------
 // entry points
 // ---------------------------------------------------------------------------
@@ -1065,7 +1062,7 @@ fn revision_id(file: &TestFile, revision: &Revision) -> String {
 // running one revision
 // ---------------------------------------------------------------------------
 
-/// The whole translation unit for a revision: prelude, case, module pragma.
+/// The whole translation unit for a revision: the prelude and then the case.
 fn unit_text(file: &TestFile, plan: &Plan) -> (String, usize) {
     let prelude = plan.prelude();
     let mut out = String::with_capacity(file.source.len() + 128);
@@ -1077,7 +1074,6 @@ fn unit_text(file: &TestFile, plan: &Plan) -> (String, usize) {
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str(&format!("\n#pragma cinrs module {MODULE:?}\n"));
     (out, prelude.len())
 }
 

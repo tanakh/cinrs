@@ -53,7 +53,7 @@ as unimplemented or not planned, case by case.
 * **[Clang's C conformance tests](clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **167 of the 203 revisions run are correct
-  (82.3 %)** — 139 answered exactly and 28 refused because the entry point
+  (82.3 %)** — 136 answered exactly and 31 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
   **557 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and **not

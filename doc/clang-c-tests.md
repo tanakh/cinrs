@@ -163,7 +163,7 @@ corpus revision: **99 files, 276 RUN lines, 203 run, 73 skipped**, in about ten
 seconds.
 
 ```
-clang/test/C: 167/203 correct (82.3%) — 139 passed, 28 rejected as the standard requires
+clang/test/C: 167/203 correct (82.3%) — 136 passed, 31 rejected as the standard requires
   errors: 36 — bug 0, unimplemented 6, not planned 30, toolchain 0
   (73 skipped) — 11.5 s
 ```
@@ -202,9 +202,9 @@ and none of them is a translation error:
 2. **A file is five revisions.** `drs/dr0xx.c`, `dr1xx.c`, `dr2xx.c`,
    `dr3xx.c` and `dr4xx.c` are compiled once per revision of C, so a single
    cause is counted five times. Collapsing the cascades leaves **41 distinct
-   root causes** behind the 64 listed revisions — 22 of them conforming
+   root causes** behind the 67 listed revisions — 22 of them conforming
    refusals — and the report prints them with their counts.
-3. **28 of the 64 are conforming refusals**, which the correct rate above
+3. **31 of the 67 are conforming refusals**, which the correct rate above
    already counts as correct rather than as gaps.
 
 Put together: 36 errors in **19 root causes**, none of which is a bug.
@@ -218,8 +218,8 @@ The report counts the `expected-error` *lines* as well as the revisions:
       620  lines carry a required `expected-error`
       557  of them were diagnosed (89.8%)
        63  were not
-      435  errors landed on a line no directive names
-           163 of those are on the 28 revisions this entry point is required
+      448  errors landed on a line no directive names
+           176 of those are on the 31 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
@@ -227,7 +227,7 @@ The report counts the `expected-error` *lines* as well as the revisions:
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
-of them. 163 of the 435 are on the 28 revisions that are conforming refusals
+of them. 176 of the 448 are on the 31 revisions that are conforming refusals
 outright; the other 272 are on the 36 error revisions, where the same effect
 piles up behind whichever refusal came first.
 
@@ -306,11 +306,11 @@ which are the same gap — only the arithmetic types are supported.
 
 **Missed rejection (0).**
 
-### The deliberate refusals (28, marked `!`)
+### The deliberate refusals (31, marked `!`)
 
 These are not gaps, and guard mode asserts that the refusal is still there.
 
-* *A later revision's feature in an earlier block* (23): `_Static_assert` and
+* *A later revision's feature in an earlier block* (26): `_Static_assert` and
   `_Alignof` in a `c99!` block, an anonymous `struct` member in `c99!`, a
   binary constant in `c17!`, a label at the end of a compound statement in
   `c11!`, an enumerator too wide for `int` in `c17!` — and, since the C89

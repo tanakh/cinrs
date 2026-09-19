@@ -478,37 +478,37 @@ fn a_cleanup_may_take_a_pointer_to_a_qualified_type_or_a_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// two units in one module
+// two units, each in a module of its own
 // ---------------------------------------------------------------------------
 
 mod two_units {
-    use cinrs::gnu99;
-
-    gnu99! {
-        #pragma cinrs module "first"
-        static int runs;
-        static void count(int *p) { runs += *p; }
-        int one(void) {
-            runs = 0;
-            {
-                int a __attribute__((cleanup(count))) = 1;
-                (void)a;
+    mod first {
+        cinrs::gnu99! {
+            static int runs;
+            static void count(int *p) { runs += *p; }
+            int one(void) {
+                runs = 0;
+                {
+                    int a __attribute__((cleanup(count))) = 1;
+                    (void)a;
+                }
+                return runs;
             }
-            return runs;
         }
     }
 
-    gnu99! {
-        #pragma cinrs module "second"
-        static int runs;
-        static void count(int *p) { runs += *p * 2; }
-        int two(void) {
-            runs = 0;
-            {
-                int a __attribute__((cleanup(count))) = 1;
-                (void)a;
+    mod second {
+        cinrs::gnu99! {
+            static int runs;
+            static void count(int *p) { runs += *p * 2; }
+            int two(void) {
+                runs = 0;
+                {
+                    int a __attribute__((cleanup(count))) = 1;
+                    (void)a;
+                }
+                return runs;
             }
-            return runs;
         }
     }
 

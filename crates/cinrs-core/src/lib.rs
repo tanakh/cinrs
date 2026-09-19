@@ -529,8 +529,6 @@ pub struct Analysis {
     /// `#![no_std]` crate, so that the storage a variable length array or
     /// `alloca` needs comes from `alloc` rather than from `std`.
     pub no_std: bool,
-    /// The name `#pragma cinrs module` gave the generated module, if any.
-    pub module: Option<String>,
     /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate, if
     /// any; see [`ir::DEFAULT_CRATE_PATH`].
     pub crate_path: Option<String>,
@@ -620,7 +618,6 @@ struct FrontEndOutput {
     safe_functions: Vec<pp::SafeName>,
     export: bool,
     no_std: bool,
-    module: Option<String>,
     crate_path: Option<String>,
     /// The options with the target model resolved; see [`Analysis::options`].
     options: Options,
@@ -656,7 +653,6 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         safe_functions,
         export,
         no_std,
-        module,
         crate_path,
         pack_events,
     } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
@@ -677,7 +673,6 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         safe_functions,
         export,
         no_std,
-        module,
         crate_path,
         options,
     }
@@ -762,7 +757,6 @@ fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagno
         safe_functions: out.safe_functions,
         export: out.export,
         no_std: out.no_std,
-        module: out.module,
         crate_path: out.crate_path,
         options: out.options,
     }
@@ -940,7 +934,7 @@ fn include_path(name: &str, span: Span) -> PathBuf {
 /// The result is a private module holding the unit's items plus a glob
 /// re-export of it, so that two invocations in one Rust module are two
 /// namespaces and cannot collide; a unit that declares nothing expands to
-/// nothing at all. `#pragma cinrs module "…"` names that module.
+/// nothing at all.
 ///
 /// # Where each pass runs
 ///
@@ -993,7 +987,6 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
         safe_functions,
         export,
         no_std,
-        module,
         crate_path,
         // The target model the environment and the unit's own pragma settled
         // on; everything after the front end has to use these rather than the
@@ -1036,10 +1029,10 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
     } else {
         out.extend(codegen::generate(&program, &source.map, options));
     }
-    in_module(out, module.as_deref(), unit_id)
+    in_module(out, unit_id)
 }
 
-/// Wraps an expansion in a module of its own, re-exported by a glob.
+/// Wraps an expansion in a private module of its own, re-exported by a glob.
 ///
 /// A translation unit is a namespace, and two of them written in one Rust
 /// module are two namespaces: both may `#include "point.h"`, and each has to
@@ -1047,8 +1040,9 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
 /// items side by side are `E0428`; two modules each holding one, glob
 /// re-exported, are not — a glob re-export only conflicts when a name it
 /// exports is *used* ambiguously, and only from Rust, which is exactly the
-/// case where the user has to say which one they mean. `#pragma cinrs module`
-/// gives the module a name for them to say it with.
+/// case where the user has to say which one they mean. An ordinary Rust `mod`
+/// around the invocation is what they say it with, and what gives the unit's
+/// items a path of their own.
 ///
 /// The module is what makes C's own hygiene work too: a `static` function is
 /// private to it, as C says it is, while everything with external linkage is
@@ -1056,28 +1050,20 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
 /// that Rust calls it by the name its author gave it.
 ///
 /// There is no `use super::*`: C code never refers to a Rust item.
-fn in_module(items: TokenStream, name: Option<&str>, unit_id: u64) -> TokenStream {
+fn in_module(items: TokenStream, unit_id: u64) -> TokenStream {
     if items.is_empty() {
         // An empty translation unit expands to nothing at all, rather than to
         // an empty module and a glob re-export of it.
         return items;
     }
     let span = Span::call_site();
-    // The name was checked when the pragma was read; checking it again is what
-    // keeps a mistake there from becoming a panic inside a procedural macro.
-    let (vis, ident) = match name.filter(|name| codegen::is_module_name(name)) {
-        Some(name) => (quote! { pub }, Ident::new(name, span)),
-        None => (
-            TokenStream::new(),
-            Ident::new(&format!("__cinrs_unit_{:08x}", unit_id as u32), span),
-        ),
-    };
+    let ident = Ident::new(&format!("__cinrs_unit_{:08x}", unit_id as u32), span);
     // `ambiguous_glob_reexports` is what a name two units both export trips,
     // and it is not a problem until Rust code uses that name — which is an
     // error of its own, with a message that says what to do. `unknown_lints`
     // comes first so that an older compiler may not have heard of it.
     quote! {
-        #vis mod #ident {
+        mod #ident {
             #items
         }
         #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]

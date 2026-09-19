@@ -86,7 +86,6 @@
 //! #pragma cinrs export
 //! #pragma cinrs safe gcd fact
 //! #pragma cinrs no_std
-//! #pragma cinrs module "geometry"
 //! #pragma cinrs crate "crate::vendor::cinrs"
 //! ```
 //!
@@ -100,9 +99,8 @@
 //! link to it; `safe` generates those functions without `unsafe`, so that
 //! `rustc` checks them (see [`crate::sema::check_safe`]); `no_std` takes the
 //! `Vec` a variable length array or `alloca` needs from `alloc` rather than
-//! from `std`; `module` names the module the expansion goes into; and `crate`
-//! says where the `cinrs` facade crate is, for the generated code that names
-//! the runtime. Being
+//! from `std`; and `crate` says where the `cinrs` facade crate is, for the
+//! generated code that names the runtime. Being
 //! directives rather than attributes or macro arguments is what makes them
 //! mean the same thing in raw-token and in string-literal input. An unknown
 //! `#pragma cinrs` option is an error; every other pragma is ignored, as
@@ -756,8 +754,6 @@ pub struct Preprocessed {
     /// Whether `#pragma cinrs no_std` said the expansion goes into a
     /// `#![no_std]` crate.
     pub no_std: bool,
-    /// The module name `#pragma cinrs module` asked for.
-    pub module: Option<String>,
     /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate,
     /// which the generated code names when it needs the runtime.
     pub crate_path: Option<String>,
@@ -816,7 +812,6 @@ pub fn preprocess(
         safe_functions: pp.safe_functions,
         export: pp.export,
         no_std: pp.no_std,
-        module: pp.module,
         crate_path: pp.crate_path,
         pack_events: pp.pack_events,
     }
@@ -1176,8 +1171,6 @@ struct Pp<'a> {
     export: bool,
     /// Set by `#pragma cinrs no_std`.
     no_std: bool,
-    /// The name `#pragma cinrs module` gave the generated module.
-    module: Option<String>,
     /// The Rust path `#pragma cinrs crate` gave the facade crate.
     crate_path: Option<String>,
     /// Where the data model in force came from, which is what a
@@ -1255,7 +1248,6 @@ impl<'a> Pp<'a> {
             safe_functions: Vec::new(),
             export: false,
             no_std: false,
-            module: None,
             crate_path: None,
             target_source: options.target_source.clone(),
             target: options.target,
@@ -2505,7 +2497,7 @@ impl Pp<'_> {
     /// #pragma cinrs export
     /// #pragma cinrs safe gcd fact
     /// #pragma cinrs no_std
-    /// #pragma cinrs module "geometry"
+    /// #pragma cinrs crate "crate::vendor::cinrs"
     /// ```
     ///
     /// They are directives rather than macro arguments or attributes so that
@@ -2692,7 +2684,7 @@ impl Pp<'_> {
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
     const OPTIONS: &'static str = "'target', 'include_path', 'system_include', 'link', \
-                                   'export', 'safe', 'no_std', 'module' and 'crate'";
+                                   'export', 'safe', 'no_std' and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -2708,7 +2700,7 @@ impl Pp<'_> {
             // The scan before preprocessing already read this one and applied
             // it; all that is left is to say so when it cannot have worked.
             "target" => self.target_pragma(range),
-            "include_path" | "link" | "module" | "crate" => {
+            "include_path" | "link" | "crate" => {
                 let Some(value) = self.pragma_string(&rest[1..], option.range, name) else {
                     return;
                 };
@@ -2719,8 +2711,7 @@ impl Pp<'_> {
                             self.link_libraries.push(value);
                         }
                     }
-                    "crate" => self.crate_pragma(value, rest[1].range),
-                    _ => self.module_pragma(value, rest[1].range),
+                    _ => self.crate_pragma(value, rest[1].range),
                 }
             }
             // A list of function names rather than one string: the spelling of
@@ -2904,33 +2895,6 @@ impl Pp<'_> {
             Ok(dirs) => self.search.enable_system(mode, dirs),
             Err(message) => self.diags.error(range, message),
         }
-    }
-
-    /// `#pragma cinrs module "name"`, which names the module the expansion is
-    /// generated into.
-    ///
-    /// The name has to be a Rust identifier, since that is what it becomes;
-    /// naming the unit twice is a mistake rather than a silent last-one-wins.
-    fn module_pragma(&mut self, name: String, range: SourceRange) {
-        if !crate::codegen::is_module_name(&name) {
-            self.diags.error(
-                range,
-                format!("'{name}' is not usable as a Rust module name"),
-            );
-            return;
-        }
-        if let Some(previous) = &self.module
-            && *previous != name
-        {
-            self.diags.error(
-                range,
-                format!(
-                    "this unit is already named '{previous}' by an earlier #pragma cinrs module"
-                ),
-            );
-            return;
-        }
-        self.module = Some(name);
     }
 
     /// `#pragma cinrs crate "::my_cinrs"`, which says where the `cinrs` facade

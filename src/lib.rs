@@ -1012,21 +1012,28 @@
 //!
 //! What that costs is that a name two blocks both export is ambiguous when
 //! *Rust* uses it (`E0659`) — the C code is unaffected, since each unit sees
-//! only its own. Naming the module says which one is meant:
+//! only its own. There is no pragma for naming the module: Rust already has
+//! the way to give a unit a path, and it is a `mod` around the invocation,
+//! which settles the visibility (`pub(crate) mod`, attributes, a `use` list)
+//! at the same time.
 //!
 //! ```
-//! cinrs::c99! {
-//!     #pragma cinrs module "geometry"
-//!     struct Point { int x; int y; };
-//!     int point_x(struct Point p) { return p.x; }
+//! mod geometry {
+//!     cinrs::c99! {
+//!         struct Point { int x; int y; };
+//!         int point_x(struct Point p) { return p.x; }
+//!     }
 //! }
 //!
-//! assert_eq!(unsafe { point_x(geometry::Point { x: 4, y: 9 }) }, 4);
+//! assert_eq!(unsafe { geometry::point_x(geometry::Point { x: 4, y: 9 }) }, 4);
 //! ```
 //!
-//! The two units' `struct Point`s are two Rust types even when they come from
-//! the same header, so a value passes to the unit whose module it was built
-//! from.
+//! Two units written that way are told apart the same way, one `mod` each.
+//! Their `struct Point`s are two Rust types even when they come from the same
+//! header, so a value passes to the unit whose module it was built from. A
+//! relative `#include` is still looked for beside the `.rs` file, and
+//! `#pragma cinrs export` still gives the unit's symbols their C names,
+//! however deep the `mod`s around the invocation go.
 //!
 //! # Linking two blocks together
 //!
@@ -1863,13 +1870,12 @@
 //! `#pragma cinrs link "name"` puts
 //! `#[link(name = "name")]` on the generated `extern` block, for a program
 //! that calls into a library the Rust runtime does not already link. The other
-//! six `cinrs` pragmas are [`target`](#the-data-model),
+//! five `cinrs` pragmas are [`target`](#the-data-model),
 //! [`export`](#linking-two-blocks-together), [`safe`](#safe-functions),
-//! [`no_std`](#no_std),
-//! [`module`](#one-block-one-module) and
+//! [`no_std`](#no_std) and
 //! [`crate`](#the-complex-feature), which says where the `cinrs` crate itself
 //! is for a renamed dependency. The repository's [`doc/pragmas.md`][pragmas]
-//! is the reference page for all nine, and for the pragmas the preprocessor
+//! is the reference page for all eight, and for the pragmas the preprocessor
 //! itself knows — `once`, `pack`, `push_macro`, `#pragma GCC …` — and what
 //! happens to one it does not.
 //!

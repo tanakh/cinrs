@@ -4,63 +4,80 @@
 //! into the module the invocation is written in. That is what lets two blocks
 //! in one Rust module both `#include` the same header: each generates the
 //! `struct Point` its own code refers to, and two `struct Point` items in two
-//! modules are not a redefinition. The price is that *using* the shared name
-//! from Rust is ambiguous, which `#pragma cinrs module` gives a way to say.
+//! modules are not a redefinition. The price is that *using* a shared name
+//! from Rust is ambiguous, and an ordinary Rust `mod` around the invocation is
+//! what says which unit is meant — as well as what gives a unit's items a path
+//! of their own, and what decides their visibility.
 //!
 //! `#pragma cinrs export` is the other half: a unit that asks for it defines
 //! real C symbols, so another unit can call its functions and read its objects
-//! by name instead of only sharing types with it.
+//! by name instead of only sharing types with it. Neither that nor a relative
+//! `#include` cares about the nesting: a header is looked for beside the `.rs`
+//! file however deep the `mod`s around the invocation go.
 
 use cinrs::c99;
 
 // ---------------------------------------------------------------------------
-// two blocks in one module
+// two blocks, two Rust modules
 // ---------------------------------------------------------------------------
 
-c99! {
-    #pragma cinrs module "first"
-    /* Exported, so that the unit in `header_client` below can call what this
-     * one defines rather than only sharing its types. */
-    #pragma cinrs export
-    #include "include/point.h"
+/// One unit, wrapped in a `mod` that is `pub(crate)` — the visibility is the
+/// `mod`'s, which is the point of writing one.
+///
+/// It is exported as well, so that `header_client` below can call what this
+/// unit defines rather than only share its types; both the relative
+/// `#include` and the exported symbols read the same inside a `mod` as they do
+/// at the top of the file.
+pub(crate) mod first {
+    cinrs::c99! {
+        #pragma cinrs export
+        #include "include/point.h"
 
-    int point_manhattan(struct Point p) {
-        return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);
-    }
+        int point_manhattan(struct Point p) {
+            return (p.x < 0 ? -p.x : p.x) + (p.y < 0 ? -p.y : p.y);
+        }
 
-    struct Point point_translate(struct Point p, int dx, int dy) {
-        struct Point out;
-        out.x = p.x + dx;
-        out.y = p.y + dy;
-        return out;
+        struct Point point_translate(struct Point p, int dx, int dy) {
+            struct Point out;
+            out.x = p.x + dx;
+            out.y = p.y + dy;
+            return out;
+        }
     }
 }
 
-c99! {
-    #pragma cinrs module "second"
-    #include "include/point.h"
+/// A second unit sharing that header — and defining a function of the same
+/// name, which is exactly what two Rust `mod`s keep apart.
+mod second {
+    cinrs::c99! {
+        #include "include/point.h"
 
-    /* The same header, so the same `struct Point` — a second time, in a
-     * module of its own. */
-    int point_quadrant(struct Point p) {
-        if (p.x >= 0 && p.y >= 0) return 1;
-        if (p.x < 0 && p.y >= 0) return 2;
-        if (p.x < 0) return 3;
-        return 4;
+        /* The same header, so the same `struct Point` — a second time, in a
+         * module of its own. */
+        int point_manhattan(struct Point p) { return p.x + p.y; }
+
+        int point_quadrant(struct Point p) {
+            if (p.x >= 0 && p.y >= 0) return 1;
+            if (p.x < 0 && p.y >= 0) return 2;
+            if (p.x < 0) return 3;
+            return 4;
+        }
     }
 }
 
 #[test]
-fn two_blocks_in_one_module_may_share_a_header() {
-    // `Point` alone would be ambiguous — it is glob re-exported twice — so
-    // each block's module names the one it means. The two are the same
-    // `#[repr(C)]` layout, which is what makes passing one to the other work.
+fn two_blocks_in_two_modules_may_share_a_header() {
+    // `Point` and `point_manhattan` are defined twice over, so neither could
+    // be written bare here; each unit's `mod` is the path that says which one
+    // is meant. The two `Point`s are the same `#[repr(C)]` layout, which is
+    // what makes passing one to the other work.
     let p = first::Point { x: -3, y: 4 };
     let q = second::Point { x: -3, y: 4 };
     unsafe {
-        assert_eq!(point_manhattan(p), 7);
-        assert_eq!(point_quadrant(q), 2);
-        let moved = point_translate(p, 10, -10);
+        assert_eq!(first::point_manhattan(p), 7);
+        assert_eq!(second::point_manhattan(q), 1);
+        assert_eq!(second::point_quadrant(q), 2);
+        let moved = first::point_translate(p, 10, -10);
         assert_eq!((moved.x, moved.y), (7, -6));
     }
 }
@@ -68,12 +85,12 @@ fn two_blocks_in_one_module_may_share_a_header() {
 #[test]
 fn a_block_in_a_function_body_is_a_module_in_a_block() {
     // Items — modules included — are allowed inside a block, so an invocation
-    // in statement position works exactly as one at module scope does. Two of
-    // them in one body is the interesting case: two modules, two glob
-    // re-exports, one scope.
+    // in statement position works exactly as one at module scope does, and so
+    // does a `mod` written around it. Two of them in one body is the
+    // interesting case: two modules, one of them named by hand, in one scope.
     c99! {
-        /* No name: the module is the generated one, which nothing outside
-         * needs to say — this unit keeps its `struct Point` to itself. */
+        /* Unwrapped: the glob re-export lands in this very scope, and this
+         * unit keeps its `struct Point` to itself. */
         #include "include/point.h"
 
         int inner_x(int x, int y) {
@@ -84,11 +101,14 @@ fn a_block_in_a_function_body_is_a_module_in_a_block() {
         }
     }
 
-    c99! {
-        #pragma cinrs module "other"
-        #include "include/point.h"
+    mod other {
+        cinrs::c99! {
+            /* A relative `#include` is looked for beside the `.rs` file, which
+             * a `mod` — here one inside a function body — does not change. */
+            #include "include/point.h"
 
-        int inner_y(struct Point p) { return p.y; }
+            int inner_y(struct Point p) { return p.y; }
+        }
     }
 
     // Each unit's `struct Point` is a type of its own, so a value crosses from
@@ -96,7 +116,7 @@ fn a_block_in_a_function_body_is_a_module_in_a_block() {
     let p = other::Point { x: 6, y: 7 };
     unsafe {
         assert_eq!(inner_x(6, 7), 6);
-        assert_eq!(inner_y(p), 7);
+        assert_eq!(other::inner_y(p), 7);
     }
 }
 
@@ -157,7 +177,6 @@ mod header_client {
         /* point.h declares `point_manhattan`; this unit does not define it,
          * so the declaration is linked rather than generated. */
         #include "include/point.h"
-        #pragma cinrs module "client"
 
         int distance_from_origin(int x, int y) {
             struct Point p;

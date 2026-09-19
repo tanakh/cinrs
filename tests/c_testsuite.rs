@@ -74,17 +74,16 @@
 //! directory per run, so a case that leaves the corpus leaves the run — with
 //! the C source verbatim inside a raw string literal (string-literal input
 //! accepts C the Rust lexer would refuse, and the `#` count is computed so
-//! that the literal cannot terminate early), a `#pragma cinrs module "ctest"`
-//! appended after it, and a Rust `fn main` that calls the C `main` through
-//! that module and exits with what it returned. The pragma goes at the *end*
-//! because the preprocessor acts on it wherever it reads it, and appending
-//! leaves every line number of the original file alone — which is what makes
-//! a diagnostic point at the line the upstream file has.
+//! that the literal cannot terminate early), and a Rust `fn main` that calls
+//! the C `main` and exits with what it returned. Nothing at all is added to
+//! the C, so every line number of the original file still holds — which is
+//! what makes a diagnostic point at the line the upstream file has.
 //!
-//! The expansion is wrapped in a `mod unit` of its own. The unit exports a
-//! function called `main`, and glob re-exporting that into the crate root
-//! next to the harness's own `fn main` is a warning, which would then have to
-//! be blessed into a `.stderr` file for every single case.
+//! The expansion is wrapped in a `mod unit` of its own, and the C `main` is
+//! reached as `unit::main` through the glob re-export inside it. The unit
+//! exports a function called `main`, and glob re-exporting that into the crate
+//! root next to the harness's own `fn main` is a warning, which would then have
+//! to be blessed into a `.stderr` file for every single case.
 //!
 //! # Timeouts and memory
 //!
@@ -369,9 +368,6 @@ fn generate_source(
     if !c.ends_with('\n') {
         c.push('\n');
     }
-    // The blank line first: had the file ended in a backslash continuation, it
-    // splices with that and not with the pragma.
-    c.push_str("\n#pragma cinrs module \"ctest\"\n");
     let hashes = "#".repeat(raw_string_hashes(&c));
 
     let id = &test.id;
@@ -390,8 +386,8 @@ fn generate_source(
 // Written by `tests/c_testsuite.rs` from `{SUITE_DIR}/{id}.c`.
 // The output it must produce is in `{id}.run.stdout`, next to this file.
 //
-// The C below is the upstream case verbatim, with only a `#pragma cinrs
-// module` appended, so every line number of the original still holds.
+// The C below is the upstream case verbatim, nothing added, so every line
+// number of the original still holds.
 //
 // c-testsuite is MIT licensed; the individual cases carry their own licences,
 // recorded in the corpus's `.otags` files.
@@ -422,14 +418,14 @@ fn main() {{
     ));
 
     out.push_str(match main {
-        MainKind::NoArgs => "    let status = unsafe { unit::ctest::main() };\n",
+        MainKind::NoArgs => "    let status = unsafe { unit::main() };\n",
         MainKind::ArgcArgv => {
             "    // The corpus runs its cases with no arguments, so `argv` holds the
     // program name and the null pointer C requires after it.
     let mut arg0 = *b\"ctest\\0\";
     let mut argv: [*mut core::ffi::c_char; 2] =
         [arg0.as_mut_ptr().cast(), core::ptr::null_mut()];
-    let status = unsafe { unit::ctest::main(1, argv.as_mut_ptr()) };\n"
+    let status = unsafe { unit::main(1, argv.as_mut_ptr()) };\n"
         }
     });
     out.push_str("    std::process::exit(status as i32);\n}\n");

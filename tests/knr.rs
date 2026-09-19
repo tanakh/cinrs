@@ -206,22 +206,24 @@ fn c90_is_c89() {
 /// the linker, which is how a C89 program called `abs` and `strlen`.
 #[test]
 fn an_implicitly_declared_library_function_links() {
-    c89! {
-        #pragma cinrs module "libc_by_implication"
+    // A `mod` around the invocation gives the unit's items a path, which is
+    // how the two calls below name them.
+    mod libc_by_implication {
+        cinrs::c89! {
+            int magnitudes()
+            {
+                /* No <stdlib.h>, no prototype: the call declares `abs`. */
+                return abs(-7) + abs(3);
+            }
 
-        int magnitudes()
-        {
-            /* No <stdlib.h>, no prototype: the call declares `abs`. */
-            return abs(-7) + abs(3);
-        }
-
-        int length(s)
-            char *s;
-        {
-            /* `strlen` really returns a `size_t`; an implicit declaration
-               says `int`, which is what a program of the period assumed and
-               what its low half really holds. */
-            return (int)strlen(s) + atoi("100");
+            int length(s)
+                char *s;
+            {
+                /* `strlen` really returns a `size_t`; an implicit declaration
+                   says `int`, which is what a program of the period assumed
+                   and what its low half really holds. */
+                return (int)strlen(s) + atoi("100");
+            }
         }
     }
 
@@ -238,13 +240,13 @@ fn an_implicitly_declared_library_function_links() {
 /// again, and therefore C89's alone.
 #[test]
 fn a_parameter_with_no_declaration_is_an_int() {
-    c89! {
-        #pragma cinrs module "default_int_params"
-
-        scale(n, factor)
-            int factor;              /* `n` is not declared: it is an `int` */
-        {
-            return n * factor;
+    mod default_int_params {
+        cinrs::c89! {
+            scale(n, factor)
+                int factor;          /* `n` is not declared: it is an `int` */
+            {
+                return n * factor;
+            }
         }
     }
 
@@ -255,17 +257,19 @@ fn a_parameter_with_no_declaration_is_an_int() {
 // `main(argc, argv)`, the shape every K&R-era program opens with
 // ---------------------------------------------------------------------------
 
-gnu89! {
-    #pragma cinrs module "old_main"
-
-    main(argc, argv)
-        int argc;
-        char **argv;
-    {
-        if (argc < 1 || argv == 0) {
-            return 1;
+/// A unit that defines `main` needs a `mod` of its own: the glob re-export
+/// would otherwise put a `main` beside the test harness's.
+mod old_main {
+    cinrs::gnu89! {
+        main(argc, argv)
+            int argc;
+            char **argv;
+        {
+            if (argc < 1 || argv == 0) {
+                return 1;
+            }
+            return argc - 1;
         }
-        return argc - 1;
     }
 }
 
@@ -283,61 +287,61 @@ fn main_may_be_written_the_old_way() {
 // a whole program in the old idiom
 // ---------------------------------------------------------------------------
 
-gnu89! {
-    #pragma cinrs module "old_idiom"
+mod old_idiom {
+    cinrs::gnu89! {
+        /* No prototypes anywhere, `register` on everything worth it, implicit
+           `int` on the ones that return one, and the helpers declared by being
+           called. This is what C looked like. */
+        struct point {
+            int x;
+            int y;
+        };
 
-    /* No prototypes anywhere, `register` on everything worth it, implicit
-       `int` on the ones that return one, and the helpers declared by being
-       called. This is what C looked like. */
-    struct point {
-        int x;
-        int y;
-    };
-
-    static distance(p)
-        struct point *p;
-    {
-        register int dx, dy;
-        dx = p->x < 0 ? -p->x : p->x;
-        dy = p->y < 0 ? -p->y : p->y;
-        return dx + dy;
-    }
-
-    farthest(points, n)
-        struct point points[];
-        register int n;
-    {
-        register int i;
-        int best;
-        int here;
-        best = 0;
-        for (i = 0; i < n; i++) {
-            here = distance(&points[i]);
-            if (here > best) best = here;
+        static distance(p)
+            struct point *p;
+        {
+            register int dx, dy;
+            dx = p->x < 0 ? -p->x : p->x;
+            dy = p->y < 0 ? -p->y : p->y;
+            return dx + dy;
         }
-        return best;
-    }
 
-    total(points, n)
-        struct point points[];
-        int n;
-    {
-        register int i, sum;
-        sum = 0;
-        for (i = 0; i < n; i++) sum += distance(&points[i]);
-        return sum + widest(points, n);
-    }
-
-    static widest(points, n)
-        struct point points[];
-        int n;
-    {
-        register int i;
-        int best = 0;
-        for (i = 0; i < n; i++) {
-            if (points[i].x > best) best = points[i].x;
+        farthest(points, n)
+            struct point points[];
+            register int n;
+        {
+            register int i;
+            int best;
+            int here;
+            best = 0;
+            for (i = 0; i < n; i++) {
+                here = distance(&points[i]);
+                if (here > best) best = here;
+            }
+            return best;
         }
-        return best;
+
+        total(points, n)
+            struct point points[];
+            int n;
+        {
+            register int i, sum;
+            sum = 0;
+            for (i = 0; i < n; i++) sum += distance(&points[i]);
+            return sum + widest(points, n);
+        }
+
+        static widest(points, n)
+            struct point points[];
+            int n;
+        {
+            register int i;
+            int best = 0;
+            for (i = 0; i < n; i++) {
+                if (points[i].x > best) best = points[i].x;
+            }
+            return best;
+        }
     }
 }
 

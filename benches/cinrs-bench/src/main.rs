@@ -810,16 +810,18 @@ fn raw_string_hashes(source: &str) -> usize {
 /// The Rust file that wraps one C program.
 ///
 /// The shape is `tests/c_testsuite.rs`'s: the whole translation unit inside
-/// one raw string literal — the input form that accepts every C token — with
-/// `#pragma cinrs module "bench"` appended, and a `fn main` that calls the C
-/// `main` and exits with what it returned.
+/// one raw string literal — the input form that accepts every C token — in a
+/// `mod bench` of its own, and a `fn main` that calls the C `main` through the
+/// glob re-export inside that module and exits with what it returned. The
+/// `mod` is there because the unit defines a function called `main`, which
+/// beside the wrapper's own would be a warning.
 ///
-/// Two things are *prepended* rather than appended, because the preprocessor
-/// acts on them where it reads them and they have to be in force before the
-/// first `#include`: the include path (so that a program which includes a
-/// second `.c` file next to it — Dhrystone does — finds it, since a string
-/// literal has no directory of its own) and the row's `#define`s, which stand
-/// in for the `-D` the native compilers get.
+/// Two things are *prepended* to the C, because the preprocessor acts on them
+/// where it reads them and they have to be in force before the first
+/// `#include`: the include path (so that a program which includes a second
+/// `.c` file next to it — Dhrystone does — finds it, since a string literal
+/// has no directory of its own) and the row's `#define`s, which stand in for
+/// the `-D` the native compilers get.
 fn generate_rust(p: &Program, csrc: &str, source_dir: &Path) -> String {
     let mut c = String::new();
     c.push_str(&format!(
@@ -833,21 +835,16 @@ fn generate_rust(p: &Program, csrc: &str, source_dir: &Path) -> String {
     if !c.ends_with('\n') {
         c.push('\n');
     }
-    // The blank line first: had the file ended in a backslash continuation, it
-    // splices with that and not with the pragma.
-    c.push_str("\n#pragma cinrs module \"bench\"\n");
     let hashes = "#".repeat(raw_string_hashes(&c));
 
     let entry = p.dialect.macro_name();
     let name = p.name;
     let call = match p.main {
         MainKind::NoArgs => {
-            "    let status = unsafe { unit::bench::main() };\n\
+            "    let status = unsafe { bench::main() };\n\
              \x20   let _ = argv;\n"
         }
-        MainKind::ArgcArgv => {
-            "    let status = unsafe { unit::bench::main(argc, argv.as_mut_ptr()) };\n"
-        }
+        MainKind::ArgcArgv => "    let status = unsafe { bench::main(argc, argv.as_mut_ptr()) };\n",
     };
 
     format!(
@@ -855,12 +852,12 @@ fn generate_rust(p: &Program, csrc: &str, source_dir: &Path) -> String {
 // GENERATED FILE - do not edit, do not check in.
 //
 // Written by `benches/cinrs-bench` from `programs/{source}` for the `{name}`
-// benchmark. The C below is that file verbatim, with an include path, the
-// row's `#define`s and a `#pragma cinrs module` added around it.
+// benchmark. The C below is that file verbatim, with an include path and the
+// row's `#define`s prepended to it inside the string literal.
 //
 // Regenerate by running `cargo run -p cinrs-bench --release -- --filter {name}`.
 
-mod unit {{
+mod bench {{
     cinrs::{entry}! {{ r{hashes}\"{c}\"{hashes} }}
 }}
 
@@ -2280,10 +2277,12 @@ mod tests {
     fn the_generator_wraps_the_c() {
         let p = &PROGRAMS[0];
         let rs = generate_rust(p, "int main(void) { return 0; }\n", Path::new("/tmp"));
-        assert!(rs.contains("mod unit {"), "{rs}");
+        // A Rust `mod` is what gives the unit's `main` a path of its own, and
+        // nothing is added to the C but the include path and the `#define`s.
+        assert!(rs.contains("mod bench {"), "{rs}");
         assert!(rs.contains("cinrs::gnu11! { r#\""), "{rs}");
-        assert!(rs.contains("#pragma cinrs module \"bench\""), "{rs}");
-        assert!(rs.contains("unit::bench::main("), "{rs}");
+        assert!(!rs.contains("#pragma cinrs module"), "{rs}");
+        assert!(rs.contains("bench::main("), "{rs}");
     }
 
     /// A raw string literal that would end early gets more hashes.

@@ -706,9 +706,6 @@ fn generate_source(
     if !c.ends_with('\n') {
         c.push('\n');
     }
-    // The blank line first: had the file ended in a backslash continuation, it
-    // splices with that and not with the pragma.
-    c.push_str("\n#pragma cinrs module \"torture\"\n");
     let hashes = "#".repeat(raw_string_hashes(&c));
 
     let id = &case.id;
@@ -758,14 +755,14 @@ fn main() {{
     ));
 
     out.push_str(match main {
-        MainKind::NoArgs => "    let status = unsafe { unit::torture::main() };\n",
+        MainKind::NoArgs => "    let status = unsafe { unit::main() };\n",
         MainKind::ArgcArgv => {
             "    // GCC runs these with no arguments, so `argv` holds the program name
     // and the null pointer C requires after it.
     let mut arg0 = *b\"torture\\0\";
     let mut argv: [*mut core::ffi::c_char; 2] =
         [arg0.as_mut_ptr().cast(), core::ptr::null_mut()];
-    let status = unsafe { unit::torture::main(1, argv.as_mut_ptr()) };\n"
+    let status = unsafe { unit::main(1, argv.as_mut_ptr()) };\n"
         }
     });
     out.push_str("    std::process::exit(status as i32);\n}\n");

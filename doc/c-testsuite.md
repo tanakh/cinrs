@@ -193,15 +193,13 @@ shows up in the count instead of being quietly filtered out of it.
 
 mod unit {
     cinrs::c99! { r#"<the C source, verbatim>
-
-#pragma cinrs module "ctest"
 "# }
 }
 
 fn main() {
     // chdir into target/c-testsuite-work/<standard>/NNNNN
     // spawn the watchdog
-    let status = unsafe { unit::ctest::main() };
+    let status = unsafe { unit::main() };
     std::process::exit(status as i32);
 }
 ```
@@ -212,13 +210,11 @@ with `NNNNN.run.stdout` next to it, copied from `.expected`.
   that accepts every C token, and the corpus has hexadecimal floating
   constants and `'ab'` in it. The number of `#` is computed from the source, so
   the literal cannot terminate early.
-* The `#pragma cinrs module "ctest"` is **appended**, because the preprocessor
-  acts on it wherever it reads it and appending leaves every line number of the
-  original alone — a diagnostic then points at the line the upstream file has.
-  A blank line goes in front of it, so that a source ending in a backslash
-  continuation splices with that and not with the pragma.
-* The expansion is wrapped in a **`mod unit`** of its own. The unit exports a
-  function called `main`, and glob re-exporting that into the crate root next
+* **Nothing is added to the C**, so every line number of the original still
+  holds and a diagnostic points at the line the upstream file has.
+* The expansion is wrapped in a **`mod unit`** of its own, and the C `main` is
+  reached as `unit::main` through the glob re-export inside it. The unit exports
+  a function called `main`, and glob re-exporting that into the crate root next
   to the harness's own `fn main` is a warning — which would then have to be
   blessed into a `.stderr` file for all 220 cases.
 * The **signature of `main`** is read off the text, after comments and string
