@@ -204,7 +204,7 @@ c11! {
      * otherwise ask for `unsafe` around: a bit-field accessor of a *union* is
      * a safe method that reads the storage inside an `unsafe` block of its
      * own, so this compiles where `v.whole` — an ordinary union member — does
-     * not. The crate documentation says so. */
+     * not. `doc/features.md` ("Safe functions") says so. */
     int union_ready(union Packed v) { return v.ready; }
 }
 

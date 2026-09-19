@@ -6,8 +6,8 @@
 //! is spelled `::std::vec::Vec` unless `#pragma cinrs no_std` says otherwise.
 //! What the user then sees is `rustc`'s own "unresolved crate `std`", with the
 //! caret on the C declaration that needed it — which is what this test is
-//! blessing. The fix is the pragma above plus `extern crate alloc;`; see the
-//! crate documentation.
+//! blessing. The fix is the pragma above plus `extern crate alloc;`; see
+//! `doc/no-std.md`.
 
 #![no_std]
 

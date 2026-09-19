@@ -83,7 +83,8 @@ fn a_file_scope_object_is_aligned_where_it_asked_to_be() {
 
     assert_eq!(unsafe { file_scope() }, 1);
     // A Rust caller reaches an over-aligned object through the wrapper's one
-    // field, which is what the crate documentation says of it.
+    // field, which is what `doc/translation.md` ("Over-aligned objects") says
+    // of it.
     unsafe {
         assert_eq!(shared.0[0], 7);
         assert_eq!(misalignment((&raw const shared.0).cast::<u8>(), 64), 0);

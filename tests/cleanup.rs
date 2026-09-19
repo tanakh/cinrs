@@ -16,7 +16,7 @@
 //! form now, so the twin uses a computed one, which nothing but the graph can
 //! express.
 //!
-//! [CFG]: https://docs.rs/cinrs
+//! [CFG]: https://github.com/tanakh/cinrs/blob/master/doc/translation.md#control-flow-and-goto
 
 use cinrs::gnu99;
 

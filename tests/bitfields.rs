@@ -872,3 +872,41 @@ fn the_accessors_are_ordinary_rust_methods() {
         assert_eq!(read_match(n), 17);
     }
 }
+
+/// A setter given more than the field can hold keeps the low bits, and the
+/// getter reads them back in the member's declared type — sign-extended for a
+/// signed field. That is the same truncation a store from the C side makes;
+/// this is the Rust-side half of it, and it is what
+/// `doc/translation.md`'s bit-field example shows.
+#[test]
+fn a_setter_keeps_the_low_bits_and_reads_back_sign_extended() {
+    c99! {
+        struct Flags {
+            unsigned int ready : 1;
+            int          level : 3;
+            unsigned int       : 0;   /* start the next field on a new unit */
+            unsigned int mask  : 30;
+        };
+
+        void arm(struct Flags *f, int level) {
+            f->ready = 1;
+            f->level = level;
+            f->mask += 2;
+        }
+    }
+
+    let mut f = Flags {
+        __cinrs_bits0: [0; 8],
+    };
+    unsafe { arm(&raw mut f, -3) };
+    assert_eq!((f.ready(), f.level(), f.mask()), (1, -3, 2));
+
+    // Nine does not fit in three bits: the low three are kept, and reading one
+    // back sign-extends them, so `0b001` is 1.
+    f.set_level(9);
+    assert_eq!(f.level(), 1);
+
+    // The same for the unsigned field, which has nothing to sign-extend.
+    f.set_mask(0xffff_ffff);
+    assert_eq!(f.mask(), 0x3fff_ffff);
+}

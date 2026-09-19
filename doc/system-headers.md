@@ -291,7 +291,7 @@ beyond the search rules:
   there was nothing to reach. `/usr/include/limits.h` ends with one.
 * **`__attribute__((weak))` on a declaration.** glibc's `<pthread.h>` writes it
   on `__pthread_unwind_next`. It is now refused on a *definition* only; see the
-  [attribute table](gnu-extensions.md#attributes) for why
+  [attribute table](gnu-extensions.md#__attribute__-forms) for why
   `__has_attribute(weak)` still answers 0.
 * **A clean refusal for the extended floating types**, as above.
 * **A refusal on `setjmp`/`longjmp` calls by name.** The bundled `<setjmp.h>`

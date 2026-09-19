@@ -272,7 +272,8 @@ static PROGRAMS: &[Program] = &[
         // `setlinebuf` is BSD's, not standard C's, so the bundled `<stdio.h>`
         // — which is written in plain C99 — does not declare it, and `cinrs`
         // says so rather than guessing. `system_include first` is the answer
-        // the crate documents: the platform's own `<stdio.h>` is preferred,
+        // `doc/system-headers.md` gives: the platform's own `<stdio.h>` is
+        // preferred,
         // which is where glibc keeps its extensions.
         system_include: SystemInclude::First,
         note: "weighted random selection, character at a time through a line-buffered stdout",

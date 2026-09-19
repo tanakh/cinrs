@@ -52,6 +52,27 @@ fn stdio_formats_into_buffers() {
     }
 }
 
+/// Two bundled headers in one unit, and a library call nested inside the
+/// argument list of another: `(int)strlen(name)` as the `%d` of an `snprintf`.
+/// This is the example the README's tour rests on, and the shape a first
+/// `#include` usually has.
+#[test]
+fn two_headers_and_a_nested_library_call() {
+    c99! {
+        #include <stdio.h>
+        #include <string.h>
+
+        int describe(char *buf, unsigned long size, const char *name) {
+            return snprintf(buf, size, "%s has %d letters", name, (int)strlen(name));
+        }
+    }
+
+    let mut buf = [0u8; 32];
+    let n = unsafe { describe(buf.as_mut_ptr().cast(), 32, c"cinrs".as_ptr()) };
+    assert_eq!(n, 19);
+    assert_eq!(&buf[..n as usize], b"cinrs has 5 letters");
+}
+
 // ---------------------------------------------------------------------------
 // <string.h>
 // ---------------------------------------------------------------------------

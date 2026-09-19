@@ -13,8 +13,10 @@ and changes whenever that is convenient for `cinrs`, in a patch release as
 readily as in a minor one.
 
 Documentation: <https://docs.rs/cinrs-core>. What the front end accepts, and
-the whole of the language it translates, is documented in
-[`cinrs`](https://docs.rs/cinrs) instead.
+the whole of the language it translates, is documented with
+[`cinrs`](https://docs.rs/cinrs) instead —
+[what works](https://github.com/tanakh/cinrs/blob/master/doc/features.md) and
+[what the C becomes](https://github.com/tanakh/cinrs/blob/master/doc/translation.md).
 
 ## License
 

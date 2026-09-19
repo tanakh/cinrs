@@ -166,7 +166,7 @@ them.
 model of the target. A procedural macro cannot ask `rustc` what the target is,
 so a crate that is cross-compiled says so from its build script:
 
-```rust
+```rust,no_run
 // build.rs
 fn main() {
     println!("cargo:rustc-env=CINRS_TARGET={}", std::env::var("TARGET").unwrap());
@@ -226,6 +226,7 @@ free.
 | | |
 | --- | --- |
 | [What works][features] | the language, the preprocessor, the extensions, construct by construct |
+| [What the C becomes][translation] | what is generated for each construct — signatures, accessors, the module — for Rust code on the other side |
 | [Limitations][limitations] | what is refused, and what differs from a C compiler |
 | [C standard status][c-status] · [GNU extensions][gnu-extensions] | feature tables |
 | [Pragmas][pragmas] | `#pragma cinrs …`, the other pragmas, the attributes, the environment variables |
@@ -233,7 +234,7 @@ free.
 | [System headers][system-headers] | `/usr/include` and what glibc's headers do here |
 | [Cross-compilation][cross] · [`no_std`][no-std] | targets and data models; what the expansion needs |
 | [Conformance][testsuites] · [Benchmarks][benchmarks] | how the numbers above are measured |
-| [API documentation](https://docs.rs/cinrs) | the crate docs, including what is generated for each construct |
+| [API documentation](https://docs.rs/cinrs) | the macro reference: `c99!` and each of its siblings |
 
 ## How it works
 
@@ -254,8 +255,8 @@ one and carry no stability promise.
 
 Licensed under either of
 
-* [Apache License, Version 2.0](LICENSE-APACHE)
-* [MIT license](LICENSE-MIT)
+* [Apache License, Version 2.0](https://github.com/tanakh/cinrs/blob/master/LICENSE-APACHE)
+* [MIT license](https://github.com/tanakh/cinrs/blob/master/LICENSE-MIT)
 
 at your option.
 
@@ -275,6 +276,7 @@ dual licensed as above, without any additional terms or conditions.
 [testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md
 [benchmarks]: https://github.com/tanakh/cinrs/blob/master/doc/benchmarks.md
 [features]: https://github.com/tanakh/cinrs/blob/master/doc/features.md
+[translation]: https://github.com/tanakh/cinrs/blob/master/doc/translation.md
 [input-forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms
 [safe-functions]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#safe-functions
 [names]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#names-rust-would-not-take

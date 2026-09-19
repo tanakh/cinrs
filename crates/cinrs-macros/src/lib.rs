@@ -101,11 +101,13 @@ pub fn c90(input: TokenStream) -> TokenStream {
 /// rather than read from the platform) and the user's own, in the directory of
 /// the invoking `.rs` file and in whatever `#pragma cinrs include_path` adds.
 /// Since Rust's lexer refuses `##` in raw-token form, a replacement list may
-/// write the pasting operator as `a # # b` instead; see the
-/// [crate documentation] for that, for the headers and for the predefined
-/// macros.
+/// write the pasting operator as `a # # b` instead; see [Input forms] for that,
+/// [the preprocessor] for the predefined macros, and [`#include` and `#embed`]
+/// for the bundled headers.
 ///
-/// [crate documentation]: https://docs.rs/cinrs
+/// [Input forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms
+/// [the preprocessor]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#the-preprocessor
+/// [`#include` and `#embed`]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#include-and-embed
 ///
 /// Errors are reported at the exact C token that caused them. In string
 /// literal form, stable Rust cannot build a span pointing inside a literal, so

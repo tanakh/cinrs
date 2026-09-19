@@ -109,7 +109,7 @@ const BIT_TYPES: &[(&str, u32)] = &[
     ("enum BfSigned", 32),
     // One bit short of `int`: an enumeration whose underlying type is
     // unsigned can hold a full-width value that `int` cannot represent, and
-    // `cinrs` gives every enumeration the type `int`. See the crate docs.
+    // `cinrs` gives every enumeration the type `int`. See `doc/c-status.md`.
     ("enum BfUnsigned", 31),
 ];
 

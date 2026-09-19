@@ -31,7 +31,8 @@ c99! {
 
 // The same names written as universal character names. `\u` is not something
 // Rust's lexer will hand over in raw-token form, so this half is the
-// string-literal input the crate documents for exactly that case.
+// string-literal input `doc/features.md` ("Input forms") names for exactly
+// that case.
 c99! { r##"
 /* U+00E9 is `é`, so this defines `café` — and the caller below writes the
    character itself, which is the same identifier. */

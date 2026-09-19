@@ -214,8 +214,8 @@ int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
 Generates those functions as `pub extern "C" fn` rather than
 `pub unsafe extern "C" fn`, with the body *not* wrapped in an `unsafe` block,
 so that `rustc` checks the whole translation and Rust calls them without
-`unsafe`. What such a body may hold, and what it may not, is *Safe functions*
-in the [crate documentation](https://docs.rs/cinrs/latest/cinrs/#safe-functions).
+`unsafe`. What such a body may hold, and what it may not, is
+[Safe functions](features.md#safe-functions).
 
 It takes **identifiers** rather than a string, so that it reads like the C it
 is naming, and at least one of them; a unit that marks one function usually
