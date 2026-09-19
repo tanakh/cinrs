@@ -217,7 +217,8 @@ impl Standard {
 /// *newer* revision accepted without a diagnostic (GCC takes `_Static_assert`
 /// in `gnu99`).
 ///
-/// See `doc/gnu-extensions.md` for the whole catalogue.
+/// See [`doc/gnu-extensions.md`](https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md)
+/// in the repository for the whole catalogue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Dialect {
     /// Strict ISO C: `c89!`, `c99!`, `c11!`, `c17!`, `c23!`.

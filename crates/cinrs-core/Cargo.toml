@@ -5,7 +5,29 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Implementation of the cinrs C front end (lexer, parser, diagnostics)"
+homepage.workspace = true
+description = "The C front end behind the cinrs crate: lexer, preprocessor, parser, semantic analysis, code generation"
+documentation = "https://docs.rs/cinrs-core"
+readme = "README.md"
+keywords = ["c", "c99", "parser", "compiler", "cinrs"]
+categories = [
+    "development-tools::ffi",
+    "compilers",
+    "parser-implementations",
+]
+
+# The bundled headers are `include_str!`-ed by `src/include.rs`, so every one of
+# them has to be in the package or the crate does not build from its tarball.
+# The snapshot tests and their inputs are not: they are 700 KiB of blessed
+# output that no consumer of the `.crate` runs.
+include = [
+    "/src/**/*.rs",
+    "/include/**/*.h",
+    "/README.md",
+    "/LICENSE",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [lib]
 name = "cinrs_core"
@@ -35,3 +57,6 @@ unicode-normalization.workspace = true
 insta = "1"
 prettyplease = "0.2"
 syn = { version = "2", features = ["full", "parsing", "printing"] }
+
+[package.metadata.docs.rs]
+features = ["complex"]

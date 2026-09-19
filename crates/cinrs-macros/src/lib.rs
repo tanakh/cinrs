@@ -187,7 +187,8 @@ pub fn c23(input: TokenStream) -> TokenStream {
 /// **trigraphs off**, as `gcc -std=gnu99` does, so `"what??!"` there is an
 /// exclamation rather than a pipe.
 ///
-/// See `doc/gnu-extensions.md` in the repository for the whole catalogue.
+/// See [`doc/gnu-extensions.md`](https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md)
+/// in the repository for the whole catalogue.
 #[proc_macro]
 pub fn gnu99(input: TokenStream) -> TokenStream {
     expand_gnu(input, Standard::C99)

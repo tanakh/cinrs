@@ -4,10 +4,17 @@ members = ["benches/cinrs-bench", "crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Verified: `cargo +1.88.0 check -p cinrs` and the facade's behavioural tests
+# pass on 1.88.0, which is the release that stabilised
+# `proc_macro::Span::local_file` — the call this crate needs to find the `.rs`
+# file an invocation is written in. Defining a variadic function additionally
+# needs 1.99 (`c_variadic`); below that it is a located error rather than a
+# build failure. See the README.
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tanakh/cinrs"
-description = "Write C code inside Rust"
+homepage = "https://github.com/tanakh/cinrs"
+description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
 
 [workspace.dependencies]
 cinrs-core = { path = "crates/cinrs-core", version = "0.1.0" }
@@ -15,10 +22,22 @@ cinrs-macros = { path = "crates/cinrs-macros", version = "0.1.0" }
 cinrs-rt = { path = "crates/cinrs-rt", version = "0.1.0" }
 # `Complex<T>` is `#[repr(C)]` and `Copy`, which is what makes it C's
 # `_Complex`; `default-features = false` is what keeps `cinrs-rt` `no_std`.
+#
+# A *caret* requirement, deliberately: `Complex` is re-exported as
+# `cinrs::rt::Complex`, so a user who names `num_complex::Complex` from their
+# own code must end up with the same type. `^0.4.6` unifies with every other
+# `0.4` requirement in a build; an `=` pin would not.
 num-complex = { version = "0.4.6", default-features = false }
-proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+# 1.0.100 is the first release where `Span::local_file` — the call that finds
+# the `.rs` file an invocation is written in — is behind the `span-locations`
+# feature rather than `procmacro2_semver_exempt`. Verified by building against
+# exactly 1.0.100.
+proc-macro2 = { version = "1.0.100", features = ["span-locations"] }
 quote = "1.0"
 rustversion = "1.0.22"
+# Any `1.0` carries the API used (`is_xid_start`, `is_xid_continue`); a *newer*
+# one carries newer Unicode tables, which is what decides whether an extended
+# identifier is accepted, so Cargo picking the latest is the wanted behaviour.
 unicode-ident = "1.0"
 unicode-normalization = { version = "0.1.24", default-features = false }
 
@@ -29,8 +48,33 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 description.workspace = true
+documentation = "https://docs.rs/cinrs"
 readme = "README.md"
+keywords = ["c", "c99", "proc-macro", "transpiler", "ffi"]
+categories = ["development-tools::ffi", "compilers", "no-std"]
+
+# This package is the workspace root as well as the facade, so everything in
+# the repository is *next to* it: `crates/`, `benches/`, `doc/`, `third_party/`
+# — including the c-testsuite submodule, which Cargo's git walker would
+# otherwise follow into the tarball — and the conformance corpora and their
+# expected-failure lists, which are useless without corpora nobody downloads
+# from a `.crate`. So the package is an allowlist rather than a deny-list: the
+# library, the one example the README tells you to run, the README itself, the
+# changelog and the licences.
+#
+# Every pattern is anchored with a leading `/`: these are gitignore globs, and
+# an unanchored `README.md` would match `third_party/c-testsuite/README.md` too.
+include = [
+    "/src/**/*.rs",
+    "/examples/fact.rs",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [features]
 default = ["complex"]
@@ -65,8 +109,12 @@ ui_test = "0.30.7"
 cinrs-core.workspace = true
 proc-macro2.workspace = true
 
+# `nightly` is left out on purpose: it changes no documented item, only how a
+# diagnostic inside a string literal is located, and with it the documentation
+# build would depend on `#![feature(proc_macro_span)]` compiling on whatever
+# nightly docs.rs runs.
 [package.metadata.docs.rs]
-features = ["nightly", "complex"]
+features = ["complex"]
 
 [[test]]
 name = "ui"

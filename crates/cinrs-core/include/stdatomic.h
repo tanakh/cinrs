@@ -7,8 +7,8 @@
  * what GCC's `__atomic_fetch_add` (which counts in *bytes*) does not do. Both
  * families are available in every entry point; see `doc/gnu-extensions.md`.
  *
- * `<threads.h>` is a different matter and is still absent: cinrs predefines
- * `__STDC_NO_THREADS__` and not `__STDC_NO_ATOMICS__`.
+ * `__STDC_NO_ATOMICS__` is never predefined; `<threads.h>` has a macro of its
+ * own, `__STDC_NO_THREADS__`, predefined only on a target without threads.
  */
 #ifndef _CINRS_STDATOMIC_H
 #define _CINRS_STDATOMIC_H

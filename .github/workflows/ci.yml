@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    # `scripts/ci.sh` is the whole recipe — formatting, clippy, the tests, the
+    # `--no-default-features` build and the documentation — under the address
+    # space and clock ceilings this project does not run anything without.
+    #
+    # The GCC and Clang corpora are deliberately *not* fetched: they are tens of
+    # megabytes of someone else's repository, and the harnesses that read them
+    # skip themselves, successfully and with a note in the log, when they are
+    # absent. c-testsuite is a submodule and small, so `submodules: true` brings
+    # it and its harness runs for real.
+    #
+    # gcc and clang are on ubuntu-latest already; the tests that compile and run
+    # C for comparison need them.
+    name: ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - name: Versions
+        run: |
+          rustc --version
+          cc --version | head -1
+          clang --version | head -1
+      - run: scripts/ci.sh

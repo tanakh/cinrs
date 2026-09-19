@@ -2,6 +2,47 @@
 
 This is a library that implements a procedural macro allowing C code to be written within Rust code.
 
+## Installation
+
+```text
+cargo add cinrs
+```
+
+**Rust 1.88 or later** — the release that stabilised
+`proc_macro::Span::local_file`, which is how the macro finds the `.rs` file its
+own invocation is written in. Verified on 1.88.0, 1.90.0 and current stable.
+One thing needs a newer compiler: *defining* a variadic function needs Rust
+1.99's `c_variadic`, and below that it is a located error naming the version
+rather than a mysterious failure — *declaring* and *calling* one, `printf`
+included, works on every supported version. Two features: `complex` is on by
+default and is C's complex types (`default-features = false` drops it and the
+`cinrs-rt` dependency with it), and `nightly`, which needs a nightly compiler,
+moves a diagnostic about a string-literal body from the message text onto a
+caret inside the literal.
+
+## Status
+
+`cinrs` is new, and every claim it makes is measured. As of this release:
+
+* **Conformance** — 98.2 % of c-testsuite's `single-exec` suite is correct under
+  `c99!` (214 of the 218 cases that entry point is eligible for); 85.6 % of
+  GCC's C torture tests under `gnu11!` (1,515 of the 1,769 run, and 88.9 % on a
+  toolchain that has `c_variadic`); 82.3 % of Clang's C conformance tests (167
+  of the 203 revisions run, with 557 of the 620 `expected-error` lines
+  diagnosed on the right line). About 2,270 cases in about ten minutes, and
+  **not one of them is tagged `[bug]`**: every remaining failure is named, case
+  by case, as unimplemented, not planned, or needing a newer toolchain. See
+  [Conformance](#conformance).
+* **Speed** — over 39 whole C programs built three ways (`gcc -O2`,
+  `clang -O2`, and a `cinrs` block through `rustc -C opt-level=3`) the median
+  `cinrs`/`gcc -O2` ratio is **1.01×**, and 30 of the 39 are within 10 % of
+  `gcc -O2` or faster. Every program's output is identical across the three
+  builds, so the suite is a differential test as well as a benchmark. See
+  [Speed](#speed).
+* **API** — `0.1` means the macro surface may still change; the companion
+  crates `cinrs-core`, `cinrs-macros` and `cinrs-rt` are implementation details
+  of this one and carry no stability promise at all.
+
 ## Example
 
 ```rust
@@ -159,7 +200,7 @@ cinrs::include_c99!("vendor/parser.c");
   own `-std=c99`; only the plain spellings `typeof` and `asm`, and the features
   of later revisions, need `gnu99!`. Inline *assembly* is a clear error rather
   than a guess, and so is every other extension with no honest translation.
-  [`doc/gnu-extensions.md`](doc/gnu-extensions.md) is the catalogue, row by
+  [`doc/gnu-extensions.md`][gnu-extensions] is the catalogue, row by
   row.
 * **`__int128`.** GCC's 128-bit integers, in every entry point, as Rust's
   `i128` and `u128` — whose x86-64 ABI has matched `__int128`'s since Rust
@@ -390,9 +431,9 @@ GNU's **`#include_next`** works, with GCC's semantics — the search goes on fro
 the entry *after* the one the current file was found under — because the
 platform's headers use it; so does `__has_include_next`.
 
-`doc/system-headers.md` has the table of what glibc's headers do in the front
-end, header by header and entry point by entry point, and what the remaining
-gaps are.
+[`doc/system-headers.md`][system-headers] has the table of what glibc's headers
+do in the front end, header by header and entry point by entry point, and what
+the remaining gaps are.
 
 ## Known limitations
 
@@ -446,8 +487,8 @@ gaps are.
   what keeps a unit self-contained and portable across target models. A program
   that needs `struct stat` or the real `FILE` asks for them with
   `#pragma cinrs system_include`; see [System headers](#system-headers) for
-  what that costs, and `doc/system-headers.md` for the one header of the
-  standard set glibc will not hand over (`<tgmath.h>`).
+  what that costs, and [`doc/system-headers.md`][system-headers] for the one
+  header of the standard set glibc will not hand over (`<tgmath.h>`).
 * `setjmp` and `longjmp` are refused where they are *called*, whichever header
   declared them: they resume a saved machine context, and the state a
   `longjmp` would return into is the generated Rust's. Declaring them, and
@@ -524,7 +565,7 @@ does it), and an architecture whose data model is none of the three —
 `avr`, with its 16-bit `int`, is named in the diagnostic. A triple the table
 does not know is an error listing the families that are in it.
 
-`doc/c-status.md` has the full table, family by family.
+[`doc/c-status.md`][c-status] has the full table, family by family.
 
 ### The assertion that guards it
 
@@ -589,7 +630,7 @@ exactly that.
 ## Conformance
 
 `cinrs` is measured against three public corpora — about 2,270 cases in about
-ten minutes. [`doc/testsuites.md`](doc/testsuites.md) is the overview: how to
+ten minutes. [`doc/testsuites.md`][testsuites] is the overview: how to
 fetch them, the three modes each harness has, the expected-failure lists with
 their markers and **category tags**, and **the memory ceilings a run has to be
 given**, which are not optional.
@@ -616,8 +657,8 @@ as unimplemented or not planned, case by case.
   use something C99 added and a strict C89 entry point is required to refuse
   them. The corpus is a git submodule, so a fresh checkout skips the suite
   until `git submodule update --init third_party/c-testsuite` fetches it.
-  [`doc/c-testsuite.md`](doc/c-testsuite.md) has the details.
-* **[GCC's C torture tests](doc/gcc-torture.md)** — 1,776 self-checking
+  [`doc/c-testsuite.md`][c-testsuite-doc] has the details.
+* **[GCC's C torture tests][gcc-torture]** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
   exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
   `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
@@ -631,7 +672,7 @@ as unimplemented or not planned, case by case.
   implement, the definitions and `va_list`s that need Rust 1.99, and five
   programs that built and then did the wrong thing, which the document names
   one by one.
-* **[Clang's C conformance tests](doc/clang-c-tests.md)** — one file per WG14
+* **[Clang's C conformance tests][clang-c-tests]** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **167 of the 203 revisions run are correct
   (82.3 %)** — 139 answered exactly and 28 refused because the entry point
@@ -652,12 +693,12 @@ with the platform's copies preferred over the bundled ones — **66 of the 67 go
 through unchanged** against glibc 2.43, the exception being `<tgmath.h>` — and
 then compiles and runs ordinary programs against those declarations, comparing
 `sizeof(struct stat)` and its like against the host's own `cc`.
-[`doc/system-headers.md`](doc/system-headers.md) is the table.
+[`doc/system-headers.md`][system-headers] is the table.
 
 ## Speed
 
 Getting C right is half of it; running at the speed a C compiler would is the
-other half. [`doc/benchmarks.md`](doc/benchmarks.md) is the measurement: 39
+other half. [`doc/benchmarks.md`][benchmarks] is the measurement: 39
 whole C programs — the single-threaded C entries from [The Computer Language
 Benchmarks Game][bg], Dhrystone 2.1 and Whetstone, and two dozen kernels
 written to isolate one construct each (bit-fields, heap-emulated variable
@@ -675,9 +716,8 @@ both; what separates them for `cinrs` is the state machine an unstructurable
 a labelled loop — which is why `whetstone` and `interp-switch`, whose jumps are
 of that kind, sit on `gcc -O2`.
 
-`benches/cinrs-bench` is the harness; its
-[README](benches/cinrs-bench/README.md) says how to run it and how to add a
-program.
+`benches/cinrs-bench` is the harness; its [README][bench-readme] says how to run
+it and how to add a program.
 
 [bg]: https://benchmarksgame-team.pages.debian.net/benchmarksgame/
 
@@ -695,3 +735,32 @@ is stamped with the span of the C it came from, which is what makes the errors
 land where they should.
 
 See the [crate documentation](https://docs.rs/cinrs) for the details.
+
+## License
+
+Licensed under either of
+
+* [Apache License, Version 2.0](LICENSE-APACHE)
+* [MIT license](LICENSE-MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
+
+<!-- The documents under doc/ are not part of the published `.crate`, so these
+     are absolute links: a README rendered on crates.io or docs.rs has no
+     doc/ directory next to it. -->
+
+[gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
+[system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
+[c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
+[testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md
+[c-testsuite-doc]: https://github.com/tanakh/cinrs/blob/master/doc/c-testsuite.md
+[gcc-torture]: https://github.com/tanakh/cinrs/blob/master/doc/gcc-torture.md
+[clang-c-tests]: https://github.com/tanakh/cinrs/blob/master/doc/clang-c-tests.md
+[benchmarks]: https://github.com/tanakh/cinrs/blob/master/doc/benchmarks.md
+[bench-readme]: https://github.com/tanakh/cinrs/blob/master/benches/cinrs-bench/README.md

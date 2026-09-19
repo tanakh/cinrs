@@ -5,7 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The tiny runtime the code cinrs generates links against"
+homepage.workspace = true
+description = "The tiny no_std runtime the code cinrs generates links against: C's complex arithmetic, Annex G and all"
+documentation = "https://docs.rs/cinrs-rt"
+readme = "README.md"
+keywords = ["c", "complex", "no-std", "runtime", "cinrs"]
+categories = ["no-std", "development-tools::ffi", "mathematics"]
+
+include = [
+    "/src/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [lib]
 name = "cinrs_rt"

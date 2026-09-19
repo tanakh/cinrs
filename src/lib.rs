@@ -310,8 +310,9 @@
 //! `#if defined(__GNUC__) && __GNUC__ >= 4`, and those work here.
 //! `__STRICT_ANSI__` is defined in the strict entry points only.
 //!
-//! `doc/gnu-extensions.md` in the repository is the catalogue: every extension,
-//! how common it is, and whether it is supported, accepted and ignored, refused
+//! [`doc/gnu-extensions.md`][gnu-extensions] in the repository is the
+//! catalogue: every extension, how common it is, and whether it is supported,
+//! accepted and ignored, refused
 //! with a reason, or still to come. The short version of what is *refused* —
 //! recognised and reported rather than mistranslated — is inline assembly,
 //! `alias`, `weakref`, `vector_size` and
@@ -662,8 +663,9 @@
 //!
 //! Beyond `_Bool`, `int` and `unsigned int`, which the standard requires, the
 //! other integer types and `enum` are accepted as the GCC and Clang extension
-//! they are; `doc/gnu-extensions.md` in the repository records what that
-//! commits the layout to, and the one corner where an `enum` field differs.
+//! they are; [`doc/gnu-extensions.md`][gnu-extensions] in the repository
+//! records what that commits the layout to, and the one corner where an `enum`
+//! field differs.
 //!
 //! ## Compound literals
 //!
@@ -1824,9 +1826,9 @@
 //! the entry *after* the one the current file was found under — because the
 //! platform's headers use it; so does `__has_include_next`.
 //!
-//! `doc/system-headers.md` in the repository has the table: every standard and
-//! POSIX header, both entry points, what passes and why the one that does not
-//! does not.
+//! [`doc/system-headers.md`][system-headers] in the repository has the table:
+//! every standard and POSIX header, both entry points, what passes and why the
+//! one that does not does not.
 //!
 //! ## Your own headers
 //!
@@ -2234,7 +2236,7 @@
 //!
 //! The families, and what each one refuses — `__int128` on a 32-bit
 //! architecture, a bit-field on a big-endian one — are tabulated in the
-//! repository's `doc/c-status.md`.
+//! repository's [`doc/c-status.md`][c-status].
 //!
 //! ## The assertion that guards it
 //!
@@ -2272,6 +2274,14 @@
 //! header declares what the target's library is expected to export, and
 //! nothing here can confirm it. Every target but the host is compiled for and
 //! not run.
+//!
+// The documents under `doc/` are not part of the published crate, so the links
+// to them are absolute: there is no `doc/` directory next to this page on
+// docs.rs.
+//!
+//! [gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md
+//! [system-headers]: https://github.com/tanakh/cinrs/blob/master/doc/system-headers.md
+//! [c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
 
 #![warn(missing_docs)]
 #![no_std]

@@ -332,7 +332,7 @@ impl Sema<'_> {
     /// for the rules the AMD64 psABI states in 3.2.3 — right down to the
     /// merge, which is `min` over an ordering in which INTEGER comes first, so
     /// that one integer field anywhere in an eightbyte makes the whole of it
-    /// INTEGER. What is missing from this copy is what a C program cannot
+    /// INTEGER. What is missing from this implementation is what a C program cannot
     /// reach: SIMD vectors, and therefore the `SseUp` class, and the X87 class
     /// that a real `long double` would have (see the module documentation).
     fn classify(&self, ty: Ty, offset: u64, classes: &mut [Eightbyte]) -> Option<()> {
