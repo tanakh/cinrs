@@ -276,9 +276,11 @@ c99! {
     }
 
     /* What a section is called belongs to the object format: ELF and COFF take
-     * a bare name, Mach-O wants "segment,section" and refuses anything else. */
+     * a bare name, Mach-O wants "segment,section" and refuses anything else —
+     * and, for a section that holds code, the two flags that say so, without
+     * which `ld` warns that unwind information points at a non-code section. */
     #ifdef __APPLE__
-    #define TEST_SECTION "__TEXT,__cinrs_test"
+    #define TEST_SECTION "__TEXT,__cinrs_test,regular,pure_instructions"
     #else
     #define TEST_SECTION ".cinrs_test_text"
     #endif

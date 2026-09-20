@@ -202,6 +202,17 @@ and mingw's import libraries expose them, which is why both rules ask
 an MSVC target a program can always ask for a symbol by hand with an `__asm__`
 label.
 
+### Apple's C library
+
+The same thing can happen on any platform, for a plainer reason: a bundled
+header declares what the *standard* says the header holds, and a C library may
+simply not implement all of it. Apple's is the one known case. Its SDK has no
+`<uchar.h>`, and libSystem has no **`c16rtomb`, `c32rtomb`, `mbrtoc16` or
+`mbrtoc32`**; it has no **`quick_exit`** or **`at_quick_exit`** either. The
+types and the literals — `char16_t`, `u"…"`, `U'x'` — need no library and work;
+a *call* to one of those six is `Undefined symbols for architecture arm64`
+from the linker, exactly as it would be from C.
+
 ## What is run where
 
 Nothing above says that the library on the other end agrees with the header

@@ -382,14 +382,6 @@ fn unicode_string_literals_and_their_types() {
            `char16_t` and `char32_t` are typedefs of. */
         int kind_of_u(void) { return _Generic(u'x', unsigned short: 16, unsigned int: 32, default: 0); }
         int kind_of_U(void) { return _Generic(U'x', unsigned short: 16, unsigned int: 32, default: 0); }
-
-        /* The library declarations are there and link. */
-        int converts(void) {
-            char buffer[8];
-            mbstate_t state;
-            memset(&state, 0, sizeof state);
-            return (int) c32rtomb(buffer, U'A', &state) == 1 && buffer[0] == 'A';
-        }
     "## }
 
     unsafe {
@@ -426,8 +418,29 @@ fn unicode_string_literals_and_their_types() {
         assert_eq!(u16_char(), 0xe9);
         assert_eq!(u32_char(), 0x1_f600);
         assert_eq!((kind_of_u(), kind_of_U()), (16, 32));
-        assert_eq!(converts(), 1);
     }
+}
+
+/// `<uchar.h>`'s conversion functions are declared, and link — where the C
+/// library has them. Apple's does not: there is no `<uchar.h>` in its SDK and
+/// no `c32rtomb` in libSystem, so there the call is an undefined symbol, as it
+/// would be from C. The types and the literals above need no library at all.
+#[cfg(not(target_vendor = "apple"))]
+#[test]
+fn the_uchar_conversions_link() {
+    c11! { r##"
+        #include <uchar.h>
+        #include <string.h>
+
+        int converts(void) {
+            char buffer[8];
+            mbstate_t state;
+            memset(&state, 0, sizeof state);
+            return (int) c32rtomb(buffer, U'A', &state) == 1 && buffer[0] == 'A';
+        }
+    "## }
+
+    assert_eq!(unsafe { converts() }, 1);
 }
 
 #[test]
