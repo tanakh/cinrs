@@ -70,8 +70,14 @@ what is in it.
 * `nightly` — diagnostics pointing *inside* a string-literal body, which needs
   `proc_macro::Literal::subspan` and therefore a nightly compiler.
 
-### Toolchain
+### Toolchain and platforms
 
 Rust **1.88** or later (verified on 1.88.0, 1.90.0 and 1.98.1). *Defining* a
 variadic function needs Rust 1.99's `c_variadic`; below that it is a located
 error, and declaring and calling one works on every supported version.
+
+Developed and fully tested on x86-64 Linux. On macOS (arm64) and Windows
+(x86-64, MSVC) the examples and the portable tests are built, linked and run in
+CI — on MSVC the `printf` family links `legacy_stdio_definitions` and the
+`<time.h>` functions link their 64-bit UCRT names, automatically. Other targets
+are compile-checked.

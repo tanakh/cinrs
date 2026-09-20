@@ -93,6 +93,12 @@ Rust **1.88** or later. One thing needs a newer compiler: *defining* a variadic
 function needs Rust 1.99's `c_variadic` and is a clear error before that —
 declaring and calling one, `printf` included, works everywhere.
 
+**Linux, macOS and Windows.** Linux (x86-64) is where `cinrs` is developed and
+where the whole test suite and the conformance corpora run; macOS (arm64) and
+Windows (x86-64, MSVC) build, link and run the examples and the portable tests
+on every push. Other targets are compile-checked; see
+[Cross-compilation][cross].
+
 Two features: `complex` (on by default) is C's complex types, as
 [`num_complex::Complex`](https://docs.rs/num-complex) — `default-features =
 false` drops it and its one small dependency; `nightly` moves a diagnostic about
