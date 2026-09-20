@@ -43,6 +43,22 @@ jobs:
           cc --version | head -1
           clang --version | head -1
       - run: scripts/ci.sh
+      # What an editor makes of a crate that uses cinrs, which no Rust test can
+      # answer: rust-analyzer hands a procedural macro tokens with no source
+      # positions at all, and a `c99!` block's text has to be recovered anyway —
+      # see `scripts/check-rust-analyzer.sh`. It needs a rust-analyzer binary,
+      # which on a runner means the rustup component: one extra download, and if
+      # it ever cannot be had the check below skips itself and says so rather
+      # than failing, which is why this step cannot break the job.
+      #
+      # Only on `stable`, because the question is about the host rather than
+      # about the toolchain; and a step of its own rather than through
+      # `scripts/ci.sh --full`, which would turn the conformance harnesses on
+      # as well.
+      - if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        run: rustup component add rust-analyzer || echo "no rust-analyzer component here"
+      - if: ${{ !cancelled() && matrix.rust == 'stable' }}
+        run: scripts/check-rust-analyzer.sh
 
   portability:
     # The job above is the whole test suite, on the platform `cinrs` is

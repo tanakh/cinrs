@@ -39,13 +39,36 @@
 //!   invocation and the file names its own position in the message — exactly
 //!   as an `#include`d header does.
 //!
+//! * **Raw-token mode**, search path (also [`InputMode::FileSlice`]). A host
+//!   may hand a procedural macro tokens with no positions at all:
+//!   `rust-analyzer` reports no file, no source text and line 1 column 0 for
+//!   every token alike. The text is still on disk, and which text it is can be
+//!   *proved* — the `locate` module searches the crate's `.rs` files, the
+//!   directory `CARGO_MANIFEST_DIR` names, for an invocation whose token
+//!   sequence is exactly the one we were handed. A match gives the same three
+//!   things the primary path gives (path, text, anchors), so everything
+//!   downstream — diagnostics, `__FILE__`, a quoted `#include`, `include_str!`
+//!   tracking, the unit id — is unchanged. See [`Origin`] for what capture has
+//!   to be told for this to be possible, and note that it can only run when the
+//!   primary path found no position whatsoever: in a normal build it costs
+//!   nothing because it never happens.
+//!
 //! * **Raw-token mode**, fallback path ([`InputMode::Reconstructed`]). When
 //!   there is no local file (macro-generated input, some IDE contexts such as
 //!   rust-analyzer, or unit tests that build a `TokenStream` with
 //!   `TokenStream::from_str`), or when the slice fails validation, we rebuild
-//!   the text by placing every token at its original line/column, padding with
-//!   newlines and spaces. Comments are lost, but the line structure — and
-//!   therefore all reported positions — survives.
+//!   the text from the tokens. Where their positions are usable, every token
+//!   goes at its original line/column, padded with newlines and spaces:
+//!   comments are lost, but the line structure — and therefore all reported
+//!   positions — survives. Where they are not (every token at the same
+//!   position, which is what `rust-analyzer` gives an unsaved buffer), the text
+//!   is rebuilt from the tokens alone: one space between two tokens, none where
+//!   the host says they were written together, so that `->`, `<<=` and `++`
+//!   survive and `- -` stays two tokens. A *directive* is a line, and tokens
+//!   keep no lines; the forms whose end the tokens themselves give away
+//!   (`#include <…>`, `#ifdef X`, `#endif`, …) are written on a line of their
+//!   own and anything else — `#define`, `#if` — is one clear diagnostic rather
+//!   than a guess.
 //!
 //! # Coordinates
 //!
@@ -59,14 +82,15 @@
 //! the text's own line 1 sits on, which is what the preprocessor's `__FILE__`
 //! and `__LINE__` are made of.
 
-use proc_macro2::{Delimiter, LineColumn, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, LineColumn, Spacing, Span, TokenStream, TokenTree};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::diag::Diagnostics;
+use crate::diag::{Diagnostic, Diagnostics};
+use crate::locate;
 
 /// A position in the global byte-offset space managed by a [`SourceMap`].
 pub type Pos = u32;
@@ -129,7 +153,7 @@ impl SourceRange {
 
 /// `(start, end, span)` triples describing where each Rust token landed in a
 /// captured file, in file-local byte offsets.
-type AnchorList = Vec<(u32, u32, Span)>;
+pub(crate) type AnchorList = Vec<(u32, u32, Span)>;
 
 // ---------------------------------------------------------------------------
 // spans inside a string literal
@@ -184,6 +208,103 @@ impl Subspan {
 impl std::fmt::Debug for Subspan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Subspan")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// what the host says about the invocation itself
+// ---------------------------------------------------------------------------
+
+/// What the *host* can tell the front end about an invocation, over and above
+/// the tokens themselves.
+///
+/// Two of the three capture strategies need something a `TokenStream` does not
+/// carry:
+///
+/// * The search that finds the invocation in the crate's own sources needs the
+///   crate's directory — `CARGO_MANIFEST_DIR`, which Cargo sets for `rustc` and
+///   for `rust-analyzer` alike — and the name the invocation may be written
+///   with, which narrows the candidates.
+/// * String-literal mode needs the [`Subspan`] hook to put a caret inside the
+///   literal.
+///
+/// The default is an origin that says nothing: no directory, so no search, and
+/// no hook. That is what [`capture`], [`analyze`](crate::analyze) and
+/// [`expand`](crate::expand) use — a test building a `TokenStream` from a
+/// string must not depend on the developer's working directory, or on what
+/// happens to be written in the crate around it. The procedural macros pass
+/// [`Origin::new`], which is the real thing.
+#[derive(Clone, Default, Debug)]
+pub struct Origin {
+    entry_names: &'static [&'static str],
+    crate_dir: Option<PathBuf>,
+    subspan: Option<Subspan>,
+}
+
+impl Origin {
+    /// An origin that tells capture nothing; see the [type
+    /// documentation](Origin).
+    pub fn unknown() -> Self {
+        Self::default()
+    }
+
+    /// The origin of a real expansion of an entry point that may be written
+    /// with any of `entry_names` (`&["c89", "c90"]` for the two names one
+    /// entry point has), in the crate Cargo names.
+    ///
+    /// The names carry no `!` and no path: an invocation is looked for by its
+    /// last path segment, so `cinrs::c99!` is found by `"c99"`.
+    pub fn new(entry_names: &'static [&'static str]) -> Self {
+        Self {
+            entry_names,
+            crate_dir: std::env::var_os(crate::include::MANIFEST_DIR_VAR).map(PathBuf::from),
+            subspan: None,
+        }
+    }
+
+    /// This origin with a hook that can point inside a string literal; see
+    /// [`Subspan`].
+    pub fn with_subspan(mut self, subspan: Option<Subspan>) -> Self {
+        self.subspan = subspan;
+        self
+    }
+
+    /// This origin with the directory to search set explicitly.
+    ///
+    /// [`Origin::new`] reads `CARGO_MANIFEST_DIR`, which is process-global; a
+    /// test says which directory it means instead.
+    pub fn in_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.crate_dir = Some(dir.into());
+        self
+    }
+
+    /// The names an invocation of this entry point may be written with.
+    pub fn entry_names(&self) -> &'static [&'static str] {
+        self.entry_names
+    }
+
+    /// The directory the search walks, when there is one.
+    pub fn crate_dir(&self) -> Option<&Path> {
+        self.crate_dir.as_deref()
+    }
+
+    /// The entry point's own name, as a diagnostic spells it.
+    fn entry_name(&self) -> &str {
+        self.entry_names.first().copied().unwrap_or("c99")
+    }
+
+    /// Searches the crate's sources for the invocation `toks` came from.
+    ///
+    /// [`None`] whenever the search cannot run at all — no directory, which is
+    /// every context but a real expansion — or found nothing it could prove.
+    fn search(&self, toks: &[FlatTok], accept: impl FnMut(&Path) -> bool) -> Option<locate::Slice> {
+        let dir = self.crate_dir.as_deref()?;
+        locate::Search {
+            dir,
+            entry_names: self.entry_names,
+            caps: locate::Caps::default(),
+        }
+        .find(toks, accept)
     }
 }
 
@@ -695,20 +816,18 @@ impl Source {
 /// Never fails outright: a malformed string literal produces an empty source
 /// file plus a diagnostic, so that the rest of the pipeline can run normally.
 pub fn capture(input: TokenStream, diags: &mut Diagnostics) -> Source {
-    capture_with(input, diags, None)
+    capture_with(input, diags, &Origin::unknown())
 }
 
-/// Recovers the C source text of a macro invocation, with a hook that can
-/// point inside a string literal.
+/// Recovers the C source text of a macro invocation, with everything the host
+/// can say about the invocation itself.
 ///
-/// `subspan` is used only in [string-literal mode](InputMode::StringLiteral),
-/// where it is what makes a diagnostic land on the offending C token instead of
-/// on the literal as a whole; see [`Subspan`].
-pub fn capture_with(
-    input: TokenStream,
-    diags: &mut Diagnostics,
-    subspan: Option<Subspan>,
-) -> Source {
+/// [`Origin`] is what the two strategies that need more than the tokens are
+/// given: the [`Subspan`] hook that lets a diagnostic land inside a string
+/// literal, and the crate directory the search walks when the
+/// host reports no positions at all. [`capture`] is this with an origin that
+/// says nothing.
+pub fn capture_with(input: TokenStream, diags: &mut Diagnostics, origin: &Origin) -> Source {
     let trees: Vec<TokenTree> = input.into_iter().collect();
 
     // --- string-literal mode -------------------------------------------------
@@ -720,7 +839,10 @@ pub fn capture_with(
             let span = lit.span();
             // The hook measures offsets in the literal's spelling, so it can
             // only be trusted if the spelling we decoded is the source itself.
-            let hook = subspan.filter(|_| span.source_text().is_none_or(|text| text == repr));
+            let hook = origin
+                .subspan
+                .clone()
+                .filter(|_| span.source_text().is_none_or(|text| text == repr));
             let want_spelling = hook.is_some();
             let (text, spelling, error) = match decode_string_literal(&repr, want_spelling) {
                 Ok((text, spelling)) => (text, spelling, None),
@@ -729,6 +851,29 @@ pub fn capture_with(
             let precise_spans = match (hook, spelling) {
                 (Some(hook), Some(spelling)) => Some(PreciseSpans { hook, spelling }),
                 _ => None,
+            };
+            // The text is complete either way; what the `.rs` file adds is its
+            // own name — which `__FILE__` expands to and a quoted `#include`
+            // searches beside — and the line the literal starts on. The
+            // compiler normally says both; where it says nothing, the
+            // invocation is looked for in the crate's sources like any other.
+            let mut written_in = rust_path_of(span).map(|path| (path, span.start()));
+            if written_in.is_none() {
+                let mut toks = Vec::new();
+                flatten(vec![trees[0].clone()], &mut toks);
+                written_in = origin.search(&toks, |_| true).map(|slice| {
+                    (
+                        slice.path.display().to_string(),
+                        LineColumn {
+                            line: slice.line,
+                            column: slice.column,
+                        },
+                    )
+                });
+            }
+            let (rust_path, at) = match written_in {
+                Some((path, at)) => (Some(path), at),
+                None => (None, span.start()),
             };
             let mut map = SourceMap::new();
             let root = map.add_file(FileSpec {
@@ -739,12 +884,12 @@ pub fn capture_with(
                 precise: false,
                 precise_spans,
                 mode: InputMode::StringLiteral,
-                rust_path: rust_path_of(span),
+                rust_path: rust_path.clone(),
                 // The C text starts just after the literal's opening quote, so
                 // its first line is the line the literal starts on.
-                first_line: span.start().line,
+                first_line: at.line,
             });
-            let unit_id = unit_id_of(span, map.file(root).text());
+            let unit_id = unit_id_of(rust_path.as_deref(), at, map.file(root).text());
             let source = Source {
                 map,
                 root,
@@ -762,24 +907,46 @@ pub fn capture_with(
     let mut toks = Vec::new();
     flatten(trees, &mut toks);
     let fallback_span = toks.first().map_or_else(Span::call_site, |t| t.span);
+    // Decided once for the whole stream rather than token by token, because a
+    // host that gives no positions gives none to any token; see
+    // [`positions_are_usable`].
+    let positioned = positions_are_usable(&toks);
 
-    let first_line = toks.first().map_or(1, |t| t.span.start().line);
+    // The `.rs` file this text is written in: sliced at the positions the
+    // compiler gave, or — where it gave none at all — found by searching the
+    // crate's sources for an invocation these very tokens spell out. The search
+    // is the fallback of a fallback: it cannot run while there is a position to
+    // be had, so a normal build never reaches it.
+    let located = capture_file_slice(&toks).or_else(|| {
+        if positioned {
+            return None;
+        }
+        origin.search(&toks, |_| true).map(Located::from)
+    });
 
-    if let Some((path, text, anchors)) = capture_file_slice(&toks) {
-        let name = path.display().to_string();
+    if let Some(located) = located {
+        let name = located.path.display().to_string();
+        let at = LineColumn {
+            line: located.line,
+            column: located.column,
+        };
         let mut map = SourceMap::new();
         let root = map.add_file(FileSpec {
             rust_path: Some(name.clone()),
             name,
-            text,
-            anchors,
+            text: located.text,
+            anchors: located.anchors,
             fallback_span,
             precise: true,
             precise_spans: None,
             mode: InputMode::FileSlice,
-            first_line,
+            first_line: located.line,
         });
-        let unit_id = unit_id_of(fallback_span, map.file(root).text());
+        let unit_id = unit_id_of(
+            Some(map.file(root).rust_path().expect("just set")),
+            at,
+            map.file(root).text(),
+        );
         return Source {
             map,
             root,
@@ -788,12 +955,23 @@ pub fn capture_with(
         };
     }
 
-    let (text, anchors) = reconstruct(&toks);
+    let rebuilt = if positioned {
+        reconstruct(&toks)
+    } else {
+        reconstruct_from_tokens(&toks, origin.entry_name())
+    };
+    // A directive whose end the tokens do not give away stops the rebuild: the
+    // caret goes on its `#`, which is the one position the host does resolve.
+    let fallback_span = rebuilt
+        .blocked
+        .as_ref()
+        .map_or(fallback_span, |blocked| blocked.span);
+    let first_line = toks.first().map_or(1, |t| t.span.start().line);
     let mut map = SourceMap::new();
     let root = map.add_file(FileSpec {
         name: "<c99! macro input>".to_owned(),
-        text,
-        anchors,
+        text: rebuilt.text,
+        anchors: rebuilt.anchors,
         fallback_span,
         precise: true,
         precise_spans: None,
@@ -801,13 +979,45 @@ pub fn capture_with(
         rust_path: rust_path_of(fallback_span),
         first_line,
     });
-    let unit_id = unit_id_of(fallback_span, map.file(root).text());
-    Source {
+    let unit_id = unit_id_of(
+        map.file(root).rust_path(),
+        fallback_span.start(),
+        map.file(root).text(),
+    );
+    let source = Source {
         map,
         root,
         mode: InputMode::Reconstructed,
         unit_id,
+    };
+    if let Some(blocked) = rebuilt.blocked {
+        let mut diag = Diagnostic::error(SourceRange::at(source.base()), blocked.message);
+        for note in blocked.notes {
+            diag = diag.with_note(note);
+        }
+        diags.push(diag);
     }
+    source
+}
+
+/// The directory of the `.rs` file an invocation whose whole input is `input` is
+/// written in, found by searching the crate's sources.
+///
+/// This is what `include_c99!("…")` needs where the compiler gives no position:
+/// a relative path is resolved against the directory of the `.rs` file the macro
+/// is written in, and that directory has to come from somewhere. `accept` is
+/// asked about each candidate directory, so that of several invocations spelled
+/// the same way the one whose directory really holds the file wins; [`None`] when
+/// nothing can be proved, and the caller falls back to `CARGO_MANIFEST_DIR`.
+pub fn invocation_directory(
+    input: &TokenTree,
+    origin: &Origin,
+    mut accept: impl FnMut(&Path) -> bool,
+) -> Option<PathBuf> {
+    let mut toks = Vec::new();
+    flatten(vec![input.clone()], &mut toks);
+    let slice = origin.search(&toks, |path| path.parent().is_some_and(&mut accept))?;
+    slice.path.parent().map(Path::to_path_buf)
 }
 
 /// Makes a `.c` file read from disk the source of a translation unit.
@@ -826,7 +1036,7 @@ pub fn capture_with(
 /// `#include "…"` searches beside.
 pub fn capture_c_file(name: String, text: String, span: Span) -> Source {
     let mut map = SourceMap::new();
-    let unit_id = unit_id_of(span, &text);
+    let unit_id = unit_id_of(rust_path_of(span).as_deref(), span.start(), &text);
     let root = map.add_file(FileSpec {
         rust_path: Some(name.clone()),
         name,
@@ -851,28 +1061,32 @@ pub fn capture_c_file(name: String, text: String, span: Span) -> Source {
 // unit identity
 // ---------------------------------------------------------------------------
 
-/// Hashes where an invocation is and what it says into a number that
-/// distinguishes it from every other invocation in the crate.
-///
-/// The position alone would do in a real expansion, but `Span::local_file` is
-/// not always available (macro-generated input, some IDE contexts, unit tests
-/// that build a `TokenStream` from a string), and a process-wide counter would
-/// make the generated names depend on compilation order — which would in turn
-/// make snapshot tests and incremental rebuilds unstable. Hashing the text as
-/// well keeps the result deterministic in every context.
 /// The path of the `.rs` file `span` points into, when the compiler knows it.
 fn rust_path_of(span: Span) -> Option<String> {
     span.local_file().map(|p| p.display().to_string())
 }
 
-fn unit_id_of(span: Span, text: &str) -> u64 {
+/// Hashes where an invocation is and what it says into a number that
+/// distinguishes it from every other invocation in the crate.
+///
+/// The position alone would do in a real expansion, but the file is not always
+/// known (macro-generated input, some IDE contexts, unit tests that build a
+/// `TokenStream` from a string), and a process-wide counter would make the
+/// generated names depend on compilation order — which would in turn make
+/// snapshot tests and incremental rebuilds unstable. Hashing the text as well
+/// keeps the result deterministic in every context.
+///
+/// `path` and `at` are where the C text was written, whether the compiler said so
+/// or the search worked it out — and the two have to agree, or the names an IDE's
+/// expansion generates would differ from the names the build generates for the
+/// same code.
+fn unit_id_of(path: Option<&str>, at: LineColumn, text: &str) -> u64 {
     let mut hash = FNV_OFFSET;
-    if let Some(path) = span.local_file() {
-        hash = fnv(hash, path.display().to_string().as_bytes());
+    if let Some(path) = path {
+        hash = fnv(hash, path.as_bytes());
     }
-    let start = span.start();
-    hash = fnv(hash, &(start.line as u64).to_le_bytes());
-    hash = fnv(hash, &(start.column as u64).to_le_bytes());
+    hash = fnv(hash, &(at.line as u64).to_le_bytes());
+    hash = fnv(hash, &(at.column as u64).to_le_bytes());
     fnv(hash, text.as_bytes())
 }
 
@@ -904,11 +1118,20 @@ fn is_string_literal(repr: &str) -> bool {
 /// Anything that is not a string literal — a byte string, a number, an
 /// identifier — answers [`None`].
 pub fn string_literal_value(literal: &proc_macro2::Literal) -> Option<String> {
-    let repr = literal.to_string();
-    if !is_string_literal(&repr) {
+    string_literal_text(&literal.to_string())
+}
+
+/// The text a string literal's *spelling* denotes, for a caller that has the
+/// spelling rather than the token.
+///
+/// The [search](self) is what needs it: a `#include "point.h"` in the input is a
+/// `#`, an identifier and a literal, and the header's name is what that literal
+/// says — not how it is written.
+pub(crate) fn string_literal_text(repr: &str) -> Option<String> {
+    if !is_string_literal(repr) {
         return None;
     }
-    decode_string_literal(&repr, false)
+    decode_string_literal(repr, false)
         .ok()
         .map(|(text, _)| text)
 }
@@ -1034,39 +1257,105 @@ fn decode_string_literal(repr: &str, spelling: bool) -> Result<(String, Option<S
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FlatKind {
+pub(crate) enum FlatKind {
     Ident,
     Literal,
     Punct,
     Delimiter,
 }
 
-struct FlatTok {
+/// One token of the input, flattened out of its groups.
+pub(crate) struct FlatTok {
     span: Span,
     text: String,
     /// `true` when `text` came from [`Span::source_text`] and is therefore the
     /// verbatim source spelling of the whole span.
     exact: bool,
     kind: FlatKind,
+    /// Whether the token after this one was written immediately after it, with
+    /// nothing at all in between.
+    ///
+    /// Only a `Punct` knows — that is `Spacing::Joint`, and it is how one C
+    /// operator made of several of them is told from several operators: `-` `>`
+    /// jointly is `->`, and `-` `-` apart is two unary minuses. A host that
+    /// reports no positions still reports this, which is what makes a text
+    /// rebuilt from the tokens alone come out right.
+    joint: bool,
 }
 
 impl FlatTok {
-    fn new(span: Span, fallback: String, kind: FlatKind) -> Self {
+    fn new(span: Span, fallback: String, kind: FlatKind, joint: bool) -> Self {
         match span.source_text() {
             Some(text) => FlatTok {
                 span,
                 text,
                 exact: true,
                 kind,
+                joint,
             },
             None => FlatTok {
                 span,
                 text: fallback,
                 exact: false,
                 kind,
+                joint,
             },
         }
     }
+
+    /// Where this token was written, as far as the host will say.
+    pub(crate) fn span(&self) -> Span {
+        self.span
+    }
+
+    /// The token's spelling: its source text where the host gives one, and
+    /// otherwise what the token itself says it is — a single character for a
+    /// `Punct`, the bracket for a delimiter, `Literal::to_string` for a literal.
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Which kind of token this is.
+    pub(crate) fn kind(&self) -> FlatKind {
+        self.kind
+    }
+}
+
+/// Whether `tok` was already written out by `prev`.
+///
+/// Several `Punct`s may be handed over sharing the span — and therefore the
+/// source text — of the one multi-character operator they make up, in which case
+/// that text belongs to all of them and must be used once.
+///
+/// Only a token whose text *is* that source text can be dropped this way. With
+/// the per-character fallback text, which is all a host reporting no source text
+/// gives, every token carries its own single character and dropping one would
+/// lose it — and under `rust-analyzer`, where every span equals every other,
+/// dropping on the span alone would lose all but the first token of the unit.
+pub(crate) fn shares_previous_span(prev: &FlatTok, tok: &FlatTok) -> bool {
+    tok.exact && at_same_position(prev.span, tok.span)
+}
+
+/// Whether two spans start and end at the same line and column.
+fn at_same_position(a: Span, b: Span) -> bool {
+    let (a_start, a_end) = (a.start(), a.end());
+    let (b_start, b_end) = (b.start(), b.end());
+    (a_start.line, a_start.column, a_end.line, a_end.column)
+        == (b_start.line, b_start.column, b_end.line, b_end.column)
+}
+
+/// Whether the host gave these tokens positions that mean anything.
+///
+/// Decided once for the whole stream, because a host either gives positions or
+/// does not: `rust-analyzer` reports line 1, column 0 as both the start and the
+/// end of every token alike, so a stream in which nothing sits anywhere but
+/// where its first token does carries no positions at all. A single token is no
+/// evidence either way, and both strategies write it identically.
+fn positions_are_usable(toks: &[FlatTok]) -> bool {
+    let Some(first) = toks.first() else {
+        return false;
+    };
+    toks.iter().any(|t| !at_same_position(first.span, t.span))
 }
 
 fn flatten(trees: Vec<TokenTree>, out: &mut Vec<FlatTok>) {
@@ -1087,29 +1376,52 @@ fn flatten(trees: Vec<TokenTree>, out: &mut Vec<FlatTok>) {
                     g.span_open(),
                     open.to_owned(),
                     FlatKind::Delimiter,
+                    false,
                 ));
                 flatten(g.stream().into_iter().collect(), out);
                 out.push(FlatTok::new(
                     g.span_close(),
                     close.to_owned(),
                     FlatKind::Delimiter,
+                    false,
                 ));
             }
             TokenTree::Ident(i) => {
-                out.push(FlatTok::new(i.span(), i.to_string(), FlatKind::Ident));
+                out.push(FlatTok::new(
+                    i.span(),
+                    i.to_string(),
+                    FlatKind::Ident,
+                    false,
+                ));
             }
             TokenTree::Punct(p) => {
+                let joint = p.spacing() == Spacing::Joint;
                 out.push(FlatTok::new(
                     p.span(),
                     p.as_char().to_string(),
                     FlatKind::Punct,
+                    joint,
                 ));
             }
             TokenTree::Literal(l) => {
-                out.push(FlatTok::new(l.span(), l.to_string(), FlatKind::Literal));
+                out.push(FlatTok::new(
+                    l.span(),
+                    l.to_string(),
+                    FlatKind::Literal,
+                    false,
+                ));
             }
         }
     }
+}
+
+/// The flattened tokens of an input stream, which is what the search in
+/// `locate.rs` matches a candidate body against.
+#[cfg(test)]
+pub(crate) fn flat_tokens(input: TokenStream) -> Vec<FlatTok> {
+    let mut toks = Vec::new();
+    flatten(input.into_iter().collect(), &mut toks);
+    toks
 }
 
 /// Byte offsets of the start of every line of a string.
@@ -1152,12 +1464,41 @@ impl LineIndex {
     }
 }
 
+/// The `.rs` file an invocation is written in, its text, and where in the file
+/// that text begins.
+///
+/// What both strategies that answer with a real file produce: the primary one
+/// from the positions the compiler gave, the search in `locate.rs` by proving
+/// which text it is.
+struct Located {
+    path: PathBuf,
+    text: String,
+    anchors: AnchorList,
+    /// The 1-based line of the `.rs` file the text starts on.
+    line: usize,
+    /// The 0-based column, in characters, the text starts at.
+    column: usize,
+}
+
+impl From<locate::Slice> for Located {
+    fn from(slice: locate::Slice) -> Self {
+        Self {
+            path: slice.path,
+            text: slice.text,
+            anchors: slice.anchors,
+            line: slice.line,
+            column: slice.column,
+        }
+    }
+}
+
 /// Primary raw-token strategy: slice the caller's `.rs` file.
 ///
-/// Returns `None` (so that the caller falls back to [`reconstruct`]) whenever
-/// anything at all looks inconsistent, because a wrong slice would produce
-/// silently wrong code rather than a diagnostic.
-fn capture_file_slice(toks: &[FlatTok]) -> Option<(PathBuf, String, AnchorList)> {
+/// Returns `None` (so that the caller falls back to the search and then to
+/// rebuilding the text from the tokens) whenever anything at all looks
+/// inconsistent, because a wrong slice would produce silently wrong code rather
+/// than a diagnostic.
+fn capture_file_slice(toks: &[FlatTok]) -> Option<Located> {
     let first = toks.first()?;
     let last = toks.last()?;
     let path = first.span.local_file()?;
@@ -1206,33 +1547,71 @@ fn capture_file_slice(toks: &[FlatTok]) -> Option<(PathBuf, String, AnchorList)>
         anchors.push(((s - start) as u32, (e - start) as u32, t.span));
     }
 
-    Some((path, content[start..end].to_owned(), anchors))
+    let at = first.span.start();
+    Some(Located {
+        path,
+        text: content[start..end].to_owned(),
+        anchors,
+        line: at.line,
+        column: at.column,
+    })
+}
+
+/// A text rebuilt from the tokens, with the anchors that map it back to them.
+struct Rebuilt {
+    text: String,
+    anchors: AnchorList,
+    /// Set when a preprocessing directive stopped the rebuild; see
+    /// [`Blocked`].
+    blocked: Option<Blocked>,
+}
+
+/// A directive whose end the tokens alone do not give away, and the one
+/// diagnostic it earns.
+///
+/// `#define X 1` is a *line*, and a token stream with no positions keeps no
+/// lines: there is no way to tell the `1` that ends the replacement list from
+/// the `int` that begins the next line. Guessing would silently mistranslate,
+/// so the unit is refused with a message that says what is missing and how to
+/// get it, and the text comes out empty so that this is the *only* thing
+/// reported.
+struct Blocked {
+    /// The `#` the message is reported at. Under a host that gives no positions
+    /// this is still a span it can resolve — that is how it maps a
+    /// `compile_error!` back to the source — so the caret lands on the
+    /// directive even though nothing could be read from the span itself.
+    span: Span,
+    message: String,
+    notes: Vec<String>,
 }
 
 /// Fallback raw-token strategy: rebuild the text from token positions.
-fn reconstruct(toks: &[FlatTok]) -> (String, AnchorList) {
+fn reconstruct(toks: &[FlatTok]) -> Rebuilt {
     let mut out = String::new();
     let mut anchors = Vec::new();
     let Some(first) = toks.first() else {
-        return (out, anchors);
+        return Rebuilt {
+            text: out,
+            anchors,
+            blocked: None,
+        };
     };
     let line_base = first.span.start().line;
     let col_base = first.span.start().column;
     let mut cur_line = 1usize;
     let mut cur_col = 0usize;
-    let mut prev: Option<(LineColumn, LineColumn)> = None;
+    let mut prev: Option<&FlatTok> = None;
 
     for t in toks {
         let s = t.span.start();
-        let e = t.span.end();
-        // Several `Punct`s can share the span of one multi-character operator
-        // (`->`, `==`, ...); emit its text only once.
-        if let Some((ps, pe)) = prev
-            && (ps.line, ps.column, pe.line, pe.column) == (s.line, s.column, e.line, e.column)
+        // Several `Punct`s can share the span — and the source text — of one
+        // multi-character operator (`->`, `==`, ...); write it once.
+        if let Some(p) = prev
+            && shares_previous_span(p, t)
         {
             continue;
         }
-        prev = Some((s, e));
+        prev = Some(t);
 
         let target_line = s.line.saturating_sub(line_base) + 1;
         let target_col = if s.line == line_base {
@@ -1242,9 +1621,11 @@ fn reconstruct(toks: &[FlatTok]) -> (String, AnchorList) {
         };
 
         if target_line < cur_line || (target_line == cur_line && target_col < cur_col) {
-            // Positions are not usable (e.g. every token carries the call
-            // site's span). Keep the tokens; separate them with a space so
-            // that they do not merge into one C token.
+            // This token was written *before* the one in front of it, which a
+            // stream assembled from more than one place can be. (A stream with
+            // no positions at all never gets here: that is
+            // `reconstruct_from_tokens`.) Keep the tokens; separate them with a
+            // space so that they do not merge into one C token.
             if !out.is_empty() {
                 out.push(' ');
                 cur_col += 1;
@@ -1274,7 +1655,233 @@ fn reconstruct(toks: &[FlatTok]) -> (String, AnchorList) {
         anchors.push((anchor_start as u32, out.len() as u32, t.span));
     }
 
-    (out, anchors)
+    Rebuilt {
+        text: out,
+        anchors,
+        blocked: None,
+    }
+}
+
+/// Last-resort raw-token strategy: rebuild the text from the tokens alone.
+///
+/// Where the host gives no positions there is nothing to place tokens *at*, and
+/// the one thing left to get right is which of them were written together. A
+/// space goes between any two tokens except after a `Punct` the next token
+/// followed immediately, so `->`, `==`, `<<=`, `&&`, `++` and `...` come out as
+/// the single C operators they are while `- -` stays two tokens and `a + +b`
+/// stays an addition of a unary plus. Nothing is ever dropped — only a token
+/// that carries another's source text may be, and a host with no positions gives
+/// no source text either.
+///
+/// Comments, line breaks and the columns are gone for good, which costs the C
+/// text nothing that is not a *directive*: those are lines. The forms whose end
+/// the tokens themselves give away are written on a line of their own, and any
+/// other — where the end would have to be guessed — stops the rebuild with one
+/// diagnostic; see [`Blocked`] and [`directive_shape`].
+fn reconstruct_from_tokens(toks: &[FlatTok], entry: &str) -> Rebuilt {
+    let mut out = Builder::default();
+    // Whether the token just written was a `Punct` the next one follows
+    // immediately, so that the two make up one C operator.
+    let mut glued = false;
+    let mut prev: Option<&FlatTok> = None;
+    let mut i = 0;
+    while i < toks.len() {
+        let tok = &toks[i];
+        if let Some(p) = prev
+            && shares_previous_span(p, tok)
+        {
+            i += 1;
+            continue;
+        }
+        prev = Some(tok);
+
+        if !is_hash(tok) {
+            out.write(tok, !glued);
+            glued = tok.kind == FlatKind::Punct && tok.joint;
+            i += 1;
+            continue;
+        }
+
+        // A directive: its own line, and only if the tokens say where it ends.
+        let rest = &toks[i..];
+        let Some(shape) = directive_shape(rest) else {
+            return Rebuilt {
+                text: String::new(),
+                anchors: AnchorList::new(),
+                blocked: Some(blocked_directive(rest, entry)),
+            };
+        };
+        out.newline();
+        out.write(&rest[0], false);
+        for (n, tok) in rest[1..shape.tokens()].iter().enumerate() {
+            // One space after the directive's name, and none anywhere else: a
+            // header name is a single token to the preprocessor, so
+            // `<` `stdio` `.` `h` `>` has to come back out as `<stdio.h>`.
+            out.write(tok, n == 1);
+        }
+        out.newline();
+        glued = false;
+        i += shape.tokens();
+    }
+    Rebuilt {
+        text: out.text,
+        anchors: out.anchors,
+        blocked: None,
+    }
+}
+
+/// The text a token-only rebuild is writing, and where each token went.
+#[derive(Default)]
+struct Builder {
+    text: String,
+    anchors: AnchorList,
+    /// Whether nothing has been written on the current line yet, in which case
+    /// no separator may be.
+    at_line_start: bool,
+}
+
+impl Builder {
+    /// Writes one token, with a space in front of it when `space` asks for one
+    /// and it is not starting a line.
+    fn write(&mut self, tok: &FlatTok, space: bool) {
+        if space && !self.at_line_start && !self.text.is_empty() {
+            self.text.push(' ');
+        }
+        let start = self.text.len() as u32;
+        self.text.push_str(&tok.text);
+        self.anchors.push((start, self.text.len() as u32, tok.span));
+        self.at_line_start = false;
+    }
+
+    /// Ends the current line, so that what comes next begins one.
+    ///
+    /// This is the only way a newline is ever written, because the only thing a
+    /// line means here is "a directive starts here" — and the preprocessor
+    /// decides that by the `#` being the first token on its line.
+    fn newline(&mut self) {
+        if !self.text.is_empty() && !self.at_line_start {
+            self.text.push('\n');
+        }
+        self.at_line_start = true;
+    }
+}
+
+/// Whether this token is the `#` that opens a directive.
+///
+/// In C a `#` can be nothing else: the two preprocessor *operators* spelled
+/// with one live in a `#define` replacement list, which is a directive itself.
+fn is_hash(tok: &FlatTok) -> bool {
+    tok.kind == FlatKind::Punct && tok.text == "#"
+}
+
+/// A directive whose end is known from the tokens alone.
+///
+/// Everything a directive may be followed by is another line, and there are no
+/// lines here — so a form is usable exactly when its own tokens say where it
+/// stops. These do; `#define`, `#if`, `#elif`, `#error`, `#warning`, `#line`,
+/// `#embed`, `#pragma` other than `once` and a `#` followed by anything but a
+/// directive name do not, and are [`Blocked`].
+#[derive(Clone, Copy)]
+enum Shape {
+    /// A `#` with nothing at all after it: the null directive.
+    Null,
+    /// `#` and the directive's name: `#else`, `#endif`.
+    Bare,
+    /// `#`, the name and one identifier: `#ifdef X`, `#undef X`, `#pragma once`.
+    Word,
+    /// `#include` and a quoted header name, which is one string literal.
+    Quoted,
+    /// `#include` and an angled header name, holding `tokens` of path.
+    Angled(usize),
+}
+
+impl Shape {
+    /// How many tokens the directive is, `#` included.
+    fn tokens(self) -> usize {
+        match self {
+            Shape::Null => 1,
+            Shape::Bare => 2,
+            Shape::Word | Shape::Quoted => 3,
+            // `#`, `include`, `<`, the path, `>`.
+            Shape::Angled(tokens) => 4 + tokens,
+        }
+    }
+}
+
+/// The shape of the directive `toks` opens with — `toks[0]` is its `#` — or
+/// [`None`] when its end cannot be known; see [`Shape`].
+fn directive_shape(toks: &[FlatTok]) -> Option<Shape> {
+    let Some(name) = toks.get(1) else {
+        return Some(Shape::Null);
+    };
+    if name.kind != FlatKind::Ident {
+        return None;
+    }
+    let operand = toks.get(2);
+    let is_ident = |tok: Option<&FlatTok>, text: &str| {
+        tok.is_some_and(|t| t.kind == FlatKind::Ident && (text.is_empty() || t.text == text))
+    };
+    match name.text.as_str() {
+        "include" | "include_next" => {
+            // A quoted name is one literal; an angled one runs to the `>`. A
+            // name a macro stands for (`#include HEADER`) does not say where the
+            // line ends, and neither does a raw string literal — which a C
+            // preprocessor could not read anyway.
+            if operand.is_some_and(|t| t.kind == FlatKind::Literal && t.text.starts_with('"')) {
+                return Some(Shape::Quoted);
+            }
+            if operand.is_some_and(|t| t.kind == FlatKind::Punct && t.text == "<") {
+                let path = toks
+                    .get(3..)?
+                    .iter()
+                    .position(|t| t.kind == FlatKind::Punct && t.text == ">")?;
+                return Some(Shape::Angled(path));
+            }
+            None
+        }
+        // `#elifdef` and `#elifndef` are C23's, and take one name like the rest.
+        "ifdef" | "ifndef" | "undef" | "elifdef" | "elifndef" => {
+            is_ident(operand, "").then_some(Shape::Word)
+        }
+        "else" | "endif" => Some(Shape::Bare),
+        // `#pragma once` is the only pragma whose operands are a fixed set.
+        "pragma" => is_ident(operand, "once").then_some(Shape::Word),
+        _ => None,
+    }
+}
+
+/// The one diagnostic a directive that cannot be delimited earns.
+///
+/// It has three jobs: say what is missing (the positions), say why it is likely
+/// to be missing (an editor looking at an unsaved file, or input another macro
+/// built), and say what to do about it — both ways out, since saving the file is
+/// not always the one the reader wants.
+fn blocked_directive(toks: &[FlatTok], entry: &str) -> Blocked {
+    let what = match toks.get(1) {
+        Some(name) if name.kind == FlatKind::Ident => format!("the '#{}' directive", name.text),
+        _ => "this preprocessing directive".to_owned(),
+    };
+    Blocked {
+        span: toks[0].span,
+        message: format!(
+            "cannot tell where {what} ends: this block's tokens carry no source positions, so its \
+             text had to be rebuilt from the tokens alone — and a directive is a line, of which \
+             tokens keep nothing"
+        ),
+        notes: vec![
+            "the compiler that expanded this gave no position for any token, and the invocation \
+             was not found in this crate's sources either. An editor analysing a file you have \
+             not saved yet looks exactly like that — rust-analyzer gives a procedural macro no \
+             positions, and what is on disk no longer matches what you are typing — and so does \
+             input another macro built."
+                .to_owned(),
+            format!(
+                "save the file and this block is read from disk again, directives and all; or \
+                 write it as a string literal — {entry}! {{ r#\"…\"# }} — which needs no \
+                 positions at all"
+            ),
+        ],
+    }
 }
 
 #[cfg(test)]

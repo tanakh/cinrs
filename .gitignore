@@ -5,6 +5,12 @@
 # file the first time the test runs. Its artifacts go to `target/cross-check`.
 /tests/cross/Cargo.lock
 
+# `tests/rust-analyzer-fixture` is the same arrangement for
+# `scripts/check-rust-analyzer.sh`: a crate outside the workspace, whose lock
+# file appears the first time rust-analyzer loads it. Its artifacts go to
+# `target/rust-analyzer-fixture`.
+/tests/rust-analyzer-fixture/Cargo.lock
+
 # insta writes these next to the blessed snapshots when one fails
 *.snap.new
 *.pending-snap

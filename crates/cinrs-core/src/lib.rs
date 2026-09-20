@@ -103,6 +103,7 @@ pub mod gnu;
 pub mod include;
 pub mod ir;
 pub mod lex;
+mod locate;
 pub mod parse;
 pub mod pp;
 pub mod regions;
@@ -115,7 +116,7 @@ use proc_macro2::{Ident, Literal, Span, TokenStream, TokenTree};
 use quote::quote;
 
 pub use ast::TranslationUnit;
-pub use capture::{FileId, InputMode, Pos, Source, SourceMap, SourceRange, Subspan};
+pub use capture::{FileId, InputMode, Origin, Pos, Source, SourceMap, SourceRange, Subspan};
 pub use diag::{Diagnostic, Diagnostics, Level};
 pub use ir::{Program, Ty};
 pub use pp::Token;
@@ -188,6 +189,45 @@ impl Standard {
             (Dialect::Gnu, Standard::C11) => "gnu11!",
             (Dialect::Gnu, Standard::C17) => "gnu17!",
             (Dialect::Gnu, Standard::C23) => "gnu23!",
+        }
+    }
+
+    /// Every name the macro that selects this standard in `dialect` may be
+    /// written with, without the `!`.
+    ///
+    /// Two of them only for C89, which has two names and one entry point; the
+    /// point of the list is that [the search](capture::Origin) for an invocation
+    /// in the crate's sources knows what to look for, and `c90! { … }` has to be
+    /// found as readily as `c89! { … }`.
+    pub fn macro_names_in(self, dialect: Dialect) -> &'static [&'static str] {
+        match (dialect, self) {
+            (Dialect::Iso, Standard::C89) => &["c89", "c90"],
+            (Dialect::Gnu, Standard::C89) => &["gnu89"],
+            (Dialect::Iso, Standard::C99) => &["c99"],
+            (Dialect::Iso, Standard::C11) => &["c11"],
+            (Dialect::Iso, Standard::C17) => &["c17"],
+            (Dialect::Iso, Standard::C23) => &["c23"],
+            (Dialect::Gnu, Standard::C99) => &["gnu99"],
+            (Dialect::Gnu, Standard::C11) => &["gnu11"],
+            (Dialect::Gnu, Standard::C17) => &["gnu17"],
+            (Dialect::Gnu, Standard::C23) => &["gnu23"],
+        }
+    }
+
+    /// The same for the `include_…!` family, which is one entry point per name
+    /// of [`Standard::macro_names_in`].
+    pub fn include_macro_names_in(self, dialect: Dialect) -> &'static [&'static str] {
+        match (dialect, self) {
+            (Dialect::Iso, Standard::C89) => &["include_c89", "include_c90"],
+            (Dialect::Gnu, Standard::C89) => &["include_gnu89"],
+            (Dialect::Iso, Standard::C99) => &["include_c99"],
+            (Dialect::Iso, Standard::C11) => &["include_c11"],
+            (Dialect::Iso, Standard::C17) => &["include_c17"],
+            (Dialect::Iso, Standard::C23) => &["include_c23"],
+            (Dialect::Gnu, Standard::C99) => &["include_gnu99"],
+            (Dialect::Gnu, Standard::C11) => &["include_gnu11"],
+            (Dialect::Gnu, Standard::C17) => &["include_gnu17"],
+            (Dialect::Gnu, Standard::C23) => &["include_gnu23"],
         }
     }
 
@@ -396,6 +436,22 @@ impl Options {
     /// The macro that selects this entry point, as a diagnostic names it.
     pub fn macro_name(&self) -> &'static str {
         self.standard.macro_name_in(self.dialect)
+    }
+
+    /// The [origin](Origin) a real expansion of this entry point has: the names
+    /// the invocation may be written with, and the crate directory Cargo names.
+    ///
+    /// This is what the procedural macros hand to [`expand_with`], and the only
+    /// thing that lets capture find the invocation in the crate's sources when
+    /// the host reports no positions. [`expand`] and [`analyze`] deliberately do
+    /// not use it; see [`Origin`].
+    pub fn origin(&self) -> Origin {
+        Origin::new(self.standard.macro_names_in(self.dialect))
+    }
+
+    /// The same for the `include_…!` entry point of this standard and dialect.
+    pub fn include_origin(&self) -> Origin {
+        Origin::new(self.standard.include_macro_names_in(self.dialect))
     }
 
     /// How a pass gates the features of a newer revision.
@@ -684,18 +740,18 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
 /// intermediate results; [`expand`] is the one the macro calls, and it adds
 /// semantic analysis and code generation on top.
 pub fn analyze(input: TokenStream, options: &Options) -> Analysis {
-    analyze_with(input, options, None)
+    analyze_with(input, options, &Origin::unknown())
 }
 
-/// Runs capture, lexing, preprocessing and parsing over `input`, with a hook
-/// that can point inside a string literal.
+/// Runs capture, lexing, preprocessing and parsing over `input`, with
+/// everything the host says about the invocation itself.
 ///
-/// See [`Subspan`]; [`analyze`] is this with no hook.
-pub fn analyze_with(input: TokenStream, options: &Options, subspan: Option<Subspan>) -> Analysis {
+/// See [`Origin`]; [`analyze`] is this with an origin that says nothing.
+pub fn analyze_with(input: TokenStream, options: &Options, origin: &Origin) -> Analysis {
     let mut diagnostics = Diagnostics::new();
     // Capture must stay on this thread: it handles `proc_macro2::Span`s, which
     // are not `Send`. Everything after it works on plain byte offsets.
-    let source = capture::capture_with(input, &mut diagnostics, subspan);
+    let source = capture::capture_with(input, &mut diagnostics, origin);
     analyze_source(source, options, diagnostics)
 }
 
@@ -846,9 +902,11 @@ fn including_directory(rust_path: Option<&str>) -> Option<PathBuf> {
 /// Against the **directory of the `.rs` file the macro is written in**, which
 /// is what `#include "…"` in a `c99!` block already does and what the author
 /// is looking at. `Span::local_file` is how that directory is found; where the
-/// compiler will not say (input built by another macro, some IDE contexts),
-/// `CARGO_MANIFEST_DIR` stands in, so that a path written relative to the
-/// package still resolves. An absolute path is used as it stands.
+/// compiler will not say (input built by another macro, some IDE contexts), the
+/// invocation is looked for in the crate's own sources — see [`Origin`] — and
+/// `CARGO_MANIFEST_DIR` stands in when even that finds nothing, so that a path
+/// written relative to the package still resolves. An absolute path is used as
+/// it stands.
 ///
 /// # Diagnostics
 ///
@@ -877,7 +935,7 @@ pub fn expand_include(input: TokenStream, options: &Options) -> TokenStream {
         );
     };
 
-    let path = include_path(&name, span);
+    let path = include_path(&name, span, &first, &options.include_origin());
     let found = match include::read_source(&path) {
         Ok(found) => found,
         Err(include::Error::Unreadable { path, error }) => {
@@ -908,11 +966,16 @@ pub fn expand_include(input: TokenStream, options: &Options) -> TokenStream {
 ///
 /// The directory of the `.rs` file the invocation is written in, which is what
 /// `Span::local_file` reports and what a quoted `#include` in a `c99!` block
-/// already searches first; `CARGO_MANIFEST_DIR` when the compiler will not say
-/// where that is, and nothing at all — the path as written, against the working
-/// directory — when even that is unset, which is a unit test rather than a
-/// build.
-fn include_path(name: &str, span: Span) -> PathBuf {
+/// already searches first.
+///
+/// Where the compiler will not say where that is, the invocation is looked for
+/// in the crate's own sources: an `include_…!` whose argument is this very
+/// literal, in a directory that does hold the file it names — which is the test
+/// that tells two invocations of the same name apart, and the only thing this
+/// path can be checked against. Failing that `CARGO_MANIFEST_DIR` stands in, and
+/// failing even that the path is used as written, against the working directory,
+/// which is a unit test rather than a build.
+fn include_path(name: &str, span: Span, input: &Option<TokenTree>, origin: &Origin) -> PathBuf {
     let path = Path::new(name);
     if path.is_absolute() {
         return path.to_path_buf();
@@ -920,6 +983,12 @@ fn include_path(name: &str, span: Span) -> PathBuf {
     if let Some(dir) = span
         .local_file()
         .and_then(|rs| rs.parent().map(Path::to_path_buf))
+    {
+        return dir.join(path);
+    }
+    if let Some(tree) = input
+        && let Some(dir) =
+            capture::invocation_directory(tree, origin, |dir| dir.join(path).is_file())
     {
         return dir.join(path);
     }
@@ -959,15 +1028,17 @@ fn include_path(name: &str, span: Span) -> PathBuf {
 /// Rust code calling those functions does not add a second layer of errors on
 /// top of the real one.
 pub fn expand(input: TokenStream, options: &Options) -> TokenStream {
-    expand_with(input, options, None)
+    expand_with(input, options, &Origin::unknown())
 }
 
-/// Expands one `c99!`-style invocation, with a hook that can point inside a
-/// string literal.
+/// Expands one `c99!`-style invocation, with everything the host says about the
+/// invocation itself.
 ///
-/// See [`Subspan`]; [`expand`] is this with no hook.
-pub fn expand_with(input: TokenStream, options: &Options, subspan: Option<Subspan>) -> TokenStream {
-    generate_unit(analyze_with(input, options, subspan), &[])
+/// This is what the procedural macros call, with [`Options::origin`]; see
+/// [`Origin`] for what it adds and why [`expand`] — which is this with an origin
+/// that says nothing — does not.
+pub fn expand_with(input: TokenStream, options: &Options, origin: &Origin) -> TokenStream {
+    generate_unit(analyze_with(input, options, origin), &[])
 }
 
 /// Semantic analysis and code generation over a finished [`Analysis`].

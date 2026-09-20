@@ -1,0 +1,21 @@
+# The crate `scripts/check-rust-analyzer.sh` opens with rust-analyzer.
+#
+# Deliberately outside the workspace — the empty `[workspace]` table below is
+# what detaches it — because it is not built by an ordinary `cargo build` of this
+# repository at all: it exists to be *analysed*, by a host that hands a
+# procedural macro no source positions, and every `c99!` in it has to come out
+# with no diagnostic anyway. See `src/lib.rs` for what each block is there to
+# prove, and `doc/features.md`, "Input forms", for how a block gets its text.
+[package]
+name = "cinrs-rust-analyzer-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cinrs = { path = "../.." }
+
+[lib]
+path = "src/lib.rs"

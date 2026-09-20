@@ -366,7 +366,12 @@ fn include(input: TokenStream, options: Options) -> TokenStream {
 
 fn run(input: TokenStream, options: Options) -> TokenStream {
     let subspan = subspan(&input);
-    cinrs_core::expand_with(input.into(), &options, subspan).into()
+    // `Options::origin` is what tells the front end which macro this is and
+    // which directory Cargo is building, so that a host reporting no positions
+    // for its tokens — `rust-analyzer` — can still be shown the invocation's own
+    // text: see `cinrs_core::Origin`.
+    let origin = options.origin().with_subspan(subspan);
+    cinrs_core::expand_with(input.into(), &options, &origin).into()
 }
 
 /// A hook resolving a byte range of a string-literal body into a span.

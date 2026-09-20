@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use cinrs_core::capture::InputMode;
-use cinrs_core::{Options, Standard, Subspan, analyze, expand, expand_with};
+use cinrs_core::{Options, Origin, Standard, Subspan, analyze, expand, expand_with};
 use proc_macro2::{TokenStream, TokenTree};
 
 fn options() -> Options {
@@ -389,7 +389,8 @@ fn with_subspan(input: &str, span: Option<proc_macro2::Span>) -> (Vec<EmittedErr
         seen.borrow_mut().push((range.start, range.end));
         span
     });
-    let errors = emitted_errors(expand_with(stream(input), &options(), Some(hook)));
+    let origin = Origin::unknown().with_subspan(Some(hook));
+    let errors = emitted_errors(expand_with(stream(input), &options(), &origin));
     let ranges = asked.borrow().clone();
     (errors, ranges)
 }

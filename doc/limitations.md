@@ -67,3 +67,16 @@
   computes the wrong thing.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
+* **In an editor, a raw-token block with a `#define` or an `#if` needs the file
+  to be saved.** rust-analyzer hands a procedural macro tokens with no source
+  positions at all, so a block's text is recovered by finding the invocation in
+  the crate's `.rs` files and matching it token for token — see
+  [Input forms](features.md#where-a-raw-token-blocks-text-comes-from). While a
+  buffer differs from what is on disk there is no match, and a text rebuilt from
+  the tokens alone has no lines to hang a directive on: such a block reports, once
+  and on the `#`, that it cannot be read, and reads normally again the moment the
+  file is saved. Everything else — any C without directives, `#include`, `#ifdef`,
+  `#endif` — works in an unsaved buffer too, and a block written as a
+  [string literal](features.md#input-forms) (`c99! { r#"…"# }`) never needs a
+  position in the first place. A `cargo build` is unaffected: `rustc` gives the
+  positions and the file on disk is what it compiles.

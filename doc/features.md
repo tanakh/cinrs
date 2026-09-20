@@ -436,6 +436,68 @@ written in raw-token form either, so a replacement list spells the pasting
 operator `a # # b`. The third form is a **file**: `include_c99!("parser.c")` and
 one such macro per entry point — see [Including a C file](include-c.md).
 
+### Where a raw-token block's text comes from
+
+A token stream is not text, and the preprocessor needs text: `#define` and `#if`
+are *lines*, and `#error` reproduces what was written. So a raw-token block
+recovers its own source text, in one of three ways, and which one it was is
+invisible unless the last applies:
+
+* **From the `.rs` file, by position.** The first token is asked which file it is
+  in and where, and that file is sliced between the first and the last token —
+  comments, line breaks and columns exactly as written. This is what a
+  `cargo build` does, every time.
+* **From the `.rs` file, by finding the invocation.** A host may hand a
+  procedural macro tokens with *no positions at all*: rust-analyzer reports no
+  file, no source text and line 1 column 0 for every token alike. The text is
+  still on disk, and which text it is can be proved — the crate's `.rs` files
+  (the directory `CARGO_MANIFEST_DIR` names) are searched for an invocation whose
+  token sequence is exactly the one the macro was handed, matching token by token
+  with nothing but whitespace and comments between and nothing left over. A match
+  gives the same text the first way would, so everything else — `__FILE__`, a
+  quoted `#include` searching beside the file, `include_str!` rebuild tracking,
+  the identity of the unit — is unchanged.
+* **From the tokens alone.** Where the invocation is not found either, the text
+  is rebuilt from the tokens: one space between two of them, none where the host
+  says they were written together, so `->`, `<<=`, `&&` and `++` stay single
+  operators and `a - -b` stays what it was. This is enough for any C that is not
+  a directive; the directives whose end the tokens themselves give away
+  (`#include <…>`, `#include "…"`, `#ifdef X`, `#ifndef X`, `#undef X`, `#else`,
+  `#endif`, `#pragma once`, C23's `#elifdef`/`#elifndef`) are written on a line
+  of their own, and one whose end would have to be guessed is a single clear
+  diagnostic instead — see [Limitations](limitations.md).
+
+#### Identical invocations
+
+Two blocks with the *same tokens* are ordinary — a test file repeats small units
+— and a host that gives no positions cannot say which of them it is expanding.
+The second way above therefore has a rule, and it only ever applies in an editor:
+a build knows exactly where its invocation is.
+
+Whichever copy is found, the **C is the same**: that is what matching every token
+proves. What can differ is only what follows from *where* it was written — the
+directory a quoted `#include "…"` is looked for beside, `__FILE__` and
+`__LINE__`, the path whose edits trigger a rebuild, the name of the module the
+expansion goes into — and, in a contrived case, the line structure around a
+directive, since `#define A 1` on a line of its own and the same tokens run
+together with what follows do not mean the same thing.
+
+The copies are tried in sorted path order, and the one taken is **the first whose
+directory holds every header the unit includes by name**; failing that, the first
+of them. So two copies of a block in two directories, only one of which has the
+header next to it, both work. A header that comes from an include path or from
+the bundled set is next to none of the copies, which is why this is a preference
+and never a refusal — and nothing is reported when copies disagree about
+anything else, because a `__LINE__` that is off by a few lines in an editor is
+better than a red mark under code that compiles. Two *identical* blocks in one
+Rust module are the one case with no good answer: both are found as the same
+copy, so both expansions carry the same generated module name. rust-analyzer says
+nothing at all about that today, and the worst it could say is that a name is
+defined twice — never anything stranger. `rustc` has no such trouble, since the
+two invocations are in different places and it knows it; and neither has the
+editor once the two blocks differ in a single token (a comment is not one: the
+search compares tokens, and skips comments on both sides).
+
 ## Diagnostics
 
 Every generated token carries the span of the C token it came from, so both
@@ -443,6 +505,15 @@ Every generated token carries the span of the C token it came from, so both
 diagnostics and for `rustc`'s. Pointing *inside* a string literal needs
 `Literal::subspan`, which is unstable, so there the position is appended to the
 message instead; the crate's `nightly` feature turns it back into a caret.
+
+An IDE is not a compiler, and rust-analyzer in particular gives a procedural
+macro no positions for its tokens while still resolving the spans that come back
+out on generated ones. That is why a block recovers its text [the second
+way](#where-a-raw-token-blocks-text-comes-from) there: with the text in hand,
+every caret lands where it does in a build. The one case it cannot cover is a
+file whose buffer has not been saved, where what is on disk is not what is being
+typed — then a block holding `#define` or `#if` reports that it cannot be read,
+once, on the `#`, until the file is saved.
 
 ## Variadic functions
 

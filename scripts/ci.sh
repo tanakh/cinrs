@@ -4,8 +4,9 @@
 # `--no-default-features` build, and the documentation.
 #
 #   scripts/ci.sh            fmt, clippy, the workspace tests, no-default-features, docs
-#   scripts/ci.sh --full     the above and then the three conformance harnesses,
-#                            each skipped with a note when its corpus is absent
+#   scripts/ci.sh --full     the above, then the rust-analyzer check and the three
+#                            conformance harnesses, each skipped with a note when
+#                            what it needs — a binary, a corpus — is absent
 #
 # Every step runs under the two ceilings this project does not run anything
 # without — `ulimit -v` on the address space and `timeout(1)` on the clock. A
@@ -109,6 +110,23 @@ step 600 "cargo doc --no-deps" \
     cargo doc --no-deps --locked -p cinrs -p cinrs-core -p cinrs-macros -p cinrs-rt
 
 if [ "$FULL" -eq 1 ]; then
+    # What an editor makes of a crate that uses cinrs, which is a question only
+    # rust-analyzer itself can answer: it hands a procedural macro tokens with no
+    # positions at all, and a `c99!` block's text has to be recovered anyway. The
+    # script skips itself, successfully and with a note, where there is no
+    # rust-analyzer binary at all, and brings its own ceilings, so it is not
+    # wrapped in `step`. (`.github/workflows/ci.yml` runs it as a step of its
+    # own, with the rustup component, rather than through `--full`: that would
+    # turn the conformance harnesses on too.)
+    say ""
+    say "=== scripts/check-rust-analyzer.sh ==="
+    if scripts/check-rust-analyzer.sh; then
+        say "ci: ok: scripts/check-rust-analyzer.sh"
+    else
+        say "ci: FAILED: scripts/check-rust-analyzer.sh"
+        FAILED+=("scripts/check-rust-analyzer.sh")
+    fi
+
     # Each harness in its default *guard* mode: every case not in the
     # expected-failure list must pass, and a listed case that has started
     # passing is reported. `…_REQUIRED=1` turns the harness's own skip into a
