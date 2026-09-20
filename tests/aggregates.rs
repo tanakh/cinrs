@@ -884,7 +884,16 @@ fn integer_constants_cast_to_a_function_pointer_type() {
     // A non-zero constant is an implementation-defined conversion, and goes
     // through `usize`, since the integer type C names need not be
     // pointer-sized. (c-testsuite 00159.)
+    //
+    // The round trip goes through `uintptr_t` rather than `unsigned long`,
+    // which is the type C has for "an integer a pointer survives": `long` is
+    // four bytes on Windows and would truncate the address, and a truncated
+    // function pointer called is an access violation rather than a test
+    // failure. `a_narrow_constant` below is the case where the integer is
+    // deliberately *not* wide enough.
     c99! {
+        #include <stdint.h>
+
         typedef void (*Action)(void);
         typedef int (*Unary)(int);
 
@@ -906,8 +915,8 @@ fn integer_constants_cast_to_a_function_pointer_type() {
             return (a == 0) + (b == 0) + (c == 0);
         }
 
-        Unary from_integer(unsigned long bits) { return (Unary) bits; }
-        unsigned long to_integer(Unary f) { return (unsigned long) f; }
+        Unary from_integer(uintptr_t bits) { return (Unary) bits; }
+        uintptr_t to_integer(Unary f) { return (uintptr_t) f; }
         int roundtrip(int n) { return from_integer(to_integer(negate))(n); }
 
         int a_narrow_constant(void) {

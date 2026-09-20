@@ -15,6 +15,8 @@
 use cinrs::{c17, c23, c89, c90, gnu11, gnu17, gnu23, gnu89, gnu99};
 
 gnu99! {
+    #include <stddef.h>
+
     /* Every one of these needs a later revision than C99, and `gnu99!` takes
      * them all — exactly as `gcc -std=gnu99` does. */
     _Static_assert(sizeof(int) >= 4, "int is at least 32 bits");
@@ -25,7 +27,7 @@ gnu99! {
     };
 
     int kind(int n) { return _Generic(n, int: 1, double: 2, default: 0); }
-    unsigned long alignment(void) { return _Alignof(double); }
+    size_t alignment(void) { return _Alignof(double); }
     int binary(void) { return 0b1010; }
     int empty_init(void) { struct Tagged t = {}; return t.tag; }
 
@@ -71,7 +73,7 @@ c17! {
 #[test]
 fn a_gnu_dialect_accepts_what_a_later_revision_added() {
     assert_eq!(unsafe { kind(0) }, 1);
-    assert_eq!(unsafe { alignment() }, align_of::<f64>() as u64);
+    assert_eq!(unsafe { alignment() } as usize, align_of::<f64>());
     assert_eq!(unsafe { binary() }, 10);
     assert_eq!(unsafe { empty_init() }, 0);
     assert_eq!(unsafe { plain(7) }, 7);
@@ -100,6 +102,8 @@ fn every_gnu_entry_point_exists() {
 use cinrs::c99;
 
 c99! {
+    #include <stddef.h>
+
     /* The `__`-spelled extensions are available in a strict entry point, and
      * this is the point of the policy: a program that guards them with
      * `#if defined(__GNUC__)` gets them either way. */
@@ -108,7 +112,7 @@ c99! {
     int strict_attribute(int n) __attribute__((const));
     int strict_attribute(int n) { return n; }
     int strict_builtin(unsigned int n) { return __builtin_popcount(n); }
-    unsigned long strict_alignof(void) { return __alignof__(long); }
+    size_t strict_alignof(void) { return __alignof__(long); }
     unsigned __int128 strict_int128(unsigned long long n) { return (unsigned __int128) n * n; }
     __thread int strict_thread_local = 4;
     int strict_thread_read(void) { return strict_thread_local; }
@@ -121,8 +125,8 @@ fn the_double_underscore_extensions_need_no_gnu_entry_point() {
     assert_eq!(unsafe { strict_attribute(3) }, 3);
     assert_eq!(unsafe { strict_builtin(7) }, 3);
     assert_eq!(
-        unsafe { strict_alignof() },
-        align_of::<core::ffi::c_long>() as u64
+        unsafe { strict_alignof() } as usize,
+        align_of::<core::ffi::c_long>()
     );
     assert_eq!(
         unsafe { strict_int128(u64::MAX) },

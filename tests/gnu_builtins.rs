@@ -49,6 +49,8 @@ fn the_branch_hints_are_transparent() {
 // ---------------------------------------------------------------------------
 
 c99! {
+    #include <stddef.h>
+
     #define is_constant(x) __builtin_constant_p(x)
 
     int constant_of_a_literal(void) { return is_constant(1 + 2 * 3); }
@@ -80,9 +82,11 @@ c99! {
         return __builtin_choose_expr(0, "not an int at all", 42);
     }
 
-    /* Without tracking object sizes there are exactly two honest answers. */
-    unsigned long unknown_max(char *p) { return __builtin_object_size(p, 0); }
-    unsigned long unknown_min(char *p) { return __builtin_object_size(p, 2); }
+    /* Without tracking object sizes there are exactly two honest answers.
+       `__builtin_object_size` answers a `size_t`, and "unknown" is all of its
+       bits — which is not `unsigned long`'s on every target. */
+    size_t unknown_max(char *p) { return __builtin_object_size(p, 0); }
+    size_t unknown_min(char *p) { return __builtin_object_size(p, 2); }
 }
 
 #[test]
@@ -100,7 +104,10 @@ fn the_questions_about_the_program_are_answered_at_compile_time() {
     assert_eq!(unsafe { pointer_types() }, 1);
     assert_eq!(unsafe { chosen() }, 42);
     assert_eq!(unsafe { not_chosen() }, 42);
-    assert_eq!(unsafe { unknown_max(core::ptr::null_mut()) }, u64::MAX);
+    assert_eq!(
+        unsafe { unknown_max(core::ptr::null_mut()) } as usize,
+        usize::MAX
+    );
     assert_eq!(unsafe { unknown_min(core::ptr::null_mut()) }, 0);
 }
 
@@ -128,7 +135,12 @@ c99! {
 #[test]
 fn the_bit_builtins_agree_with_rusts_integer_methods() {
     assert_eq!(unsafe { popcount(0b1011_0110) }, 5);
-    assert_eq!(unsafe { popcountl(u64::MAX) }, 64);
+    // `__builtin_popcountl` counts an `unsigned long`, whose width follows the
+    // data model: 64 bits under LP64 and 32 on Windows.
+    assert_eq!(
+        unsafe { popcountl(core::ffi::c_ulong::MAX) },
+        core::ffi::c_ulong::BITS as core::ffi::c_int
+    );
     assert_eq!(unsafe { popcountll(0) }, 0);
     // Undefined for zero in C, so only non-zero operands are asked about.
     assert_eq!(unsafe { clz(1) }, 31);
@@ -549,14 +561,6 @@ c99! {
         return __builtin_snprintf(buf, n, "%d", value);
     }
 
-    /* The GNU string functions, which `<string.h>` does not declare. */
-    void *after(void *dst, const void *src, unsigned long n) {
-        return __builtin_mempcpy(dst, src, n);
-    }
-    char *end_of(char *dst, const char *src) { return __builtin_stpcpy(dst, src); }
-    void zero(void *p, unsigned long n) { __builtin_bzero(p, n); }
-    char *first(const char *s, int c) { return __builtin_index(s, c); }
-
     /* A `long double` maths builtin is the `double` one: `long double` *is*
      * `double` here, and calling the platform's `sqrtl` would pass it an
      * eighty-bit value the generated Rust cannot make. */
@@ -582,22 +586,6 @@ fn a_library_builtin_declares_its_own_function() {
         assert_eq!(into_n(buf.as_mut_ptr().cast(), buf.len() as _, 42), 2);
         assert_eq!(&buf[..2], b"42");
 
-        let src = [1u8, 2, 3, 4];
-        let mut dst = [0u8; 4];
-        let end = after(dst.as_mut_ptr().cast(), src.as_ptr().cast(), 4);
-        assert_eq!(end, dst.as_mut_ptr().wrapping_add(4).cast());
-        assert_eq!(dst, [1, 2, 3, 4]);
-
-        let mut text = [0u8; 8];
-        let end = end_of(text.as_mut_ptr().cast(), c"abc".as_ptr());
-        assert_eq!(end, text.as_mut_ptr().wrapping_add(3).cast());
-        zero(dst.as_mut_ptr().cast(), 4);
-        assert_eq!(dst, [0, 0, 0, 0]);
-        assert_eq!(
-            first(c"abc".as_ptr(), b'b' as _),
-            c"abc".as_ptr().add(1) as _
-        );
-
         assert_eq!(root_l(16.0), 4.0);
         assert_eq!(power_l(2.0, 10.0), 1024.0);
         assert_eq!(biggest(1.0, 2.0), 2.0);
@@ -606,6 +594,48 @@ fn a_library_builtin_declares_its_own_function() {
         assert_eq!(fused(2.0, 3.0, 4.0), 10.0);
         assert_eq!(rounded(2.5), 2.0);
         assert_eq!(widest_abs(-9), 9);
+    }
+}
+
+/// The GNU string functions, which the builtin declares and the C library then
+/// has to *have*: `mempcpy` is glibc's and musl's, `stpcpy`, `bzero` and
+/// `index` are POSIX's, and the Microsoft C runtime exports none of the four —
+/// a unit calling one there is a link error rather than anything cinrs
+/// decides. The builtins themselves are recognised on every target; what this
+/// checks is the call reaching the library, so it runs where the library has
+/// them.
+#[cfg(target_os = "linux")]
+mod the_gnu_string_functions {
+    use cinrs::c99;
+
+    c99! {
+        void *after(void *dst, const void *src, unsigned long n) {
+            return __builtin_mempcpy(dst, src, n);
+        }
+        char *end_of(char *dst, const char *src) { return __builtin_stpcpy(dst, src); }
+        void zero(void *p, unsigned long n) { __builtin_bzero(p, n); }
+        char *first(const char *s, int c) { return __builtin_index(s, c); }
+    }
+
+    #[test]
+    fn a_library_builtin_declares_its_own_gnu_function() {
+        unsafe {
+            let src = [1u8, 2, 3, 4];
+            let mut dst = [0u8; 4];
+            let end = after(dst.as_mut_ptr().cast(), src.as_ptr().cast(), 4);
+            assert_eq!(end, dst.as_mut_ptr().wrapping_add(4).cast());
+            assert_eq!(dst, [1, 2, 3, 4]);
+
+            let mut text = [0u8; 8];
+            let end = end_of(text.as_mut_ptr().cast(), c"abc".as_ptr());
+            assert_eq!(end, text.as_mut_ptr().wrapping_add(3).cast());
+            zero(dst.as_mut_ptr().cast(), 4);
+            assert_eq!(dst, [0, 0, 0, 0]);
+            assert_eq!(
+                first(c"abc".as_ptr(), b'b' as _),
+                c"abc".as_ptr().add(1) as _
+            );
+        }
     }
 }
 

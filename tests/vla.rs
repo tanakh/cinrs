@@ -286,11 +286,14 @@ fn a_thousand_large_arrays_do_not_grow_the_process() {
     // `/proc/self/statm` turns "no leak by construction" into an assertion;
     // where there is no procfs the test still exercises the loop.
     c99! {
-        long touch(int n) {
+        /* `long long` rather than `long`: the running total on the Rust side
+           is eleven thousand mebibytes, which a 32-bit `long` could not hold
+           and Windows gives it only 32 bits. */
+        long long touch(int n) {
             char a[n];
             a[0] = 1;
             a[n - 1] = 2;
-            return a[0] + a[n - 1] + (long)sizeof a;
+            return a[0] + a[n - 1] + (long long)sizeof a;
         }
     }
 

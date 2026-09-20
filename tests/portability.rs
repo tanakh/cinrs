@@ -19,10 +19,11 @@
 //! `SIGUSR1`), nothing glibc-only, and no `#pragma cinrs link` — the C library
 //! is what the Rust runtime already links on all three.
 //!
-//! Two calls are left out on Windows, and not because of C: `time` and
-//! `difftime`, whose plain names the Windows SDK's import library does not
-//! export. The `#if !defined(_WIN32)` below says the whole of it, and
-//! `doc/cross-compilation.md` records it as a known gap.
+//! Nothing is left out on any of the three. The `<time.h>` calls are the one
+//! place where cinrs has to know *which* C library it is beyond the `printf`
+//! family — the Microsoft one exports `_time64` and not `time` — so they are
+//! here in full, with answers C fixes rather than the machine, and the comment
+//! above them says why each is worth asking.
 //!
 //! Every value is asserted **from Rust**: the C computes, Rust checks. What a
 //! platform is allowed to differ about is written as the platform's own
@@ -267,17 +268,17 @@ size_t format_a_date(char *buf, size_t n) {
     return strftime(buf, n, "%Y-%m-%d %H:%M:%S", &when);
 }
 
-/* `time` and `difftime` are left out on Windows, and the reason is a link error
- * rather than anything about C: the Windows SDK's `ucrt.lib` — the import
- * library `rustc` links for a `*-windows-msvc` target — exports `_time64`,
- * `_difftime64`, `_mktime64`, `_localtime64`, `_gmtime64` and `_ctime64` and
- * *not* the plain names, which are macros in Microsoft's own <time.h>. cinrs's
- * bundled <time.h> declares the plain ones, so a unit that calls them does not
- * link there; `clock`, `asctime` and `strftime` are ordinary exports and do.
- * See the "Cross-compilation" section of the documentation. mingw-w64 is not
- * affected — `ucrtbase.dll` does export the plain names — but `_WIN32` is all
- * the C can ask about, so both are left out here. */
-#if !defined(_WIN32)
+/* The calendar. These run on Windows too, and are the test of the one thing
+ * cinrs does about *which* C library it is beyond the `printf` family: the
+ * Windows SDK's `ucrt.lib` exports `_time64`, `_difftime64`, `_mktime64`,
+ * `_localtime64`, `_gmtime64`, `_ctime64` and `_timespec64_get` and none of
+ * the plain names, which are macros in Microsoft's own <time.h>, so cinrs
+ * links a declaration of `time` by `_time64` there (codegen's `MSVC_RENAMED`).
+ * Getting that wrong is not a link error: the MSVC toolset's `msvcrt.lib`
+ * defines `time` as a weak alias for the **32-bit** `_time32`, and a program
+ * whose `time_t` is 64 bits then reads answers the library never gave. So
+ * what is asserted below is not only that the calls resolve but that they
+ * answer what C says, at dates a 32-bit `time_t` could not hold. */
 
 int now_is_positive(void) { return time(NULL) > 0; }
 
@@ -293,7 +294,89 @@ double seconds_between(int seconds) {
     return difftime(now + seconds, now);
 }
 
-#endif
+/* `gmtime` of a `time_t` whose broken-down form is fixed by C rather than by
+ * the machine's timezone: 1000000000 is 2001-09-09T01:46:40Z, a Sunday and the
+ * 252nd day of that year — `tm_wday` 0 and `tm_yday` 251, both counted from
+ * zero. Every field is read back, because `struct tm`'s layout is the bundled
+ * header's and the values are the library's. */
+int gmtime_of_a_known_stamp(int *year, int *mon, int *mday,
+                            int *hour, int *min, int *sec,
+                            int *wday, int *yday) {
+    time_t stamp = 1000000000;
+    struct tm *broken = gmtime(&stamp);
+    if (broken == NULL) return 0;
+    *year = broken->tm_year;
+    *mon = broken->tm_mon;
+    *mday = broken->tm_mday;
+    *hour = broken->tm_hour;
+    *min = broken->tm_min;
+    *sec = broken->tm_sec;
+    *wday = broken->tm_wday;
+    *yday = broken->tm_yday;
+    return 1;
+}
+
+/* `mktime(localtime(t)) == t` holds whatever the timezone is: the two are
+ * inverses of each other, which is the only thing about them a test on an
+ * unknown machine may assert. */
+int the_local_time_round_trips(long long stamp) {
+    time_t when = (time_t) stamp;
+    struct tm copy;
+    struct tm *broken = localtime(&when);
+    if (broken == NULL) return 0;
+    copy = *broken;
+    return mktime(&copy) == when;
+}
+
+/* A date before the epoch, whose `time_t` is negative — the Unix libraries
+ * answer 1960-01-01 itself, and the Microsoft one answers `(time_t)-1`, which
+ * is also negative and is all this asks about. A *32-bit* `mktime` returns
+ * either of those in a 32-bit register, and a caller reading a 64-bit
+ * `time_t` then sees a large **positive** number instead: 0xED2F1900 or
+ * 0xFFFFFFFF. That is the failure a wrongly named symbol produces, and no
+ * link error would. */
+long long a_date_before_the_epoch(void) {
+    struct tm when;
+    memset(&when, 0, sizeof when);
+    when.tm_year = 60; /* 1960 */
+    when.tm_mon = 0;
+    when.tm_mday = 1;
+    when.tm_hour = 12;
+    when.tm_isdst = -1;
+    return (long long) mktime(&when);
+}
+
+/* C says `ctime` writes 26 bytes: "Www Mmm dd hh:mm:ss yyyy\n\0". */
+int ctime_is_twenty_five_characters(void) {
+    time_t stamp = 1000000000;
+    char *text = ctime(&stamp);
+    return text != NULL && strlen(text) == 25;
+}
+
+size_t size_of_time_t(void) { return sizeof(time_t); }
+
+/* 2040-01-01T00:00:00Z, which is the year 140 of `struct tm` and which no
+ * 32-bit `time_t` can hold — so Rust asks this one only where `time_t` is
+ * eight bytes, which is everywhere but a 32-bit Unix. On Windows it is the
+ * difference between `_gmtime64` and `_gmtime32`, the second of which answers
+ * a null pointer. */
+int gmtime_past_2038(int *year) {
+    time_t stamp = 2208988800;
+    struct tm *broken = gmtime(&stamp);
+    if (broken == NULL) return 0;
+    *year = broken->tm_year;
+    return 1;
+}
+
+/* C11 7.27.2.5. `TIME_UTC` is the one base every implementation has. */
+int the_monotonic_clock_answers(long long *secs) {
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
+    if (timespec_get(&ts, TIME_UTC) != TIME_UTC) return 0;
+    *secs = (long long) ts.tv_sec;
+    return ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000L;
+}
 
 /* -- <wchar.h> --------------------------------------------------------- */
 
@@ -621,10 +704,12 @@ fn the_clock_and_a_formatted_date() {
     }
 }
 
-/// `time` and `difftime`, which are not on Windows: see the comment above the
-/// `#if !defined(_WIN32)` in the unit — the Windows SDK's import library has
-/// `_time64` and not `time`, so a unit calling the C name does not link there.
-#[cfg(not(windows))]
+/// `<time.h>`, which on Windows is the one family cinrs links by another name:
+/// see the comment above the calls in the unit. Every answer here is C's own —
+/// a `gmtime` of a fixed `time_t`, `mktime(localtime(t)) == t`, and the
+/// `(time_t)-1` that a 32-bit function could not report through a 64-bit
+/// `time_t` — so a platform that resolved the wrong symbol fails here rather
+/// than quietly answering something else.
 #[test]
 fn the_calendar() {
     unsafe {
@@ -632,6 +717,54 @@ fn the_calendar() {
         assert_eq!(both_forms_of_time_agree(), 1);
         assert_eq!(seconds_between(0), 0.0);
         assert_eq!(seconds_between(2), 2.0);
+
+        // 1000000000 is 2001-09-09T01:46:40Z: `tm_year` 101, `tm_mon` 8,
+        // a Sunday (`tm_wday` 0) and the 252nd day of the year
+        // (`tm_yday` 251).
+        let (mut year, mut mon, mut mday) = (0, 0, 0);
+        let (mut hour, mut min, mut sec) = (0, 0, 0);
+        let (mut wday, mut yday) = (0, 0);
+        assert_eq!(
+            gmtime_of_a_known_stamp(
+                &mut year, &mut mon, &mut mday, &mut hour, &mut min, &mut sec, &mut wday,
+                &mut yday,
+            ),
+            1,
+            "gmtime answered a null pointer"
+        );
+        assert_eq!(
+            (year, mon, mday, hour, min, sec, wday, yday),
+            (101, 8, 9, 1, 46, 40, 0, 251)
+        );
+
+        // Whatever the machine's timezone is, the two are inverses.
+        for stamp in [0i64, 1_000_000_000, 1_700_000_000] {
+            assert_eq!(
+                the_local_time_round_trips(stamp),
+                1,
+                "round trip of {stamp}"
+            );
+        }
+
+        // Negative, whether the library answers the date itself or the
+        // `(time_t)-1` the Microsoft one gives a pre-epoch date: what a
+        // 32-bit `mktime` would hand back is positive either way.
+        let before = a_date_before_the_epoch();
+        assert!(before < 0, "mktime of 1960 answered {before}");
+
+        assert_eq!(ctime_is_twenty_five_characters(), 1);
+
+        // A date beyond a 32-bit `time_t`, wherever `time_t` is wider than
+        // one: 2040-01-01, which is `tm_year` 140.
+        if size_of_time_t() as usize >= 8 {
+            let mut year = 0;
+            assert_eq!(gmtime_past_2038(&mut year), 1, "gmtime of 2040 was null");
+            assert_eq!(year, 140);
+        }
+
+        let mut secs = 0i64;
+        assert_eq!(the_monotonic_clock_answers(&mut secs), 1);
+        assert!(secs > 1_600_000_000, "timespec_get answered {secs}");
     }
 }
 

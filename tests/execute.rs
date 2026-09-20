@@ -485,6 +485,7 @@ fn shifts() {
         int shift_right(int x, int n) { return x >> n; }
         unsigned ushift_right(unsigned x, int n) { return x >> n; }
         long shift_long(long x, int n) { return x << n; }
+        long long shift_long_long(long long x, int n) { return x << n; }
     }
 
     assert_eq!(unsafe { shift_left(1, 4) }, 16);
@@ -493,7 +494,26 @@ fn shifts() {
     // mainstream C implementation does.
     assert_eq!(unsafe { shift_right(-16, 2) }, -4);
     assert_eq!(unsafe { ushift_right(0x8000_0000, 4) }, 0x0800_0000);
-    assert_eq!(unsafe { shift_long(1, 40) }, 1 << 40);
+    // A shift wider than an `int`. `long long` is 64 bits on every data model
+    // this crate supports, so a shift by 40 is defined there whatever the
+    // platform.
+    assert_eq!(unsafe { shift_long_long(1, 40) }, 1i64 << 40);
+    // `long` is 64 bits only under LP64 — it is 32 on Windows, where `1L << 40`
+    // would be undefined — so the count follows the platform's own `long`, and
+    // so does the expected value. It is written as a shift of a *variable* one
+    // because `1 << 40` typed as a 32-bit `c_long` is a compile-time
+    // `arithmetic_overflow` even in a branch that never runs.
+    let count = if size_of::<core::ffi::c_long>() == 8 {
+        40
+    } else {
+        20
+    };
+    let one: core::ffi::c_long = 1;
+    assert_eq!(
+        unsafe { shift_long(1, count) },
+        one << count,
+        "a `long` shift by {count}"
+    );
 }
 
 /// A shift by a count the shifted type cannot hold.
@@ -1457,9 +1477,13 @@ fn an_integer_constant_expression_keeps_its_type() {
         #include <stdio.h>
 
         /* An argument matched by `...` has no parameter to take its type from,
-           so the conditional has to carry its own: `%ld` reads eight bytes. */
+           so the conditional has to carry its own. `long long` and `%lld`
+           rather than `long` and `%ld`, because the two have to agree on every
+           platform: a `long` is four bytes on Windows, where `3000000000L` is
+           a `long long` already (6.4.4.1p5) and `%ld` would print the low half
+           of it. */
         int formatted(char *buf, unsigned long size, int n) {
-            return snprintf(buf, size, "%ld", n ? 3000000000L : 1L);
+            return snprintf(buf, size, "%lld", n ? 3000000000LL : 1LL);
         }
     }
 

@@ -383,11 +383,14 @@ fn offsetof_agrees_with_rusts_offset_of() {
         size_t offset_of_name(void) { return offsetof(struct Mixed, name); }
         size_t size_of_mixed(void) { return sizeof(struct Mixed); }
         int null_is_null(void) { return NULL == (void *)0; }
+        /* `wchar_t` is an `int` on the Unix platforms and an `unsigned short`
+         * on Windows; what holds on both is that `<stddef.h>` gives it the
+         * platform's own width, which Rust checks against `size_of` below. */
         int types_are_sized(void) {
             return sizeof(size_t) == sizeof(void *)
-                && sizeof(ptrdiff_t) == sizeof(void *)
-                && sizeof(wchar_t) == sizeof(int);
+                && sizeof(ptrdiff_t) == sizeof(void *);
         }
+        size_t size_of_wchar(void) { return sizeof(wchar_t); }
     }
 
     unsafe {
@@ -407,6 +410,12 @@ fn offsetof_agrees_with_rusts_offset_of() {
         assert_eq!(size_of_mixed() as usize, core::mem::size_of::<Mixed>());
         assert_eq!(null_is_null(), 1);
         assert_eq!(types_are_sized(), 1);
+        assert_eq!(size_of_wchar() as usize, size_of::<wchar_t>());
+        assert_eq!(
+            size_of::<wchar_t>(),
+            if cfg!(windows) { 2 } else { 4 },
+            "the width of wchar_t"
+        );
     }
 }
 
@@ -625,12 +634,6 @@ int wide_compare(void) {
         && wcsncmp(L"abcdef", L"abcxxx", 3) == 0;
 }
 
-int wide_copy(void) {
-    wchar_t buf[8];
-    wmemcpy(buf, L"hello", 6);
-    return wcscmp(buf, L"hello") == 0 && buf[5] == 0 && wmemcmp(buf, L"hello", 6) == 0;
-}
-
 int wide_format(void) {
     wchar_t buf[32];
     int n = swprintf(buf, 32, L"%ls-%d", L"hi", 42);
@@ -669,8 +672,7 @@ int decode_one_byte(void) {
     mbstate_t state;
     wchar_t wc = 0;
     memset(&state, 0, sizeof state);
-    return mbsinit(&state)
-        && mbrtowc(&wc, "A", 1, &state) == 1
+    return mbrtowc(&wc, "A", 1, &state) == 1
         && wc == L'A'
         && mbrlen("B", 1, &state) == 1;
 }
@@ -681,16 +683,18 @@ int classification(void) {
         && iswctype(L'x', wctype("alpha"));
 }
 
-/* Both headers say what `wchar_t`'s range is, and either may come first. */
-int limits_agree(void) {
-    return sizeof(wchar_t) == 4 && WCHAR_MAX == 2147483647 && WCHAR_MIN < 0;
-}
+/* Both headers say what `wchar_t`'s range is, and either may come first. The
+   type itself is the platform's — a signed 32-bit `int` on the Unix platforms
+   and an `unsigned short` on Windows — so Rust is handed the three values and
+   checks them against the width it sees. */
+int wchar_size(void) { return (int)sizeof(wchar_t); }
+long long wchar_max(void) { return WCHAR_MAX; }
+long long wchar_min(void) { return WCHAR_MIN; }
 "# }
 
     unsafe {
         assert_eq!(wide_length(), 3);
         assert_eq!(wide_compare(), 1);
-        assert_eq!(wide_copy(), 1);
         assert_eq!(wide_format(), 1);
         assert_eq!(wide_search(), 1);
         assert_eq!(wide_tokens(), 1);
@@ -699,7 +703,46 @@ int limits_agree(void) {
         assert_eq!(byte_round_trip(), 1);
         assert_eq!(decode_one_byte(), 1);
         assert_eq!(classification(), 1);
-        assert_eq!(limits_agree(), 1);
+
+        assert_eq!(wchar_size() as usize, size_of::<wchar_t>());
+        let (max, min) = if cfg!(windows) {
+            (65535, 0)
+        } else {
+            (2147483647, -2147483648)
+        };
+        assert_eq!(wchar_max(), max, "WCHAR_MAX");
+        assert_eq!(wchar_min(), min, "WCHAR_MIN");
+    }
+}
+
+/// `wmemcpy`, `wmemcmp` and `mbsinit`, which the Microsoft C runtime has no
+/// symbol for: its own `<wchar.h>` makes them inline over `memcpy` and friends,
+/// and no library on an MSVC link line exports them, so a unit that calls one
+/// there is `LNK2019`. `doc/cross-compilation.md` lists the seven names and the
+/// workaround; the rest of `<wchar.h>` is exported and is in the test above.
+#[cfg(not(all(windows, target_env = "msvc")))]
+#[test]
+fn the_wide_memory_functions() {
+    c99! { r#"
+#include <string.h>
+#include <wchar.h>
+
+int wide_copy(void) {
+    wchar_t buf[8];
+    wmemcpy(buf, L"hello", 6);
+    return wcscmp(buf, L"hello") == 0 && buf[5] == 0 && wmemcmp(buf, L"hello", 6) == 0;
+}
+
+int the_initial_conversion_state(void) {
+    mbstate_t state;
+    memset(&state, 0, sizeof state);
+    return mbsinit(&state) != 0;
+}
+"# }
+
+    unsafe {
+        assert_eq!(wide_copy(), 1);
+        assert_eq!(the_initial_conversion_state(), 1);
     }
 }
 
@@ -711,14 +754,29 @@ fn the_wide_character_limits_survive_both_headers() {
         #include <stdint.h>
         #include <wchar.h>
 
-        int stdint_first(void) { return WCHAR_MAX == INT32_MAX; }
+        /* `wchar_t` is a signed 32-bit `int` on the Unix platforms and an
+         * `unsigned short` on Windows, and the point here is that the two
+         * headers say the same thing about whichever it is. */
+        int stdint_first(void) {
+        #if defined(_WIN32)
+            return WCHAR_MAX == UINT16_MAX && WCHAR_MIN == 0;
+        #else
+            return WCHAR_MAX == INT32_MAX && WCHAR_MIN == INT32_MIN;
+        #endif
+        }
     }
 
     c99! {
         #include <wchar.h>
         #include <stdint.h>
 
-        int wchar_first(void) { return WCHAR_MIN == INT32_MIN; }
+        int wchar_first(void) {
+        #if defined(_WIN32)
+            return WCHAR_MIN == 0 && WCHAR_MAX == UINT16_MAX;
+        #else
+            return WCHAR_MIN == INT32_MIN && WCHAR_MAX == INT32_MAX;
+        #endif
+        }
     }
 
     unsafe {
@@ -892,9 +950,20 @@ fn threads_h_compiles_in_every_entry_point() {
 }
 
 // ---------------------------------------------------------------------------
-// <signal.h>
+// the POSIX headers
 // ---------------------------------------------------------------------------
+//
+// Everything above is ISO C and runs anywhere the crate does. What follows is
+// POSIX, and every one of the four is `#[cfg(target_os = "linux")]`: the
+// numbers and widths asserted are glibc's own — `SIGUSR1` is 10 on Linux and
+// 30 on the BSDs, `mode_t` is four bytes on Linux and two on Apple's platforms
+// — so they say what *this* library does rather than what POSIX requires, and
+// a second POSIX library would need its own answers rather than these. On
+// Windows the bundled `<unistd.h>`, `<fcntl.h>` and `<strings.h>` are each an
+// `#error` naming the reason and the nearest equivalent, which is the right
+// answer and is what `tests/ui` checks.
 
+#[cfg(target_os = "linux")]
 #[test]
 fn signal_numbers_and_handlers() {
     c99! {
@@ -933,10 +1002,7 @@ fn signal_numbers_and_handlers() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// <sys/types.h>, <unistd.h>, <fcntl.h> and <strings.h>
-// ---------------------------------------------------------------------------
-
+#[cfg(target_os = "linux")]
 #[test]
 fn the_system_typedefs_have_the_platform_widths() {
     c99! {
@@ -963,6 +1029,7 @@ fn the_system_typedefs_have_the_platform_widths() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn unistd_and_fcntl_reach_the_real_system_calls() {
     c99! {
@@ -1001,6 +1068,7 @@ fn unistd_and_fcntl_reach_the_real_system_calls() {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn the_bsd_string_functions() {
     c99! {

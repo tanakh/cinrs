@@ -774,20 +774,24 @@ fn an_enumerator_too_large_for_int_widens_the_enumeration() {
         enum wide { small = 1, huge = ULLONG_MAX };
         enum signed_too { low = -1, high = 3000000000 };
 
-        /* The widened type is the narrowest that holds every value, which on
-           an LP64 target makes `ULLONG_MAX` an `unsigned long` — the same
-           choice Clang makes. What the standard fixes is not *which* type it
-           is but that every enumerator has it. */
-        int same_type(void) {
-            return _Generic(small, unsigned long: 1, default: 0)
-                == _Generic(huge, unsigned long: 1, default: 0);
+        /* The widened type is the narrowest that holds every value — the same
+           choice Clang makes — so *which* type that is follows the data model:
+           `unsigned long` where it is 64 bits, and `unsigned long long` where
+           `long` is only 32, as on Windows. What the standard fixes is not
+           which one it is but that every enumerator has it, so each of these
+           answers 1 for the first, 2 for the second and 0 for neither, and the
+           assertions compare them. */
+        int width_of_small(void) {
+            return _Generic(small, unsigned long: 1, unsigned long long: 2, default: 0);
         }
-        int widened_to_unsigned(void) {
-            return _Generic(huge, unsigned long: 1, default: 0);
+        int width_of_huge(void) {
+            return _Generic(huge, unsigned long: 1, unsigned long long: 2, default: 0);
         }
-        int widened_to_signed(void) {
-            return _Generic(high, long: 1, default: 0)
-                && _Generic(low, long: 1, default: 0);
+        int width_of_low(void) {
+            return _Generic(low, long: 1, long long: 2, default: 0);
+        }
+        int width_of_high(void) {
+            return _Generic(high, long: 1, long long: 2, default: 0);
         }
         unsigned long long biggest(void) { return huge; }
         long negative(void) { return low; }
@@ -798,9 +802,19 @@ fn an_enumerator_too_large_for_int_widens_the_enumeration() {
     }
 
     unsafe {
-        assert_eq!(same_type(), 1);
-        assert_eq!(widened_to_unsigned(), 1);
-        assert_eq!(widened_to_signed(), 1);
+        // 1 where `long` is 64 bits wide, 2 where the `long long` pair is the
+        // narrowest that holds `ULLONG_MAX` and 3000000000.
+        let widened = if size_of::<core::ffi::c_long>() == 8 {
+            1
+        } else {
+            2
+        };
+        assert_eq!(width_of_huge(), widened);
+        assert_eq!(width_of_high(), widened);
+        // Every enumerator of one enumeration has that same type, which is
+        // what C23 fixed.
+        assert_eq!(width_of_small(), width_of_huge());
+        assert_eq!(width_of_low(), width_of_high());
         assert_eq!(biggest(), u64::MAX);
         assert_eq!(negative(), -1);
         assert_eq!(fits_int_stays_int(), 1);

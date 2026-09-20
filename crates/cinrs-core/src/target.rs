@@ -809,9 +809,12 @@ impl TargetModel {
     /// with its own runtime libraries in front of the system's, so a rule that
     /// holds for the Microsoft toolchain must not reach it.
     ///
-    /// The one such rule is the `printf` family, which the UCRT defines inline
-    /// rather than exporting; see `codegen`'s `LEGACY_STDIO`. The *data model*
-    /// is the same either way, which is why nothing else here asks.
+    /// There are two such rules, both in `codegen`: the `printf` family, which
+    /// the UCRT defines inline rather than exporting, so a unit declaring one
+    /// links `legacy_stdio_definitions` (`LEGACY_STDIO`); and the names the UCRT
+    /// exports under another spelling, `time` as `_time64` and the rest, which a
+    /// declaration links by (`MSVC_RENAMED`). The *data model* is the same
+    /// either way, which is why nothing else here asks.
     pub fn is_msvc(&self) -> bool {
         self.os == Os::Windows && self.env == Env::Msvc
     }

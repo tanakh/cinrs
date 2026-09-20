@@ -49,11 +49,14 @@ jobs:
     # developed on. This one answers a narrower question on the other two:
     # does what the README shows build, link against the platform's C library
     # and run? The examples call `printf`; the test files are the ones with no
-    # platform in them — arithmetic, control flow, aggregates, pointers and the
-    # string functions of the C library — plus `tests/portability.rs`, which is
-    # the one written for this job: the bundled headers are cinrs's and the C
-    # library is the platform's, and only a program built, linked and run here
-    # says whether the two agree.
+    # platform in them, and `scripts/portability-tests.txt` is the list — read
+    # here and by `scripts/test-windows-from-wsl.sh`, so that a maintainer's
+    # local Windows run and this job cannot drift apart. It says what is in it
+    # and what is left out and why.
+    #
+    # `tests/portability.rs` is the one written for this job: the bundled
+    # headers are cinrs's and the C library is the platform's, and only a
+    # program built, linked and run here says whether the two agree.
     #
     # Every step after the toolchain runs even when an earlier one failed, so
     # that one run reports everything that is wrong on a platform rather than
@@ -76,9 +79,17 @@ jobs:
         run: cargo run --locked --example readme
       - if: ${{ !cancelled() }}
         run: cargo run --locked --example fact
+      # `bash` on both runners — Git Bash on the Windows one — so that one
+      # command reads the list on either.
       - if: ${{ !cancelled() }}
-        run: >-
-          cargo test --locked -p cinrs
-          --test smoke --test execute --test goto --test safe
-          --test aggregates --test pointers --test portability
-          -- --test-threads=2
+        shell: bash
+        run: |
+          args=()
+          while read -r name; do
+              # A Windows checkout may have given the list CRLF line endings.
+              name=${name%$'\r'}
+              case "$name" in ''|'#'*) continue ;; esac
+              args+=(--test "$name")
+          done < scripts/portability-tests.txt
+          echo "running $((${#args[@]} / 2)) test files, two tests at a time"
+          cargo test --locked -p cinrs "${args[@]}" -- --test-threads=2

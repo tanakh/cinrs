@@ -202,6 +202,8 @@ fn comparisons_know_which_type_they_are_in() {
 #[test]
 fn conversions_to_and_from_every_other_scalar() {
     c99! {
+        #include <stdint.h>
+
         __int128 from_int(int v) { return v; }
         __int128 from_ulong(unsigned long v) { return v; }
         int to_int(__int128 v) { return (int) v; }
@@ -215,14 +217,21 @@ fn conversions_to_and_from_every_other_scalar() {
 
         int to_bool(__int128 v) { return !!v; }
 
-        /* A pointer round trip: `__int128` is wide enough for any address. */
-        __int128 pointer_bits(void *p) { return (__int128) (unsigned long) p; }
-        void *back(__int128 bits) { return (void *) (unsigned long) bits; }
+        /* A pointer round trip: `__int128` is wide enough for any address.
+           The step in between is `uintptr_t` rather than `unsigned long`,
+           which is four bytes on Windows and would lose half of one. */
+        __int128 pointer_bits(void *p) { return (__int128) (uintptr_t) p; }
+        void *back(__int128 bits) { return (void *) (uintptr_t) bits; }
     }
 
     unsafe {
         assert_eq!(from_int(-3), -3i128);
-        assert_eq!(from_ulong(u64::MAX), i128::from(u64::MAX));
+        // Every bit of an `unsigned long`, whatever width the platform gives
+        // it: 64 under LP64, 32 on Windows.
+        assert_eq!(
+            from_ulong(core::ffi::c_ulong::MAX),
+            i128::from(core::ffi::c_ulong::MAX)
+        );
         assert_eq!(to_int(1i128 << 70 | 5), 5);
         assert_eq!(to_uchar(u128::MAX), 0xff);
         assert_eq!(to_llong(-1), -1);

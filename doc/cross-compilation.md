@@ -83,8 +83,10 @@ with the caret on the C, rather than compiling into a program whose every
 
 ## The Microsoft library's inline `printf`
 
-The C library is still the platform's, and the one thing cinrs has to do about
-*which* library that is concerns the `printf` family. In the Universal CRT — the
+The C library is still the platform's, and there are two things cinrs has to do
+about *which* library that is. The first concerns the `printf` family; the
+second, [below](#the-names-the-microsoft-library-exports-differently), the
+`<time.h>` functions. In the Universal CRT — the
 Microsoft C library from Visual Studio 2015 on — `printf` and `scanf` and their
 relatives are **inline functions in `<stdio.h>`**, written over
 `__stdio_common_vfprintf` and its siblings, so the import library exports no
@@ -122,28 +124,83 @@ The Windows branch of the bundled headers keeps to the portable UCRT subset
 otherwise — `__acrt_iob_func` for `stdin` and its two siblings, `_errno()` for
 `errno` — which both the Microsoft library and mingw-w64 export.
 
-Three groups of functions **are** in the same position as `printf` and are *not*
-worked around: a bundled header declares the C name, and no library on an MSVC
-link line has it, so a unit that calls one fails with `LNK2019`. They are
+## The names the Microsoft library exports differently
 
-* `<math.h>`'s `fabsf`, `frexpf`, `ldexpf` and `hypotf`, which Microsoft's
-  `<math.h>` makes inline over the `double` forms — the other float functions
-  (`sinf`, `sqrtf`, `powf`, `floorf`, …) are exported and work;
-* `<wchar.h>`'s `wmemcpy`, `wmemmove`, `wmemset`, `wmemcmp` and `wmemchr`, plus
-  `mbsinit` and `fwide`, inline for the same reason — `wcslen` and the rest of
-  the header are exported;
-* the whole of `<time.h>` but `clock`, `asctime` and `strftime`. The Windows
-  SDK's `ucrt.lib` exports `_time64`, `_difftime64`, `_mktime64`, `_localtime64`,
-  `_gmtime64`, `_ctime64` and `_timespec64_get`, and none of `time`, `difftime`,
-  `mktime`, `localtime`, `gmtime`, `ctime` or `timespec_get`, which Microsoft's
-  own `<time.h>` renames onto the first set with a macro.
+The other shape of the same problem: the function *is* in `ucrt.lib`, under a
+name that is not the one C gives it. Microsoft's own headers paper over the
+difference with a macro — `#define time _time64` — which cinrs's bundled
+headers, the same text on every platform, do not write. So on an MSVC target a
+**declaration** of one of these links by the name the library really has, which
+is what `#[link_name]` says:
 
-mingw-w64 is unaffected by all three: `ucrtbase.dll` exports the plain names and
-mingw's import libraries expose them. On an MSVC target a program can ask for
-the real symbol by hand, which is what an `__asm__` label is for —
-`long long now(long long *t) __asm__("_time64");` — and `tests/portability.rs`
-leaves the `<time.h>` calls out on Windows, with the reason written where it
-does so.
+| C name | links by |
+| --- | --- |
+| `time` | `_time64` |
+| `difftime` | `_difftime64` |
+| `mktime` | `_mktime64` |
+| `localtime` | `_localtime64` |
+| `gmtime` | `_gmtime64` |
+| `ctime` | `_ctime64` |
+| `timespec_get` | `_timespec64_get` |
+| `hypotf` | `_hypotf` |
+
+The table is `MSVC_RENAMED` in the code generator, beside `LEGACY_STDIO`, and
+every row was read out of a real import library with `nm` — the Windows SDK's
+`ucrt.lib` and the MSVC toolset's `msvcrt.lib`, 10.0.26100.0 and 14.44.35207.
+As with the `printf` rule it is keyed on the symbol a declaration links by, it
+applies to `*-windows-msvc` and `*-uwp-windows-msvc` and not to mingw-w64, and
+it touches a declaration only: a C program that *defines* `time` has defined
+`time`. An `__asm__("…")` label is the program's own answer and wins over the
+table, which is also how a unit asks for `_time32` on purpose:
+
+```c
+/* `_time32` takes and answers a 32-bit `__time32_t`, which is a `long`. */
+long now32(long *t) __asm__("_time32");
+```
+
+The `<time.h>` rows are **not** merely a link error, and that is what makes them
+worth a table. The MSVC toolset's `msvcrt.lib` holds an alias-map object per
+name that defines `time` as a *weak* external for `_time32`, and the rest
+likewise, so a declaration of `time` does resolve — to the **32-bit** `time_t`
+function. cinrs's `<time.h>` makes `time_t` eight bytes on Windows, as the UCRT
+does, and the two then disagree in ways a program sees: `_mktime32`'s
+`(time_t)-1` arrives as `0x0000_0000_FFFF_FFFF`, and `_gmtime32` answers a null
+pointer for every date after 2038 rather than a `struct tm`. Naming `_time64`
+and its siblings is a correctness fix and not only a convenience;
+`tests/portability.rs` asserts both of those answers on the platform itself.
+
+`timespec_get` and `hypotf` had no weak alias and were plain `LNK2019`s before.
+
+### What is still not worked around
+
+Ten functions are in the same position as `printf` but have **no** exported
+equivalent at all — `nm` over `ucrt.lib`, `msvcrt.lib`, `vcruntime.lib` and
+`oldnames.lib` shows no symbol of any spelling, in any library on an MSVC link
+line — because Microsoft's headers make each one inline over a wider function.
+A bundled header declares the C name, and a unit that calls one fails with
+`LNK2019`. They are
+
+* `<math.h>`'s **`fabsf`, `frexpf` and `ldexpf`**, inline over the `double`
+  forms. The other float functions — `sinf`, `sqrtf`, `powf`, `floorf`, … — are
+  exported and work, and so is `hypotf`, through the table above.
+  `__builtin_fabsf` needs no library at all: cinrs lowers it to a sign-bit clear
+  in `core`, exactly as it does `__builtin_fabs`. For the other two, `frexp` and
+  `ldexp` *are* exported, and a `float` converts to a `double` and back exactly,
+  which is what Microsoft's header does inline —
+  `(float) frexp((double) x, &e)`.
+* `<wchar.h>`'s **`wmemcpy`, `wmemmove`, `wmemset`, `wmemcmp`, `wmemchr`,
+  `mbsinit` and `fwide`** — `wcslen`, `wcscmp`, `swprintf`, `wcstok`, `mbrtowc`
+  and the rest of the header are exported. `memcpy`, `memmove`, `memset`,
+  `memcmp` and `memchr` over `n * sizeof(wchar_t)` bytes are the five in plain
+  C; `mbsinit(&s)` is true of a zeroed `mbstate_t`, which is the initial
+  conversion state in every locale the UCRT has; `fwide` has no equivalent, and
+  a UCRT stream is byte-oriented until a wide call orients it.
+
+mingw-w64 is unaffected by any of this: `ucrtbase.dll` exports the plain names
+and mingw's import libraries expose them, which is why both rules ask
+`TargetModel::is_msvc` rather than merely whether the target is Windows. And on
+an MSVC target a program can always ask for a symbol by hand with an `__asm__`
+label.
 
 ## What is run where
 
@@ -155,6 +212,20 @@ taken:
 | Platform | How far |
 | --- | --- |
 | **`x86_64-unknown-linux-gnu`** | the development platform: the whole test suite, the three conformance corpora, and the differential tests that compile the same C with `gcc` and `clang` and compare |
-| **macOS (arm64) and Windows (x86-64, MSVC)** | built, linked and **run** on every push by the `portability` job in `.github/workflows/ci.yml`: both examples, and `tests/portability.rs` — the C library through the bundled headers, every value asserted from Rust — beside six behavioural files |
+| **macOS (arm64) and Windows (x86-64, MSVC)** | built, linked and **run** on every push by the `portability` job in `.github/workflows/ci.yml`: both examples, and the test files `scripts/portability-tests.txt` names — `tests/portability.rs`, which asserts the C library through the bundled headers value by value, beside thirty-five behavioural files, which is every one with no platform in it |
 | **`i686-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `wasm32-unknown-unknown`** | compile-checked with a real `cargo check --target` — `tests/cross_targets.rs`, which also shows the data-model assertion firing when `CINRS_TARGET` is left out |
 | **everything else in the table above** | the front end only: every bundled header is compiled for a model of each family, and the widths, alignments, layouts and predefined macros are asserted in-process |
+
+A maintainer on WSL2 with Visual Studio installed on the Windows side can run
+the Windows column locally, without waiting for CI:
+
+```console
+$ scripts/test-windows-from-wsl.sh
+```
+
+It finds the newest MSVC toolset and Windows SDK under `/mnt/c`, links with
+`lld-link`, sets `CINRS_TARGET` — the macro runs on the *host*, so without it
+every `sizeof` in the expansion would be the Linux answer — and runs the two
+examples and the same `scripts/portability-tests.txt` list, one file at a time,
+executing each `.exe` through WSL's interop. `--help` says what it needs, and
+`--list` prints the list the CI job reads from the same file.

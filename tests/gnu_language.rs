@@ -13,6 +13,8 @@ use cinrs::{c11, c99, gnu99};
 // ---------------------------------------------------------------------------
 
 c99! {
+    #include <stddef.h>
+
     /* Every one of these is spelled with a double underscore, so it is
      * available in a strict entry point exactly as it is in GCC's. */
     __inline__ int alt_double(__const__ int n) { return n * 2; }
@@ -27,7 +29,7 @@ c99! {
         return *q;
     }
 
-    unsigned long alt_alignof(void) { return __alignof__(double); }
+    size_t alt_alignof(void) { return __alignof__(double); }
 
     __typeof__(int) alt_typeof(__typeof(long) n) {
         __typeof__(n) doubled = n * 2;
@@ -43,7 +45,7 @@ fn the_double_underscore_keywords_work_in_a_strict_block() {
     assert_eq!(unsafe { alt_extension(41) }, 42);
     let (p, mut q) = (7, 0);
     assert_eq!(unsafe { alt_qualifiers(&raw const p, &raw mut q) }, 7);
-    assert_eq!(unsafe { alt_alignof() }, align_of::<f64>() as u64);
+    assert_eq!(unsafe { alt_alignof() } as usize, align_of::<f64>());
     assert_eq!(unsafe { alt_typeof(21) }, 42);
     assert_eq!(unsafe { alt_signed(-3) }, -3);
 }
@@ -224,7 +226,7 @@ c99! {
     const char *whoami_gnu(void) { return __FUNCTION__; }
     const char *whoami_pretty(void) { return __PRETTY_FUNCTION__; }
 
-    unsigned long name_length(void) { return sizeof(__func__); }
+    size_t name_length(void) { return sizeof(__func__); }
 
     /* It is in scope in every block, however deeply nested. */
     int nested_func_name(void) {
@@ -246,7 +248,7 @@ fn func_names_the_function_it_is_written_in() {
         b"whoami_pretty"
     );
     // `sizeof` sees the array, not the pointer.
-    assert_eq!(unsafe { name_length() }, "name_length".len() as u64 + 1);
+    assert_eq!(unsafe { name_length() } as usize, "name_length".len() + 1);
     assert_eq!(
         unsafe { nested_func_name() },
         "nested_func_name".len() as i32

@@ -354,7 +354,8 @@ fn bracketed(tokens: TokenStream, span: Span) -> TokenStream {
 }
 
 // ---------------------------------------------------------------------------
-// the Microsoft library's inline printf family
+// the Microsoft library's inline printf family, and the names it exports under
+// a different spelling
 // ---------------------------------------------------------------------------
 
 /// The library that has out-of-line definitions of the `printf` and `scanf`
@@ -431,6 +432,55 @@ const LEGACY_STDIO: &[(&str, &str)] = &[
     ("vwscanf", LEGACY_STDIO_DEFINITIONS),
     ("vfwscanf", LEGACY_STDIO_DEFINITIONS),
     ("vswscanf", LEGACY_STDIO_DEFINITIONS),
+];
+
+/// The C functions the Microsoft C runtime exports under **another name**, each
+/// with the symbol a declaration of it has to link by on an MSVC target.
+///
+/// `LEGACY_STDIO` above is about a family the UCRT defines inline and ships an
+/// out-of-line copy of in a library of its own. This is the other shape of the
+/// same problem: the function *is* in `ucrt.lib`, under a name that is not the
+/// one C gives it, and Microsoft's own headers paper over the difference with a
+/// macro (`#define time _time64`) that cinrs's bundled headers, which are the
+/// same on every platform, do not write.
+///
+/// Every row was read out of the real import libraries with `nm` — the Windows
+/// SDK's `ucrt.lib` and the MSVC toolset's `msvcrt.lib`, 10.0.26100.0 and
+/// 14.44.35207 — and not inferred. `ucrt.lib` exports each symbol on the right
+/// and none of the C names on the left.
+///
+/// The `<time.h>` rows are **not** merely a link error, which is what makes
+/// them worth a table rather than a paragraph in the documentation. The MSVC
+/// toolset's `msvcrt.lib` holds an "alias map" object per name that defines
+/// `time` as a *weak* external for `_time32`, and the rest likewise — so a
+/// declaration of `time` does link, silently, to the **32-bit** `time_t`
+/// function. cinrs's `<time.h>` makes `time_t` 64 bits on Windows, as the UCRT
+/// does, and the two disagree in ways a program sees: `_mktime32`'s `(time_t)-1`
+/// comes back as `0x0000_0000_FFFF_FFFF`, and `_gmtime32` answers `NULL` for
+/// every date after 2038 rather than a `struct tm`. Naming `_time64` and its
+/// siblings is therefore a correctness fix and not only a convenience.
+///
+/// `hypotf` is the one `<math.h>` name with an exported equivalent: `_hypotf`
+/// is a real export with C's signature (Microsoft's `<math.h>` makes `hypotf`
+/// inline over it). `fabsf`, `frexpf` and `ldexpf` have no symbol at all in any
+/// library on an MSVC link line — they are inline over the `double` forms — and
+/// so are not here; `doc/cross-compilation.md` records them, with the
+/// workaround. The same goes for `<wchar.h>`'s `wmemcpy`, `wmemmove`, `wmemset`,
+/// `wmemcmp`, `wmemchr`, `mbsinit` and `fwide`.
+///
+/// The rule this table serves is [`Codegen::msvc_symbol`], which applies to a
+/// **declaration** and after an `__asm__("…")` label: a program that has named
+/// the symbol it wants by hand has said the last word, which is also how a unit
+/// asks for `_time32` on purpose.
+const MSVC_RENAMED: &[(&str, &str)] = &[
+    ("time", "_time64"),
+    ("difftime", "_difftime64"),
+    ("mktime", "_mktime64"),
+    ("localtime", "_localtime64"),
+    ("gmtime", "_gmtime64"),
+    ("ctime", "_ctime64"),
+    ("timespec_get", "_timespec64_get"),
+    ("hypotf", "_hypotf"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -2048,7 +2098,13 @@ impl<'a> Codegen<'a> {
                 let ty = self.ty(func.sig.ret, fspan);
                 quote_spanned! {fspan=> -> #ty }
             };
-            let symbol = func.asm_label.as_deref().unwrap_or(&func.name);
+            // An `__asm__("symbol")` label is the program's own answer and wins;
+            // failing that, a name the Microsoft library exports differently is
+            // linked by the name it really has. See [`MSVC_RENAMED`].
+            let symbol = match func.asm_label.as_deref() {
+                Some(label) => label,
+                None => self.msvc_symbol(&func.name),
+            };
             symbols.push(symbol);
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
@@ -2088,6 +2144,25 @@ impl<'a> Codegen<'a> {
             out.extend(quote_spanned! {span=> #[link(name = #literal)] });
         }
         out
+    }
+
+    /// The symbol a **declaration** of the C function `name` links by: the name
+    /// itself, or, on an MSVC target, what the Microsoft C runtime exports it
+    /// as. See [`MSVC_RENAMED`] for the table and for how each row was read out
+    /// of a real import library.
+    ///
+    /// Only a declaration: a function this unit *defines* is its own symbol, and
+    /// a C program that defines `time` has defined `time`.
+    fn msvc_symbol<'name>(&self, name: &'name str) -> &'name str {
+        if !self.options.target.is_msvc() {
+            return name;
+        }
+        for (c_name, symbol) in MSVC_RENAMED {
+            if *c_name == name {
+                return symbol;
+            }
+        }
+        name
     }
 
     /// The libraries the `printf` and `scanf` declarations among `symbols` have

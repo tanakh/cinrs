@@ -1083,3 +1083,119 @@ fn every_name_of_the_family_asks_for_the_library() {
     let output = expand_for("x86_64-pc-windows-msvc", &source);
     assert!(!output.contains("link (name"), "{output}");
 }
+
+// ---------------------------------------------------------------------------
+// the names the Microsoft library exports under another spelling
+// ---------------------------------------------------------------------------
+//
+// The UCRT's `<time.h>` functions are exported as `_time64`, `_difftime64` and
+// so on, and `hypotf` as `_hypotf`; Microsoft's own headers rename them with a
+// macro, which cinrs's — the same text on every platform — do not. Codegen's
+// `MSVC_RENAMED` is the rule, and it is a **correctness** one rather than a
+// convenience: the MSVC toolset's `msvcrt.lib` defines `time` as a weak alias
+// for `_time32`, so without this a declaration links silently to the 32-bit
+// `time_t` function while cinrs's `<time.h>` makes `time_t` 64 bits. Only the
+// expansion can be checked here; the `portability` job in
+// `.github/workflows/ci.yml` calls the functions for real.
+
+/// The C names, with the symbol each one has to link by on an MSVC target.
+const RENAMED: &[(&str, &str)] = &[
+    ("time", "_time64"),
+    ("difftime", "_difftime64"),
+    ("mktime", "_mktime64"),
+    ("localtime", "_localtime64"),
+    ("gmtime", "_gmtime64"),
+    ("ctime", "_ctime64"),
+    ("timespec_get", "_timespec64_get"),
+    ("hypotf", "_hypotf"),
+];
+
+/// A declaration of one of them links by the exported name on MSVC and by the C
+/// name everywhere else, mingw-w64 included.
+#[test]
+fn an_msvc_target_links_the_time_family_by_its_exported_name() {
+    for (name, symbol) in RENAMED {
+        // Declared by the unit itself, so that the table rather than a header
+        // is what is under test.
+        let source = format!("long long {name}(long long);\n");
+        for triple in [
+            "x86_64-pc-windows-msvc",
+            "i686-pc-windows-msvc",
+            "aarch64-pc-windows-msvc",
+            "x86_64-uwp-windows-msvc",
+        ] {
+            let output = expand_for(triple, &source);
+            assert!(
+                output.contains(&format!("link_name = \"{symbol}\"")),
+                "{triple} {name}: {output}"
+            );
+        }
+        for triple in [
+            // mingw-w64 exports the plain names; so do glibc and Apple's
+            // library, and nothing about them needs saying.
+            "x86_64-pc-windows-gnu",
+            "x86_64-pc-windows-gnullvm",
+            "i686-pc-windows-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+        ] {
+            let output = expand_for(triple, &source);
+            assert!(
+                output.contains(&format!("link_name = \"{name}\"")),
+                "{triple} {name}: {output}"
+            );
+            assert!(
+                !output.contains(&format!("link_name = \"{symbol}\"")),
+                "{triple} {name}: {output}"
+            );
+        }
+    }
+}
+
+/// Through the bundled `<time.h>`, which is how a program reaches them.
+#[test]
+fn the_bundled_time_header_declares_them_under_the_exported_names() {
+    let source = "#include <time.h>\nlong long now(void) { return time(0); }";
+    let msvc = expand_for("x86_64-pc-windows-msvc", source);
+    for (name, symbol) in RENAMED {
+        if *name == "hypotf" {
+            continue;
+        }
+        assert!(
+            msvc.contains(&format!("link_name = \"{symbol}\"")),
+            "{name}: {msvc}"
+        );
+    }
+    // `clock`, `asctime` and `strftime` are ordinary exports and keep their
+    // names, which is what makes this a table and not a rule about `<time.h>`.
+    for name in ["clock", "asctime", "strftime"] {
+        assert!(msvc.contains(&format!("link_name = \"{name}\"")), "{msvc}");
+    }
+    let linux = expand_for("x86_64-unknown-linux-gnu", source);
+    assert!(linux.contains("link_name = \"time\""), "{linux}");
+    assert!(!linux.contains("_time64"), "{linux}");
+}
+
+/// An `__asm__("…")` label is the program's own answer and wins over the table
+/// — which is also how a unit asks for `_time32` on purpose.
+#[test]
+fn an_asm_label_wins_over_the_renaming() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "long time(long *) __asm__(\"_time32\");\nlong now(void) { return time(0); }",
+    );
+    assert!(output.contains("link_name = \"_time32\""), "{output}");
+    assert!(!output.contains("_time64"), "{output}");
+}
+
+/// A function the unit **defines** is its own symbol: a C program that defines
+/// `time` has defined `time`, and nothing renames it.
+#[test]
+fn a_definition_is_not_renamed() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "#pragma cinrs export\nlong long time(long long *t) { if (t) *t = 7; return 7; }",
+    );
+    assert!(output.contains("fn time ("), "{output}");
+    assert!(!output.contains("_time64"), "{output}");
+}

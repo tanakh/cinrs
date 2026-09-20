@@ -22,8 +22,10 @@ use cinrs::{c99, gnu99};
 #[test]
 fn a_two_dimensional_array_is_one_object() {
     c99! {
-        /* Row-major, `n * m` elements, indexed the way C says. */
-        long fill_and_sum(int n, int m) {
+        /* Row-major, `n * m` elements, indexed the way C says. The answer is a
+           `long long` so that the Rust side can compare it against an `i64` on
+           a platform where `long` is only 32 bits. */
+        long long fill_and_sum(int n, int m) {
             long a[n][m];
             for (int i = 0; i < n; i++) {
                 for (int j = 0; j < m; j++) {
@@ -186,6 +188,8 @@ fn the_sizeof_identities_hold_at_run_time() {
 #[test]
 fn a_pointer_to_a_row_walks_by_rows() {
     c99! {
+        #include <stddef.h>
+
         /* `int (*p)[n]` steps by a whole row, and `(*p)[j]` reaches into it. */
         int walk(int n, int rows) {
             int a[rows][n];
@@ -206,7 +210,7 @@ fn a_pointer_to_a_row_walks_by_rows() {
         }
 
         /* `sizeof *p` is the size of one row, computed now. */
-        unsigned long row_size(int n) {
+        size_t row_size(int n) {
             double a[2][n];
             double (*p)[n] = a;
             return sizeof *p + sizeof p[0] * 1000 + sizeof(p) * 1000000;
@@ -216,8 +220,8 @@ fn a_pointer_to_a_row_walks_by_rows() {
     unsafe {
         // Rows 0..2 of width 4: (0 + 3) + (4 + 7) + (8 + 11) = 33.
         assert_eq!(walk(4, 3), 33 * 1000 + 3 * 10 + 4);
-        let ptr = core::mem::size_of::<*const u8>() as u64;
-        assert_eq!(row_size(5), 40 + 40 * 1000 + ptr * 1000000);
+        let ptr = core::mem::size_of::<*const u8>();
+        assert_eq!(row_size(5) as usize, 40 + 40 * 1000 + ptr * 1000000);
     }
 }
 
@@ -228,6 +232,8 @@ fn a_pointer_to_a_row_walks_by_rows() {
 #[test]
 fn a_matrix_parameter_is_a_pointer_to_a_row() {
     c99! {
+        #include <stddef.h>
+
         /* The classic: `a[i][j]` in a function that was handed a flat buffer.
            `double a[n][m]` adjusts to `double (*a)[m]`, whose `m` is read on
            entry. */
@@ -246,7 +252,7 @@ fn a_matrix_parameter_is_a_pointer_to_a_row() {
 
         /* `sizeof` of a variably modified parameter: the parameter itself is a
            pointer, and a row of it is `m` elements. */
-        unsigned long row_of(int n, int m, double a[n][m]) {
+        size_t row_of(int n, int m, double a[n][m]) {
             (void)n;
             return sizeof a[0] + sizeof a * 1000;
         }
@@ -275,8 +281,11 @@ fn a_matrix_parameter_is_a_pointer_to_a_row() {
         matmul(2, 3, 2, a.as_ptr(), b.as_ptr(), c.as_mut_ptr());
         assert_eq!(c, [22.0, 28.0, 49.0, 64.0]);
 
-        let ptr = core::mem::size_of::<*const u8>() as u64;
-        assert_eq!(row_of(2, 3, core::ptr::null_mut()), 24 + ptr * 1000);
+        let ptr = core::mem::size_of::<*const u8>();
+        assert_eq!(
+            row_of(2, 3, core::ptr::null_mut()) as usize,
+            24 + ptr * 1000
+        );
         assert_eq!(frozen(2, 7, core::ptr::null_mut()), 70 + 1);
     }
 }

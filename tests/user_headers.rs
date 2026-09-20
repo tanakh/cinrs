@@ -161,6 +161,13 @@ fn an_include_path_pragma_makes_a_header_available_in_angle_brackets() {
     assert_eq!(unsafe { my_answer() }, 42);
 }
 
+/// The library named has to *exist*, which is what keeps this test on the Unix
+/// platforms: `libm` is there and empty — glibc and Apple's library both put
+/// the maths functions in libc — where Windows has no `m.lib` at all and the
+/// link fails before anything is run. The mechanism is the same on all three
+/// and `crates/cinrs-core/tests/expand.rs` checks the attribute itself; only a
+/// library to point it at is missing here.
+#[cfg(not(windows))]
 #[test]
 fn a_link_pragma_is_accepted_and_names_a_library() {
     c99! {

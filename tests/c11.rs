@@ -190,10 +190,10 @@ fn anonymous_members_are_part_of_the_enclosing_record() {
             v->as_int = n;
         }
 
-        unsigned long size(void) { return sizeof(struct Value); }
-        unsigned long tag_offset(void) { return offsetof(struct Value, tag); }
-        unsigned long value_offset(void) { return offsetof(struct Value, as_double); }
-        unsigned long bytes_offset(void) { return offsetof(struct Value, as_bytes); }
+        size_t size(void) { return sizeof(struct Value); }
+        size_t tag_offset(void) { return offsetof(struct Value, tag); }
+        size_t value_offset(void) { return offsetof(struct Value, as_double); }
+        size_t bytes_offset(void) { return offsetof(struct Value, as_bytes); }
     }
 
     unsafe {
@@ -206,12 +206,12 @@ fn anonymous_members_are_part_of_the_enclosing_record() {
         assert_eq!(read_int(v), 9);
 
         // What C computes and what Rust lays out have to be the same thing.
-        assert_eq!(size(), size_of::<Value>() as u64);
+        assert_eq!(size() as usize, size_of::<Value>());
         assert_eq!(align_of::<Value>(), 8);
-        assert_eq!(tag_offset(), core::mem::offset_of!(Value, tag) as u64);
+        assert_eq!(tag_offset() as usize, core::mem::offset_of!(Value, tag));
         assert_eq!(
-            value_offset(),
-            core::mem::offset_of!(Value, __cinrs_anon0.as_double) as u64
+            value_offset() as usize,
+            core::mem::offset_of!(Value, __cinrs_anon0.as_double)
         );
         assert_eq!(bytes_offset(), value_offset());
 

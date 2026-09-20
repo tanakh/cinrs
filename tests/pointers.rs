@@ -87,6 +87,8 @@ fn pointer_arithmetic_and_offset_from() {
 #[test]
 fn null_pointers() {
     c99! {
+        #include <stdint.h>
+
         int is_null(int *p) {
             return p == 0;
         }
@@ -110,8 +112,10 @@ fn null_pointers() {
             return 0;
         }
 
+        /* `uintptr_t` and not `unsigned long`: the integer a pointer survives
+           is four bytes on Windows and would truncate the address. */
         int roundtrip(int *p) {
-            unsigned long bits = (unsigned long) p;
+            uintptr_t bits = (uintptr_t) p;
             int *back = (int *) bits;
             return *back;
         }
@@ -532,8 +536,14 @@ fn two_translation_units_in_one_module() {
 fn wide_string_literals_and_pointers_to_arrays() {
     // `L"…"` is a prefixed literal the Rust lexer refuses, so the C source
     // comes in as a string literal.
+    //
+    // `wchar_t` comes from `<stddef.h>` rather than a `typedef` of this file's
+    // own: what an `L"…"` literal is an array *of* follows the target — `int`
+    // on the Unix platforms, `unsigned short` on Windows — and a header that
+    // spelled it `int` everywhere would make this unit a type error on the
+    // second. The values read out of one are `int`s either way.
     c99! { r#"
-        typedef int wchar_t;
+        #include <stddef.h>
 
         static const wchar_t *wide = L"hi";
 

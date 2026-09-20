@@ -1,0 +1,74 @@
+# The integration test files the `portability` job in
+# `.github/workflows/ci.yml` builds, links and runs on macOS and Windows, one
+# name per line. `scripts/test-windows-from-wsl.sh` reads this same file, so
+# the two cannot drift apart.
+#
+# What qualifies: a file with no platform in it, which built, linked and passed
+# on x86_64-pc-windows-msvc — the data model furthest from the development
+# platform's, with a 32-bit `long`, a 16-bit `wchar_t` and the Microsoft C
+# library on the other end of every declaration. `tests/portability.rs` is the
+# one written for this job; the rest are the behavioural files, and between
+# them they run the arithmetic, the control flow, the aggregates, the pointers,
+# the bit-fields, the VLAs, the atomics, the dialects, the GNU extensions and
+# the C library through the bundled headers.
+#
+# What is left out, and why:
+#
+#   * `system_headers`, which reads `/usr/include`; `c11_threads`, which is
+#     `#![cfg(linux)]` because that is where `<threads.h>` declares anything.
+#   * `cross_targets`, which shells out to `cargo check --target` for seven
+#     triples — a question about the front end, answered on the development
+#     platform.
+#   * `bitfield_layout`, `complex` and `vaarg_structs`, whose oracle is the
+#     platform's own `cc`: they pass on Windows, where there is no `cc` to find
+#     and the oracle test skips itself with a note, but adding them here would
+#     put a *new* compiler behind the oracle on macOS, which nothing has run
+#     yet.
+#   * `ui`, `expected_lists`, `c_testsuite`, `gcc_torture` and `clang_c`, which
+#     are `harness = false` and are about diagnostics and conformance corpora
+#     rather than about a platform.
+#
+# Four of the files in the list keep a test or two behind a `#[cfg]` rather
+# than being left out altogether, and each says so where it does it:
+# `gnu_attributes` (`constructor` needs a runtime that walks an ELF or Mach-O
+# initialiser table), `gnu_builtins` (`mempcpy`, `stpcpy`, `bzero` and `index`
+# are glibc's and POSIX's, not the Microsoft runtime's), `headers` (its POSIX
+# section, and `wmemcpy`/`wmemcmp`/`mbsinit`, which the UCRT has no symbol for)
+# and `user_headers` (`#pragma cinrs link "m"` needs an `m` to link).
+
+smoke
+execute
+goto
+safe
+aggregates
+pointers
+portability
+alignment
+atomics
+bitfields
+c11
+c23
+cleanup
+compound_literals
+dialects
+gnu_attributes
+gnu_builtins
+gnu_language
+gnu_preprocessor
+headers
+identifiers
+include_c
+int128
+knr
+limits
+nested_functions
+preprocessor
+primitive_names
+prototypes
+scopes
+threads
+units
+user_headers
+variadic
+vla
+vm_types

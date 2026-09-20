@@ -29,10 +29,12 @@ use cinrs::c11;
 #[test]
 fn a_redeclaration_gives_the_name_a_composite_type_inside_its_block() {
     c11! {
+        #include <stddef.h>
+
         extern int dr011_i[];
         extern int dr011_j[10];
 
-        unsigned long incomplete_then_complete(void) {
+        size_t incomplete_then_complete(void) {
             extern int dr011_i[];
             {
                 /* The composite here is `int[10]`, so `sizeof` has an
@@ -42,7 +44,7 @@ fn a_redeclaration_gives_the_name_a_composite_type_inside_its_block() {
             }
         }
 
-        unsigned long complete_then_incomplete(void) {
+        size_t complete_then_incomplete(void) {
             extern int dr011_j[10];
             {
                 extern int dr011_j[];
@@ -70,10 +72,10 @@ fn a_redeclaration_gives_the_name_a_composite_type_inside_its_block() {
     #[unsafe(no_mangle)]
     static mut dr011_j: [core::ffi::c_int; 10] = [0; 10];
 
-    let ints = core::mem::size_of::<core::ffi::c_int>() as u64;
+    let ints = core::mem::size_of::<core::ffi::c_int>();
     unsafe {
-        assert_eq!(incomplete_then_complete(), 10 * ints);
-        assert_eq!(complete_then_incomplete(), 10 * ints);
+        assert_eq!(incomplete_then_complete() as usize, 10 * ints);
+        assert_eq!(complete_then_incomplete() as usize, 10 * ints);
         assert_eq!(stores_and_reads(), 7);
     }
 }
@@ -86,15 +88,20 @@ fn a_redeclaration_gives_the_name_a_composite_type_inside_its_block() {
 #[test]
 fn a_file_scope_redeclaration_completes_the_object_for_the_rest_of_the_unit() {
     c11! {
+        #include <stddef.h>
+
         static int tentative[];
         static int tentative[3];
 
-        unsigned long size(void) { return sizeof(tentative); }
+        size_t size(void) { return sizeof(tentative); }
         int third(void) { tentative[2] = 5; return tentative[2]; }
     }
 
     unsafe {
-        assert_eq!(size(), 3 * core::mem::size_of::<core::ffi::c_int>() as u64);
+        assert_eq!(
+            size() as usize,
+            3 * core::mem::size_of::<core::ffi::c_int>()
+        );
         assert_eq!(third(), 5);
     }
 }

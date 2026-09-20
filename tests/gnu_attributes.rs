@@ -301,23 +301,42 @@ fn the_function_attributes_are_honoured_or_ignored() {
 // constructors and destructors
 // ---------------------------------------------------------------------------
 
-c99! {
-    static int startup_count;
+/// `constructor` and `destructor` are an initialiser table the runtime walks,
+/// which is an ELF and a Mach-O idea: cinrs refuses the attributes anywhere
+/// else, with a `compile_error!` naming the reason (see `init_array_guard` in
+/// the code generator), so a unit using them cannot even be written on Windows.
+/// The `cfg` here is that guard's own condition — `tests/ui` is where the
+/// refusal itself is checked.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly",
+    target_vendor = "apple"
+))]
+mod initialiser_table {
+    use cinrs::c99;
 
-    __attribute__((constructor)) static void run_first(void) { startup_count += 1; }
-    __attribute__((constructor(101))) static void run_first_too(void) {
-        startup_count += 10;
+    c99! {
+        static int startup_count;
+
+        __attribute__((constructor)) static void run_first(void) { startup_count += 1; }
+        __attribute__((constructor(101))) static void run_first_too(void) {
+            startup_count += 10;
+        }
+        __attribute__((destructor)) static void run_last(void) { startup_count -= 1; }
+
+        int startup_ran(void) { return startup_count; }
     }
-    __attribute__((destructor)) static void run_last(void) { startup_count -= 1; }
 
-    int startup_ran(void) { return startup_count; }
-}
-
-#[test]
-fn a_constructor_has_already_run_by_the_time_a_test_does() {
-    // Both constructors ran before `main`, so the counter is 11 before the
-    // first statement of any test.
-    assert_eq!(unsafe { startup_ran() }, 11);
+    #[test]
+    fn a_constructor_has_already_run_by_the_time_a_test_does() {
+        // Both constructors ran before `main`, so the counter is 11 before the
+        // first statement of any test.
+        assert_eq!(unsafe { startup_ran() }, 11);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -325,14 +344,17 @@ fn a_constructor_has_already_run_by_the_time_a_test_does() {
 // ---------------------------------------------------------------------------
 
 c99! {
+    #include <stddef.h>
+
     /* An `asm` label renames a declaration's symbol, which is how a program
      * reaches a libc function under a name of its own. A declaration the unit
      * does not define is renamed apart in the generated `extern` block, so the
-     * C calls it and Rust asks the C. */
-    unsigned long my_strlen(const char *s) __asm__("strlen");
+     * C calls it and Rust asks the C. `strlen` answers a `size_t`, and saying
+     * `unsigned long` instead would be four bytes too few on Windows. */
+    size_t my_strlen(const char *s) __asm__("strlen");
     int my_abs(int n) __asm__("abs");
 
-    unsigned long length_of(const char *s) { return my_strlen(s); }
+    size_t length_of(const char *s) { return my_strlen(s); }
     int magnitude(int n) { return my_abs(n); }
 }
 
