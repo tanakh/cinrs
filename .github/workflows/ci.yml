@@ -92,4 +92,5 @@ jobs:
               args+=(--test "$name")
           done < scripts/portability-tests.txt
           echo "running $((${#args[@]} / 2)) test files, two tests at a time"
-          cargo test --locked -p cinrs "${args[@]}" -- --test-threads=2
+          # --no-fail-fast: every test file reports, not only the first to fail.
+          cargo test --locked --no-fail-fast -p cinrs "${args[@]}" -- --test-threads=2

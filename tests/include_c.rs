@@ -49,10 +49,21 @@ fn a_pragma_inside_the_file_configures_the_unit() {
 
 #[test]
 fn file_and_line_name_the_c_file() {
-    // `__FILE__` is the `.c` file as the path was written to reach it, and
-    // `__LINE__` counts that file's lines rather than the `.rs` file's.
+    // `__FILE__` is the `.c` file as the path was written to reach it — the
+    // directory of this file, as the compiler that ran the macro spells it,
+    // and then the macro's argument as it stands — and `__LINE__` counts that
+    // file's lines rather than the `.rs` file's. `file!()` is spelled by that
+    // same compiler, so the expectation follows the *host*: `tests/c/geometry.c`
+    // when the crate is built on Linux or macOS, whatever it is built for, and
+    // `tests\c/geometry.c` when it is built on Windows.
     let name = unsafe { CStr::from_ptr(geometry::geometry_file()) };
-    assert_eq!(name.to_str(), Ok("tests/c/geometry.c"));
+    let directory = file!()
+        .strip_suffix("include_c.rs")
+        .expect("this file is include_c.rs");
+    assert_eq!(
+        name.to_str(),
+        Ok(format!("{directory}c/geometry.c").as_str())
+    );
     assert_eq!(unsafe { geometry::geometry_line() }, 45);
 }
 
