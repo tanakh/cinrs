@@ -275,7 +275,14 @@ c99! {
         never_comes_back();
     }
 
-    __attribute__((section(".cinrs_test_text"))) int in_a_section(void) { return 7; }
+    /* What a section is called belongs to the object format: ELF and COFF take
+     * a bare name, Mach-O wants "segment,section" and refuses anything else. */
+    #ifdef __APPLE__
+    #define TEST_SECTION "__TEXT,__cinrs_test"
+    #else
+    #define TEST_SECTION ".cinrs_test_text"
+    #endif
+    __attribute__((section(TEST_SECTION))) int in_a_section(void) { return 7; }
 
     __attribute__((deprecated("use replacement instead"))) int obsolete(void) { return 1; }
     int replacement(void) { return 2; }
