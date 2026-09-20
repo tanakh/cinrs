@@ -155,7 +155,14 @@ fi
 # `inactive_code` on every `#[cfg(test)]` module, above all — and the exit status
 # is non-zero whenever *anything* anywhere is an error, so the lines are what this
 # reads rather than the status.
-BAD=$(grep -F "$FIXTURE" "$OUT" | grep -v "inactive_code" || true)
+#
+# Only a *diagnostic* counts, and a diagnostic is text that starts with
+# `at crate `. Some versions — the rustup component of 1.98 is one — also write
+# progress to the same stream, `3/38 7% processing <path>`, padded with spaces
+# and with a carriage return or nothing at all before whatever comes next, so a
+# diagnostic may begin in the middle of a line. A progress update names the
+# fixture's files too and says nothing about them; it never says `at crate`.
+BAD=$(tr '\r' '\n' <"$OUT" | grep -oE 'at crate .*' | grep -F "$FIXTURE" | grep -v "inactive_code" || true)
 if [ -n "$BAD" ]; then
     say "check-rust-analyzer: FAILED: rust-analyzer reports the fixture's own code:"
     printf '%s\n' "$BAD"
