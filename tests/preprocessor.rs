@@ -540,10 +540,6 @@ fn both_compilers_spellings_of_the_width_macros_are_defined() {
                 && __INT_FAST8_WIDTH__ == 8
                 && __INT_FAST64_WIDTH__ == 64;
         }
-
-        /* The "fast" widths have to agree with the typedefs <stdint.h>
-         * writes, or the macro and a `sizeof` would answer differently. */
-        int fast_widths_match_the_typedefs(void);
     }
 
     // `<stdint.h>` is included by the second block so that the first one shows
@@ -552,6 +548,8 @@ fn both_compilers_spellings_of_the_width_macros_are_defined() {
         #include <stdint.h>
         #define BITS(t) (sizeof(t) * __CHAR_BIT__)
 
+        /* The "fast" widths have to agree with the typedefs <stdint.h>
+         * writes, or the macro and a `sizeof` would answer differently. */
         int fast_widths_match_the_typedefs(void) {
             return __INT_FAST16_WIDTH__ == BITS(int_fast16_t)
                 && __INT_FAST32_WIDTH__ == BITS(int_fast32_t);

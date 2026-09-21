@@ -625,8 +625,8 @@ fn the_search_does_not_run_when_the_positions_are_usable() {
 }
 
 /// The items of an expansion, with every unit id taken out of the names built
-/// from it: the module (`__cinrs_unit_050a9987`) and the renamed `extern`
-/// declarations (`__cinrs_050a9987_printf`).
+/// from it: the module (`__cinrs_unit_050a9987`), the renamed `extern` *objects*
+/// (`__cinrs_050a9987_stdout`) and the function-local `static`s.
 ///
 /// Two expansions of the same C differ in those whenever they differ in where
 /// the C was written or in how its text was recovered, which is exactly what the

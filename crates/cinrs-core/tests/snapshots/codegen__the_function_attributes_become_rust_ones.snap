@@ -7,7 +7,7 @@ mod __cinrs_unit_c25379d4 {
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "other_symbol"]
-        pub fn __cinrs_c25379d4_renamed(n: ::core::ffi::c_int) -> ::core::ffi::c_int;
+        pub fn renamed(n: ::core::ffi::c_int) -> ::core::ffi::c_int;
     }
     #[allow(…)]
     #[inline(always)]
@@ -43,7 +43,7 @@ mod __cinrs_unit_c25379d4 {
         mut n: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
         unsafe {
-            return __cinrs_c25379d4_renamed(n);
+            return renamed(n);
         }
     }
 }

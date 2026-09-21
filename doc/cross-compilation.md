@@ -202,6 +202,19 @@ and mingw's import libraries expose them, which is why both rules ask
 an MSVC target a program can always ask for a symbol by hand with an `__asm__`
 label.
 
+One more MSVC rule follows from the `#[link(name = "…")]` those two put on the
+generated `extern` block — and from the one
+[`#pragma cinrs link`](pragmas.md#link-name) puts there. `rustc` reaches a
+`static` declared in a block with such an attribute through a `dllimport`, which
+is right for a symbol in another image and wrong for one defined in *this* one:
+a unit that declares `extern int counter;` while another exported unit of the
+same crate defines it reads rubbish, and `lld-link` says
+`LNK4217: locally defined symbol imported`. Functions are unaffected. So on an
+MSVC target, keep an `extern` object shared between two units of one crate in a
+unit that names no library — or hand it over through an accessor function, which
+is what Rust has to do for such an object anyway (see
+[Objects](translation.md#objects)).
+
 ### Apple's C library
 
 The same thing can happen on any platform, for a plainer reason: a bundled

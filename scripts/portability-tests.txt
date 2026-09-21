@@ -10,7 +10,10 @@
 # one written for this job; the rest are the behavioural files, and between
 # them they run the arithmetic, the control flow, the aggregates, the pointers,
 # the bit-fields, the VLAs, the atomics, the dialects, the GNU extensions and
-# the C library through the bundled headers.
+# the C library through the bundled headers. `declared_names` is here because
+# the names a *declaration* is generated under are the names Rust calls the
+# platform's library by, and the Microsoft runtime is the one that renames some
+# of them (`time` is `_time64`) and defines others inline.
 #
 # What is left out, and why:
 #
@@ -50,6 +53,7 @@ c11
 c23
 cleanup
 compound_literals
+declared_names
 dialects
 gnu_attributes
 gnu_builtins

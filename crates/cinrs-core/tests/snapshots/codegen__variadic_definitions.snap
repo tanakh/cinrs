@@ -7,7 +7,7 @@ mod __cinrs_unit_f47d9b27 {
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "vsnprintf"]
-        pub fn __cinrs_f47d9b27_vsnprintf(
+        pub fn vsnprintf(
             buf: *mut ::core::ffi::c_char,
             size: ::core::ffi::c_ulong,
             fmt: *const ::core::ffi::c_char,
@@ -50,7 +50,7 @@ mod __cinrs_unit_f47d9b27 {
             let mut copy: ::core::ffi::VaList = __cinrs_va.clone();
             ap = __cinrs_va.clone();
             copy = ap.clone();
-            let mut written: ::core::ffi::c_int = __cinrs_f47d9b27_vsnprintf(
+            let mut written: ::core::ffi::c_int = vsnprintf(
                 buf,
                 size,
                 fmt,

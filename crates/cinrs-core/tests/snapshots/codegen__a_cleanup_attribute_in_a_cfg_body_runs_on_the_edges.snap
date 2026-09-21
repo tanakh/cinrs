@@ -7,7 +7,7 @@ mod __cinrs_unit_ed73c93d {
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "note"]
-        pub fn __cinrs_ed73c93d_note(p: *mut ::core::ffi::c_int);
+        pub fn note(p: *mut ::core::ffi::c_int);
     }
     #[allow(…)]
     pub unsafe extern "C" fn jumping(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -45,18 +45,18 @@ mod __cinrs_unit_ed73c93d {
                         continue 'cfg;
                     }
                     3 => {
-                        __cinrs_ed73c93d_note((&raw mut b));
+                        note((&raw mut b));
                         __cinrs_state = 1;
                         continue 'cfg;
                     }
                     4 => {
-                        __cinrs_ed73c93d_note((&raw mut b));
-                        __cinrs_ed73c93d_note((&raw mut a));
+                        note((&raw mut b));
+                        note((&raw mut a));
                         return 0;
                     }
                     5 => {
                         __cinrs_ret = a;
-                        __cinrs_ed73c93d_note((&raw mut a));
+                        note((&raw mut a));
                         return __cinrs_ret;
                     }
                     _ => ::core::unreachable!(),

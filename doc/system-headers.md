@@ -26,6 +26,25 @@ cinrs::gnu11! {
 }
 ```
 
+What such a header declares is callable **from Rust** as well, under its own C
+name and with nothing in between — `stat`, `opendir`, `pthread_create`,
+`regcomp` — because a declaration the unit does not define *is* the Rust item.
+That is [Calling a C library from
+Rust](features.md#calling-a-c-library-from-rust), and it is what a program that
+wants a library rather than a language reaches for: the pragma above finds the
+header, `#pragma cinrs link "…"` names the library, and a macro the header
+defines gets a one-line C wrapper written in the same block.
+
+Two things about the platform's headers in particular. They declare a great
+many **objects** — `stdout`, glibc's `timezone` and `daylight`, `optarg`,
+`optind`, `environ` — and those are deliberately not nameable from Rust (see
+[Objects](translation.md#objects)), so a `let stdout = …;` in the surrounding
+module is safe and an accessor written in the block is how Rust reads one. And
+they declare a great many **functions**, which are now names the block exports:
+two such blocks in one Rust scope, or one beside a `use libc::*;`, is an
+ambiguity the moment Rust uses a shared name, and a `mod` around the invocation
+is the answer.
+
 ## The switch
 
 | Written | Order |

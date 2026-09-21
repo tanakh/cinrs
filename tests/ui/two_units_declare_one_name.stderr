@@ -1,0 +1,30 @@
+error[E0659]: `strlen` is ambiguous
+  --> tests/ui/two_units_declare_one_name.rs:30:14
+   |
+30 |     unsafe { strlen(s) as u64 }
+   |              ^^^^^^ ambiguous name
+   |
+   = note: ambiguous because of multiple glob imports of a name in the same module
+note: `strlen` could refer to the function imported here
+  --> tests/ui/two_units_declare_one_name.rs:12:1
+   |
+12 | / cinrs::c99! {
+13 | |     #include <string.h>
+14 | |     unsigned long first_length(const char *s) { return strlen(s); }
+15 | | }
+   | |_^
+   = help: consider adding an explicit import of `strlen` to disambiguate
+note: `strlen` could also refer to the function imported here
+  --> tests/ui/two_units_declare_one_name.rs:17:1
+   |
+17 | / cinrs::c99! {
+18 | |     #include <string.h>
+19 | |     unsigned long second_length(const char *s) { return strlen(s); }
+20 | | }
+   | |_^
+   = help: consider adding an explicit import of `strlen` to disambiguate
+   = note: this error originates in the macro `cinrs::c99` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0659`.

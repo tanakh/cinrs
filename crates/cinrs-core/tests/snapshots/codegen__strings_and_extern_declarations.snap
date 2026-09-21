@@ -9,14 +9,9 @@ mod __cinrs_unit_5cdf88e1 {
         #[link_name = "errno"]
         pub static mut __cinrs_5cdf88e1_errno: ::core::ffi::c_int;
         #[link_name = "strlen"]
-        pub fn __cinrs_5cdf88e1_strlen(
-            s: *const ::core::ffi::c_char,
-        ) -> ::core::ffi::c_ulong;
+        pub fn strlen(s: *const ::core::ffi::c_char) -> ::core::ffi::c_ulong;
         #[link_name = "printf"]
-        pub fn __cinrs_5cdf88e1_printf(
-            fmt: *const ::core::ffi::c_char,
-            ...
-        ) -> ::core::ffi::c_int;
+        pub fn printf(fmt: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
     }
     #[allow(…)]
     static mut messages: [*const ::core::ffi::c_char; 2] = [
@@ -38,11 +33,11 @@ mod __cinrs_unit_5cdf88e1 {
                     );
                 (*__cinrs_tmp0)
             };
-            __cinrs_5cdf88e1_printf(
+            printf(
                 b"%s (%lu)\n\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
                     as *const ::core::ffi::c_char,
                 message,
-                __cinrs_5cdf88e1_strlen(message),
+                strlen(message),
             );
             return __cinrs_5cdf88e1_errno;
         }

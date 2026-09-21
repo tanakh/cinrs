@@ -1223,16 +1223,16 @@ impl<'a> Codegen<'a> {
         )
     }
 
-    /// The name of the item an externally linked symbol is declared under.
+    /// The name of the item an externally linked **object** is declared under;
+    /// see [`Program::extern_object_name`] for why an object and not a
+    /// function.
     ///
     /// The symbol itself is what `#[link_name]` says; this is only the Rust
-    /// side of it, and it is spelled the same way every other C name is so
-    /// that two symbols never end up under one item.
-    fn extern_ident(&self, symbol: &str, span: Span) -> Ident {
-        Ident::new(
-            &self.program.extern_name(&self.names.spelling(symbol)),
-            span,
-        )
+    /// side of it, and it is built out of the spelling every other C name is
+    /// given so that two symbols never end up under one item.
+    fn extern_object_ident(&self, symbol: &str, span: Span) -> Ident {
+        let spelling = self.names.spelling(symbol);
+        Ident::new(&self.program.extern_object_name(&spelling), span)
     }
 
     /// A name no C identifier can collide with.
@@ -2059,6 +2059,13 @@ impl<'a> Codegen<'a> {
     }
 
     /// The `extern` block declaring everything the unit does not define.
+    ///
+    /// A **function** is declared under its own C name — `pub fn crc32`, not a
+    /// hidden one — so that the glob re-export carries it out of the unit's
+    /// module and `#include <zlib.h>` is all Rust needs to call it. An
+    /// **object** is not, because a glob-imported `static` changes what a `let`
+    /// of the same name means; [`Program::extern_object_name`] is that rule and
+    /// its reason.
     fn extern_block(&mut self) -> TokenStream {
         if !self.program.has_externs() {
             return TokenStream::new();
@@ -2076,7 +2083,7 @@ impl<'a> Codegen<'a> {
                 continue;
             };
             let ospan = self.sp(object.range);
-            let rust_name = self.extern_ident(item_name, ospan);
+            let rust_name = self.extern_object_ident(item_name, ospan);
             let ty = self.ty(object.ty, ospan);
             // An `__asm__("symbol")` label renames the declaration, which is
             // exactly what `#[link_name]` already says.
@@ -2090,7 +2097,12 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             let fspan = self.sp(func.range);
-            let rust_name = self.extern_ident(&func.name, fspan);
+            // The C name, through the same mapping every other name goes
+            // through: a keyword becomes `r#yield`, `a$b` becomes
+            // `a_dollar_b`, and [`Names`] has already made it unique within
+            // the unit. It is what a call in this unit names too; see
+            // [`Codegen::function_path`].
+            let rust_name = self.c_ident(func.item_name(), fspan);
             let params = self.extern_params(func, fspan);
             let ret = if func.sig.ret.is_void() {
                 TokenStream::new()
@@ -2892,7 +2904,7 @@ impl<'a> Codegen<'a> {
             Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {
                 self.c_ident(item_name, span)
             }
-            Storage::Extern { item_name } => self.extern_ident(item_name, span),
+            Storage::Extern { item_name } => self.extern_object_ident(item_name, span),
         }
     }
 
@@ -5583,13 +5595,13 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=> unsafe extern "C" fn #list #ret }
     }
 
-    /// The path a call to `function` uses: its own name, or the renamed
-    /// declaration in the `extern` block.
+    /// The path a call to `function` uses.
+    ///
+    /// One name whether the unit defines the function or only declares it: the
+    /// item in the `extern` block carries the C name as well (see
+    /// [`Codegen::extern_block`]), and a lifted nested function carries the name
+    /// it was lifted under.
     fn function_path(&self, function: &Function, span: Span) -> TokenStream {
-        if function.is_extern() {
-            let name = self.extern_ident(&function.name, span);
-            return quote_spanned! {span=> #name };
-        }
         let name = self.c_ident(function.item_name(), span);
         quote_spanned! {span=> #name }
     }

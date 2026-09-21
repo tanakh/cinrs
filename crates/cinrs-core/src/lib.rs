@@ -44,7 +44,7 @@
 //!
 //! Capture also hands sema a [unit id](capture::Source::unit_id) identifying
 //! the invocation, which every synthetic name the expansion needs is built
-//! from — the renamed `extern` declarations, the mangled function-local
+//! from — the renamed `extern` *objects*, the mangled function-local
 //! `static`s, the names given to anonymous tags, and the module the whole
 //! expansion goes into (see [`expand`]), so that two `c99!` blocks in one Rust
 //! module never collide.

@@ -166,6 +166,29 @@ See [system headers][system-headers], and [the pragma reference][pragmas] for
 all eight `#pragma cinrs` options and the environment variables that go with
 them.
 
+### Calling a C library
+
+A header's declarations are the binding: a function a header declares and the
+unit does not define is callable from Rust under its own C name, and so are the
+header's types.
+
+```rust,ignore
+mod z {
+    cinrs::c99! {
+        #pragma cinrs system_include
+        #pragma cinrs link "z"
+        #include <zlib.h>
+
+        /* `deflateInit` is a macro, so it needs a line of C — written here. */
+        int z_deflate_init(z_stream *s, int level) { return deflateInit(s, level); }
+        enum { ZDEMO_OK = Z_OK };
+    }
+}
+// unsafe { z::crc32(0, buf.as_ptr(), buf.len() as z::uInt) }
+```
+
+More in [calling a C library from Rust][calling-c].
+
 ### Cross-compilation
 
 `sizeof`, layouts and `#if` are worked out while the macro expands, from a
@@ -286,6 +309,7 @@ dual licensed as above, without any additional terms or conditions.
 [input-forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms
 [safe-functions]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#safe-functions
 [names]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#names-rust-would-not-take
+[calling-c]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#calling-a-c-library-from-rust
 [limitations]: https://github.com/tanakh/cinrs/blob/master/doc/limitations.md
 [c-status]: https://github.com/tanakh/cinrs/blob/master/doc/c-status.md
 [gnu-extensions]: https://github.com/tanakh/cinrs/blob/master/doc/gnu-extensions.md

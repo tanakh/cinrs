@@ -67,6 +67,27 @@
   computes the wrong thing.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
+* **A macro is not exported to Rust.** A function a unit declares becomes an
+  item Rust can call and a `struct` becomes a type Rust can build, but an
+  object-like macro (`Z_OK`, `SEEK_SET`, `PATH_MAX`) becomes no `pub const`, and
+  a function-like one (`deflateInit`, `isascii`) becomes no function: a macro is
+  not a declaration and has no type. Both are one line of C away, inside the
+  block — `enum { MY_OK = Z_OK };` is one `pub const` per enumerator, and
+  `int wrap(T *p) { return macro(p); }` is a function — which is what
+  [Calling a C library from Rust](features.md#calling-a-c-library-from-rust)
+  shows. Rust asking for the macro's name directly is `E0425`, "cannot find
+  value", rather than anything subtler.
+* **An object a unit only declares is not nameable from Rust.** A declared
+  function comes out under its C name; a declared object deliberately does not,
+  because a glob-imported `static` is a name a Rust `let` may not shadow
+  (`error[E0530]: let bindings cannot shadow statics`) and `<stdio.h>`'s
+  `stdout`, glibc's `timezone` and `<unistd.h>`'s `optarg` would then be in the
+  way of ordinary Rust in the surrounding module. The item keeps a hidden
+  `__cinrs_<unit>_<symbol>` name, the C in the unit is unaffected, and Rust
+  reaches the object the way one C translation unit hands another a `FILE *`:
+  through an accessor written in the block,
+  `FILE *get_stdout(void) { return stdout; }`. See
+  [Objects](translation.md#objects).
 * **In an editor, a raw-token block with a `#define` or an `#if` needs the file
   to be saved.** rust-analyzer hands a procedural macro tokens with no source
   positions at all, so a block's text is recovered by finding the invocation in

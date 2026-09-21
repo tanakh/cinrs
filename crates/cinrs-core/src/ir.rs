@@ -2139,22 +2139,45 @@ impl Program {
         &self.strings[id.0 as usize]
     }
 
-    /// The Rust name standing for an externally linked C symbol.
+    /// The hidden Rust name an externally linked **object** is declared under.
     ///
-    /// The whole expansion already lives in a module of its own, so the rename
-    /// is not what keeps two `c99!` blocks apart any more; what it keeps apart
-    /// is the *glob re-export* and the module the invocation is written in. A
-    /// unit that declares `int abs(int);` would otherwise re-export a bare
-    /// `abs` into the user's namespace, which is not something the user asked
-    /// for. A module of its own for the `extern` block would have been
-    /// prettier still, but a module cannot see the `struct` items of the block
-    /// it is written in, which an `extern` declaration taking a `struct`
+    /// Only an object. A function the unit merely declares is generated under
+    /// its own C name, like everything else the unit spells, so that
+    /// `#include <zlib.h>` is enough for Rust to call `crc32`; an object is
+    /// not, and the difference is Rust's rule for patterns rather than a
+    /// matter of taste.
+    ///
+    /// A glob-imported **function** cannot change the meaning of Rust code
+    /// that does not mention it: a function is not a pattern, so `let read =
+    /// 1;` beside a unit that declares `read` is still a new binding. A glob
+    /// imported **static** can. Rust resolves a binding pattern against the
+    /// value namespace first, and a `static` there is not a name a `let` may
+    /// shadow:
+    ///
+    /// ```text
+    /// error[E0530]: let bindings cannot shadow statics
+    /// ```
+    ///
+    /// — which is what `let stdout = std::io::stdout();` would become next to a
+    /// block that includes `<stdio.h>`, and `let timezone = …` next to one that
+    /// includes glibc's `<time.h>`. `optarg`, `optind` and `environ` are the
+    /// same story. So a declared-only object keeps a name of its own,
+    /// `__cinrs_<unit>_<symbol>`, and Rust reaches it the way C code does in
+    /// the same situation: through an accessor written in the block,
+    /// `FILE *get_stdout(void) { return stdout; }`.
+    ///
+    /// The C code in the unit is unaffected either way — it refers to the
+    /// object by its C name, and this is only the Rust side of that.
+    ///
+    /// A module of its own for the `extern` block would have avoided the
+    /// question altogether, but a module cannot see the `struct` items of the
+    /// block it is written in, which an `extern` declaration taking a `struct`
     /// needs.
     ///
     /// A `$` in the C name — an identifier character here, and one Rust has no
     /// spelling for — is written [`crate::codegen::DOLLAR`]; the symbol the
     /// declaration links by is a `#[link_name]` string and keeps the `$`.
-    pub fn extern_name(&self, symbol: &str) -> String {
+    pub fn extern_object_name(&self, symbol: &str) -> String {
         format!(
             "__cinrs_{:08x}_{}",
             self.unit_id as u32,

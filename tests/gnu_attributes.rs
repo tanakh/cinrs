@@ -356,10 +356,11 @@ c99! {
     #include <stddef.h>
 
     /* An `asm` label renames a declaration's symbol, which is how a program
-     * reaches a libc function under a name of its own. A declaration the unit
-     * does not define is renamed apart in the generated `extern` block, so the
-     * C calls it and Rust asks the C. `strlen` answers a `size_t`, and saying
-     * `unsigned long` instead would be four bytes too few on Windows. */
+     * reaches a libc function under a name of its own. The generated `extern`
+     * block declares `my_strlen` under that C name and points it at `strlen`
+     * with `#[link_name]`, so the two names are two items and one symbol.
+     * `strlen` answers a `size_t`, and saying `unsigned long` instead would be
+     * four bytes too few on Windows. */
     size_t my_strlen(const char *s) __asm__("strlen");
     int my_abs(int n) __asm__("abs");
 

@@ -71,8 +71,8 @@ Every parameter is `mut`, because C lets a function assign to one.
 A function the unit marks [safe](features.md#safe-functions) is
 `pub extern "C" fn` with no `unsafe` block, and Rust calls it as `add(1, 2)`.
 
-A function the unit only **declares** is linked rather than defined. It is
-renamed apart from everything else of that name and pointed back at its symbol:
+A function the unit only **declares** is linked rather than defined, and the
+declaration *is* the item — under the C name, `pub`, and pointed at its symbol:
 
 ```c
 int printf(const char *, ...);
@@ -81,17 +81,32 @@ int printf(const char *, ...);
 ```rust
 unsafe extern "C" {
     #[link_name = "printf"]
-    pub fn __cinrs_ab49b1a7_printf(_: *const c_char, ...) -> c_int;
+    pub fn printf(_: *const c_char, ...) -> c_int;
 }
 ```
 
-so Rust code calls the C library through its own declaration, not through this
-one. `#pragma cinrs link "name"` puts `#[link(name = "name")]` on that block —
-and so does cinrs itself in one case: a unit translated for a `*-windows-msvc`
-target whose block declares one of the `printf` or `scanf` family gets
+So the glob re-export carries it out of the unit's module and Rust calls it as
+`printf(…)`: `#include <zlib.h>` is the whole binding, and [Calling a C library
+from Rust](features.md#calling-a-c-library-from-rust) is the tour of what that
+is like. The name goes through the same mapping every other C name does — a
+keyword is a raw identifier (`int yield(int);` is `r#yield`), and `$` and the
+five unspellable names get their usual spellings — so one C name is one Rust
+name here too, and `#[link_name]` is what carries the symbol whenever the two
+differ.
+
+`#pragma cinrs link "name"` puts `#[link(name = "name")]` on that block — and so
+does cinrs itself in one case: a unit translated for a `*-windows-msvc` target
+whose block declares one of the `printf` or `scanf` family gets
 `#[link(name = "legacy_stdio_definitions")]`, because the Universal CRT defines
 those functions inline in `<stdio.h>` and exports no symbol for them (see
 [Cross-compilation](cross-compilation.md#the-microsoft-librarys-inline-printf)).
+The same page has the `<time.h>` names the Microsoft runtime exports under
+another spelling: `time` is still `pub fn time`, with
+`#[link_name = "_time64"]`.
+
+A C program is free to name a local or a parameter after a function it declared
+(`int index`, `long time`, `char *basename`), and so is Rust: a function is not
+a pattern, so the binding shadows the item rather than colliding with it.
 
 ## Objects
 
@@ -109,6 +124,44 @@ A file-scope object is a `static mut`, so **Rust reads it by value**:
 `assert_eq!({ counter }, 1)` rather than `assert_eq!(counter, 1)`, since taking
 a reference to a `static mut` is an error in edition 2024. A C `static` object,
 like a `static` function, loses the `pub`.
+
+An object the unit only **declares** is the one thing that does *not* come out
+under its C name:
+
+```c
+extern FILE *stdout;
+```
+
+```rust
+unsafe extern "C" {
+    #[link_name = "stdout"]
+    pub static mut __cinrs_ab49b1a7_stdout: *mut FILE;
+}
+```
+
+The reason is Rust's rule for patterns rather than a matter of taste. A
+glob-imported *function* cannot change the meaning of Rust code that does not
+mention it, because a function is not a pattern: `let read = 1;` beside a unit
+that declares `read` is still a new binding. A glob-imported `static` can — Rust
+resolves a binding pattern against the value namespace first, and a `static`
+there is not a name a `let` may shadow:
+
+```text
+error[E0530]: let bindings cannot shadow statics
+```
+
+which is what `let stdout = std::io::stdout();` would become next to a block
+that includes `<stdio.h>`. glibc's `<time.h>` declares `timezone` and
+`daylight`, `<unistd.h>` declares `optarg` and `optind`, and `environ` is there
+too; a hidden name keeps all of them out of the way of ordinary Rust.
+
+The C in the unit is unaffected either way — it reads the object by its C name —
+and Rust reaches such an object the way one C translation unit hands another a
+`FILE *`, through an accessor written in the block:
+
+```c
+FILE *get_stdout(void) { return stdout; }
+```
 
 ## Types
 
@@ -585,6 +638,13 @@ uses it (`E0659`) — the C code is unaffected, since each unit sees only its ow
 — and that the two `struct Point`s are two Rust types, so a value passes to the
 unit whose module it was built from.
 
+A *declared* function is one of those names, which is what makes this worth
+knowing rather than a curiosity: two blocks in one Rust scope that both
+`#include <stdio.h>` both export `printf`, and Rust naming `printf` is `E0659`
+whichever of them defined anything. Nothing is wrong until then — each block's C
+compiles and calls its own — and the answer is the same `mod` as for the two
+`struct Point`s. `use libc::*;` beside a block is the same rule again.
+
 An ordinary Rust `mod` around the invocation is what gives a unit a path and
 tells two of them apart:
 
@@ -634,5 +694,12 @@ triple`, and `user`'s declaration becomes the `#[link_name = "triple"]` extern
 above. The risk is C's own: two exported units defining the same name is a
 duplicate symbol, and the linker says so rather than the compiler. Only export
 the units something else has to link against.
+
+The `mod`s are not decoration here. Both units export a `triple` to Rust — the
+definition from one and the declaration from the other — so with the two
+invocations written in *one* Rust scope, Rust naming `triple` is the `E0659`
+above rather than a call to the definition. `user::triple` and
+`library::triple` are two ways of reaching one symbol, and which one a Rust
+caller writes is up to it.
 
 [`core::ffi`]: https://doc.rust-lang.org/core/ffi/index.html

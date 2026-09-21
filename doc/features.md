@@ -14,6 +14,7 @@ module an expansion goes into — is [What the C becomes](translation.md).
 * [Variably modified types and `alloca`](#variably-modified-types-and-alloca)
 * [The preprocessor](#the-preprocessor)
 * [`#include` and `#embed`](#include-and-embed)
+* [Calling a C library from Rust](#calling-a-c-library-from-rust)
 * [GNU extensions](#gnu-extensions)
 * [`__int128`](#__int128)
 * [Thread-local objects](#thread-local-objects)
@@ -230,6 +231,79 @@ stat`, `DIR` and `pthread_mutex_t` — are one pragma away; see
 [System headers](system-headers.md). `#embed "logo.png"` puts the bytes of a
 file into the program — with `limit`, `prefix`, `suffix`, `if_empty` and
 `__has_embed` — and editing *that* rebuilds the crate too.
+
+## Calling a C library from Rust
+
+A header's declarations are already the binding. A function a unit declares and
+does not define becomes an item under its own C name — see [What the C
+becomes](translation.md#functions) — so including the library's header and
+naming the library is the whole of it:
+
+```rust,ignore
+mod z {
+    cinrs::c99! {
+        #pragma cinrs system_include
+        #pragma cinrs link "z"
+
+        #include <zlib.h>
+
+        /* `deflateInit` is a macro over `deflateInit_`, and a macro is not a
+         * symbol. C in this very block can call it, and the wrapper is two
+         * lines. */
+        int z_deflate_init(z_stream *s, int level) {
+            return deflateInit(s, level);
+        }
+
+        /* An object-like macro is not a Rust constant either; an enumeration
+         * *is* one `pub const` per enumerator. */
+        enum { ZDEMO_OK = Z_OK, ZDEMO_FINISH = Z_FINISH };
+    }
+}
+
+let version = unsafe { CStr::from_ptr(z::zlibVersion()) };
+let crc = unsafe { z::crc32(0, buf.as_ptr(), buf.len() as z::uInt) };
+let rc = unsafe { z::compress(out.as_mut_ptr(), &raw mut len, buf.as_ptr(), n) };
+assert_eq!(rc, z::ZDEMO_OK);
+```
+
+`z_stream`, `uLong` and `Bytef` come out under their C names like every other
+type, so nothing has to be described twice.
+
+Four things are worth knowing before the first `#include <…>` of somebody
+else's header.
+
+**A macro needs a line of C.** cinrs exports no macro to Rust, function-like or
+object-like, and the two idioms above are the answer: a one-line wrapper
+function for a function-like macro, and an `enum { NAME = MACRO }` for the
+constants. Both are written inside the block, which is the point — there is no
+second language and no build script.
+
+**Naming the library.**
+[`#pragma cinrs link "z"`](pragmas.md#link-name) puts `#[link(name = "z")]` on
+the generated `extern` block. Nothing is needed for the C library itself, which
+the Rust runtime has already linked.
+
+**The header has to be findable.**
+[`#pragma cinrs system_include`](pragmas.md#system_include-and-system_include-first)
+puts the platform's own include directories on the path, which is where
+`/usr/include/zlib.h` is; a header that ships with your crate is one
+[`#pragma cinrs include_path`](pragmas.md#include_path-dir) away instead, or is
+found beside the `.rs` file with no pragma at all. Reading the platform's
+headers has [a page of its own](system-headers.md).
+
+**One name, one meaning.** The `mod z` is what the example is really about. A
+block's items are glob re-exported into the module the invocation is written in,
+so two blocks in one Rust scope that both `#include <stdio.h>` both export
+`printf` — and Rust naming `printf` is then `E0659`, "ambiguous name".
+Nothing is wrong until that use, and a `mod` around one of the blocks is the
+answer; `use libc::*;` beside a block is the same rule again. A Rust item you
+*wrote* is not affected at all — an item in a module beats a glob import, so a
+`fn strlen` of your own beside such a block is still your `strlen`. What a glob
+import does beat is the **prelude**: a unit that declares `drop` or `size_of`
+shadows the prelude's for the rest of the module, which shows up as a type error
+rather than a silent change. And a declared-only *object* is deliberately not
+nameable from Rust at all, for which see [Objects](translation.md#objects) and
+[Known limitations](limitations.md).
 
 ## GNU extensions
 

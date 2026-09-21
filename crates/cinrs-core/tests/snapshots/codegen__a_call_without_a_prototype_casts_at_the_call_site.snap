@@ -7,7 +7,7 @@ mod __cinrs_unit_949d5fe9 {
     #[allow(…)]
     unsafe extern "C" {
         #[link_name = "taker"]
-        pub fn __cinrs_949d5fe9_taker() -> ::core::ffi::c_int;
+        pub fn taker() -> ::core::ffi::c_int;
     }
     #[allow(…)]
     pub unsafe extern "C" fn made_here() -> ::core::ffi::c_int {
@@ -24,14 +24,13 @@ mod __cinrs_unit_949d5fe9 {
             > = ::core::option::Option::Some(
                 made_here as unsafe extern "C" fn() -> ::core::ffi::c_int,
             );
-            return __cinrs_949d5fe9_taker()
+            return taker()
                 .wrapping_add(
                     (::core::mem::transmute::<
                         unsafe extern "C" fn() -> ::core::ffi::c_int,
                         unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
                     >(
-                        (__cinrs_949d5fe9_taker
-                            as unsafe extern "C" fn() -> ::core::ffi::c_int),
+                        (taker as unsafe extern "C" fn() -> ::core::ffi::c_int),
                     ))(c as ::core::ffi::c_int),
                 )
                 .wrapping_add(made_here())

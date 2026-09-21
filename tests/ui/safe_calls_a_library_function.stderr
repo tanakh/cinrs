@@ -1,4 +1,4 @@
-error[E0133]: call to unsafe function `__cinrs_unit_HASH::__cinrs_HASH_abs` is unsafe and requires unsafe block
+error[E0133]: call to unsafe function `__cinrs_unit_HASH::abs` is unsafe and requires unsafe block
   --> tests/ui/safe_calls_a_library_function.rs:16:16
    |
 16 |         return abs(n);

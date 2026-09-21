@@ -176,9 +176,10 @@ fn a_prototype_without_a_definition_becomes_an_extern_declaration() {
 
 #[test]
 fn two_expansions_do_not_share_their_synthetic_names() {
-    // Two `c99!` blocks in one Rust module generate into the same namespace,
-    // so the `extern` declarations and the mangled `static` locals of one must
-    // not collide with the other's.
+    // Two `c99!` blocks in one Rust module generate into the same namespace, so
+    // the synthetic names of one must not collide with the other's: the module
+    // itself, the mangled function-local `static`s, and the `extern` *objects*,
+    // which are the one kind of declaration that keeps a hidden name.
     let source = "int abs(int n); int f(void) { static int calls; calls++; return abs(calls); }";
     let first = expand(stream(source), &options()).to_string();
     // A second invocation with different text (and, in a real expansion, a
@@ -1199,4 +1200,112 @@ fn a_definition_is_not_renamed() {
     );
     assert!(output.contains("fn time ("), "{output}");
     assert!(!output.contains("_time64"), "{output}");
+}
+
+// ---------------------------------------------------------------------------
+// the name a declared function is generated under
+// ---------------------------------------------------------------------------
+//
+// The Rust name and the symbol are two different things, and the tables above
+// only ever move the symbol. A function the unit declares and does not define
+// is an item under its **own C name** — `pub fn printf`, not a hidden one — so
+// that the glob re-export carries it out of the unit's module and Rust calls
+// the C library through the very declaration the header wrote. `#[link_name]`
+// is what carries the symbol, and it is what the two tables feed.
+//
+// An **object** is the exception: a glob-imported `static` is a name a `let`
+// may not shadow (`E0530`), so it keeps `__cinrs_<unit>_<symbol>` and Rust
+// reaches it through an accessor written in the block.
+
+/// The three platforms, one source: the item is `printf` everywhere, and only
+/// the symbol and the `#[link]` differ.
+#[test]
+fn a_declared_function_is_an_item_under_its_c_name() {
+    let source = "#include <stdio.h>\nvoid greet(const char *n) { printf(\"hi %s\\n\", n); }";
+    for triple in [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ] {
+        let output = expand_for(triple, source);
+        assert!(output.contains("pub fn printf ("), "{triple}: {output}");
+        assert!(
+            output.contains("# [link_name = \"printf\"]"),
+            "{triple}: {output}"
+        );
+        // Nothing carries the unit id any more, which is what a Rust caller
+        // could not have spelled.
+        assert!(!output.contains("_printf"), "{triple}: {output}");
+    }
+    // The library is asked for on the MSVC target and on neither of the others,
+    // exactly as before: the rule reads the symbol, not the item name.
+    assert!(
+        expand_for("x86_64-pc-windows-msvc", source).contains(LEGACY_LINK),
+        "the MSVC target still links the library"
+    );
+    for triple in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
+        assert!(
+            !expand_for(triple, source).contains("link (name"),
+            "{triple} must link nothing"
+        );
+    }
+}
+
+/// A renamed symbol keeps the C name as the item: `time` is `pub fn time` on
+/// every target, and only what it links by moves.
+#[test]
+fn a_renamed_declaration_is_still_an_item_under_its_c_name() {
+    let source = "#include <time.h>\nlong long now(void) { return time(0); }";
+    let msvc = expand_for("x86_64-pc-windows-msvc", source);
+    assert!(msvc.contains("pub fn time ("), "{msvc}");
+    assert!(msvc.contains("# [link_name = \"_time64\"]"), "{msvc}");
+    for triple in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
+        let output = expand_for(triple, source);
+        assert!(output.contains("pub fn time ("), "{triple}: {output}");
+        assert!(
+            output.contains("# [link_name = \"time\"]"),
+            "{triple}: {output}"
+        );
+    }
+}
+
+/// A declared **object** is the exception, on every platform: the item name
+/// carries the unit id, and the symbol is the C name.
+#[test]
+fn a_declared_object_keeps_a_hidden_name() {
+    // Declared by the unit itself: what the bundled headers make of `stdout`
+    // differs per platform — `__stdoutp` on Apple, `__acrt_iob_func(1)` on
+    // Windows — and the rule under test does not.
+    let source = "extern int counter;\nint read_it(void) { return counter; }";
+    for triple in [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ] {
+        let output = expand_for(triple, source);
+        assert!(
+            output.contains("# [link_name = \"counter\"]"),
+            "{triple}: {output}"
+        );
+        assert!(
+            !output.contains("pub static mut counter :"),
+            "{triple}: {output}"
+        );
+        assert!(output.contains("_counter :"), "{triple}: {output}");
+    }
+}
+
+/// A C name Rust cannot spell as itself is spelled the way every other name in
+/// the unit is, and the symbol is untouched.
+#[test]
+fn a_declared_functions_name_goes_through_the_usual_spelling() {
+    // A Rust keyword becomes a raw identifier.
+    let output = expand_for("x86_64-unknown-linux-gnu", "int yield(int n);");
+    assert!(output.contains("pub fn r#yield ("), "{output}");
+    assert!(output.contains("# [link_name = \"yield\"]"), "{output}");
+
+    // One of the five names that cannot even be raw grows an underscore.
+    let output = expand_for("x86_64-unknown-linux-gnu", "int self(int n);");
+    assert!(output.contains("pub fn self_ ("), "{output}");
+    assert!(output.contains("# [link_name = \"self\"]"), "{output}");
 }
