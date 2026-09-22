@@ -98,6 +98,7 @@
 //! Rust" error never compete for the same construct, and so that a broken
 //! program is diagnosed identically on every toolchain.
 
+mod asm;
 mod atomics;
 mod builtins;
 mod decl;

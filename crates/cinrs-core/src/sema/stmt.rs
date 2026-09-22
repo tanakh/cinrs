@@ -389,10 +389,7 @@ impl Sema<'_> {
                 }
             }
             ast::StmtKind::Return(value) => self.return_stmt(value.as_ref(), stmt.range),
-            ast::StmtKind::Asm(_) => {
-                self.error(stmt.range, "inline assembly is not supported");
-                Stmt::Nop
-            }
+            ast::StmtKind::Asm(asm) => self.asm_stmt(asm, stmt.range),
             ast::StmtKind::Error => Stmt::Nop,
         }
     }

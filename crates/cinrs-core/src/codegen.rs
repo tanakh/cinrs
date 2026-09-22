@@ -3613,6 +3613,14 @@ impl<'a> Codegen<'a> {
     fn stmt(&mut self, stmt: &Stmt) -> TokenStream {
         match stmt {
             Stmt::Nop => TokenStream::new(),
+            // Sema maps the statement; emitting the `asm!` is the next stage.
+            // Until then it must never compile silently to nothing.
+            Stmt::Asm(asm) => {
+                let span = self.sp(asm.range);
+                quote_spanned! {span=>
+                    ::core::compile_error!("inline assembly: code generation is not implemented yet");
+                }
+            }
             Stmt::Expr(expr) => self.expr_stmt(expr),
             Stmt::Let { object, init, .. } => {
                 let id = *object;
@@ -4019,6 +4027,7 @@ impl<'a> Codegen<'a> {
             Stmt::Switch(switch) => switch.range,
             Stmt::SwitchTree(switch) => switch.range,
             Stmt::Region(region) => region.range,
+            Stmt::Asm(asm) => asm.range,
             Stmt::Block(items) => return items.iter().find_map(|s| self.stmt_range(s)),
             Stmt::Nop => return None,
         })

@@ -133,10 +133,12 @@ pub struct Local {
 #[derive(Clone, Debug)]
 pub struct BasicBlock {
     /// Statements with no control flow of their own: [`ir::Stmt::Expr`],
-    /// [`ir::Stmt::Nop`] and [`ir::Stmt::Vla`], whose three bindings are
-    /// hoisted like every other local and whose allocation stays here.
+    /// [`ir::Stmt::Asm`], [`ir::Stmt::Nop`] and [`ir::Stmt::Vla`], whose three
+    /// bindings are hoisted like every other local and whose allocation stays
+    /// here.
     ///
     /// [`ir::Stmt::Expr`]: crate::ir::Stmt::Expr
+    /// [`ir::Stmt::Asm`]: crate::ir::Stmt::Asm
     /// [`ir::Stmt::Nop`]: crate::ir::Stmt::Nop
     /// [`ir::Stmt::Vla`]: crate::ir::Stmt::Vla
     pub stmts: Vec<Stmt>,
@@ -520,6 +522,8 @@ impl Lowerer<'_> {
         match stmt {
             Stmt::Nop => {}
             Stmt::Expr(expr) => self.push(Stmt::Expr(expr)),
+            // No control flow of its own: `asm goto` is refused.
+            asm @ Stmt::Asm(_) => self.push(asm),
             Stmt::Let {
                 object,
                 init,

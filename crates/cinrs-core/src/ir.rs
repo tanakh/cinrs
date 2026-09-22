@@ -3405,6 +3405,110 @@ pub enum Stmt {
         /// Where the statement was written.
         range: SourceRange,
     },
+    /// GNU inline assembly, mapped onto `core::arch::asm!`; see [`AsmStmt`].
+    ///
+    /// It has no control flow of its own (`asm goto` is refused), so the
+    /// [control-flow graph](crate::cfg) carries it as a simple statement.
+    Asm(Box<AsmStmt>),
+}
+
+/// An inline assembly statement, already in `asm!`'s terms.
+///
+/// Sema has done all the mapping (see `sema/asm.rs`): the template is Rust's
+/// — `%0` is `{o0}`, `%%` is `%`, braces are doubled — and each operand says
+/// which register and which direction. What is left for code generation is
+/// evaluating the operands and storing the outputs back.
+#[derive(Clone, Debug)]
+pub struct AsmStmt {
+    /// The template in `asm!`'s syntax, still AT&T assembly: code generation
+    /// always adds `options(att_syntax)`.
+    pub template: String,
+    /// The operands, in GCC's order (outputs, then inputs), with each tied
+    /// input folded into the output it is tied to.
+    pub operands: Vec<AsmOperand>,
+    /// The registers the statement clobbers, in `asm!`'s spelling (`rax`,
+    /// `xmm0`), each of which becomes `out("rax") _`. `"memory"` and `"cc"`
+    /// are not here: they are what `asm!` assumes without being told.
+    pub clobbers: Vec<&'static str>,
+    /// Where the statement was written.
+    pub range: SourceRange,
+}
+
+/// One operand of an [`AsmStmt`].
+#[derive(Clone, Debug)]
+pub struct AsmOperand {
+    /// The `asm!` name the template refers to it by — `o` and the GCC
+    /// operand number — or `None` for an explicit register, which `asm!`
+    /// does not let a template name (sema writes the register itself).
+    pub name: Option<String>,
+    /// Where the value lives.
+    pub reg: AsmReg,
+    /// The direction, and the C side of it.
+    pub kind: AsmOperandKind,
+    /// The C type of the value, which is what the `asm!` operand has.
+    pub ty: Ty,
+    /// Where the operand was written.
+    pub range: SourceRange,
+}
+
+impl AsmOperand {
+    /// The head of the `asm!` operand, up to the expression: `o0 =
+    /// lateout(reg)`, `inout("eax")`, `o2 = const`.
+    pub fn head(&self) -> String {
+        let dir = match &self.kind {
+            AsmOperandKind::In(_) => "in",
+            AsmOperandKind::Out { late: true, .. } => "lateout",
+            AsmOperandKind::Out { late: false, .. } => "out",
+            AsmOperandKind::InOut { .. } => "inout",
+            AsmOperandKind::Const(_) => "const",
+        };
+        let reg = match (&self.kind, self.reg) {
+            (AsmOperandKind::Const(_), _) => String::new(),
+            (_, AsmReg::Class(class)) => format!("({class})"),
+            (_, AsmReg::Explicit(name)) => format!("(\"{name}\")"),
+        };
+        match &self.name {
+            Some(name) => format!("{name} = {dir}{reg}"),
+            None => format!("{dir}{reg}"),
+        }
+    }
+}
+
+/// Where an [`AsmOperand`] lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsmReg {
+    /// A register `asm!` allocates from a class: `reg`, `reg_byte`,
+    /// `reg_abcd`, `xmm_reg`.
+    Class(&'static str),
+    /// One register, spelled at the operand's width: `al`, `ecx`, `rdx`.
+    Explicit(&'static str),
+}
+
+/// The direction of an [`AsmOperand`].
+#[derive(Clone, Debug)]
+pub enum AsmOperandKind {
+    /// An input: the value is computed before the statement.
+    In(Expr),
+    /// An output, stored into `place` afterwards. `late` is `lateout` — GCC's
+    /// plain `=`, written only after every input has been read — and its
+    /// absence is `out`, GCC's early clobber `=&`.
+    Out {
+        /// Where the value goes.
+        place: Place,
+        /// Whether the register may share one with an input.
+        late: bool,
+    },
+    /// An operand that is read and written: GCC's `+`, or an output with an
+    /// input tied to it by a digit constraint (`"=r"(x) : "0"(y)`).
+    InOut {
+        /// The tied input's value, already converted to the output's type;
+        /// `None` for `+`, where the input is whatever `output` holds.
+        input: Option<Expr>,
+        /// Where the value goes.
+        output: Place,
+    },
+    /// An immediate, folded: `"i"(3)` is `const 3`.
+    Const(i128),
 }
 
 impl Stmt {

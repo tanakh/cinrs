@@ -448,8 +448,9 @@ impl Sema<'_> {
         if let Some(label) = &declarator.asm_label {
             self.error(
                 label.range,
-                "an 'asm' label on a local variable is not supported; it names a register \
-                 or a symbol, and neither has a place in the generated Rust",
+                "an 'asm' label on a local variable is not supported: GCC's register variable \
+                 has no counterpart in Rust's 'asm!'. Write the register as a constraint of the \
+                 'asm' statement instead, such as \"a\"(x) for eax",
             );
         }
         if let Some(section) = &attrs.section {

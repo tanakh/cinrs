@@ -1,13 +1,13 @@
-error: inline assembly is not supported
- --> tests/ui/gnu_asm.rs:9:9
-  |
-9 |         asm volatile ("add %1, %0" : "=r"(sum) : "r"(a), "0"(b));
-  |         ^^^
-
-error: inline assembly is not supported
-  --> tests/ui/gnu_asm.rs:14:9
+error: inline assembly: code generation is not implemented yet
+  --> tests/ui/gnu_asm.rs:10:9
    |
-14 |         __asm__ __volatile__("" ::: "memory");
+10 |         asm volatile ("add %1, %0" : "=r"(sum) : "r"(a), "0"(b));
+   |         ^^^
+
+error: inline assembly: code generation is not implemented yet
+  --> tests/ui/gnu_asm.rs:15:9
+   |
+15 |         __asm__ __volatile__("" ::: "memory");
    |         ^^^^^^^
 
 error: aborting due to 2 previous errors

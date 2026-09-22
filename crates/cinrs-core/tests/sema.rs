@@ -5,7 +5,7 @@
 
 use std::str::FromStr;
 
-use cinrs_core::{Level, Options, Standard, analyze, sema};
+use cinrs_core::{Level, Options, Standard, analyze, ir, sema};
 use proc_macro2::TokenStream;
 
 /// Analyses `source` and returns every error message, in source order.
@@ -1506,5 +1506,362 @@ fn an_older_toolchain_is_told_what_it_needs() {
     assert_eq!(
         errors_with("int f(int n, ...) { return missing(n); }", &options),
         ["implicit declaration of function 'missing' is invalid in C99"]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// inline assembly
+// ---------------------------------------------------------------------------
+
+/// The x86-64 target, whatever the host is.
+const X86_64: &str = "#pragma cinrs target \"x86_64-unknown-linux-gnu\"\n";
+
+fn asm_options() -> Options {
+    Options::gnu(Standard::C99)
+}
+
+/// Every `asm` statement of `source`, as `template | operand heads | clobbers`,
+/// asserting there were no errors.
+fn asm_ir(source: &str) -> Vec<String> {
+    let options = asm_options();
+    let source = format!("{X86_64}{source}");
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, &options);
+    assert!(
+        analysis.diagnostics.items().is_empty(),
+        "front end: {:#?}",
+        analysis.diagnostics.items()
+    );
+    let (program, diagnostics) =
+        sema::analyze(&analysis.unit, &analysis.options, analysis.source.unit_id());
+    let errors: Vec<_> = diagnostics
+        .sorted()
+        .into_iter()
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "expected no errors, got {errors:#?}");
+    let mut out = Vec::new();
+    for function in &program.functions {
+        match &function.body {
+            Some(ir::Body::Structured(stmts)) => collect_asm(stmts, &mut out),
+            Some(ir::Body::Cfg(cfg)) => {
+                for block in &cfg.blocks {
+                    collect_asm(&block.stmts, &mut out);
+                }
+            }
+            None => {}
+        }
+    }
+    out
+}
+
+fn collect_asm(stmts: &[ir::Stmt], out: &mut Vec<String>) {
+    for stmt in stmts {
+        match stmt {
+            ir::Stmt::Asm(asm) => {
+                let heads: Vec<String> = asm.operands.iter().map(|o| o.head()).collect();
+                out.push(format!(
+                    "{} | {} | {}",
+                    asm.template,
+                    heads.join(", "),
+                    asm.clobbers.join(", ")
+                ));
+            }
+            ir::Stmt::Block(items) => collect_asm(items, out),
+            ir::Stmt::Region(region) => collect_asm(&region.body, out),
+            ir::Stmt::Switch(switch) => {
+                for group in &switch.groups {
+                    collect_asm(&group.body, out);
+                }
+            }
+            ir::Stmt::Label { body, .. }
+            | ir::Stmt::If {
+                then_branch: body, ..
+            } => collect_asm(std::slice::from_ref(&**body), out),
+            _ => {}
+        }
+    }
+}
+
+/// The errors `source` produces for x86-64.
+fn asm_errors(source: &str) -> Vec<String> {
+    asm_errors_with(&format!("{X86_64}{source}"), &asm_options())
+}
+
+/// The errors `source` produces, with the target its `#pragma cinrs target`
+/// resolved to (which [`errors_with`] does not pass on).
+fn asm_errors_with(source: &str, options: &Options) -> Vec<String> {
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, options);
+    assert!(
+        analysis.diagnostics.items().is_empty(),
+        "front end: {:#?}",
+        analysis.diagnostics.items()
+    );
+    let (_program, diagnostics) =
+        sema::analyze(&analysis.unit, &analysis.options, analysis.source.unit_id());
+    diagnostics
+        .sorted()
+        .into_iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| d.message.clone())
+        .collect()
+}
+
+#[test]
+fn basic_asm_is_passed_through() {
+    assert_eq!(
+        asm_ir(
+            r#"void f(void) {
+                asm("mfence");
+                __asm__ __volatile__("pause");
+                asm volatile ("" ::: "memory");
+                asm("movl %eax, %ebx");
+            }"#
+        ),
+        [
+            "mfence |  | ",
+            "pause |  | ",
+            " |  | ",
+            // Basic asm: '%' is literal.
+            "movl %eax, %ebx |  | ",
+        ]
+    );
+}
+
+#[test]
+fn each_operand_kind_maps_onto_asm() {
+    assert_eq!(
+        asm_ir(
+            r#"long f(long a, int b, unsigned char c, double d, int *p) {
+                long r; int s; unsigned int lo, hi;
+                asm("addq %1, %0" : "=r"(r) : "r"(a));
+                asm("bsrl %1, %0" : "=&r"(s) : "rm"(b));
+                asm("addl %1, %0" : "+r"(s) : "ri"(b));
+                asm("notb %0" : "+q"(c));
+                asm("incl %k0" : "+r"(r));
+                asm("incw %w0; incb %b0; incb %h0" : "+r"(s));
+                asm("incq %q0" : "+g"(r));
+                asm("rdtsc" : "=a"(lo), "=d"(hi));
+                asm("movl %1, %0" : "=a"(s) : "c"(b) : "rsi", "cc", "memory");
+                asm("shlq %1, %0" : "+r"(r) : "i"(3 + 1));
+                asm("addl %2, %0" : "=r"(s) : "r"(b), "0"(a));
+                asm("incl (%0)" : : "r"(p));
+                asm("addsd %1, %0" : "+x"(d) : "x"(d));
+                asm("addl %[y], %[x]" : [x] "+r"(s) : [y] "r"(b));
+                asm("movl %0, %%eax; movb %b0, %%al; %{%|%}" : : "a"(b) : "xmm1");
+            }"#
+        ),
+        [
+            "addq {o1}, {o0} | o0 = lateout(reg), o1 = in(reg) | ",
+            "bsrl {o1}, {o0} | o0 = out(reg), o1 = in(reg) | ",
+            "addl {o1}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            "notb {o0} | o0 = inout(reg_byte) | ",
+            "incl {o0:e} | o0 = inout(reg) | ",
+            "incw {o0:x}; incb {o0:l}; incb {o0:h} | o0 = inout(reg_abcd) | ",
+            "incq {o0:r} | o0 = inout(reg) | ",
+            "rdtsc | lateout(\"eax\"), lateout(\"edx\") | ",
+            "movl %ecx, %eax | lateout(\"eax\"), in(\"ecx\") | rsi",
+            "shlq ${o1}, {o0} | o0 = inout(reg), o1 = const | ",
+            // The tied input is folded into the output it is tied to, and '%2'
+            // names that output.
+            "addl {o0}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            "incl ({o0}) | o0 = in(reg) | ",
+            "addsd {o1}, {o0} | o0 = inout(xmm_reg), o1 = in(xmm_reg) | ",
+            "addl {o1}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            "movl %eax, %eax; movb %al, %al; {{|}} | in(\"eax\") | xmm1",
+        ]
+    );
+}
+
+#[test]
+fn asm_is_carried_by_the_control_flow_graph() {
+    let found = asm_ir(
+        r#"int f(int n) {
+            int i = 0;
+        again:
+            asm volatile ("pause");
+            if (++i < n) goto again;
+            switch (n) { case 1: asm("nop"); break; default: break; }
+            return i;
+        }"#,
+    );
+    assert_eq!(found, ["pause |  | ", "nop |  | "]);
+}
+
+#[test]
+fn what_asm_cannot_express_is_refused_by_name() {
+    let cases: &[(&str, &str)] = &[
+        (
+            r#"void f(int x) { asm("incl %0" : "+m"(x)); }"#,
+            "the constraint \"+m\" asks for a memory operand, and Rust's 'asm!' has none: pass \
+             the address in a register (\"r\"(&x)) and write the memory reference in the \
+             template, such as '(%0)'",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "m"(x)); }"#,
+            "the constraint \"m\" asks for a memory operand, and Rust's 'asm!' has none: pass \
+             the address in a register (\"r\"(&x)) and write the memory reference in the \
+             template, such as '(%0)'",
+        ),
+        (
+            r#"void f(unsigned long long x) { asm("rdtsc" : "=A"(x)); }"#,
+            "the constraint \"A\" (the edx:eax pair) is not supported: 'asm!' has no operand \
+             that spans two registers. Use \"=a\" and \"=d\" with two variables and combine them",
+        ),
+        (
+            r#"void f(double x) { asm("fsqrt" : "+t"(x)); }"#,
+            "the constraint \"t\" (an x87 stack register) is not supported: 'asm!' has no \
+             operand on the x87 register stack",
+        ),
+        (
+            r#"void f(double x) { asm("" : "=f"(x)); }"#,
+            "the constraint \"f\" (an x87 stack register) is not supported: 'asm!' has no \
+             operand on the x87 register stack",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "y"(x)); }"#,
+            "the constraint \"y\" (an MMX register) is not supported: Rust has no MMX",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "X"(x)); }"#,
+            "the constraint \"X\" (any operand at all) is not supported: say which register \
+             class, such as \"r\"",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "I"(x)); }"#,
+            "the constraint \"I\" (a range-checked immediate) is not supported: write \"i\", \
+             which 'asm!' takes as a 'const' operand",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "R"(x)); }"#,
+            "the constraint \"R\" (a legacy register) is not supported: 'asm!' has no class for \
+             it. Use \"r\", or name the register",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "Yz"(x)); }"#,
+            "the constraint \"Yz\" is not supported: 'asm!' has no class for it. Use \"x\" for \
+             an SSE register",
+        ),
+        (
+            r#"void f(int x) { asm("cpuid" : "=b"(x)); }"#,
+            "the constraint \"b\" is not supported: rustc reserves rbx (LLVM uses it \
+             internally) and refuses it as an 'asm!' operand. Use \"r\", and save and restore \
+             rbx in the template if the instruction writes it",
+        ),
+        (
+            r#"int f(int a, int b) { char z; asm("cmpl %1, %2" : "=@ccz"(z) : "r"(a), "r"(b)); return z; }"#,
+            "the flag output \"=@ccz\" is not supported: 'asm!' has no flag outputs. Set a byte \
+             register from the flag in the template ('setz %b0') and use \"=q\"",
+        ),
+        (
+            r#"void f(void) { asm("1: jmp 1b%=" : :); }"#,
+            "'%=' is not supported: 'asm!' has no number unique to each instance. Use a GNU as \
+             local label ('1:' with '1b' or '1f') instead",
+        ),
+        (
+            r#"void f(void) { asm(".byte %c0" : : "i"(1)); }"#,
+            "the operand modifier '%c' is not supported: it prints a constant or an address \
+             without its '$', which 'asm!' has no spelling for. Write the operand with \"i\" \
+             and '%0', or pass the address in a register",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "i"(x)); }"#,
+            "the constraint \"i\" asks for an immediate, and this operand is not an integer \
+             constant expression: 'asm!' takes an immediate as a 'const' operand. Write a \
+             constant, or use \"r\" to pass the value in a register",
+        ),
+        (
+            r#"struct S { int b : 3; }; void f(struct S *s) { asm("" : "=r"(s->b)); }"#,
+            "a bit-field cannot be an 'asm' output: it has no register-sized storage of its own. \
+             Write the output to a local and assign the bit-field from it",
+        ),
+        (
+            r#"void f(void) { asm("cpuid" : : : "rbx"); }"#,
+            "the clobber \"rbx\" is not supported: rustc reserves rbx (LLVM uses it \
+             internally) and refuses it as an 'asm!' operand or clobber; save and restore it in \
+             the template instead, as GCC's <cpuid.h> does with 'xchgq %%rbx, %q1' around the \
+             instruction and a \"=&r\" operand",
+        ),
+        (
+            r#"void f(void) { asm("" : : : "rsp"); }"#,
+            "the clobber \"rsp\" is not supported: the stack pointer cannot be an 'asm!' operand",
+        ),
+        (
+            r#"void f(void) { asm("{movl|mov} %eax, %ebx"); }"#,
+            "'{' and '}' in an 'asm' template are GCC's assembler dialect alternatives \
+             ('{att|intel}'), which are not supported: write the AT&T form alone, or '%{' and \
+             '%}' for a literal brace",
+        ),
+        (
+            r#"void f(void) { asm(".intel_syntax noprefix\n mov eax, ebx"); }"#,
+            "a template that switches to Intel syntax with '.intel_syntax' is not supported: \
+             GCC's x86 templates are AT&T, and cinrs gives 'asm!' options(att_syntax) to match. \
+             Write the instructions in AT&T syntax",
+        ),
+        (
+            r#"int f(int x) { asm goto ("jmp %l0" : : : : out); return 0; out: return 1; }"#,
+            "'asm goto' is not supported yet: Rust's 'asm!' has 'label' blocks, but the jump to \
+             a C label has to go through the function's control flow, which this release does \
+             not do. Write the branch in C on a flag the 'asm' sets",
+        ),
+        (
+            r#"void f(void) { register int x asm("eax") = 1; (void)x; }"#,
+            "an 'asm' label on a local variable is not supported: GCC's register variable has no \
+             counterpart in Rust's 'asm!'. Write the register as a constraint of the 'asm' \
+             statement instead, such as \"a\"(x) for eax",
+        ),
+        (
+            r#"struct P { int a, b; }; void f(struct P p) { asm("" : : "r"(p)); }"#,
+            "an 'asm' operand has to have integer, floating or pointer type, not 'struct P'",
+        ),
+        (
+            r#"void f(char c) { asm("incl %k0" : "+r"(c)); }"#,
+            "the operand modifier '%k' cannot apply to an 8-bit operand: 'asm!' has no wider \
+             name for a byte register. Widen the operand to 'unsigned int'",
+        ),
+        (
+            r#"void f(int x) { asm("mov %1, %0" : "=r"(x)); }"#,
+            "'%1' names operand 1 that this 'asm' statement does not have (1 operands)",
+        ),
+        (
+            r#"void f(int x) { asm("" : "r"(x)); }"#,
+            "the output constraint \"r\" has to start with '=' or '+'",
+        ),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(asm_errors(source), [*expected], "for:\n{source}");
+    }
+}
+
+#[test]
+fn asm_is_refused_where_it_cannot_be_had() {
+    // A safe function has no `unsafe` block to hold an `asm!`.
+    let mut options = Options::gnu(Standard::C23);
+    options.c_variadic = true;
+    assert_eq!(
+        asm_errors_with(
+            &format!("{X86_64}[[cinrs::safe]] void f(void) {{ asm(\"nop\"); }}"),
+            &options
+        ),
+        [
+            "inline assembly cannot be written in the safe function 'f': Rust's 'asm!' is unsafe, \
+          and a safe function has no 'unsafe' block to put it in. Drop [[cinrs::safe]] from 'f'"
+        ]
+    );
+    // Another architecture's template would be handed over unchanged, and the
+    // registers are x86's.
+    assert_eq!(
+        asm_errors_with(
+            "#pragma cinrs target \"aarch64-unknown-linux-gnu\"\nvoid f(void) { asm(\"nop\"); }",
+            &asm_options()
+        ),
+        [
+            "inline assembly is only supported on x86 and x86-64: the template is assembly for \
+          one architecture and the operands are mapped onto x86's registers, and the target \
+          here is aarch64"
+        ]
     );
 }
