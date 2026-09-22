@@ -8,7 +8,7 @@ follows [Semantic Versioning][semver].
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-09-22
 
 First release. A procedural macro that takes a C translation unit and
 translates it to Rust, with every generated token carrying the span of the C it
@@ -48,6 +48,13 @@ what is in it.
   storage and `#if` mean what they will mean on the machine the code runs on:
   LP64, LLP64 and ILP32, chosen from `CINRS_TARGET`, `#pragma cinrs target` or
   the host, and guarded by a compile-time assertion in every expansion.
+* **A header is a binding.** A function a unit declares and does not define —
+  everything `#include <zlib.h>` brings in — is callable from Rust under its C
+  name, and so are the header's types; a Rust `mod` around the invocation
+  gives them a path. A macro needs a line of C written in the same block.
+* **Works under rust-analyzer**, which hands a procedural macro no source
+  positions: a raw-token block recovers its own text from the crate's sources,
+  so the editor shows the same diagnostics — and the same carets — as `cargo`.
 
 ### Conformance and speed, as measured for this release
 
