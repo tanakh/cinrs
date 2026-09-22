@@ -581,3 +581,105 @@ fn a_cleanup_lives_beside_the_other_scope_machinery() {
         assert_eq!(nesting(), 3000 + 10 * 100 + 11 + 1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// the shapes the relooper recovers
+// ---------------------------------------------------------------------------
+
+/// A block with a `cleanup` that a `goto` leaves through **two** different
+/// edges: both run it, and both run the outer one after it.
+///
+/// The jump into the loop body is what puts the function through the graph, so
+/// the calls are on the edges rather than on a drop guard — and each edge owes
+/// the same two calls in the same order.
+#[test]
+fn a_goto_leaves_one_scope_by_two_edges() {
+    gnu99! {
+        static int trace[16];
+        static int traced;
+
+        static void note(int *p) { trace[traced++] = *p; }
+
+        int jumping(int c) {
+            traced = 0;
+            trace[0] = trace[1] = trace[2] = 0;
+            int a __attribute__((cleanup(note))) = 1;
+            if (c < 0) goto inside;
+            while (c > 0) {
+                {
+                    int b __attribute__((cleanup(note))) = 2;
+                    if (c == 1) goto first;
+                    if (c == 2) goto second;
+                }
+            inside:
+                c = 0;
+            }
+            return 1000;
+        first:
+            return 10;
+        second:
+            return 20;
+        }
+
+        /* The `note` calls the run above recorded, most recent last: one digit
+           each, and the count in front. Read after the call, so that the one
+           the `return` itself owes is counted too. */
+        int recorded(void) {
+            return traced * 100 + trace[0] * 10 + trace[1];
+        }
+    }
+
+    unsafe {
+        // c = 1 leaves the block through `goto first`, c = 2 through `goto
+        // second`. Both run `b`'s call, and `a`'s afterwards at the `return`.
+        assert_eq!(jumping(1), 10);
+        assert_eq!(recorded(), 2 * 100 + 2 * 10 + 1, "b's call, then a's");
+        assert_eq!(jumping(2), 20);
+        assert_eq!(recorded(), 2 * 100 + 2 * 10 + 1, "the other edge, the same");
+        // c = 3 leaves the block by falling off its end, which owes the same.
+        assert_eq!(jumping(3), 1000);
+        assert_eq!(recorded(), 2 * 100 + 2 * 10 + 1);
+        // c = -1 jumps past the block into the loop body, so only `a`'s call
+        // happens — at the `return`, after the value was taken.
+        assert_eq!(jumping(-1), 1000);
+        assert_eq!(recorded(), 100 + 10);
+    }
+}
+
+/// A `cleanup` on a variable of a loop body, in a function the relooper
+/// lowers: one call per pass, and one more on the edge that leaves.
+#[test]
+fn a_cleanup_in_a_relooped_loop_runs_once_per_pass() {
+    gnu99! {
+        static int trace[32];
+        static int traced;
+
+        static void note(int *p) { trace[traced++] = *p; }
+
+        int passes(int n, int start_inside) {
+            traced = 0;
+            trace[0] = trace[1] = trace[2] = 0;
+            if (start_inside) goto middle;
+            while (n > 0) {
+            middle:
+                {
+                    int b __attribute__((cleanup(note))) = n;
+                    if (b == 1) goto out;
+                }
+                n--;
+            }
+        out:
+            return traced * 1000 + trace[0] * 100 + trace[1] * 10 + trace[2];
+        }
+    }
+
+    unsafe {
+        // Passes with b = 3, 2, and then b = 1 leaves through the `goto`,
+        // which owes the same call on its own edge.
+        assert_eq!(passes(3, 0), 3000 + 300 + 20 + 1);
+        assert_eq!(passes(2, 1), 2000 + 200 + 10);
+        // Entering at the label skips the loop's own test, so the body runs
+        // once even though `n` is not positive.
+        assert_eq!(passes(0, 1), 1000);
+    }
+}

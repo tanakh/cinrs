@@ -1,0 +1,33 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: "lowered(THREE_EXITS, \"f\")"
+---
+pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut t: ::core::ffi::c_int = 0;
+        let mut extra: ::core::ffi::c_int = 0;
+        t = 0;
+        'r0: loop {
+            if n > 0 {
+                if n == 3 {
+                    break 'r0;
+                }
+                if n == 5 {
+                    return t.wrapping_sub(2);
+                } else {
+                    if n == 7 {
+                        return t.wrapping_sub(3);
+                    } else {
+                        t = t.wrapping_add(n);
+                        n = n.wrapping_sub(1);
+                    }
+                }
+            } else {
+                extra = n.wrapping_add(1);
+                t = t.wrapping_add(extra);
+                break 'r0;
+            }
+        }
+        return t.wrapping_sub(1);
+    }
+}

@@ -185,6 +185,7 @@ use crate::ir::{
     Function, LogicalOp, LoopId, NEVER_RAW, Place, PlaceKind, Program, RecordKind, Stmt, Storage,
     Switch, Ty,
 };
+use crate::reloop;
 
 /// Generates the Rust items for a fully checked program.
 pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenStream {
@@ -778,8 +779,9 @@ fn is_label_name(name: &str) -> bool {
         && !is_generated_label(name)
 }
 
-/// The labels this module gives its own loops, `switch`es and state machine:
-/// `'cfg`, `'lN`, `'lN_body`, `'swN` and `'swN_cM`.
+/// The labels this module gives its own loops, `switch`es, state machine and
+/// [recovered shapes](crate::reloop): `'cfg`, `'lN`, `'lN_body`, `'swN`,
+/// `'swN_cM`, `'bN` and `'rN`.
 fn is_generated_label(name: &str) -> bool {
     fn digits(text: &str) -> bool {
         !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
@@ -792,6 +794,13 @@ fn is_generated_label(name: &str) -> bool {
         && digits(rest.strip_suffix("_body").unwrap_or(rest))
     {
         return true;
+    }
+    for prefix in ['b', 'r'] {
+        if let Some(rest) = name.strip_prefix(prefix)
+            && digits(rest)
+        {
+            return true;
+        }
     }
     if let Some(rest) = name.strip_prefix("sw") {
         if digits(rest) {
@@ -1097,6 +1106,36 @@ struct Codegen<'a> {
     /// The regions the statement being generated stands inside, which is what
     /// tells a `goto` whether it leaves one or restarts it.
     region_kinds: HashMap<ir::LabelId, ir::RegionKind>,
+    /// The Rust label each loop [the relooper](crate::reloop) recovered
+    /// carries: the C label its head stands at, or `'rN`.
+    loop_names: HashMap<u32, String>,
+    /// The labelled blocks and loops open around the shape being generated,
+    /// outermost first.
+    shape_scopes: Vec<ShapeScope>,
+    /// Numbers the labelled blocks a sequence of shapes needs, so that each
+    /// has a name of its own within the function.
+    shape_labels: u32,
+    /// The labels a jump really used: one nothing named is left out, braces
+    /// and all.
+    used_labels: HashSet<u32>,
+}
+
+/// A labelled block or loop the shape being generated stands inside.
+///
+/// Together they are how a jump the graph still holds is emitted: the
+/// innermost scope whose [exit](reloop::Exit) names the target block says
+/// whether it is a `break` or a `continue`, and of what.
+#[derive(Clone)]
+struct ShapeScope {
+    /// Identifies the label in [`Codegen::used_labels`]. A loop's is
+    /// [`u32::MAX`], which is never looked up: a loop always carries its name.
+    id: u32,
+    /// The name, without the tick.
+    name: String,
+    /// Whether arriving at `exit` is `continue` rather than `break`.
+    repeats: bool,
+    /// Where the jump arrives.
+    exit: reloop::Exit,
 }
 
 impl<'a> Codegen<'a> {
@@ -1140,6 +1179,10 @@ impl<'a> Codegen<'a> {
             label_states,
             region_names: HashMap::new(),
             region_kinds: HashMap::new(),
+            loop_names: HashMap::new(),
+            shape_scopes: Vec::new(),
+            shape_labels: 0,
+            used_labels: HashSet::new(),
         }
     }
 
@@ -2629,8 +2672,18 @@ impl<'a> Codegen<'a> {
         self.local_names.clear();
         self.region_names.clear();
         self.region_kinds.clear();
+        self.loop_names.clear();
+        self.shape_scopes.clear();
+        self.used_labels.clear();
+        self.shape_labels = 0;
         if let Some(Body::Structured(stmts)) = &func.body {
             self.name_regions(stmts);
+        }
+        if let Some(Body::Cfg(cfg)) = &func.body
+            && let Some(plan) = &cfg.shape
+        {
+            let mut taken = HashSet::new();
+            self.name_loops(&plan.body, &mut taken);
         }
         self.env = func
             .env
@@ -2903,11 +2956,25 @@ impl<'a> Codegen<'a> {
 
     // -- the control-flow-graph form ----------------------------------------
 
-    /// Emits a [CFG](crate::cfg) body as a state machine.
+    /// Emits a [CFG](crate::cfg) body.
     ///
-    /// Every arm of the `match` ends in `continue 'cfg` or in a `return`, so
-    /// the loop never finishes and the function needs no value after it.
+    /// Every local is bound at the top — Rust has no way to jump over a `let`
+    /// — and then either the structured shapes [the relooper](crate::reloop)
+    /// recovered, or, for a function whose labels have addresses, the state
+    /// machine.
     fn cfg_body(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
+        let mut out = self.cfg_locals(cfg);
+        match &cfg.shape {
+            Some(plan) => {
+                out.extend(self.shape_seq(cfg, &plan.body, &reloop::Exit::nowhere(), span))
+            }
+            None => out.extend(self.state_machine(cfg, span)),
+        }
+        out
+    }
+
+    /// The `let` bindings every local of a graph-lowered function gets.
+    fn cfg_locals(&mut self, cfg: &Cfg) -> TokenStream {
         let mut out = TokenStream::new();
         for local in &cfg.locals {
             let object = self.program.object(local.object);
@@ -2934,6 +3001,16 @@ impl<'a> Codegen<'a> {
             let init = self.binding_init(local.object, init, ospan);
             out.extend(quote_spanned! {ospan=> let mut #name: #ty = #init; });
         }
+        out
+    }
+
+    /// The graph as a state machine, for a function whose labels have
+    /// addresses: `&&label` *is* a block's number, so there is nothing else it
+    /// can be.
+    ///
+    /// Every arm of the `match` ends in `continue 'cfg` or in a `return`, so
+    /// the loop never finishes and the function needs no value after it.
+    fn state_machine(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
         let state = self.state_ident();
         let label = self.cfg_label();
         let mut arms = TokenStream::new();
@@ -2946,7 +3023,6 @@ impl<'a> Codegen<'a> {
         arms.extend(quote_spanned! {span=> _ => ::core::unreachable!(), });
         let u32_ty = primitive_ty("u32", span);
         quote_spanned! {span=>
-            #out
             let mut #state: #u32_ty = 0;
             #label: loop {
                 match #state { #arms }
@@ -3066,6 +3142,370 @@ impl<'a> Codegen<'a> {
         let state = self.state_ident();
         let value = state_literal(target.0 as usize, span);
         quote_spanned! {span=> #state = #value; }
+    }
+
+    // -- the structured form of the graph ------------------------------------
+
+    /// Names the loops [the relooper](crate::reloop) recovered, after the C
+    /// labels their heads stand at.
+    ///
+    /// The same rules as [`Codegen::name_regions`]: a name Rust cannot spell
+    /// as a label, or one this module gives its own loops and blocks, is
+    /// replaced by `rN`, and a name two loops would share gets an underscore.
+    fn name_loops(&mut self, seq: &reloop::Seq, taken: &mut HashSet<String>) {
+        for shape in seq {
+            match shape {
+                reloop::Shape::Loop { id, name, body, .. } => {
+                    let mut candidate = match name {
+                        Some(name) => rust_spelling(name).into_owned(),
+                        None => String::new(),
+                    };
+                    if !is_label_name(&candidate) {
+                        candidate = format!("r{id}");
+                    }
+                    while taken.contains(&candidate) {
+                        candidate.push('_');
+                    }
+                    taken.insert(candidate.clone());
+                    self.loop_names.insert(*id, candidate);
+                    self.name_loops(body, taken);
+                }
+                reloop::Shape::Simple { arms, .. } | reloop::Shape::Dispatch { arms, .. } => {
+                    for arm in arms {
+                        self.name_loops(&arm.body, taken);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A run of shapes, one after another.
+    ///
+    /// Everything before a shape stands inside a labelled block that ends
+    /// where that shape begins, so that a jump forwards is `break` of it —
+    /// the same shape [`regions`](crate::regions) gives an outward `goto`.
+    /// The nesting runs the other way round from the order they are emitted
+    /// in: the block for the *second* shape is the innermost one, so that
+    /// breaking it lands on the second shape and breaking any of the others
+    /// skips past what is in between.
+    fn shape_seq(
+        &mut self,
+        cfg: &Cfg,
+        seq: &reloop::Seq,
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        let Some(first) = seq.first() else {
+            return TokenStream::new();
+        };
+        let exits: Vec<reloop::Exit> = seq.iter().map(reloop::Shape::exit).collect();
+        // An irreducible region's state variable is bound before anything that
+        // could jump into it, which is the head of the run it stands in.
+        let mut out = TokenStream::new();
+        for shape in seq {
+            if let reloop::Shape::Loop {
+                state: Some(state), ..
+            } = shape
+            {
+                let name = entry_ident(*state);
+                let u32_ty = primitive_ty("u32", span);
+                out.extend(quote_spanned! {span=> let mut #name: #u32_ty = 0; });
+            }
+        }
+        let ids: Vec<u32> = (1..seq.len())
+            .map(|_| {
+                let id = self.shape_labels;
+                self.shape_labels += 1;
+                id
+            })
+            .collect();
+        for (index, id) in ids.iter().enumerate().rev() {
+            self.shape_scopes.push(ShapeScope {
+                id: *id,
+                name: format!("b{id}"),
+                repeats: false,
+                exit: exits[index + 1].clone(),
+            });
+        }
+        let mut code = self.shape(cfg, first, exits.get(1).unwrap_or(fall), span);
+        for (index, shape) in seq.iter().enumerate().skip(1) {
+            let scope = self.shape_scopes.pop().expect("one scope per shape");
+            if self.used_labels.contains(&scope.id) {
+                let label = self.label(&scope.name, span);
+                code = quote_spanned! {span=> #label: { #code } };
+            }
+            code.extend(self.shape(cfg, shape, exits.get(index + 1).unwrap_or(fall), span));
+        }
+        out.extend(code);
+        out
+    }
+
+    /// One shape.
+    fn shape(
+        &mut self,
+        cfg: &Cfg,
+        shape: &reloop::Shape,
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        match shape {
+            reloop::Shape::Simple { block, arms } => {
+                self.shape_simple(cfg, *block, arms, fall, span)
+            }
+            reloop::Shape::Loop {
+                id,
+                entries,
+                state,
+                body,
+                ..
+            } => {
+                let name = self
+                    .loop_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("r{id}"));
+                let bspan = entries.first().map_or(span, |entry| {
+                    self.block_span(&cfg.blocks[entry.index()], span)
+                });
+                let head = reloop::Exit {
+                    targets: entries.clone(),
+                    state: *state,
+                };
+                // Leaving the loop is `break`, going round again `continue`.
+                self.shape_scopes.push(ShapeScope {
+                    id: u32::MAX,
+                    name: name.clone(),
+                    repeats: false,
+                    exit: fall.clone(),
+                });
+                self.shape_scopes.push(ShapeScope {
+                    id: u32::MAX,
+                    name: name.clone(),
+                    repeats: true,
+                    exit: head.clone(),
+                });
+                let body = self.shape_seq(cfg, body, &head, bspan);
+                self.shape_scopes.pop();
+                self.shape_scopes.pop();
+                let label = self.label(&name, bspan);
+                quote_spanned! {bspan=> #label: loop { #body } }
+            }
+            reloop::Shape::Dispatch { state, arms } => {
+                self.shape_dispatch(cfg, *state, arms, fall, span)
+            }
+        }
+    }
+
+    /// The head of an irreducible region: which entry this turn runs.
+    fn shape_dispatch(
+        &mut self,
+        cfg: &Cfg,
+        state: u32,
+        arms: &[reloop::Arm],
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        let Some((last, rest)) = arms.split_last() else {
+            return TokenStream::new();
+        };
+        if rest.is_empty() {
+            return self.shape_seq(cfg, &last.body, fall, span);
+        }
+        let name = entry_ident(state);
+        // Two heads is the common irreducible region, and two heads is an
+        // `if`: a `match` of `0 =>` and `_ =>` says nothing more.
+        if rest.len() == 1 {
+            let first = self.shape_seq(cfg, &rest[0].body, fall, span);
+            let second = self.shape_seq(cfg, &last.body, fall, span);
+            let zero = state_literal(0, span);
+            return quote_spanned! {span=>
+                if #name == #zero { #first } else { #second }
+            };
+        }
+        let mut cases = TokenStream::new();
+        for (index, arm) in rest.iter().enumerate() {
+            let body = self.shape_seq(cfg, &arm.body, fall, span);
+            let pattern = state_literal(index, span);
+            cases.extend(quote_spanned! {span=> #pattern => { #body } });
+        }
+        let body = self.shape_seq(cfg, &last.body, fall, span);
+        cases.extend(quote_spanned! {span=> _ => { #body } });
+        quote_spanned! {span=> match #name { #cases } }
+    }
+
+    /// A block, and the branch its terminator becomes.
+    fn shape_simple(
+        &mut self,
+        cfg: &Cfg,
+        block: BlockId,
+        arms: &[reloop::Arm],
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        let basic = &cfg.blocks[block.index()];
+        let span = self.block_span(basic, span);
+        let mut out = self.stmts(&basic.stmts);
+        match &basic.term {
+            Terminator::Jump { target, range } => {
+                let jspan = self.sp(*range);
+                out.extend(self.enter_shape(cfg, arms, *target, fall, jspan));
+            }
+            Terminator::Branch {
+                cond,
+                then_blk,
+                else_blk,
+            } => out.extend(self.shape_branch(cfg, arms, cond, *then_blk, *else_blk, fall)),
+            Terminator::Switch {
+                value,
+                cases,
+                default,
+                range,
+            } => {
+                let sspan = self.sp(*range);
+                out.extend(self.shape_switch(cfg, arms, value, cases, *default, fall, sspan));
+            }
+            Terminator::Return { value, range } => {
+                let rspan = self.sp(*range);
+                match value {
+                    Some(value) => {
+                        let ret = self.ret_ty;
+                        let tokens = self.expr_at(value, ret);
+                        out.extend(quote_spanned! {rspan=> return #tokens; });
+                    }
+                    None => out.extend(quote_spanned! {rspan=> return; }),
+                }
+            }
+            // A computed `goto` keeps the state machine; see [`crate::reloop`].
+            Terminator::IndirectJump { .. } | Terminator::Unreachable => {
+                out.extend(quote_spanned! {span=> ::core::unreachable!(); });
+            }
+        }
+        out
+    }
+
+    /// A two-way branch: `if`, with the blocks only it reaches in its arms.
+    fn shape_branch(
+        &mut self,
+        cfg: &Cfg,
+        arms: &[reloop::Arm],
+        cond: &Expr,
+        then_blk: BlockId,
+        else_blk: BlockId,
+        fall: &reloop::Exit,
+    ) -> TokenStream {
+        let span = self.sp(cond.range);
+        // Both edges lead to the same block: the condition is still evaluated,
+        // for what it does rather than for what it says.
+        if then_blk == else_blk {
+            let effects = self.expr_stmt(cond);
+            let jump = self.enter_shape(cfg, arms, then_blk, fall, span);
+            return quote_spanned! {span=> #effects #jump };
+        }
+        let then_tokens = self.enter_shape(cfg, arms, then_blk, fall, span);
+        let else_tokens = self.enter_shape(cfg, arms, else_blk, fall, span);
+        if then_tokens.is_empty() && else_tokens.is_empty() {
+            return self.expr_stmt(cond);
+        }
+        if else_tokens.is_empty() {
+            let test = self.condition(cond).at_condition(span);
+            return quote_spanned! {span=> if #test { #then_tokens } };
+        }
+        if then_tokens.is_empty() {
+            // No empty arm: the test is inverted rather than left standing
+            // with nothing in it.
+            let test = self.condition(cond).at(prec::UNARY, span);
+            return quote_spanned! {span=> if !#test { #else_tokens } };
+        }
+        let test = self.condition(cond).at_condition(span);
+        quote_spanned! {span=> if #test { #then_tokens } else { #else_tokens } }
+    }
+
+    /// A `switch`: one `match`, with the case bodies in its arms and
+    /// fallthrough as the code that follows it.
+    #[allow(clippy::too_many_arguments)]
+    fn shape_switch(
+        &mut self,
+        cfg: &Cfg,
+        arms: &[reloop::Arm],
+        value: &Expr,
+        cases: &[(ir::CaseRange, BlockId)],
+        default: BlockId,
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        let groups = group_cases(cases);
+        let mut lowered: Vec<(Vec<ir::CaseRange>, TokenStream)> = Vec::new();
+        for (target, values) in groups {
+            let tokens = self.enter_shape(cfg, arms, target, fall, span);
+            lowered.push((values, tokens));
+        }
+        let fallback = self.enter_shape(cfg, arms, default, fall, span);
+        // One arm is no dispatch at all: every value goes the same way, and
+        // all the `match` would do is evaluate the controlling expression.
+        if lowered.iter().all(|(_, tokens)| tokens.is_empty()) && fallback.is_empty() {
+            return self.expr_stmt(value);
+        }
+        if lowered.is_empty() {
+            let effects = self.expr_stmt(value);
+            return quote_spanned! {span=> #effects #fallback };
+        }
+        let scrutinee = self.expr(value).at(prec::UNARY, span);
+        let mut out = TokenStream::new();
+        for (values, tokens) in lowered {
+            let mut pattern = TokenStream::new();
+            for (index, case) in values.iter().enumerate() {
+                if index > 0 {
+                    pattern.extend(quote_spanned! {span=> | });
+                }
+                pattern.extend(case_pattern(*case, value.ty, span));
+            }
+            out.extend(quote_spanned! {span=> #pattern => { #tokens } });
+        }
+        out.extend(quote_spanned! {span=> _ => { #fallback } });
+        quote_spanned! {span=> match #scrutinee { #out } }
+    }
+
+    /// What one edge of a terminator becomes: the shapes only it reaches,
+    /// emitted here, or a jump to where they stand.
+    fn enter_shape(
+        &mut self,
+        cfg: &Cfg,
+        arms: &[reloop::Arm],
+        target: BlockId,
+        fall: &reloop::Exit,
+        span: Span,
+    ) -> TokenStream {
+        match arms.iter().find(|arm| arm.entry == target) {
+            Some(arm) => self.shape_seq(cfg, &arm.body, fall, span),
+            None => self.goto_shape(target, fall, span),
+        }
+    }
+
+    /// The jump that reaches `target` from here.
+    ///
+    /// Falling out of the construct being generated is free; anything else is
+    /// a `break` or a `continue` of the innermost labelled block or loop that
+    /// arrives there. [`reloop::plan`] has checked that one of the two always
+    /// applies.
+    fn goto_shape(&mut self, target: BlockId, fall: &reloop::Exit, span: Span) -> TokenStream {
+        if let Some(index) = fall.index_of(target) {
+            return entry_assignment(fall, index, span);
+        }
+        for depth in (0..self.shape_scopes.len()).rev() {
+            let Some(index) = self.shape_scopes[depth].exit.index_of(target) else {
+                continue;
+            };
+            let scope = self.shape_scopes[depth].clone();
+            self.used_labels.insert(scope.id);
+            let label = self.label(&scope.name, span);
+            let set = entry_assignment(&scope.exit, index, span);
+            return if scope.repeats {
+                quote_spanned! {span=> #set continue #label; }
+            } else {
+                quote_spanned! {span=> #set break #label; }
+            };
+        }
+        unreachable!("the shapes were checked before they were generated")
     }
 
     // -- statements ---------------------------------------------------------
@@ -7108,6 +7548,25 @@ fn hex_literal(value: u64, span: Span) -> TokenStream {
         .unwrap_or_else(|_| Literal::u64_unsuffixed(value));
     literal.set_span(span);
     TokenStream::from(TokenTree::Literal(literal))
+}
+
+/// The variable that says which entry of an irreducible region control is
+/// going to, in this crate's own hygiene.
+///
+/// One per region rather than one per function; see [`crate::reloop`].
+fn entry_ident(state: u32) -> Ident {
+    Ident::new(&format!("__cinrs_entry{state}"), Span::mixed_site())
+}
+
+/// The store that says which entry of a dispatch is meant, or nothing at all
+/// when the jump has only one place to arrive.
+fn entry_assignment(exit: &reloop::Exit, index: usize, span: Span) -> TokenStream {
+    let Some(state) = exit.state else {
+        return TokenStream::new();
+    };
+    let name = entry_ident(state);
+    let value = state_literal(index, span);
+    quote_spanned! {span=> #name = #value; }
 }
 
 /// A state number, which is a `u32` because the state variable is.

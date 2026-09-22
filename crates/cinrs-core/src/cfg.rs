@@ -20,7 +20,16 @@
 //!
 //! A function containing any of them is lowered here instead: its whole body becomes
 //! a list of [basic blocks](BasicBlock) — straight-line statements ending in a
-//! [`Terminator`] — which codegen emits as a state machine:
+//! [`Terminator`].
+//!
+//! What codegen does with that graph is **not** a state machine any more.
+//! [`reloop`](crate::reloop) reads it back into loops, `if`s and `match`es —
+//! [`Cfg::shape`] — so that the loop a C program wrote is a Rust loop even when
+//! its jumps are ones no label can express, and LLVM sees the graph GCC sees.
+//! The state machine below is the last resort. What is still left on it is a
+//! function that takes a label's *address*, whose value is the state number
+//! itself, and one whose shapes would nest deeper than `rustc`'s own parser
+//! will go — this `match` is flat however many arms it has:
 //!
 //! ```text
 //! let mut __cinrs_state: u32 = 0;
@@ -89,9 +98,9 @@
 //! predecessor and never dropped — a computed `goto` can still enter it even
 //! when no edge does. [`Cfg::labels`] is what the numbers come back as.
 //!
-//! There is deliberately no relooper: the point is a correct, obvious lowering
-//! of the functions that need it, not to reconstruct the loops of a function
-//! that never had to leave the structured form.
+//! They also make the graph the relooper reads a compact one, which is most of
+//! what keeps its output readable: a `case 0: case 1:` costs no shape, and a
+//! run of statements stays in one block rather than one shape per statement.
 
 use std::collections::{HashMap, HashSet};
 
@@ -106,7 +115,7 @@ use crate::ir::{
 pub struct BlockId(pub u32);
 
 impl BlockId {
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         self.0 as usize
     }
 }
@@ -198,7 +207,7 @@ pub enum Terminator {
 
 impl Terminator {
     /// The blocks control can move to, in the order they should be read in.
-    fn successors(&self) -> Vec<BlockId> {
+    pub(crate) fn successors(&self) -> Vec<BlockId> {
         match self {
             Terminator::Jump { target, .. } => vec![*target],
             Terminator::Branch {
@@ -256,6 +265,12 @@ pub struct Cfg {
     ///
     /// [`ir::ExprKind::LabelAddr`]: crate::ir::ExprKind::LabelAddr
     pub labels: HashMap<LabelId, BlockId>,
+    /// The structured form of the same graph, when there is one; see
+    /// [`reloop`](crate::reloop).
+    ///
+    /// This is what codegen emits: loops, `if`s and `match`es, with the state
+    /// machine below kept only for a function whose labels have addresses.
+    pub shape: Option<crate::reloop::Plan>,
 }
 
 /// Lowers a checked function body into a control-flow graph.
@@ -265,9 +280,18 @@ pub struct Cfg {
 /// the labels a `&&label` took the address of — in a fixed order, since it
 /// decides the numbering of blocks nothing else reaches.
 ///
+/// `names` is what each label was called in C, which the loops
+/// [`reloop`](crate::reloop) recovers are named after.
+///
 /// The body must end in a statement that always terminates — sema appends a
 /// `return` when the source does not — so that no block falls off the end.
-pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object], pinned: &[LabelId]) -> Cfg {
+pub fn lower(
+    body: Vec<Stmt>,
+    params: &[ObjectId],
+    objects: &[Object],
+    pinned: &[LabelId],
+    names: &HashMap<LabelId, String>,
+) -> Cfg {
     let mut used: HashSet<String> = params
         .iter()
         .map(|id| objects[id.0 as usize].name.clone())
@@ -305,7 +329,7 @@ pub fn lower(body: Vec<Stmt>, params: &[ObjectId], objects: &[Object], pinned: &
     if let Some(open) = lowerer.current.take() {
         lowerer.blocks[open.index()].term = Terminator::Unreachable;
     }
-    lowerer.finish(entry)
+    lowerer.finish(entry, names)
 }
 
 /// What a loop's `break` and `continue` jump to, and how many cleanups each of
@@ -872,10 +896,10 @@ impl Lowerer<'_> {
 
     // -- cleanup ------------------------------------------------------------
 
-    fn finish(mut self, entry: BlockId) -> Cfg {
+    fn finish(mut self, entry: BlockId, names: &HashMap<LabelId, String>) -> Cfg {
         let entry = self.thread_jumps(entry);
         self.merge_chains(entry);
-        self.renumber(entry)
+        self.renumber(entry, names)
     }
 
     /// Whether a block's identity has to survive the clean-up passes.
@@ -895,6 +919,11 @@ impl Lowerer<'_> {
             .collect();
         for block in &mut self.blocks {
             block.term.map_targets(|target| resolved[target.index()]);
+        }
+        // A label now stands at whatever the forwarding chain ended on, which
+        // is where a loop named after it begins.
+        for block in self.labels.values_mut() {
+            *block = resolved[block.index()];
         }
         resolved[entry.index()]
     }
@@ -979,7 +1008,7 @@ impl Lowerer<'_> {
     /// Reverse postorder is what makes the emitted states read in the order
     /// the C did: a block comes before everything only reachable through it,
     /// and the `then` branch of a condition comes before the `else`.
-    fn renumber(mut self, entry: BlockId) -> Cfg {
+    fn renumber(mut self, entry: BlockId, names: &HashMap<LabelId, String>) -> Cfg {
         let mut order = Vec::with_capacity(self.blocks.len());
         let mut visited = vec![false; self.blocks.len()];
         for root in self.roots(entry) {
@@ -1027,7 +1056,7 @@ impl Lowerer<'_> {
             });
             blocks.push(block);
         }
-        let labels = self
+        let labels: HashMap<LabelId, BlockId> = self
             .pinned
             .iter()
             .map(|(id, block)| {
@@ -1036,10 +1065,30 @@ impl Lowerer<'_> {
                 (*id, numbered)
             })
             .collect();
+        // The C label each block now stands at, for the loops the relooper
+        // names. A label the clean-up passes merged into a predecessor no
+        // longer heads a block and leaves nothing behind; the order is by
+        // label so that the first one written wins whatever the hash order.
+        let mut named: Vec<(LabelId, BlockId)> =
+            self.labels.iter().map(|(a, b)| (*a, *b)).collect();
+        named.sort_unstable();
+        let mut block_labels: HashMap<BlockId, String> = HashMap::new();
+        for (id, block) in named {
+            let (Some(name), Some(numbered)) = (names.get(&id), index_of[block.index()]) else {
+                continue;
+            };
+            block_labels.entry(numbered).or_insert_with(|| name.clone());
+        }
+        // A `&&label` is a state *number*, which only the machine below has.
+        let shape = labels
+            .is_empty()
+            .then(|| crate::reloop::plan(&blocks, &block_labels))
+            .flatten();
         Cfg {
             locals: self.locals,
             blocks,
             labels,
+            shape,
         }
     }
 }

@@ -1,0 +1,41 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: "lowered(INTERLEAVED, \"f\")"
+---
+pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut t: ::core::ffi::c_int = 0;
+        let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+        t = 0;
+        if n & 1 != 0 {
+            __cinrs_entry0 = 1;
+        } else {
+            __cinrs_entry0 = 0;
+        }
+        'a: loop {
+            if __cinrs_entry0 == 0 {
+                t = t.wrapping_add(n);
+                if !(({
+                    n = n.wrapping_sub(1);
+                    n
+                }) <= 0)
+                {
+                    __cinrs_entry0 = 1;
+                    continue 'a;
+                }
+                return t;
+            } else {
+                t = t.wrapping_add((2 as ::core::ffi::c_int).wrapping_mul(n));
+                if !(({
+                    n = n.wrapping_sub(1);
+                    n
+                }) <= 0)
+                {
+                    __cinrs_entry0 = 0;
+                    continue 'a;
+                }
+                return t;
+            }
+        }
+    }
+}

@@ -470,8 +470,8 @@ corrupting anything.
 whole arena is freed by the `return` — which is `alloca`'s own lifetime, so a
 pointer to it returned to the caller dangles here exactly as it does in C.
 
-In a function lowered into a [state machine](#control-flow-and-goto), where
-every local is hoisted to the top, the hidden `Vec` is hoisted with them: it is
+In a function lowered through the [control-flow graph](#control-flow-and-goto),
+where every local is hoisted to the top, the hidden `Vec` is hoisted too: it is
 created empty, filled where the declaration was written, and dropped when the
 function returns rather than when the block ends. A C program can only observe
 that as memory it expected to have been given back sooner.
@@ -569,60 +569,139 @@ array](#variably-modified-types-and-alloca) and runs a
 [`cleanup`](gnu-extensions.md#__attribute__-forms) attribute exactly where C says
 they run.
 
-What is left over is lowered into a **state machine** over basic blocks, with
-every local of the function hoisted to the top and renamed apart:
+Five things do not fit those two shapes: a jump **into** a block (a label inside
+a loop body, an `if` branch or a `switch` group, named from outside it), a
+computed `goto`, a `case` label that is not a direct child of its `switch` body
+(Duff's device), two labels whose regions would have to overlap without nesting,
+and a declaration between a jump and the label it names, which no Rust block may
+hold without ending its scope early. Such a function is lowered into a
+**control-flow graph** of basic blocks, with every local hoisted to the top and
+renamed apart — and the graph is then read back into Rust's own loops and
+branches. There are three tiers in all.
+
+### Tier 2: the graph, relooped
+
+Most of what reaches the graph is *reducible*: every cycle in it has one head.
+That is exactly the shape Rust's `loop`, `break` and `continue` describe, and
+[the relooper](https://github.com/tanakh/cinrs/blob/master/crates/cinrs-core/src/reloop.rs)
+— Emscripten's algorithm — recovers it. A `switch` whose cases jump to a label
+inside one of them, which is what `sqlite3VdbeExec` and every other interpreter
+loop is made of, comes out as a `match` inside a `loop`:
 
 ```c
-int into_block(int n) {
+for (;;) {
+    switch (ops[i]) {
+    case 1: rc += 1; break;
+    case 2: if (n < 0) goto fail; rc += 2; break;
+    case 3:
+        rc = 3;
+    fail:
+        rc = -rc;
+        goto done;
+    }
+    i++;
+}
+done:
+```
+
+```rust
+'r0: loop {
+    match (*ops.offset(i as isize)) {
+        1 => { rc = rc.wrapping_add(1); }
+        2 => { if n < 0 { break 'r0; } rc = rc.wrapping_add(2); }
+        3 => { rc = 3; break 'r0; }
+        _ => {}
+    }
+    i = i.wrapping_add(1);
+}
+rc = rc.wrapping_neg();
+return rc;
+```
+
+There is no state variable at all: a loop is a Rust loop, a jump forwards is
+`break` of a labelled block that ends where its target begins, and a jump
+backwards is `continue`. Loops are named after the C label their head stands at
+(`'retry`, `'start`) and `'rN` where there is none; the labelled blocks the
+forward jumps break out of are `'bN`. What LLVM sees is the graph GCC sees.
+
+### Tier 3: a state variable, for an irreducible region only
+
+A `goto` into the middle of a loop, Duff's device and two loops that jump into
+each other's bodies all make a cycle with **two heads**, and no arrangement of
+Rust's blocks can enter one twice. The relooper keeps both heads and puts a
+`match` on a state variable at the top of the loop; every jump to a head writes
+it first:
+
+```c
+int into_block(int n, int inside) {
     int total = 0;
-    if (n > 0) goto inside;         /* into the loop body */
-    total = 100;
-    while (n < 3) { inside: total += n; n++; }
+    if (inside) goto mid;           /* into the loop body */
+    while (n > 0) { n--; mid: total += n; }
     return total;
 }
 ```
 
 ```rust
 let mut total: c_int = 0;
+let mut __cinrs_entry0: u32 = 0;
+total = 0;
+if inside != 0 { __cinrs_entry0 = 1; } else { __cinrs_entry0 = 0; }
+'mid: loop {
+    if __cinrs_entry0 == 0 {
+        if !(n > 0) { break 'mid; }
+        n = n.wrapping_sub(1);
+        __cinrs_entry0 = 1;
+    } else {
+        total = total.wrapping_add(n);
+        __cinrs_entry0 = 0;
+    }
+}
+return total;
+```
+
+Two heads is an `if`; more than two — Duff's device has five — is a `match`.
+
+One `u32` per such region, not one per function, and nothing outside the region
+reads it. SQLite's amalgamation has exactly one: `sqlite3VdbeExec`'s
+`abort_due_to_error`, which the progress-callback loop at `vdbe_return` jumps
+back to.
+
+### Tier 4: the whole-function machine
+
+One thing still needs it — a function that takes a label's address; see [Labels
+as values](#labels-as-values). Its body is one `match` over block numbers:
+
+```rust
 let mut __cinrs_state: u32 = 0;
 'cfg: loop {
     match __cinrs_state {
-        0 => { total = 0;
-               if n > 0 { __cinrs_state = 3; } else { __cinrs_state = 1; }
-               continue 'cfg; }
-        1 => { total = 100; __cinrs_state = 2; continue 'cfg; }
-        2 => { if n < 3 { __cinrs_state = 3; } else { __cinrs_state = 4; }
-               continue 'cfg; }
-        3 => { total = total.wrapping_add(n); n = n.wrapping_add(1);
-               __cinrs_state = 2; continue 'cfg; }
-        4 => { return total; }
+        0 => { total = 0; __cinrs_state = 1; continue 'cfg; }
+        1 => { return total; }
         _ => ::core::unreachable!(),
     }
 }
 ```
 
-Five things ask for it: a jump **into** a block (a label inside a loop body, an
-`if` branch or a `switch` group, named from outside it), a computed `goto`, a
-`case` label that is not a direct child of its `switch` body (Duff's device),
-two labels whose regions would have to overlap without nesting, and a
-declaration between a jump and the label it names, which no Rust block may hold
-without ending its scope early. Both forms compute exactly what the C did; only
-the second is unpleasant to read, and only the functions that need it get it.
-That is also the one systematic cost in the [benchmarks](benchmarks.md) — an
-outward `goto` is free.
+A `switch` with more `case` groups than `rustc`'s parser will nest also falls
+back to it, because that `match` is flat however many arms it has.
 
-Because the locals are hoisted, a `cleanup` attribute in such a function is
-emitted on each edge that leaves the scope rather than as a drop guard, and a
-`break` or `continue` out of a statement expression is refused: there is no Rust
-loop left to leave.
+All four compute exactly what the C did, and `cinrs` picks the first that can
+express the function. Over SQLite's 2,610 defined functions the split is 2,597
+structured, 12 relooped, one with a state variable and none on the machine.
+
+Because the locals of a graph-lowered function are hoisted, a `cleanup`
+attribute in one is emitted on each edge that leaves the scope rather than as a
+drop guard, and a `break` or `continue` out of a statement expression is
+refused: there is no Rust loop left to leave.
 
 ## Labels as values
 
-GNU C's computed `goto` is why the state machine is worth having. `&&label` is
-an rvalue of type `void *` whose value is the **state number** the label's block
-was given, and `goto *e` is `__cinrs_state = e as usize as u32; continue 'cfg;`
-— so a function that takes a label's address is always lowered through the
-machine.
+GNU C's computed `goto` is why the whole-function machine is still there.
+`&&label` is an rvalue of type `void *` whose value is the **state number** the
+label's block was given, and `goto *e` is
+`__cinrs_state = e as usize as u32; continue 'cfg;` — the number has to mean
+something, so a function that takes a label's address is lowered through the
+machine, whole, and skips the relooper.
 
 ```c
 static void *table[] = { &&push, &&add, &&halt };

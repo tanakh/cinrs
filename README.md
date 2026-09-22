@@ -233,7 +233,7 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 | Corpus | Correct | Entry point |
 | --- | --- | --- |
 | [c-testsuite] — whole programs with expected output | **214 of 218 (98.2 %)** | `c99!` |
-| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,515 of 1,769 (85.6 %)**, 88.9 % on Rust 1.99 | `gnu11!` |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,516 of 1,769 (85.7 %)**, 89.0 % on Rust 1.99 | `gnu11!` |
 | [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **167 of 203 (82.3 %)** | per test |
 | glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
 
@@ -245,11 +245,12 @@ or needing a newer toolchain — **not one is tagged as a bug**.
 [Benchmarks][benchmarks]: 39 whole C programs — the single-threaded C entries
 of the Benchmarks Game, Dhrystone, Whetstone and two dozen kernels that isolate
 one construct each — built as `gcc -O2`, `clang -O2` and a `cinrs` block under
-`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.01×**, 30 of the
+`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.01×**, 32 of the
 39 are within 10 % of `gcc` or faster, and every output is identical across the
-three builds. The one systematic cost is a `goto` that jumps *into* a block,
-which needs a state machine; an outward `goto` (`goto done`, `goto retry`) is
-free.
+three builds. A `goto` costs nothing: an outward one is a labelled `break` or
+`continue`, and anything else is read back into loops and branches by a
+relooper, so an interpreter loop written as a `switch` full of `goto`s — the
+SQLite VDBE, say — runs at the speed `gcc` gives it.
 
 ## Documentation
 

@@ -14,53 +14,27 @@ mod __cinrs_unit_ed73c93d {
             let mut a: ::core::ffi::c_int = 0;
             let mut b: ::core::ffi::c_int = 0;
             let mut __cinrs_ret: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: ::core::primitive::u32 = 0;
-            'cfg: loop {
-                match __cinrs_state {
-                    0 => {
-                        a = 1;
-                        if c < 0 {
-                            __cinrs_state = 4;
-                        } else {
-                            __cinrs_state = 1;
+            'b0: {
+                a = 1;
+                if !(c < 0) {
+                    'r0: loop {
+                        if !(c != 0) {
+                            break 'r0;
                         }
-                        continue 'cfg;
-                    }
-                    1 => {
-                        if c != 0 {
-                            __cinrs_state = 2;
-                        } else {
-                            __cinrs_state = 5;
-                        }
-                        continue 'cfg;
-                    }
-                    2 => {
                         b = 2;
-                        if b != 0 {
-                            __cinrs_state = 3;
-                        } else {
-                            __cinrs_state = 4;
+                        if !(b != 0) {
+                            break 'b0;
                         }
-                        continue 'cfg;
-                    }
-                    3 => {
                         note((&raw mut b));
-                        __cinrs_state = 1;
-                        continue 'cfg;
                     }
-                    4 => {
-                        note((&raw mut b));
-                        note((&raw mut a));
-                        return 0;
-                    }
-                    5 => {
-                        __cinrs_ret = a;
-                        note((&raw mut a));
-                        return __cinrs_ret;
-                    }
-                    _ => ::core::unreachable!(),
+                    __cinrs_ret = a;
+                    note((&raw mut a));
+                    return __cinrs_ret;
                 }
             }
+            note((&raw mut b));
+            note((&raw mut a));
+            return 0;
         }
     }
 }

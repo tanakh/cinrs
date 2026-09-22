@@ -11,44 +11,33 @@ mod __cinrs_unit_386f1989 {
             let mut x: ::core::ffi::c_int = 0;
             let mut x_1: ::core::ffi::c_int = 0;
             let mut x_2: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: ::core::primitive::u32 = 0;
-            'cfg: loop {
-                match __cinrs_state {
-                    0 => {
-                        total = 0;
-                        x = 1;
-                        total = total.wrapping_add(x);
-                        x_1 = 20;
-                        x_2 = 300;
-                        total = total.wrapping_add(x_2);
-                        total = total.wrapping_add(x_1);
-                        if n != 0 {
-                            __cinrs_state = 2;
-                        } else {
-                            __cinrs_state = 1;
-                        }
-                        continue 'cfg;
+            let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+            total = 0;
+            x = 1;
+            total = total.wrapping_add(x);
+            x_1 = 20;
+            x_2 = 300;
+            total = total.wrapping_add(x_2);
+            total = total.wrapping_add(x_1);
+            if n != 0 {
+                __cinrs_entry0 = 1;
+            } else {
+                __cinrs_entry0 = 0;
+            }
+            'inside: loop {
+                if __cinrs_entry0 == 0 {
+                    if n < 0 {
+                        __cinrs_entry0 = 1;
+                    } else {
+                        break 'inside;
                     }
-                    1 => {
-                        if n < 0 {
-                            __cinrs_state = 2;
-                        } else {
-                            __cinrs_state = 3;
-                        }
-                        continue 'cfg;
-                    }
-                    2 => {
-                        total = -1;
-                        n = n.wrapping_add(1);
-                        __cinrs_state = 1;
-                        continue 'cfg;
-                    }
-                    3 => {
-                        return total;
-                    }
-                    _ => ::core::unreachable!(),
+                } else {
+                    total = -1;
+                    n = n.wrapping_add(1);
+                    __cinrs_entry0 = 0;
                 }
             }
+            return total;
         }
     }
 }

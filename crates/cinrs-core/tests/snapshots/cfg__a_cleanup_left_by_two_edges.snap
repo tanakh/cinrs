@@ -1,0 +1,32 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: "lowered(CLEANUP_TWO_EDGES, \"f\")"
+---
+pub unsafe extern "C" fn f(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut a: ::core::ffi::c_int = 0;
+        let mut b: ::core::ffi::c_int = 0;
+        let mut __cinrs_ret: ::core::ffi::c_int = 0;
+        'b0: {
+            a = 1;
+            if !(c < 0) {
+                'r0: loop {
+                    if !(c != 0) {
+                        break 'r0;
+                    }
+                    b = 2;
+                    if !(b != 0) {
+                        break 'b0;
+                    }
+                    note((&raw mut b));
+                }
+                __cinrs_ret = a;
+                note((&raw mut a));
+                return __cinrs_ret;
+            }
+        }
+        note((&raw mut b));
+        note((&raw mut a));
+        return 0;
+    }
+}

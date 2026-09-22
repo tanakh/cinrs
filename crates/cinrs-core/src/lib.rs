@@ -18,9 +18,12 @@
 //!             ──codegen─▶ TokenStream         (every token spanned at its C)
 //! ```
 //!
-//! A function that jumps takes one more step on the way: sema hands its body
-//! to [`cfg`](mod@cfg), which turns it into basic blocks that codegen emits as a state
-//! machine. See that module for why, and for what it costs.
+//! A function that jumps takes two more steps on the way: sema hands its body
+//! to [`cfg`](mod@cfg), which turns it into basic blocks, and
+//! [`reloop`](mod@reloop) reads those back into loops, `if`s and `match`es for
+//! codegen to emit. Most `goto`s take neither — [`regions`](mod@regions) is
+//! the line between an outward jump, which stays a labelled block or a
+//! labelled loop over the statements themselves, and one that does not fit.
 //!
 //! Which revision is being compiled reaches every pass that has an opinion
 //! about it: the [lexer](mod@lex) (which spellings are keywords, and the C23
@@ -107,6 +110,7 @@ mod locate;
 pub mod parse;
 pub mod pp;
 pub mod regions;
+pub mod reloop;
 pub mod sema;
 pub mod target;
 

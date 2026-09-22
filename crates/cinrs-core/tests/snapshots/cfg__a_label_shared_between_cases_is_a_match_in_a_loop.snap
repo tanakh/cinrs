@@ -1,0 +1,50 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: out
+---
+pub unsafe extern "C" fn f(
+    mut n: ::core::ffi::c_int,
+    mut ops: *const ::core::ffi::c_int,
+) -> ::core::ffi::c_int {
+    unsafe {
+        let mut rc: ::core::ffi::c_int = 0;
+        let mut i: ::core::ffi::c_int = 0;
+        'b2: {
+            rc = 0;
+            i = 0;
+            'r0: loop {
+                match ({
+                    let __cinrs_tmp0 = ops.offset(i as ::core::primitive::isize);
+                    (*__cinrs_tmp0)
+                }) {
+                    1 => {
+                        rc = rc.wrapping_add(1);
+                    }
+                    2 => {
+                        if n < 0 {
+                            break 'r0;
+                        }
+                        rc = rc.wrapping_add(2);
+                    }
+                    3 => {
+                        rc = rc.wrapping_add(3);
+                        break 'r0;
+                    }
+                    4 => {
+                        rc = rc.wrapping_add(4);
+                    }
+                    5 => {
+                        rc = 5;
+                        break 'r0;
+                    }
+                    _ => {
+                        break 'b2;
+                    }
+                }
+                i = i.wrapping_add(1);
+            }
+            rc = rc.wrapping_neg();
+        }
+        return rc;
+    }
+}

@@ -1,0 +1,45 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: "lowered(SWITCH_IN_DO_WHILE, \"f\")"
+---
+pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut t: ::core::ffi::c_int = 0;
+        let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+        t = 0;
+        if n > 100 {
+            __cinrs_entry0 = 1;
+        } else {
+            __cinrs_entry0 = 0;
+        }
+        'odd: loop {
+            if __cinrs_entry0 == 0 {
+                match (n & 3) {
+                    0 => {
+                        t = t.wrapping_add(1);
+                    }
+                    1 => {
+                        __cinrs_entry0 = 1;
+                        continue 'odd;
+                    }
+                    _ => {
+                        t = t.wrapping_add(4);
+                    }
+                }
+                t = t.wrapping_add(8);
+            } else {
+                t = t.wrapping_add(2);
+            }
+            if ({
+                n = n.wrapping_sub(1);
+                n
+            }) > 0
+            {
+                __cinrs_entry0 = 0;
+            } else {
+                break 'odd;
+            }
+        }
+        return t;
+    }
+}

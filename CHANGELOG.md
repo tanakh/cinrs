@@ -12,6 +12,39 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **A `goto` no longer costs the loop it was written in.** The functions whose
+  jumps Rust cannot make directly are still lowered into a control-flow graph,
+  but that graph is now read back into Rust's own `loop`s, `if`s and `match`es
+  by a [relooper](doc/translation.md#control-flow-and-goto) — Emscripten's
+  algorithm — instead of being emitted as one flat `loop { match state { … } }`
+  over block numbers. A `switch` comes out as a `match` with the case bodies in
+  its arms and fallthrough as the code after it, a loop comes out as a Rust loop
+  named after the C label its head stands at, and a jump forwards is a `break`
+  of a labelled block. A state variable is left only where the C really is
+  irreducible — a cycle with two heads, which is what a `goto` into a loop body,
+  Duff's device and two loops that jump into each other's bodies each make —
+  and it is one `u32` per such region rather than one per function. A computed
+  `goto` keeps the old machine, whole, because `&&label` *is* a block's number.
+
+  What it is worth, measured on one machine:
+
+  | | before | after |
+  | --- | ---: | ---: |
+  | the `statemachine` kernel (a lexer written as a dozen `goto`s) | 2.16× `gcc -O2` | 1.00× |
+  | one small SQLite query loop against a `gcc -O2` build of the same amalgamation | 4.24× | 0.97× |
+  | `sqlite3VdbeExec`, instructions for that loop under `callgrind` (GCC's: 0.35 G) | 1.97 G | 0.36 G |
+
+  Over SQLite's 2,610 defined functions, 13 were whole-function state machines
+  and none is now: 12 are relooped outright and `sqlite3VdbeExec` has one
+  irreducible region, `abort_due_to_error`, which the progress-callback loop at
+  `vdbe_return` jumps back to. Over the GCC torture corpus 44 functions needed
+  the machine and 19 do — every one of them a computed `goto`. `execute/medce-1`,
+  which asks the optimiser to delete a call to an undefined `link_error()`
+  inside `if (0)`, now compiles and passes. [`doc/benchmarks.md`](doc/benchmarks.md)
+  was regenerated after the change: `statemachine` is at 0.99×, 32 of the 39
+  programs are within 10 % of `gcc -O2` or faster, and every output still
+  matches.
+
 * **The bundled headers are ISO C; POSIX comes from the platform.** `<unistd.h>`,
   `<fcntl.h>`, `<strings.h>` and `<sys/types.h>` are no longer bundled. They were
   small incomplete copies — no `access`, `fsync` or `sysconf`, no `struct flock`

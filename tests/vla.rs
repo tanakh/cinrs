@@ -409,6 +409,45 @@ fn a_function_that_also_jumps_keeps_its_array() {
     }
 }
 
+/// An array in the body of a loop the relooper recovered, with a `goto` out of
+/// its scope.
+///
+/// The jump *in* is to a label before the array's own block — jumping into
+/// that block is the error C99 6.8.6.1p1 gives, and sema reports it — and the
+/// jump *out* leaves the scope, which is what frees the storage.
+#[test]
+fn an_array_in_a_relooped_loop_a_goto_leaves() {
+    c99! {
+        int scan(int n, int start) {
+            int t = 0;
+            if (start) goto mid;
+            while (n > 0) {
+            mid:
+                {
+                    int a[n < 1 ? 1 : n];
+                    for (int i = 0; i < (n < 1 ? 1 : n); i++) a[i] = i + 1;
+                    t += a[0] + (int)(sizeof a / sizeof a[0]);
+                    if (t > 20) goto out;
+                }
+                n--;
+            }
+        out:
+            return t;
+        }
+    }
+
+    unsafe {
+        // Passes of 1 + n for n = 4, 3, 2, 1: 5, 4, 3, 2.
+        assert_eq!(scan(4, 0), 14);
+        // Entering at the label only skips the loop's own first test.
+        assert_eq!(scan(4, 1), 14);
+        assert_eq!(scan(1, 0), 2);
+        // n = 0 through the label: the body runs once with a one-element
+        // array, and the loop's test then ends it.
+        assert_eq!(scan(0, 1), 2);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // alloca
 // ---------------------------------------------------------------------------

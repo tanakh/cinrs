@@ -897,3 +897,266 @@ fn a_table_of_label_differences() {
         assert_eq!(offsets(1), 1);
     }
 }
+
+// ---------------------------------------------------------------------------
+// the shapes the relooper recovers
+// ---------------------------------------------------------------------------
+//
+// Everything below goes through the graph, and the graph is read back into
+// Rust's own loops and branches — see `doc/translation.md`. The tiers are
+// asserted in `crates/cinrs-core/tests/cfg.rs`; what these say is that each
+// shape still computes what the C did.
+
+/// `sqlite3VdbeExec`'s idiom in miniature: a label inside one `case` that four
+/// other `case`s jump to. Reducible, so it comes out as a `match` inside a
+/// `loop` with no state variable at all.
+#[test]
+fn a_label_shared_between_switch_cases() {
+    c99! {
+        int run(int n, const int *ops) {
+            int rc = 0;
+            int i = 0;
+            for (;;) {
+                switch (ops[i]) {
+                case 1: rc += 1; break;
+                case 2: if (n < 0) goto fail; rc += 2; break;
+                case 3: rc += 3; goto fail;
+                case 4: rc += 4; break;
+                case 5:
+                    rc = 5;
+                fail:
+                    rc = -rc;
+                    goto done;
+                default:
+                    goto done;
+                }
+                i++;
+            }
+        done:
+            return rc;
+        }
+    }
+
+    unsafe {
+        // 1, 4, 1 and then 0, which is the `default` that leaves.
+        let ops = [1i32, 4, 1, 0];
+        assert_eq!(run(1, ops.as_ptr()), 6);
+        // `case 2` with a negative `n` jumps into `case 5`'s label.
+        let ops = [1i32, 2];
+        assert_eq!(run(-1, ops.as_ptr()), -1);
+        assert_eq!(run(1, [1i32, 2, 0].as_ptr()), 3);
+        // `case 3` adds and then jumps to the same label.
+        assert_eq!(run(1, [3i32].as_ptr()), -3);
+        // `case 5` falls into it.
+        assert_eq!(run(1, [1i32, 5].as_ptr()), -5);
+    }
+}
+
+/// The `statemachine` benchmark's shape: a dozen labels jumping among one
+/// another in both directions. Every cycle has one head, so it is reducible
+/// and becomes nested Rust loops named after the C labels.
+#[test]
+fn a_lexer_written_as_a_dozen_labels() {
+    c99! {
+        int lex(const char *p) {
+            int words = 0, numbers = 0, strings = 0, comments = 0, punct = 0;
+        start:
+            if (*p == '\0') goto done;
+            if (*p == ' ' || *p == '\t' || *p == '\n') { p++; goto start; }
+            if (*p >= 'a' && *p <= 'z') goto in_word;
+            if (*p >= '0' && *p <= '9') goto in_number;
+            if (*p == '"') goto in_string;
+            if (*p == '/') goto maybe_comment;
+            punct++;
+            p++;
+            goto start;
+        in_word:
+            p++;
+            if ((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9')) goto in_word;
+            words++;
+            goto start;
+        in_number:
+            p++;
+            if (*p >= '0' && *p <= '9') goto in_number;
+            numbers++;
+            goto start;
+        in_string:
+            p++;
+            if (*p == '\0') goto unterminated;
+            if (*p != '"') goto in_string;
+            p++;
+            strings++;
+            goto start;
+        unterminated:
+            strings--;
+            goto done;
+        maybe_comment:
+            p++;
+            if (*p != '*') { punct++; goto start; }
+            p++;
+            goto in_comment;
+        in_comment:
+            if (*p == '\0') goto done;
+            if (*p == '*') goto comment_star;
+            p++;
+            goto in_comment;
+        comment_star:
+            p++;
+            if (*p != '/') goto in_comment;
+            p++;
+            comments++;
+            goto start;
+        done:
+            return words + 10 * numbers + 100 * strings + 1000 * comments + 10000 * punct;
+        }
+    }
+
+    let lex = |text: &str| unsafe {
+        let owned = std::ffi::CString::new(text).expect("no interior NUL");
+        lex(owned.as_ptr())
+    };
+    // two words, one number, one string, one comment, two punctuation.
+    assert_eq!(lex("ab c1 42 \"s\" /*x*/ +-"), 2 + 10 + 100 + 1000 + 20000);
+    assert_eq!(lex(""), 0);
+    // A `/` that opens no comment is punctuation of its own.
+    assert_eq!(lex("/x"), 10000 + 1);
+    // An unterminated string takes its own count back off again.
+    assert_eq!(lex("\"open"), -100);
+    // A comment that never closes ends the scan where it is.
+    assert_eq!(lex("/*forever"), 0);
+}
+
+/// Two loops that jump into each other: one cycle with two heads, which no
+/// arrangement of Rust's blocks can enter twice, so the region — and only the
+/// region — dispatches on a state variable.
+#[test]
+fn two_loops_that_jump_into_each_other() {
+    c99! {
+        int zigzag(int n, int odd) {
+            int t = 0;
+            if (odd) goto b;
+        a:
+            t += n;
+            if (--n <= 0) return t;
+        b:
+            t += 2 * n;
+            if (--n <= 0) return t;
+            goto a;
+        }
+    }
+
+    // n = 4: a adds 4, b adds 2*3, a adds 2, b adds 2*1 → 4+6+2+2 = 14.
+    assert_eq!(unsafe { zigzag(4, 0) }, 14);
+    // Entering at b: 2*4 then 3 then 2*2 then 1 → 8+3+4+1 = 16.
+    assert_eq!(unsafe { zigzag(4, 1) }, 16);
+    assert_eq!(unsafe { zigzag(1, 0) }, 1);
+    assert_eq!(unsafe { zigzag(1, 1) }, 2);
+}
+
+/// A loop with three ways out, to three different labels — and a declaration
+/// between the loop and them, which is what keeps it off the structured path.
+#[test]
+fn a_loop_with_three_exits_to_three_labels() {
+    c99! {
+        int pick(int n) {
+            int t = 0;
+            while (n > 0) {
+                if (n == 3) goto one;
+                if (n == 5) goto two;
+                if (n == 7) goto three;
+                t += n;
+                n--;
+            }
+            int extra = n + 1;
+            t += extra;
+        one:
+            return t - 1;
+        two:
+            return t - 2;
+        three:
+            return t - 3;
+        }
+    }
+
+    unsafe {
+        // n = 2: 2 + 1 then the fall-out adds `extra` = 1, then `one` takes 1.
+        assert_eq!(pick(2), 2 + 1 + 1 - 1);
+        // n = 4: 4 then n == 3 leaves through `one`.
+        assert_eq!(pick(4), 4 - 1);
+        // n = 6: 6 then n == 5 leaves through `two`.
+        assert_eq!(pick(6), 6 - 2);
+        // n = 8: 8 then n == 7 leaves through `three`.
+        assert_eq!(pick(8), 8 - 3);
+    }
+}
+
+/// Nested loops left through labels of their own, from a function the graph
+/// has to lower: `goto continue_outer` and `goto break_outer` out of the
+/// inner one, and a jump into the outer one's body to force the graph.
+#[test]
+fn continue_outer_and_break_outer_through_the_graph() {
+    c99! {
+        int walk(int n, int m, int start_inside) {
+            int t = 0;
+            int i = 0, j;
+            if (start_inside) goto inner;
+            for (i = 0; i < n; i++) {
+            inner:
+                for (j = 0; j < m; j++) {
+                    if (j == 3) goto continue_outer;
+                    if (i == 2) goto break_outer;
+                    t += j + 1;
+                }
+            continue_outer: ;
+            }
+        break_outer:
+            return t * 10 + i;
+        }
+    }
+
+    unsafe {
+        // Two passes of 1 + 2 + 3, then the loop's own test ends it.
+        assert_eq!(walk(2, 10, 0), (6 + 6) * 10 + 2);
+        // The same two passes, and then `i == 2` leaves everything at once.
+        assert_eq!(walk(4, 10, 0), (6 + 6) * 10 + 2);
+        // m = 2 never reaches `j == 3`; the inner loop's own test ends it.
+        assert_eq!(walk(2, 2, 0), (3 + 3) * 10 + 2);
+        // Entering the outer body without running the `for`'s init clause.
+        assert_eq!(walk(1, 10, 1), 6 * 10 + 1);
+        assert_eq!(walk(0, 10, 0), 0);
+    }
+}
+
+/// A `switch` inside a `do`/`while` whose `continue` leaves the `switch` and
+/// not the loop, entered by a `goto` into one of its groups.
+#[test]
+fn a_switch_inside_a_do_while_with_continue() {
+    c99! {
+        int tally(int n) {
+            int t = 0;
+            if (n > 100) goto odd;
+            do {
+                switch (n & 3) {
+                case 0: t += 1; break;
+                case 1:
+                odd:
+                    t += 2;
+                    continue;
+                default: t += 4; break;
+                }
+                t += 8;
+            } while (--n > 0);
+            return t;
+        }
+    }
+
+    unsafe {
+        // n = 4: 4&3 == 0 → 1 + 8; n = 3: 4 + 8; n = 2: 4 + 8; n = 1: 2 and
+        // `continue`, which ends the loop.
+        assert_eq!(tally(4), 9 + 12 + 12 + 2);
+        // Entering at the label: 2, then the `continue` tests `--n > 0` with
+        // n still 101, so the loop runs on from there.
+        assert_eq!(tally(101), 877);
+        assert_eq!(tally(1), 2);
+    }
+}

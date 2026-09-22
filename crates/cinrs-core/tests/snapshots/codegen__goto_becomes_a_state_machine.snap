@@ -11,42 +11,26 @@ mod __cinrs_unit_e25ccc91 {
     ) -> ::core::ffi::c_int {
         unsafe {
             let mut steps: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: ::core::primitive::u32 = 0;
-            'cfg: loop {
-                match __cinrs_state {
-                    0 => {
-                        steps = 0;
-                        if start_inside != 0 {
-                            __cinrs_state = 3;
-                        } else {
-                            __cinrs_state = 1;
-                        }
-                        continue 'cfg;
+            let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+            steps = 0;
+            if start_inside != 0 {
+                __cinrs_entry0 = 1;
+            } else {
+                __cinrs_entry0 = 0;
+            }
+            'inside: loop {
+                if __cinrs_entry0 == 0 {
+                    if !(n > 0) {
+                        break 'inside;
                     }
-                    1 => {
-                        if n > 0 {
-                            __cinrs_state = 2;
-                        } else {
-                            __cinrs_state = 4;
-                        }
-                        continue 'cfg;
-                    }
-                    2 => {
-                        n = n.wrapping_sub(1);
-                        __cinrs_state = 3;
-                        continue 'cfg;
-                    }
-                    3 => {
-                        steps = steps.wrapping_add(1);
-                        __cinrs_state = 1;
-                        continue 'cfg;
-                    }
-                    4 => {
-                        return steps.wrapping_mul(10).wrapping_add(n);
-                    }
-                    _ => ::core::unreachable!(),
+                    n = n.wrapping_sub(1);
+                    __cinrs_entry0 = 1;
+                } else {
+                    steps = steps.wrapping_add(1);
+                    __cinrs_entry0 = 0;
                 }
             }
+            return steps.wrapping_mul(10).wrapping_add(n);
         }
     }
 }

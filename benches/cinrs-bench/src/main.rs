@@ -463,7 +463,7 @@ static PROGRAMS: &[Program] = &[
     Program {
         args: &["8000000", "30"],
         note: "a lexer written as `goto`s that jump into one another, which is what `cinrs` \
-               lowers into a state machine",
+               lowers through a control-flow graph and reloops",
         ..program("statemachine", "kernels/statemachine.c", Group::Kernel)
     },
     Program {
@@ -2016,22 +2016,23 @@ fn write_interpretation(
            emulation costs, and it is an allocation per declaration rather than a stack \
            adjustment. A VLA declared once and used in a loop — which is what \
            `spectral-norm` and `fannkuch-redux` do — costs nothing.\n\
-         * **An outward `goto` is a labelled block; what is left is a state machine.** A jump \
-           forwards to a label later in a block it stands in becomes `break 'done`, and one \
-           backwards to a label that block begins with becomes `continue 'retry`, so the \
-           function keeps the shape its C had — hot loop included. `whetstone`, whose `main` \
-           and whose inner `PA` are built out of backward jumps, and `interp-switch`, whose \
-           dispatch loop leaves through `goto done`, are what that is worth: both were more \
-           than 40 % behind `gcc` when every jump went through the state machine, and \
-           `whetstone` was the largest number in this report at 2.43×. What no Rust label can \
-           express — a jump *into* a block, a computed `goto`, or two labels whose regions \
-           would have to overlap without nesting — still puts the whole function into a \
-           `loop {{ match block {{ … }} }}` over basic blocks, hot loop and all. \
+         * **A `goto` keeps the shape its C had.** A jump forwards to a label later in a block \
+           it stands in becomes `break 'done`, and one backwards to a label that block begins \
+           with becomes `continue 'retry`, so the function keeps the shape its C had — hot \
+           loop included. `whetstone`, whose `main` and whose inner `PA` are built out of \
+           backward jumps, and `interp-switch`, whose dispatch loop leaves through \
+           `goto done`, are what that is worth: both were more than 40 % behind `gcc` when \
+           every jump went through a state machine over basic blocks. What no Rust label can \
+           express — a jump *into* a block, or two labels whose regions would have to overlap \
+           without nesting — goes through a control-flow graph, and a relooper reads that \
+           back into Rust's own loops and `match`es, so the hot loop is a hot loop there too. \
            `statemachine` and `statemachine-structured` are the same lexer over the same \
            input, one written with a dozen labels that jump into one another every which way \
-           and one with `while` and `switch`: `gcc` and `clang` take the same time over both, \
-           and `cinrs` does not. That pair is the measurement of what is left of this \
-           lowering, and it is the largest number in the report.\n\
+           and one with `while` and `switch`: all three compilers take the same time over \
+           both, where `cinrs` was 2.16× on the `goto` version and 1.02× on the other before \
+           the graph was relooped. What is still lowered as a state machine is a computed \
+           `goto`, whose `&&label` *is* a block's number — `interp-goto` is that row, and it \
+           is level with `clang`.\n\
          * **`switch` becomes `match`.** `interp-switch` is a bytecode dispatch loop with a \
            fallthrough case; the fallthrough has to run the next arm's body without \
            re-dispatching, which is what the labelled-block chain the expansion builds is for. \

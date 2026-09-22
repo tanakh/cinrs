@@ -131,12 +131,10 @@ fn control_flow_is_safe() {
 }
 
 c99! {
-    #pragma cinrs safe collatz_steps
+    #pragma cinrs safe collatz_steps jump_in zigzag
 
-    /* A `goto` means the body is lowered through a control-flow graph — a
-     * state machine over basic blocks — and every one of its pieces is safe
-     * too: the dispatch's fallback arm is `unreachable!()`, a panic, rather
-     * than the `unreachable_unchecked` C's own `unreachable()` asks for. */
+    /* An outward `goto` keeps Rust's own control flow: a labelled loop for
+     * `again` and a labelled block for `done`. Nothing here is unsafe. */
     int collatz_steps(long n) {
         int steps = 0;
     again:
@@ -151,11 +149,42 @@ c99! {
     done:
         return steps;
     }
+
+    /* A jump *into* a loop body is lowered through the control-flow graph,
+     * which is read back into a Rust loop with a state variable picking the
+     * head — and every piece of that is safe too. */
+    int jump_in(int n, int inside) {
+        int t = 0;
+        if (inside) goto mid;
+        while (n > 0) {
+            n--;
+        mid:
+            t += 2;
+        }
+        return t;
+    }
+
+    /* Two loops that jump into each other, which is the same again with the
+     * state variable read twice. */
+    int zigzag(int n, int odd) {
+        int t = 0;
+        if (odd) goto b;
+    a:
+        t += n;
+        if (--n <= 0) return t;
+    b:
+        t += 2 * n;
+        if (--n <= 0) return t;
+        goto a;
+    }
 }
 
 #[test]
 fn a_function_lowered_through_the_cfg_is_safe() {
     assert_eq!(collatz_steps(27), 111);
+    assert_eq!((jump_in(3, 0), jump_in(3, 1)), (6, 8));
+    assert_eq!((jump_in(0, 1), jump_in(0, 0)), (2, 0));
+    assert_eq!((zigzag(4, 0), zigzag(4, 1)), (14, 16));
 }
 
 c11! {

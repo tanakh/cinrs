@@ -162,18 +162,18 @@ broken down into the four categories
 defines.
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1515/1769 correct (85.6%) — 1411 passed, 104 rejected as the standard requires
-  errors: 254 — bug 0, unimplemented 3, not planned 190, toolchain 61
-  (7 not generated) — 4 m 02 s
+gcc.c-torture/execute through `gnu11!`: 1516/1769 correct (85.7%) — 1412 passed, 104 rejected as the standard requires
+  errors: 253 — bug 0, unimplemented 3, not planned 189, toolchain 61
+  (7 not generated) — 4 m 03 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned | toolchain |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1515/1769** | **85.6 %** | 1411 | 104 | 0 | 3 | 190 | 61 |
-| `gnu89!` | 1508/1769 | 85.2 % | 1508 | — | 0 | 4 | 196 | 61 |
+| **`gnu11!`** | **1516/1769** | **85.7 %** | 1412 | 104 | 0 | 3 | 189 | 61 |
+| `gnu89!` | 1509/1769 | 85.3 % | 1509 | — | 0 | 4 | 195 | 61 |
 
 On **`beta`**, where a variadic definition compiles, the sixty-one `toolchain`
-entries pass instead: 1573/1769 (88.9 %) under `gnu11!` and 1566/1769 (88.5 %)
+entries pass instead: 1574/1769 (89.0 %) under `gnu11!` and 1567/1769 (88.6 %)
 under `gnu89!`. That gap is the whole of the difference between the two
 toolchains, which is why those lines carry `?` and are guarded neither way.
 
@@ -181,7 +181,7 @@ by group:
 
 | group | `gnu11!` | `gnu89!` |
 | --- | ---: | ---: |
-| `execute` | 1451/1691 (85.8 %) | 1444/1691 (85.4 %) |
+| `execute` | 1452/1691 (85.9 %) | 1445/1691 (85.5 %) |
 | `execute/ieee` | 64/78 (82.1 %) | 64/78 (82.1 %) |
 
 **There is no `[bug]` left in this corpus**, under either entry point.
@@ -205,9 +205,9 @@ every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
-1508 cases build and run.
+1509 cases build and run.
 
-**`gnu11!` gets the same 1411 of those, refuses 104 more as the standard
+**`gnu11!` gets the same 1412 of those, refuses 104 more as the standard
 requires it to, and comes out seven ahead.** Those 104 are the cases that lean
 on a rule C99 deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R
 parameter) and an implicit function declaration (3) — and a C99-or-later entry
@@ -222,7 +222,7 @@ rule there and stop at a second gap — four at a nested function that needs the
 enclosing *frame* (two at a nonlocal `goto` out of one, two at the address of a
 label of the enclosing function), one at a nested function that uses the
 enclosing function's variable length array, and two at `<setjmp.h>`. That is
-the whole of the difference: 1508 = 1411 + 97, and 1515 = 1411 + 104.
+the whole of the difference: 1509 = 1412 + 97, and 1516 = 1412 + 104.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
@@ -231,9 +231,9 @@ because GCC's own runner would not have run them either.
 
 ### The errors, by category and cause
 
-Under `gnu11!` 249 of the 254 errors are refused at compile time, in 29
+Under `gnu11!` 248 of the 253 errors are refused at compile time, in 29
 distinct causes, and 5 are programs that built and then did the wrong thing;
-under `gnu89!`, 256 of 261 in 30. The ones worth a line each, with what the
+under `gnu89!`, 255 of 260 in 30. The ones worth a line each, with what the
 same cause costs under `gnu89!` beside it — the 104 conforming rejections
 above are *not* in this table:
 
@@ -256,7 +256,7 @@ above are *not* in this table:
 | not planned | 2 | — | `<setjmp.h>`, which cinrs does not bundle: nothing in Rust unwinds a C `longjmp`. Under `gnu11!` both cases stop at the C89 implicit `int` first, and are conforming rejections there | `execute/pr56982` |
 | not planned | 2 | 2 | `<sys/mman.h>`: cinrs bundles the ISO C headers and never searches the platform's include path | `execute/loop-2f` |
 | not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
-| not planned | 2 | 2 | a `link_error()` nothing defines, which an optimiser is required to delete | `execute/medce-1` |
+| not planned | 1 | 1 | a `link_error()` nothing defines, which an optimiser is required to delete | `ieee/fp-cmp-7` |
 | not planned | 2 | 1 | the address of a label of the **enclosing** function — `&&label` inside a nested one, which is the nonlocal jump one step earlier | `execute/920721-4` |
 | unimplemented | 1 | 1 | a label inside a statement expression, which nothing outside it could jump to | `execute/930406-1` |
 | unimplemented | 1 | 1 | an initialised flexible array member in a *nested* context: GCC takes one inside a `union` whose other member already makes the object large enough. Every other shape of the extension is [implemented](gnu-extensions.md) | `execute/pr28865` |
@@ -274,18 +274,28 @@ because a diagnostic raised inside an `#include`d corpus file carries the file
 name and is grouped on its own; the `vector_size` and
 address-of-a-nested-function counts are sums of two for the same reason.
 
-The last round of work was **`va_arg` of a `struct`**. It moves **12** cases
+The last round of work was **[relooping the control-flow
+graph](translation.md#control-flow-and-goto)**, and its effect on this corpus is
+one case: `execute/medce-1`, whose `if (0) { link_error(); case 1: … }` really is
+an `if false` in the output now, so LLVM deletes the call and the link succeeds.
+What it changed everywhere else is the *shape* of the output: of the 44
+functions in this corpus whose jumps need the graph, 25 now come out as Rust
+loops and `match`es and 19 keep the machine over block numbers — every one of
+those 19 a computed `goto`, whose `&&label` *is* a block's number. The corpus
+measures that only by continuing to pass, which is the point of running it.
+
+The round before that was **`va_arg` of a `struct`**. It moves **12** cases
 out of `[unimplemented]` — `920625-1`, `920908-1`, the seven `931004-*`,
 `pr44575`, `strct-stdarg-1` and `strct-varg-1`, every one of them a `struct` of
 at most sixteen bytes read back out of an argument list — and into `?`, because
 what is left in their way is only the Rust 1.99 variadic gate: on `beta` they
-pass, which is the whole of the 85.6 % → 88.9 % difference between the two
+pass, which is the whole of the 85.7 % → 89.0 % difference between the two
 toolchains. Two more stopped at a second gate rather than moving: `va-arg-22`
 passes records of up to thirty-one bytes, which the ABI puts on the stack, and
 `va-arg-pack-1` reaches `__builtin_va_arg_pack` and is now `[not-planned]` with
 the rest of the unimplemented builtins.
 
-The round before that — **labels as values**, an **alignment specifier on an
+Before that — **labels as values**, an **alignment specifier on an
 object**, **pointers to `va_list`** and an **initialised flexible array
 member** — took `gnu11!` up by **14** and `gnu89!` by **14**, and no case went
 the other way in either:
@@ -362,16 +372,17 @@ to 1367:
 | 1 | a cast to a union type |
 | 1 | an over-long string initialiser, which GCC warns about and truncates |
 
-Two of the four-or-fewer rows are worth naming, because they are the only two
-compile failures that are not a *gap*: `execute/medce-1` and `ieee/fp-cmp-7`
-call a `link_error()` that nothing defines, and the whole point of each case is
-that an optimising compiler must delete the call — `if (0) { link_error(); case
-1: … }` in one, `if (x > __builtin_inf())` with `x` folded to `1.0` in the
-other. Nothing here optimises, so the call survives and the link fails. They
-would pass under `-O`, and asking `rustc` for that would change what the whole
-suite measures.
+One of the four-or-fewer rows is worth naming, because it is the only compile
+failure that is not a *gap*: `ieee/fp-cmp-7` calls a `link_error()` that nothing
+defines, and the whole point of the case is that an optimising compiler must
+delete the call — `if (x > __builtin_inf()) link_error();` with `x` a parameter.
+LLVM does not fold that far through the translation, so the call survives and
+the link fails. Its twin `execute/medce-1` — `if (0) { link_error(); case 1: … }`
+— used to fail the same way and now passes: with the control-flow graph
+[relooped](translation.md#control-flow-and-goto) the dead call really is inside
+an `if false`, which LLVM deletes.
 
-**Read the table by its first column.** 131 of `gnu11!`'s 254 errors are the
+**Read the table by its first column.** 131 of `gnu11!`'s 253 errors are the
 three largest `not planned` rows — inline assembly, the vector extensions and
 the `__builtin_…` forms nobody is going to write — and another 13 are the
 complex-integer and `va_list`-in-a-record corners Rust has no counterpart for.
@@ -426,7 +437,7 @@ where the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 358 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 261.
+`gnu11!`'s, 357 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 260.
 One id per line, in the same format the other two suites use — a marker, the
 id, a category tag and a note; see
 [`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)

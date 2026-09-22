@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.6 %** (`gnu11!`), 85.2 % (`gnu89!`); 88.9 % / 88.5 % on `beta` | 254: 0 bug, 3 unimplemented, 190 not planned, 61 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.7 %** (`gnu11!`), 85.3 % (`gnu89!`); 89.0 % / 88.6 % on `beta` | 253: 0 bug, 3 unimplemented, 189 not planned, 61 toolchain |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -39,12 +39,12 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,515 of the 1,769 run are correct (85.6 %)** under
-  `gnu11!` — 1,411 passing and 104 refused as C99 requires — and 1,508
-  (85.2 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,516 of the 1,769 run are correct (85.7 %)** under
+  `gnu11!` — 1,412 passing and 104 refused as C99 requires — and 1,509
+  (85.3 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses none of them; on `beta`, where a variadic definition
-  compiles, the same runs are 1,573 (88.9 %) and 1,566 (88.5 %). **Not one of
-  the 254 errors is a bug**; they are inline assembly, the vector extensions,
+  compiles, the same runs are 1,574 (89.0 %) and 1,567 (88.6 %). **Not one of
+  the 253 errors is a bug**; they are inline assembly, the vector extensions,
   the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
@@ -227,8 +227,8 @@ report breaks its error count down into them, in this order:
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1515/1769 correct (85.6%) — 1411 passed, 104 rejected as the standard requires
-  errors: 254 — bug 0, unimplemented 3, not planned 190, toolchain 61
+gcc.c-torture/execute through `gnu11!`: 1516/1769 correct (85.7%) — 1412 passed, 104 rejected as the standard requires
+  errors: 253 — bug 0, unimplemented 3, not planned 189, toolchain 61
   (7 not generated) — 4 m 22 s
 ```
 
@@ -294,7 +294,8 @@ on a Unix means pthreads; and `SQLITE_THREADSAFE=0`.
 
 What it exercises that no small program does: the virtual machine
 (`sqlite3VdbeExec`, a 7,000-line `switch` inside a `for(;;)` with `goto`s into and
-out of it, which becomes a control-flow graph), tables of function pointers
+out of it, which becomes a control-flow graph and is relooped back into a
+`match` inside a `loop`), tables of function pointers
 (`sqlite3_vfs`, `sqlite3_io_methods`), twenty variadic *definitions*
 (`sqlite3_mprintf`, `sqlite3_snprintf`, `sqlite3_log`, `sqlite3_config` and the
 rest — the one thing that needs **Rust 1.99** and `c_variadic`), `va_list`
@@ -321,17 +322,26 @@ On an x86-64 laptop under WSL2, glibc 2.43, `cargo +beta` 1.99.0-beta.6, SQLite
 | the translated library, release | 24 MB rlib |
 | the linked test binary, release | 2.8 MB |
 | the smoke test itself | 0.1 s |
-| one small prepared query, release | 86 µs |
-| the same query through the platform's `libsqlite3` | 24 µs |
+| one small prepared query, release | 20 µs |
+| the same query through the platform's `libsqlite3` | 21 µs |
 
 The last two are the only ones that need a caveat, and they need a large one:
 they are one loop in one process, the platform's library is a *different
-release* (3.46.1 here) built by GCC with SQLite's own recommended options, and a
+release* built by GCC with SQLite's own recommended options, and a
 `SELECT count(*), sum(n) … WHERE n > ?` over a thousand rows is a full scan
 rather than anything a profile would recognise. Read the ratio as "the same
-order of magnitude, about three and a half times", not as a benchmark. The
-general picture — what is fast and what is not, and why — is in
-[`doc/benchmarks.md`](benchmarks.md).
+order of magnitude", not as a benchmark. The general picture — what is fast and
+what is not, and why — is in [`doc/benchmarks.md`](benchmarks.md).
+
+That ratio was **4.2×** until the control-flow graph was [relooped](
+translation.md#control-flow-and-goto), and all of the difference was in one
+function. Against a `gcc -O2` build of the *same* amalgamation, `callgrind` put
+`sqlite3VdbeExec` at 1.97 G instructions for this query loop where GCC's ran
+0.35 G — a 1,775-state `match` with 1,041 `continue 'cfg` in it, where the C is
+a `for(;;)` around a 190-case `switch`. Recovering the loop and the `switch`
+brought it to **0.36 G**, 1.05× GCC's, and every other function in the
+amalgamation was already within ±25 %. Against that same build the whole query
+loop is 0.97× now, where it was 4.24×.
 
 ## Should there be a fourth? — chibicc
 

@@ -4,6 +4,11 @@
 //!
 //!     cargo run -q -p cinrs-core --example frontend -- file.c [c99|c11|c17|c23|gnu99|…] [-I dir]…
 //!
+//! `--tiers` prints, instead of the diagnostics, how each function's control
+//! flow was lowered — the count per tier and the name of every function that
+//! needed more than the structured form. That is the measurement behind
+//! `doc/translation.md`'s "Control flow and goto".
+//!
 //! Exit status 0 when the unit has no errors, 1 when it has, 2 on a usage error.
 
 use std::str::FromStr;
@@ -14,7 +19,8 @@ fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let expand = args.iter().any(|a| a == "--expand" || a == "--print");
     let print = args.iter().any(|a| a == "--print");
-    args.retain(|a| a != "--expand" && a != "--print");
+    let tiers = args.iter().any(|a| a == "--tiers");
+    args.retain(|a| a != "--expand" && a != "--print" && a != "--tiers");
     let mut args = args.into_iter();
     let Some(path) = args.next() else {
         eprintln!("usage: frontend FILE.c [STANDARD]");
@@ -135,6 +141,10 @@ fn main() {
     analysis.expansions.annotate(&mut pragmas);
     diagnostics.extend(pragmas);
     let total = started.elapsed();
+    if tiers {
+        report_tiers(&program);
+        return;
+    }
     let map = &analysis.source.map;
     let mut errors = 0;
     for diag in diagnostics.sorted() {
@@ -146,4 +156,46 @@ fn main() {
     }
     eprintln!("front end: {errors} error(s); lex+pp+parse {parsed:?}, +sema {total:?}");
     std::process::exit(if errors == 0 { 0 } else { 1 });
+}
+
+/// How each function's control flow was lowered.
+///
+/// Tier 1 is the structured form, which is every function whose jumps Rust can
+/// make on its own — including the outward `goto`s `cinrs_core::regions` turns
+/// into labelled blocks and loops. Tier 2 is the graph read back into loops,
+/// `if`s and `match`es by `cinrs_core::reloop`, and tier 3 the same with a
+/// state variable for an irreducible region. Tier 4 is the whole-function state
+/// machine, which only a `&&label` still needs.
+fn report_tiers(program: &cinrs_core::Program) {
+    use cinrs_core::ir::Body;
+
+    let mut structured = 0usize;
+    let mut relooped = 0usize;
+    let mut irreducible: Vec<(&str, u32)> = Vec::new();
+    let mut machines: Vec<&str> = Vec::new();
+    for func in &program.functions {
+        match &func.body {
+            None => {}
+            Some(Body::Structured(_)) => structured += 1,
+            Some(Body::Cfg(cfg)) => match &cfg.shape {
+                Some(plan) if plan.states > 0 => {
+                    irreducible.push((func.name.as_str(), plan.states));
+                }
+                Some(_) => relooped += 1,
+                None => machines.push(func.name.as_str()),
+            },
+        }
+    }
+    let defined = structured + relooped + irreducible.len() + machines.len();
+    println!("functions with a body: {defined}");
+    println!("  tier 1  structured:                {structured}");
+    println!("  tier 2  relooped:                  {relooped}");
+    println!("  tier 3  relooped, state variable:  {}", irreducible.len());
+    println!("  tier 4  whole-function machine:    {}", machines.len());
+    for (name, states) in &irreducible {
+        println!("    tier 3: {name} ({states} irreducible region(s))");
+    }
+    for name in &machines {
+        println!("    tier 4: {name}");
+    }
 }

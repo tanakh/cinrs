@@ -5,8 +5,8 @@ pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
 `core::mem::offset_of!` for `offsetof`, `core::sync::atomic` for `_Atomic` and
 the atomic builtins, a `#[used]` function pointer in `.init_array` for a
 `constructor`, and the C library's own `abort` for `__builtin_trap` and
-`assert`. `goto` is a labelled block or a state machine, and both are `core`
-too. The C library is still *linked*, because the C code calls it — that
+`assert`. `goto` is a labelled block, a recovered loop or a state machine, and
+all three are `core` too. The C library is still *linked*, because the C code calls it — that
 is a link-time dependency of the program rather than a Rust one.
 
 A complex type is the one thing that names another crate — `cinrs::rt`, the

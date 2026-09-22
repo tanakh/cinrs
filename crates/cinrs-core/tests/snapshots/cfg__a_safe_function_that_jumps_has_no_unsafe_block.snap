@@ -1,0 +1,30 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: out
+---
+pub extern "C" fn f(
+    mut n: ::core::ffi::c_int,
+    mut inside: ::core::ffi::c_int,
+) -> ::core::ffi::c_int {
+    let mut t: ::core::ffi::c_int = 0;
+    let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+    t = 0;
+    if inside != 0 {
+        __cinrs_entry0 = 1;
+    } else {
+        __cinrs_entry0 = 0;
+    }
+    'mid: loop {
+        if __cinrs_entry0 == 0 {
+            if !(n > 0) {
+                break 'mid;
+            }
+            n = n.wrapping_sub(1);
+            __cinrs_entry0 = 1;
+        } else {
+            t = t.wrapping_add(2);
+            __cinrs_entry0 = 0;
+        }
+    }
+    return t;
+}

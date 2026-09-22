@@ -217,7 +217,6 @@ execute/loop-2g                       [not-planned]    compile error: <sys/mman.
 !execute/loop-3                                        error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-3b                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-3c                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-execute/medce-1                       [not-planned]    compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and requires the optimiser to delete the call, which nothing here does
 execute/misalign                      [not-planned]    compile error: inline assembly is not supported
 !execute/mod-1                                         error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 ?execute/multi-ix                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -398,7 +397,7 @@ ieee/float32-builtin-issignaling-1    [not-planned]    compile error: third_part
 ieee/float32x-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf32x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float64-builtin-issignaling-1    [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf64' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float64x-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf64x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/fp-cmp-7                         [not-planned]    compile error: linking with `cc` failed: exit status: 1 — see `execute/medce-1`: `if (x > __builtin_inf()) link_error();` with `x` a parameter the optimiser is expected to fold
+ieee/fp-cmp-7                         [not-planned]    compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and expects the optimiser to delete the call: `if (x > __builtin_inf()) link_error();` with `x` a parameter LLVM does not fold that far
 ieee/fp-cmp-cond-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 ieee/pr50310                          [not-planned]    compile error: inline assembly is not supported
 ieee/pr72824-2                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable

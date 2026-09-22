@@ -2608,11 +2608,19 @@ impl Sema<'_> {
                 .filter(|id| self.label_addrs.contains(id))
                 .collect();
             pinned.sort_unstable();
+            // What each label was called, so that a loop the relooper recovers
+            // can carry the C name of the label it heads.
+            let names: HashMap<ir::LabelId, String> = self
+                .labels
+                .iter()
+                .map(|(name, label)| (label.id, name.clone()))
+                .collect();
             ir::Body::Cfg(crate::cfg::lower(
                 body,
                 &params,
                 &self.program.objects,
                 &pinned,
+                &names,
             ))
         } else {
             ir::Body::Structured(body)

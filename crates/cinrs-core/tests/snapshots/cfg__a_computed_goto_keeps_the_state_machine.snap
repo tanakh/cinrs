@@ -1,0 +1,30 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: out
+---
+pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut __cinrs_state: ::core::primitive::u32 = 0;
+        'cfg: loop {
+            match __cinrs_state {
+                0 => {
+                    __cinrs_state = ({
+                        let __cinrs_tmp0 = ((&raw mut __cinrs_static_8441b386_f_table)
+                            .cast::<*mut ::core::ffi::c_void>()
+                            as *const *mut ::core::ffi::c_void)
+                            .offset((n & 1) as ::core::primitive::isize);
+                        (*__cinrs_tmp0)
+                    }) as ::core::primitive::usize as ::core::primitive::u32;
+                    continue 'cfg;
+                }
+                1 => {
+                    return 1;
+                }
+                2 => {
+                    return 2;
+                }
+                _ => ::core::unreachable!(),
+            }
+        }
+    }
+}

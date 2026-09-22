@@ -1,0 +1,104 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: out
+---
+pub unsafe extern "C" fn f(mut p: *const ::core::ffi::c_char) -> ::core::ffi::c_int {
+    unsafe {
+        let mut words: ::core::ffi::c_int = 0;
+        let mut numbers: ::core::ffi::c_int = 0;
+        let mut strings: ::core::ffi::c_int = 0;
+        let mut comments: ::core::ffi::c_int = 0;
+        let mut punct: ::core::ffi::c_int = 0;
+        words = 0;
+        numbers = 0;
+        strings = 0;
+        comments = 0;
+        punct = 0;
+        'start: loop {
+            if (*p) as ::core::ffi::c_int == 0 {
+                break 'start;
+            }
+            if (*p) as ::core::ffi::c_int == 32 {
+                p = p.offset(1);
+            } else {
+                if (*p) as ::core::ffi::c_int >= 97 && (*p) as ::core::ffi::c_int <= 122
+                {
+                    'in_word: loop {
+                        p = p.offset(1);
+                        if !((*p) as ::core::ffi::c_int >= 97
+                            && (*p) as ::core::ffi::c_int <= 122
+                            || (*p) as ::core::ffi::c_int >= 48
+                                && (*p) as ::core::ffi::c_int <= 57)
+                        {
+                            break 'in_word;
+                        }
+                    }
+                    words = words.wrapping_add(1);
+                } else {
+                    if (*p) as ::core::ffi::c_int >= 48
+                        && (*p) as ::core::ffi::c_int <= 57
+                    {
+                        'in_number: loop {
+                            p = p.offset(1);
+                            if !((*p) as ::core::ffi::c_int >= 48
+                                && (*p) as ::core::ffi::c_int <= 57)
+                            {
+                                break 'in_number;
+                            }
+                        }
+                        numbers = numbers.wrapping_add(1);
+                    } else {
+                        if (*p) as ::core::ffi::c_int == 34 {
+                            'in_string: loop {
+                                p = p.offset(1);
+                                if (*p) as ::core::ffi::c_int == 0 {
+                                    strings = strings.wrapping_sub(1);
+                                    break 'start;
+                                } else {
+                                    if (*p) as ::core::ffi::c_int != 34 {
+                                        continue 'in_string;
+                                    }
+                                    p = p.offset(1);
+                                    strings = strings.wrapping_add(1);
+                                    break 'in_string;
+                                }
+                            }
+                        } else {
+                            if (*p) as ::core::ffi::c_int == 47 {
+                                p = p.offset(1);
+                                if (*p) as ::core::ffi::c_int != 42 {
+                                    punct = punct.wrapping_add(1);
+                                } else {
+                                    p = p.offset(1);
+                                    'in_comment: loop {
+                                        if (*p) as ::core::ffi::c_int == 0 {
+                                            break 'start;
+                                        }
+                                        if (*p) as ::core::ffi::c_int == 42 {
+                                            p = p.offset(1);
+                                            if !((*p) as ::core::ffi::c_int != 47) {
+                                                break 'in_comment;
+                                            }
+                                        } else {
+                                            p = p.offset(1);
+                                        }
+                                    }
+                                    p = p.offset(1);
+                                    comments = comments.wrapping_add(1);
+                                }
+                            } else {
+                                punct = punct.wrapping_add(1);
+                                p = p.offset(1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return words
+            .wrapping_add((10 as ::core::ffi::c_int).wrapping_mul(numbers))
+            .wrapping_add((100 as ::core::ffi::c_int).wrapping_mul(strings))
+            .wrapping_add((1000 as ::core::ffi::c_int).wrapping_mul(comments))
+            .wrapping_add(punct);
+    }
+}

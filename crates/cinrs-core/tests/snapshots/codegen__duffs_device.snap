@@ -12,31 +12,28 @@ mod __cinrs_unit_e974c52e {
     ) {
         unsafe {
             let mut n: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: ::core::primitive::u32 = 0;
-            'cfg: loop {
-                match __cinrs_state {
+            let mut __cinrs_entry0: ::core::primitive::u32 = 0;
+            n = count.wrapping_add(3) / 4;
+            match (count % 4) {
+                0 => {
+                    __cinrs_entry0 = 1;
+                }
+                3 => {
+                    __cinrs_entry0 = 2;
+                }
+                2 => {
+                    __cinrs_entry0 = 3;
+                }
+                1 => {
+                    __cinrs_entry0 = 0;
+                }
+                _ => {
+                    __cinrs_entry0 = 4;
+                }
+            }
+            'r0: loop {
+                match __cinrs_entry0 {
                     0 => {
-                        n = count.wrapping_add(3) / 4;
-                        match (count % 4) {
-                            0 => {
-                                __cinrs_state = 2;
-                            }
-                            3 => {
-                                __cinrs_state = 3;
-                            }
-                            2 => {
-                                __cinrs_state = 4;
-                            }
-                            1 => {
-                                __cinrs_state = 1;
-                            }
-                            _ => {
-                                __cinrs_state = 5;
-                            }
-                        }
-                        continue 'cfg;
-                    }
-                    1 => {
                         let __cinrs_tmp1 = ({
                             let __cinrs_tmp0 = to;
                             to = to.offset(1);
@@ -55,13 +52,12 @@ mod __cinrs_unit_e974c52e {
                             n
                         }) > 0
                         {
-                            __cinrs_state = 2;
+                            __cinrs_entry0 = 1;
                         } else {
-                            __cinrs_state = 5;
+                            __cinrs_entry0 = 4;
                         }
-                        continue 'cfg;
                     }
-                    2 => {
+                    1 => {
                         let __cinrs_tmp5 = ({
                             let __cinrs_tmp4 = to;
                             to = to.offset(1);
@@ -75,10 +71,9 @@ mod __cinrs_unit_e974c52e {
                             });
                             (*__cinrs_tmp7)
                         };
-                        __cinrs_state = 3;
-                        continue 'cfg;
+                        __cinrs_entry0 = 2;
                     }
-                    3 => {
+                    2 => {
                         let __cinrs_tmp9 = ({
                             let __cinrs_tmp8 = to;
                             to = to.offset(1);
@@ -92,10 +87,9 @@ mod __cinrs_unit_e974c52e {
                             });
                             (*__cinrs_tmp11)
                         };
-                        __cinrs_state = 4;
-                        continue 'cfg;
+                        __cinrs_entry0 = 3;
                     }
-                    4 => {
+                    3 => {
                         let __cinrs_tmp13 = ({
                             let __cinrs_tmp12 = to;
                             to = to.offset(1);
@@ -109,13 +103,11 @@ mod __cinrs_unit_e974c52e {
                             });
                             (*__cinrs_tmp15)
                         };
-                        __cinrs_state = 1;
-                        continue 'cfg;
+                        __cinrs_entry0 = 0;
                     }
-                    5 => {
+                    _ => {
                         return;
                     }
-                    _ => ::core::unreachable!(),
                 }
             }
         }
