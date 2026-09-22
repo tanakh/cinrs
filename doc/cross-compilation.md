@@ -104,9 +104,11 @@ scanf   fscanf   sscanf   vscanf    vfscanf  vsscanf
 ```
 
 or any of the twelve wide forms (`wprintf`, `fwprintf`, `swprintf`, … ,
-`vswscanf`) carries `#[link(name = "legacy_stdio_definitions")]` exactly as
-`#pragma cinrs link "legacy_stdio_definitions"` would have — and a unit that
-writes that pragma itself gets the attribute once rather than twice. The rule
+`vswscanf`) gets `#[link(name = "legacy_stdio_definitions")]` exactly as
+`#pragma cinrs link "legacy_stdio_definitions"` would have put it there — on an
+`extern` block of its own, for the reason
+[below](#where-a-link-goes-and-why-a-block-of-its-own) — and a unit that writes
+that pragma itself asks for the library once rather than twice. The rule
 lives in the code generator rather than in `<stdio.h>`, because a program may
 declare `int printf(const char *, ...);` itself, or reach the function through
 `__builtin_printf`, and never include a header: it is keyed on the symbols the
@@ -202,18 +204,58 @@ and mingw's import libraries expose them, which is why both rules ask
 an MSVC target a program can always ask for a symbol by hand with an `__asm__`
 label.
 
-One more MSVC rule follows from the `#[link(name = "…")]` those two put on the
-generated `extern` block — and from the one
-[`#pragma cinrs link`](pragmas.md#link-name) puts there. `rustc` reaches a
-`static` declared in a block with such an attribute through a `dllimport`, which
-is right for a symbol in another image and wrong for one defined in *this* one:
-a unit that declares `extern int counter;` while another exported unit of the
-same crate defines it reads rubbish, and `lld-link` says
-`LNK4217: locally defined symbol imported`. Functions are unaffected. So on an
-MSVC target, keep an `extern` object shared between two units of one crate in a
-unit that names no library — or hand it over through an accessor function, which
-is what Rust has to do for such an object anyway (see
-[Objects](translation.md#objects)).
+### Where a `#[link]` goes, and why a block of its own
+
+On a Windows target `#[link(name = "…")]` says two things: put this library on
+the link line, and reach every `static` declared **in that very block** through a
+`dllimport`. cinrs means only the first, so every library it links —
+`legacy_stdio_definitions` above, and every
+[`#pragma cinrs link`](pragmas.md#link-name) — is asked for on an `extern` block
+with nothing in it:
+
+```rust
+#[link(name = "legacy_stdio_definitions")]
+unsafe extern "C" {}
+```
+
+which is Rust's ordinary idiom for "also link this", and sits *beside* the block
+that holds the declarations rather than around it. The library reaches the link
+line either way — `rustc --print native-static-libs` lists it — and no
+declaration of the unit's becomes a `dllimport`, which is also what C does:
+adding a `.lib` to a link line is not `__declspec(dllimport)` on anything.
+
+It matters because a `dllimport` is right for an object that lives in another
+image and **silently wrong** for one that lives in this one. With the attribute
+on the declarations, a unit that declared `extern int counter;` while another
+exported unit of the same crate defined it read `7887437` for `17`, and
+`lld-link` warned `LNK4217: locally defined symbol imported` — measured on
+`x86_64-pc-windows-msvc`, for a unit that had asked for nothing but
+`#include <stdio.h>` and for one that wrote the pragma alike. Functions are
+unaffected either way, since the linker rewrites a call through `__imp_f` to the
+definition it holds.
+
+What the choice costs is the other end of the same case: a DLL's **data**
+export, the one kind of symbol an import library holds as `__imp_name` and
+nothing else. Declared as a plain object it is now `LNK2019: unresolved external
+symbol` — `lld-link: error: undefined symbol: GdiBatchLimit` — which is loud, at
+link time, and the way to read it is to name that pointer, exactly as a C program
+with no `__declspec(dllimport)` must:
+
+```c
+#pragma cinrs link "gdi32"
+
+/* `gdi32.lib` holds `__imp_GdiBatchLimit` and no thunk for it. */
+extern unsigned long *batch_limit __asm__("__imp_GdiBatchLimit");
+
+unsigned long gdi_batch_limit(void) { return *batch_limit; }
+```
+
+A DLL's *functions* need none of this: the import library has a thunk under the
+plain name. Nothing in the C library is affected either — `nm` over the Windows
+SDK's `ucrt.lib` finds a thunk for all 1350 of its imports and not one data
+export, the UCRT reaching its globals through `__acrt_iob_func` and `_errno()`
+instead. `tests/declared_names.rs` keeps both halves: the shared object on every
+platform, and the `__imp_` pointer on an MSVC one.
 
 ### Apple's C library
 

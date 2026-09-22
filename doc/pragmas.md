@@ -34,7 +34,7 @@ to the last two, for a reason its own section gives.
 | [`target "<triple>"`](#target-triple) | picks the data model the unit is translated for | the whole unit, and it must come first |
 | [`include_path "<dir>"`](#include_path-dir) | adds a directory to the include search path | from the directive on |
 | [`system_include [first]`](#system_include-and-system_include-first) | puts the platform's own include directories on the path | from the directive on |
-| [`link "<name>"`](#link-name) | `#[link(name = "…")]` on the generated `extern` block | the whole unit |
+| [`link "<name>"`](#link-name) | `#[link(name = "…")]` on an `extern` block of its own | the whole unit |
 | [`export`](#export) | gives everything with external linkage a real C symbol | the whole unit |
 | [`safe f g h`](#safe-f-g-h) | generates those functions without `unsafe` | the whole unit |
 | [`no_std`](#no_std) | takes the `Vec` a VLA or `alloca` needs from `alloc` | the whole unit |
@@ -165,13 +165,21 @@ point a cross build at a sysroot. Programmatically it is
 extern int mylib_open(const char *path);
 ```
 
-Puts `#[link(name = "mylib")]` on the generated `extern` block, for a program
-that calls into a library the Rust runtime does not already link. Nothing is
-needed for the C library itself.
+Adds `#[link(name = "mylib")] unsafe extern "C" {}` to the expansion, for a
+program that calls into a library the Rust runtime does not already link. Nothing
+is needed for the C library itself.
 
-It reaches the whole unit wherever it is written — there is one `extern` block
-— and any number of libraries may be named. They are kept in the order written,
-and naming the same one twice adds it once.
+The block the attribute sits on has **nothing in it**, which is deliberate: on a
+Windows target `#[link]` also makes `rustc` reach every `static` declared in its
+own block through a `dllimport`, and that is wrong for an object another unit of
+the same crate defines. [Where a `#[link]`
+goes](cross-compilation.md#where-a-link-goes-and-why-a-block-of-its-own) is the
+whole story, including how to read a DLL's data export, which is the one thing
+this costs.
+
+It reaches the whole unit wherever it is written, and any number of libraries may
+be named. They are kept in the order written, and naming the same one twice adds
+it once.
 
 There is no environment variable for it; the Cargo-level equivalent is a
 `build.rs` that prints `cargo:rustc-link-lib=mylib`.

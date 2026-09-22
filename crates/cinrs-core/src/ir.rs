@@ -2074,7 +2074,7 @@ pub struct Program {
     pub enum_constants: Vec<Enumerator>,
     /// Every string literal, indexed by [`StrId`].
     pub strings: Vec<StrData>,
-    /// The libraries the `extern` block must be linked against, named by
+    /// The libraries the unit must be linked against, named by
     /// `#pragma cinrs link "…"`.
     ///
     /// Filled in after semantic analysis: it is the preprocessor that reads

@@ -573,8 +573,8 @@ pub struct Analysis {
     /// The absolute paths of the resources `#embed` read, mentioned in the
     /// expansion for the same reason.
     pub embedded_files: Vec<PathBuf>,
-    /// The libraries `#pragma cinrs link` asked the `extern` block to be
-    /// linked against.
+    /// The libraries `#pragma cinrs link` asked the expansion to be linked
+    /// against, each of which becomes an `extern` block of its own.
     pub link_libraries: Vec<String>,
     /// The functions `#pragma cinrs safe` asked to be generated without
     /// `unsafe`; see [`sema::check_safe`].

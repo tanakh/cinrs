@@ -137,12 +137,12 @@ cinrs::c11! { r#"
     }
 
     /* The platform's own C library, which is where the target's *library*
-     * rather than its data model comes in: the `extern` block cinrs generates
-     * for these declarations carries whatever link attribute the target needs
-     * — `legacy_stdio_definitions` on an MSVC target, where the UCRT's
+     * rather than its data model comes in: beside the `extern` block cinrs
+     * generates for these declarations goes whatever link attribute the target
+     * needs — `legacy_stdio_definitions` on an MSVC target, where the UCRT's
      * `printf` family is inline rather than exported, and nothing anywhere
-     * else — and `cargo check` is what says that the block, attribute
-     * included, is one `rustc` accepts for this machine. Whether the symbols
+     * else — and `cargo check` is what says that the blocks, attribute
+     * included, are ones `rustc` accepts for this machine. Whether the symbols
      * really resolve is a question only a linker can answer; that is the
      * `portability` job in `.github/workflows/ci.yml`. */
     #include <stdio.h>

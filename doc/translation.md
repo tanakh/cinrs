@@ -105,8 +105,12 @@ five unspellable names get their usual spellings — so one C name is one Rust
 name here too, and `#[link_name]` is what carries the symbol whenever the two
 differ.
 
-`#pragma cinrs link "name"` puts `#[link(name = "name")]` on that block — and so
-does cinrs itself in one case: a unit translated for a `*-windows-msvc` target
+`#pragma cinrs link "name"` adds `#[link(name = "name")] unsafe extern "C" {}`
+beside that block — a block of its own, with nothing in it, because the attribute
+would otherwise make `rustc` reach every `static` in the block it sits on through
+a `dllimport` on a Windows target (see [Where a `#[link]`
+goes](cross-compilation.md#where-a-link-goes-and-why-a-block-of-its-own)). cinrs
+adds one itself in a single case: a unit translated for a `*-windows-msvc` target
 whose block declares one of the `printf` or `scanf` family gets
 `#[link(name = "legacy_stdio_definitions")]`, because the Universal CRT defines
 those functions inline in `<stdio.h>` and exports no symbol for them (see

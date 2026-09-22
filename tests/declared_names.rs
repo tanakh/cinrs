@@ -269,14 +269,18 @@ mod declared_objects {
 /// where the bundled headers happen not to declare one: `stdout` is
 /// `__acrt_iob_func(1)` on Windows and `__stdoutp` on Apple.
 ///
-/// The declaring unit includes no header at all, which is deliberate: on an
-/// MSVC target an `extern` block that carries a `#[link(name = "…")]` — from
-/// `#pragma cinrs link`, or from the `legacy_stdio_definitions` rule that
-/// `<stdio.h>` triggers — makes `rustc` reach its `static`s through a
-/// `dllimport`, and a symbol defined in the *same* image must not be read that
-/// way (`LNK4217`).
+/// The declaring unit includes `<stdio.h>`, which is deliberate: that header is
+/// what makes an MSVC target link `legacy_stdio_definitions` for the `printf`
+/// family, and `#[link(name = "…")]` is also what would make `rustc` reach every
+/// `static` in the block it sits on through a `dllimport` — reading rubbish for
+/// a symbol defined in *this* image, with `lld-link` saying `LNK4217: locally
+/// defined symbol imported`. cinrs therefore puts every library it links on an
+/// `extern` block of its own, with nothing in it; this is the test that says so
+/// on the platform. See `doc/cross-compilation.md`.
 mod a_declared_object_of_our_own {
     cinrs::c99! {
+        #include <stdio.h>
+
         extern int cinrs_test_shared_object;
 
         int read_shared_object(void) { return cinrs_test_shared_object; }
@@ -294,6 +298,49 @@ mod a_declared_object_of_our_own {
         let cinrs_test_shared_object = 4;
         assert_eq!(cinrs_test_shared_object, 4);
         assert_eq!(unsafe { read_shared_object() }, 17);
+    }
+}
+
+/// The same shared object in a unit that names a library **itself**, and the
+/// other end of the rule: a data symbol a real DLL exports.
+///
+/// `#pragma cinrs link` is the program's own statement, and it too puts the
+/// library on a block with nothing in it, so the object another unit of this
+/// crate defines is an ordinary symbol rather than a `dllimport`. The price is
+/// that a DLL's *data* export — the one kind of symbol an import library holds
+/// as `__imp_name` alone — has to be named through that pointer, which is what
+/// a C program with no `__declspec(dllimport)` does as well. Both halves are
+/// MSVC-only: `doc/cross-compilation.md` has the measurements, and the link
+/// attribute is a no-op on the platforms where it is not needed.
+#[cfg(all(windows, target_env = "msvc"))]
+mod a_unit_that_names_a_library {
+    /// `gdi32.lib` exports the `DWORD` `GdiBatchLimit` as data: it holds
+    /// `__imp_GdiBatchLimit` and no thunk, which is why a plain declaration of
+    /// it is `LNK2019: unresolved external symbol` and the pointer is the way in.
+    /// The value is the DLL's business — 20 by default, and this only reads it.
+    mod gdi {
+        cinrs::c99! {
+            #pragma cinrs link "gdi32"
+
+            extern int cinrs_test_pragma_object;
+            extern unsigned long *cinrs_test_batch_limit __asm__("__imp_GdiBatchLimit");
+
+            int read_pragma_object(void) { return cinrs_test_pragma_object; }
+            unsigned long read_batch_limit(void) { return *cinrs_test_batch_limit; }
+        }
+
+        mod object_owner {
+            cinrs::c99! {
+                #pragma cinrs export
+                int cinrs_test_pragma_object = 17;
+            }
+        }
+    }
+
+    #[test]
+    fn the_object_is_this_crates_and_the_dlls_data_is_the_dlls() {
+        assert_eq!(unsafe { gdi::read_pragma_object() }, 17);
+        assert_ne!(unsafe { gdi::read_batch_limit() }, 0);
     }
 }
 

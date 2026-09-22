@@ -10,9 +10,10 @@
 //! One expansion produces, in this order: the alignment wrappers an
 //! over-aligned object needs, the `struct` and `union` items for every tag and
 //! the flexible-array companions that go with them, the `enum` aliases and
-//! their constants, the file-scope `typedef` aliases, one `extern` block for
-//! everything the unit only declares, the `static mut` items, and finally the
-//! functions. A C function becomes
+//! their constants, the file-scope `typedef` aliases, an empty `extern` block
+//! per library the unit links, one `extern` block for everything the unit only
+//! declares, the `static mut` items, and finally the functions. A C function
+//! becomes
 //!
 //! ```text
 //! pub unsafe extern "C" fn name(mut p: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -2021,7 +2022,9 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=> const _: () = #block; }
     }
 
-    /// The `extern` block declaring everything the unit does not define.
+    /// The `extern` block declaring everything the unit does not define, with
+    /// the libraries the unit links beside it — one empty block each, never an
+    /// attribute on this one; [`Codegen::link_blocks`] is why.
     ///
     /// A **function** is declared under its own C name — `pub fn crc32`, not a
     /// hidden one — so that the glob re-export carries it out of the unit's
@@ -2084,22 +2087,60 @@ impl<'a> Codegen<'a> {
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
         }
-        let links = self.link_attrs(&symbols, span);
+        let links = self.link_blocks(&symbols, span);
         quote_spanned! {span=> #links unsafe extern "C" { #items } }
     }
 
-    /// `#[link(name = "…")]` for every `#pragma cinrs link` the unit wrote, and
-    /// for the library an MSVC target needs to resolve the `printf` family.
+    /// The libraries this unit links: one `#[link(name = "…")] unsafe extern "C"
+    /// {}` — the ordinary Rust idiom for "also link this" — for every
+    /// `#pragma cinrs link` the unit wrote, and for the library an MSVC target
+    /// needs to resolve the `printf` family.
     ///
     /// Nothing here is needed for the C library itself, which the Rust runtime
     /// already links; the pragma is for the program that calls into something
     /// else, and [`LEGACY_STDIO`] is the one library cinrs asks for on its own
-    /// initiative. `symbols` is what the declarations in this very block link
-    /// by, which is what decides the second of those.
+    /// initiative. `symbols` is what the declarations in the block next to these
+    /// link by, which is what decides the second of those.
     ///
     /// A library named by both — `#pragma cinrs link "legacy_stdio_definitions"`
     /// written out by hand — is emitted once.
-    fn link_attrs(&self, symbols: &[&str], span: Span) -> TokenStream {
+    ///
+    /// # Why an empty block of its own, and not an attribute on the declarations
+    ///
+    /// Because `#[link(name = "…")]` says two things, and cinrs means only the
+    /// first. It puts the library on the link line, and it also makes `rustc`
+    /// reach every `static` declared *in that very block* through a `dllimport`
+    /// on a Windows target — `native_library` is asked per foreign item, so a
+    /// sibling block is untouched. A `dllimport` is right for an object that
+    /// lives in another image and silently wrong for one that lives in this one:
+    /// with the attribute on the declarations, a unit that declared
+    /// `extern int counter;` while another exported unit of the same crate
+    /// defined it read rubbish — 7887437 for 17, measured on Windows — and
+    /// `lld-link` said `LNK4217: locally defined symbol imported`.
+    ///
+    /// For the `printf` rule that was cinrs's own doing: a unit that includes
+    /// `<stdio.h>` never asked for a library. The pragma is the program's own
+    /// statement, but it is no better placed to decide, because in C adding a
+    /// `.lib` to a link line implies `__declspec(dllimport)` on nothing, and
+    /// cinrs has no way to write that per declaration. So no generated
+    /// declaration is a `dllimport`, which is C's own default, and a program that
+    /// wants a DLL's *data* export — the one case the import library exposes as
+    /// `__imp_name` alone — names that pointer itself:
+    ///
+    /// ```c
+    /// #pragma cinrs link "gdi32"
+    /// extern unsigned long *batch_limit __asm__("__imp_GdiBatchLimit");
+    /// ```
+    ///
+    /// That reads the DLL's value; the same symbol declared as a plain object is
+    /// `lld-link: error: undefined symbol: GdiBatchLimit` — loud, at link time,
+    /// rather than a wrong value. With the attribute on the declarations even the
+    /// pointer was out of reach: `rustc` asked for its `__imp_` in turn, and
+    /// `lld-link` said `undefined symbol: __declspec(dllimport)
+    /// __imp_GdiBatchLimit`. Every sentence here was measured on
+    /// `x86_64-pc-windows-msvc`; `doc/cross-compilation.md` keeps the numbers and
+    /// `tests/declared_names.rs` the cases.
+    fn link_blocks(&self, symbols: &[&str], span: Span) -> TokenStream {
         let mut libraries: Vec<&str> = Vec::new();
         for name in &self.program.link_libraries {
             if !libraries.contains(&name.as_str()) {
@@ -2115,7 +2156,7 @@ impl<'a> Codegen<'a> {
         for name in libraries {
             let mut literal = Literal::string(name);
             literal.set_span(span);
-            out.extend(quote_spanned! {span=> #[link(name = #literal)] });
+            out.extend(quote_spanned! {span=> #[link(name = #literal)] unsafe extern "C" {} });
         }
         out
     }

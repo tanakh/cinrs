@@ -93,8 +93,8 @@
 //! `CINRS_TARGET`; `include_path` adds a directory to the search path (relative
 //! paths resolve against `CARGO_MANIFEST_DIR`); `system_include` puts the
 //! platform's own include directories on that path, after the bundled headers
-//! or — with `first` — before them (see [`crate::include`]); `link` puts
-//! `#[link(name = "mylib")]` on the generated `extern` block; `export` gives
+//! or — with `first` — before them (see [`crate::include`]); `link` adds
+//! `#[link(name = "mylib")]` on an `extern` block of its own; `export` gives
 //! everything with external linkage a real C symbol, so that another unit can
 //! link to it; `safe` generates those functions without `unsafe`, so that
 //! `rustc` checks them (see [`crate::sema::check_safe`]); `no_std` takes the

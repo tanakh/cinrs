@@ -279,8 +279,8 @@ constants. Both are written inside the block, which is the point — there is no
 second language and no build script.
 
 **Naming the library.**
-[`#pragma cinrs link "z"`](pragmas.md#link-name) puts `#[link(name = "z")]` on
-the generated `extern` block. Nothing is needed for the C library itself, which
+[`#pragma cinrs link "z"`](pragmas.md#link-name) adds `#[link(name = "z")]`, on
+an `extern` block of its own. Nothing is needed for the C library itself, which
 the Rust runtime has already linked.
 
 **The header has to be findable.**

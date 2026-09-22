@@ -840,17 +840,34 @@ fn setjmp_says_it_is_not_supported() {
 }
 
 #[test]
-fn a_link_pragma_puts_a_link_attribute_on_the_extern_block() {
+fn a_link_pragma_adds_an_extern_block_naming_the_library() {
     let output = expand(
         stream("#pragma cinrs link \"mylib\"\nint helper(int);"),
         &options(),
     )
     .to_string();
     assert!(!output.contains("compile_error"), "{output}");
-    assert!(output.contains("# [link (name = \"mylib\")]"), "{output}");
+    // On a block with nothing in it — the ordinary "also link this" idiom —
+    // rather than on the one that declares `helper`; see
+    // `Codegen::link_blocks` for what the attribute would otherwise do to a
+    // declaration.
+    assert!(
+        output.contains("# [link (name = \"mylib\")] unsafe extern \"C\" { }"),
+        "{output}"
+    );
+    assert!(links_are_all_on_empty_blocks(&output), "{output}");
+    assert!(output.contains("pub fn helper"), "{output}");
     // Nothing is added when nothing asks for it.
     let plain = expand(stream("int helper(int);"), &options()).to_string();
     assert!(!plain.contains("link (name"), "{plain}");
+}
+
+/// Whether every `#[link(name = "…")]` in `output` sits on an `extern` block
+/// with nothing in it, which is the invariant that keeps a declared `static` out
+/// of a `dllimport`.
+fn links_are_all_on_empty_blocks(output: &str) -> bool {
+    output.matches("# [link (name = ").count()
+        == output.matches(")] unsafe extern \"C\" { }").count()
 }
 
 // ---------------------------------------------------------------------------
@@ -865,8 +882,10 @@ fn a_link_pragma_puts_a_link_attribute_on_the_extern_block() {
 // for a Windows linker, which `.github/workflows/ci.yml`'s `portability` job
 // asks.
 
-/// The attribute the rule adds, as the expansion's own token spacing writes it.
-const LEGACY_LINK: &str = "# [link (name = \"legacy_stdio_definitions\")]";
+/// The attribute the rule adds — and the block it sits on, which has nothing in
+/// it so that no declaration of the unit's becomes a `dllimport` — as the
+/// expansion's own token spacing writes them.
+const LEGACY_LINK: &str = "# [link (name = \"legacy_stdio_definitions\")] unsafe extern \"C\" { }";
 
 /// Options translating for `triple`, which the table must know.
 fn options_for(triple: &str) -> Options {
@@ -889,12 +908,15 @@ fn an_msvc_target_links_the_legacy_stdio_definitions() {
     let source = "#include <stdio.h>\nvoid greet(const char *n) { printf(\"hi %s\\n\", n); }";
     let msvc = expand_for("x86_64-pc-windows-msvc", source);
     assert!(msvc.contains(LEGACY_LINK), "{msvc}");
-    // One attribute, and it is on the `extern` block rather than anywhere else.
+    // One attribute, on a block of its own, and the block that declares
+    // `printf` carries none: the library is the only thing cinrs asks for here.
     assert_eq!(
         msvc.matches("legacy_stdio_definitions").count(),
         1,
         "{msvc}"
     );
+    assert!(links_are_all_on_empty_blocks(&msvc), "{msvc}");
+    assert!(msvc.contains("link_name = \"printf\""), "{msvc}");
     for triple in [
         // mingw-w64 is Windows and has its own out-of-line definitions; the
         // library is not there to link at all.
@@ -1032,8 +1054,52 @@ fn a_pragma_naming_the_library_is_not_doubled() {
         "#pragma cinrs link \"mylib\"\n#include <stdio.h>\n\
          void greet(const char *n) { printf(\"hi %s\\n\", n); }",
     );
-    assert!(output.contains("# [link (name = \"mylib\")]"), "{output}");
+    assert!(
+        output.contains("# [link (name = \"mylib\")] unsafe extern \"C\" { }"),
+        "{output}"
+    );
     assert!(!output.contains("legacy_stdio"), "{output}");
+}
+
+/// Every library is asked for on a block with **nothing in it**, so that a
+/// `static` the unit declares is an ordinary external symbol rather than a
+/// `dllimport`.
+///
+/// `#[link(name = "…")]` says two things on a Windows target: link this library,
+/// and reach every `static` declared in *this very block* through a
+/// `dllimport`. cinrs means only the first — a unit that includes `<stdio.h>`
+/// never asked for a library at all — and the second is silently wrong for an
+/// object another unit of the same crate defines: it read 7887437 for 17, with
+/// `lld-link` saying `LNK4217: locally defined symbol imported`. So no
+/// declaration ever shares a block with the attribute, and the pragma's library
+/// is placed the same way as the automatic one. `tests/declared_names.rs` is
+/// the same statement on the platform itself, and
+/// `Codegen::link_blocks` the reasoning.
+#[test]
+fn a_declared_object_never_shares_a_block_with_a_library() {
+    let output = expand_for(
+        "x86_64-pc-windows-msvc",
+        "#pragma cinrs link \"mylib\"\n#include <stdio.h>\n\
+         extern int counter;\n\
+         int read_counter(void) { return printf(\"%d\", counter); }",
+    );
+    // Two libraries, two empty blocks, and one block for the declarations.
+    assert_eq!(output.matches("# [link (name = ").count(), 2, "{output}");
+    assert!(
+        output.contains("# [link (name = \"mylib\")] unsafe extern \"C\" { }"),
+        "{output}"
+    );
+    assert!(output.contains(LEGACY_LINK), "{output}");
+    assert!(links_are_all_on_empty_blocks(&output), "{output}");
+    // The object is declared, and in a block no attribute is on: what follows
+    // the last empty block is the one that holds the declarations.
+    let declarations = output
+        .rsplit_once(")] unsafe extern \"C\" { }")
+        .expect("an empty block naming a library")
+        .1;
+    assert!(declarations.contains("pub static mut"), "{output}");
+    assert!(declarations.contains("link_name = \"counter\""), "{output}");
+    assert!(!declarations.contains("link (name"), "{output}");
 }
 
 /// The whole family, one name at a time, each declared by the unit itself so
