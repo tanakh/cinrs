@@ -345,7 +345,10 @@ impl Sema<'_> {
             else_expr
         };
         let value = self.expr(chosen)?;
-        Some(Expr::new(value.kind, value.ty, range))
+        // The chosen operand *is* the result, a wide bit-field's width
+        // included; see [`Expr::bits`].
+        let bits = value.bits;
+        Some(Expr::new(value.kind, value.ty, range).narrowed(bits))
     }
 
     /// The string literal `__func__` stands for inside a function body.
@@ -512,7 +515,10 @@ impl Sema<'_> {
         // Only the chosen association is checked: the others may name types
         // the operation is not defined for, which is the point of `_Generic`.
         let value = self.expr(&picked.value)?;
-        Some(Expr::new(value.kind, value.ty, range))
+        // The selected association *is* the result, a wide bit-field's width
+        // included; see [`Expr::bits`].
+        let bits = value.bits;
+        Some(Expr::new(value.kind, value.ty, range).narrowed(bits))
     }
 
     /// A type spelled the way it was written, qualifiers and all.
@@ -2623,6 +2629,22 @@ impl Sema<'_> {
                 return Some(Expr::new(ExprKind::Cast(Box::new(value)), target, range));
             }
             let converted = self.convert(value, target);
+            // A value computed in a wide bit-field's width — `(unsigned long
+            // long) (s.b - 8)` with `s.b` forty bits wide — is reduced to that
+            // width by the node that computed it, and the cast then makes it a
+            // full-width value of the target type. Re-typing that node in place
+            // would lose the reduction (the width rides on the node, see
+            // [`Expr::bits`]), and keeping the width on the result would
+            // narrow the arithmetic around the cast, which C says happens in
+            // the target type. So the node is kept whole under a cast of its
+            // own, as for a bit-field load above.
+            if converted.bits.is_some() {
+                return Some(Expr::new(
+                    ExprKind::Cast(Box::new(converted)),
+                    target,
+                    range,
+                ));
+            }
             // A cast is always explicit in the output, even when it is a
             // no-op, so that the generated code mirrors the source.
             return Some(Expr::new(converted.kind, target, range));

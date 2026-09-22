@@ -302,6 +302,61 @@ fn a_field_wider_than_int_computes_in_its_own_width() {
     }
 }
 
+#[test]
+fn a_wide_field_keeps_its_width_through_a_cast_and_a_selection() {
+    c11! {
+        /* The width rides on the node that computed the value, so a cast
+         * must reduce that node before it widens the result — and must not
+         * pass the width on, since the arithmetic after a cast happens in the
+         * target type. `_Generic` and `__builtin_choose_expr` are the other
+         * way round: their result *is* the chosen operand, width included.
+         * Every expected value below is what `gcc -O2` (15.2) printed for the
+         * same C; `execute/bitfld-5` in GCC's torture suite is the first. */
+        struct CastWide { unsigned long long b : 40; };
+        struct CastSigned { long long s : 40; };
+
+        unsigned long long cast_back(unsigned long long v) {
+            struct CastWide w; w.b = v; return (unsigned long long) (w.b - 8) + 8;
+        }
+        long long cast_back_signed(long long v) {
+            struct CastSigned w; w.s = v; return (long long) (w.s - 8) * 2;
+        }
+        unsigned cast_narrower(unsigned long long v) {
+            struct CastWide w; w.b = v; return (unsigned) (w.b - 8);
+        }
+        unsigned long long cast_wider_high(unsigned long long v) {
+            struct CastWide w; w.b = v;
+            unsigned __int128 x = (unsigned __int128) (w.b - 8) + 8;
+            return (unsigned long long) (x >> 32);
+        }
+        unsigned long long generic_bare(unsigned long long v) {
+            struct CastWide w; w.b = v; return _Generic(0, int: w.b - 8);
+        }
+        unsigned long long generic_then_add(unsigned long long v) {
+            struct CastWide w; w.b = v; return _Generic(0, int: w.b - 8) + 8;
+        }
+        unsigned long long choose_bare(unsigned long long v) {
+            struct CastWide w; w.b = v; return __builtin_choose_expr(1, w.b - 8, 0);
+        }
+        unsigned long long choose_then_add(unsigned long long v) {
+            struct CastWide w; w.b = v; return __builtin_choose_expr(1, w.b - 8, 0) + 8;
+        }
+    }
+
+    unsafe {
+        // 2 - 8 wraps in forty bits, and the cast then widens 0xff_ffff_fffa.
+        assert_eq!(cast_back(2), 0x100_0000_0002);
+        assert_eq!(cast_back_signed(2), -12);
+        assert_eq!(cast_narrower(2), 0xffff_fffa);
+        assert_eq!(cast_wider_high(2), 0x100);
+        // The selected operand is still forty bits wide, so `+ 8` wraps too.
+        assert_eq!(generic_bare(2), 0xff_ffff_fffa);
+        assert_eq!(generic_then_add(2), 2);
+        assert_eq!(choose_bare(2), 0xff_ffff_fffa);
+        assert_eq!(choose_then_add(2), 2);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // updating in place
 // ---------------------------------------------------------------------------
