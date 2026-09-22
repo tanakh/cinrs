@@ -831,15 +831,16 @@ fn libc_is_modelled(model: &str) -> bool {
 /// The headers that only exist on an *architecture*, and so refuse on every
 /// other one.
 ///
-/// The Intel intrinsics headers are the whole list: `__m128i` and
-/// `_mm_add_epi32` are mapped onto `core::arch::x86_64` (or `core::arch::x86`),
-/// and there is nothing on any other architecture to map them onto — NEON is a
-/// different instruction set with different names. So each is an `#error` where
-/// it cannot work, which is what lets a portable program guard the `#include`
-/// and take the other branch.
+/// The Intel intrinsics headers: `__m128i` and `_mm_add_epi32` are mapped onto
+/// `core::arch::x86_64` (or `core::arch::x86`), and there is nothing on any
+/// other architecture to map them onto — NEON is a different instruction set
+/// with different names. And `<cpuid.h>`, whose macros are x86 inline assembly.
+/// So each is an `#error` where it cannot work, which is what lets a portable
+/// program guard the `#include` and take the other branch.
 const X86_ONLY: &[&str] = &[
     "avx2intrin.h",
     "avxintrin.h",
+    "cpuid.h",
     "emmintrin.h",
     "immintrin.h",
     "nmmintrin.h",
@@ -856,8 +857,13 @@ const X86_ONLY: &[&str] = &[
 /// one.
 fn arch_refusal(name: &str, model: &str) -> Option<&'static str> {
     let target = TargetModel::from_triple(model).expect("a model this crate knows");
+    let message = if name == "cpuid.h" {
+        "<cpuid.h> is x86 only"
+    } else {
+        "the Intel intrinsics headers are x86 only"
+    };
     (X86_ONLY.contains(&name) && !matches!(target.arch, Arch::X86 | Arch::X86_64))
-        .then_some("the Intel intrinsics headers are x86 only")
+        .then_some(message)
 }
 
 /// The headers that are an `#error` on purpose.
