@@ -19,7 +19,8 @@
 //! | `"x"`                              | `xmm_reg`                               |
 //! | `"i"`, `"n"`                       | `const`, folded; written `${oN}`        |
 //! | `"0"` … (tied to an output)        | `inout(…) input => output`              |
-//! | `%N`, `%[name]`                    | `{oN}`, or the register for an explicit one |
+//! | `%N`, `%[name]`                    | `{oN}` at the operand's width (`{oN:e}` for 32 bits, `:x` for 16), or the register for an explicit one |
+//! | an operand the template never names | `{oN}` in a trailing `/* … */` comment |
 //! | `%kN` `%wN` `%bN` `%hN` `%qN`      | `{oN:e}` `:x` `:l` `:h` (`reg_abcd`) `:r` |
 //! | `%%`, `%{`, `%}`, `%\|`            | `%`, `{{`, `}}`, `\|`                   |
 //! | clobber `"rax"`, `"xmm0"`          | `out("rax") _`                          |
@@ -53,6 +54,15 @@
 //! * `reg` takes 16-, 32- and 64-bit integers, `f32`, `f64` and pointers, but
 //!   not 8-bit values, which need `reg_byte`; `reg_byte` takes no modifier.
 //! * `:e`, `:x`, `:l`, `:r` work on `reg`; `:h` only on `reg_abcd`.
+//! * With no modifier a `reg` operand is printed as the *whole* register
+//!   (`rax`) whatever its type — rustc warns (`asm_sub_register`) — where GCC
+//!   prints it at the operand's width. So a plain `%0` on an `int` is
+//!   `{o0:e}`, or `addl %0, %1` would assemble as `addl %rcx, %rax`.
+//! * A named operand the template never mentions is an error ("named
+//!   argument never used"); GCC takes such operands without a word, so they
+//!   are mentioned in an assembler comment at the end of the template.
+//! * An output may be any place expression, a member of a packed record
+//!   included: `lateout(reg) (*q).v` compiles and stores unaligned.
 //! * A `const` operand is substituted as a bare number, so AT&T's `$` has to
 //!   be in the template: `${o1}`.
 //! * `xmm_reg` takes `f32`, `f64`, 32- and 64-bit integers and the 128-bit
@@ -955,6 +965,7 @@ impl Sema<'_> {
         }
         let mut out = String::new();
         let mut ok = true;
+        let mut used = vec![false; operands.len()];
         for piece in pieces {
             let (modifier, target) = match piece {
                 Piece::Text(text) => {
@@ -985,14 +996,32 @@ impl Sema<'_> {
                 ok = false;
                 continue;
             };
+            used[op] = true;
             let operand = &operands[op];
-            match render_reference(operand, modifier, x86_64) {
+            let size = self.size_of(operand.ty).unwrap_or(0);
+            match render_reference(operand, size, modifier, x86_64) {
                 Ok(text) => out.push_str(&text),
                 Err(message) => {
                     self.error(at, message);
                     ok = false;
                 }
             }
+        }
+        // GCC lets a template leave an operand out — an input only there to
+        // keep a value live, an output only there to say a register changes —
+        // and `asm!` calls a named operand the template never mentions an
+        // error. An assembler comment mentions it without changing a byte.
+        let unused: Vec<String> = operands
+            .iter()
+            .zip(&used)
+            .filter(|(operand, used)| !**used && operand.name.is_some())
+            .filter_map(|(operand, _)| {
+                let size = self.size_of(operand.ty).unwrap_or(0);
+                render_reference(operand, size, None, x86_64).ok()
+            })
+            .collect();
+        if !unused.is_empty() {
+            out.push_str(&format!(" /* {} */", unused.join(" ")));
         }
         ok.then_some(out)
     }
@@ -1017,6 +1046,7 @@ fn resolve(target: &RefTarget, names: &[Option<&str>], slots: &[Slot]) -> Option
 /// What one reference in the template becomes.
 fn render_reference(
     operand: &ir::AsmOperand,
+    size: u64,
     modifier: Option<char>,
     x86_64: bool,
 ) -> Result<String, String> {
@@ -1067,7 +1097,13 @@ fn render_reference(
         },
         AsmReg::Class(_) => {
             let suffix = match modifier {
-                None => "",
+                // GCC prints a register at the operand's width; `asm!` prints
+                // the whole register unless a modifier says otherwise.
+                None => match size {
+                    2 => ":x",
+                    4 => ":e",
+                    _ => "",
+                },
                 Some('k') => ":e",
                 Some('w') => ":x",
                 Some('b') => ":l",

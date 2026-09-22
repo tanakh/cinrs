@@ -3613,14 +3613,7 @@ impl<'a> Codegen<'a> {
     fn stmt(&mut self, stmt: &Stmt) -> TokenStream {
         match stmt {
             Stmt::Nop => TokenStream::new(),
-            // Sema maps the statement; emitting the `asm!` is the next stage.
-            // Until then it must never compile silently to nothing.
-            Stmt::Asm(asm) => {
-                let span = self.sp(asm.range);
-                quote_spanned! {span=>
-                    ::core::compile_error!("inline assembly: code generation is not implemented yet");
-                }
-            }
+            Stmt::Asm(asm) => self.asm_stmt(asm),
             Stmt::Expr(expr) => self.expr_stmt(expr),
             Stmt::Let { object, init, .. } => {
                 let id = *object;
@@ -4005,6 +3998,116 @@ impl<'a> Codegen<'a> {
             .iter()
             .find_map(|s| self.stmt_range(s))
             .map_or_else(Span::call_site, |range| self.sp(range))
+    }
+
+    /// An inline assembly statement: `::core::arch::asm!`, with the operands
+    /// sema mapped (see `sema/asm.rs`).
+    ///
+    /// ```text
+    /// {
+    ///     let p = …;                          // each output place's setup, once
+    ///     ::core::arch::asm!("addl {o1:e}, {o0:e}",
+    ///         o0 = inout(reg) (*p).f,         // the place itself
+    ///         o1 = in(reg) b,
+    ///         out("rcx") _,
+    ///         options(att_syntax));
+    /// }
+    /// ```
+    ///
+    /// An output is written straight into its place whenever that place is an
+    /// ordinary Rust place expression: a [lowered place](LoweredPlace)'s
+    /// access may be evaluated more than once and its setup — where the side
+    /// effects of `a[i++]` or `f()->x` happen — runs exactly once, before the
+    /// statement. Only a place that may be underaligned goes through a typed
+    /// temporary, read with `read_unaligned` (for `+`) and stored back with
+    /// `write_unaligned` after the statement: `asm!` would otherwise write it
+    /// with an aligned store. Bit-fields and `_Atomic` objects never get here;
+    /// sema refuses both.
+    ///
+    /// Inputs are emitted with [`Codegen::expr`], never bare: an `asm!`
+    /// operand has no expected type, so an unsuffixed literal would be an
+    /// `i32` whatever the C operand was, and the register would be read at the
+    /// wrong width.
+    fn asm_stmt(&mut self, asm: &ir::AsmStmt) -> TokenStream {
+        let span = self.sp(asm.range);
+        let mut setup = TokenStream::new();
+        let mut store_back = TokenStream::new();
+        let mut operands = TokenStream::new();
+        for (index, operand) in asm.operands.iter().enumerate() {
+            let op_span = self.sp(operand.range);
+            let head = asm_operand_head(operand, op_span);
+            let value = match &operand.kind {
+                ir::AsmOperandKind::In(expr) => self.expr(expr).at(prec::LOWEST, op_span),
+                ir::AsmOperandKind::Const(value) => asm_const_literal(*value, op_span),
+                ir::AsmOperandKind::Out { place, .. } => {
+                    self.asm_output(place, None, index, &mut setup, &mut store_back)
+                }
+                ir::AsmOperandKind::InOut { input, output } => {
+                    let input = input
+                        .as_ref()
+                        .map(|expr| self.expr(expr).at(prec::LOWEST, op_span));
+                    let read_place = input.is_none();
+                    let target = self.asm_output(
+                        output,
+                        Some(read_place),
+                        index,
+                        &mut setup,
+                        &mut store_back,
+                    );
+                    match input {
+                        Some(input) => quote_spanned! {op_span=> #input => #target },
+                        None => target,
+                    }
+                }
+            };
+            operands.extend(quote_spanned! {op_span=> #head #value, });
+        }
+        for clobber in &asm.clobbers {
+            let name = Literal::string(clobber);
+            operands.extend(quote_spanned! {span=> out(#name) _, });
+        }
+        let mut template = Literal::string(&asm.template);
+        template.set_span(span);
+        let call = quote_spanned! {span=>
+            ::core::arch::asm!(#template, #operands options(att_syntax));
+        };
+        if setup.is_empty() && store_back.is_empty() {
+            return call;
+        }
+        quote_spanned! {span=> { #setup #call #store_back } }
+    }
+
+    /// Where an `asm` output goes: the place itself, or — for a place that
+    /// may be underaligned — a temporary that is stored back afterwards.
+    ///
+    /// `read` is `None` for a pure output, and for an in/out operand says
+    /// whether its input is the place's own value (GCC's `+`).
+    fn asm_output(
+        &mut self,
+        place: &Place,
+        read: Option<bool>,
+        index: usize,
+        setup: &mut TokenStream,
+        store_back: &mut TokenStream,
+    ) -> TokenStream {
+        let span = self.sp(place.range);
+        let lowered = self.place(place, true);
+        setup.extend(lowered.setup.clone());
+        if !lowered.unaligned {
+            let access = &lowered.access;
+            return quote_spanned! {span=> #access };
+        }
+        let temp = Ident::new(&format!("__cinrs_asm{index}"), span);
+        let ty = self.ty(place.ty, span);
+        let access = &lowered.access;
+        // A pure output is initialised by the statement itself, exactly once.
+        setup.extend(if read == Some(true) {
+            quote_spanned! {span=> let mut #temp: #ty = (&raw const #access).read_unaligned(); }
+        } else {
+            quote_spanned! {span=> let #temp: #ty; }
+        });
+        store_back.extend(self.write(&lowered, quote_spanned! {span=> #temp }, span));
+        quote_spanned! {span=> #temp }
     }
 
     fn stmt_range(&self, stmt: &Stmt) -> Option<SourceRange> {
@@ -8098,6 +8201,50 @@ fn usize_literal(value: u64, span: Span) -> TokenStream {
 /// It is what an x86 intrinsic's immediate operand becomes, where the type of
 /// `core::arch`'s `const` parameter has to be written out because a const
 /// argument is not inferred from the parameter.
+/// The head of an `asm!` operand, up to its expression: `o0 = lateout(reg)`,
+/// `inout("eax")`, `o2 = const`.
+fn asm_operand_head(operand: &ir::AsmOperand, span: Span) -> TokenStream {
+    let dir = match &operand.kind {
+        ir::AsmOperandKind::In(_) => "in",
+        ir::AsmOperandKind::Out { late: true, .. } => "lateout",
+        ir::AsmOperandKind::Out { late: false, .. } => "out",
+        ir::AsmOperandKind::InOut { .. } => "inout",
+        ir::AsmOperandKind::Const(_) => "const",
+    };
+    let dir = Ident::new(dir, span);
+    let reg = match (&operand.kind, operand.reg) {
+        (ir::AsmOperandKind::Const(_), _) => TokenStream::new(),
+        (_, ir::AsmReg::Class(class)) => {
+            let class = Ident::new(class, span);
+            quote_spanned! {span=> (#class) }
+        }
+        (_, ir::AsmReg::Explicit(name)) => {
+            let mut name = Literal::string(name);
+            name.set_span(span);
+            quote_spanned! {span=> (#name) }
+        }
+    };
+    match &operand.name {
+        Some(name) => {
+            let name = Ident::new(name, span);
+            quote_spanned! {span=> #name = #dir #reg }
+        }
+        None => quote_spanned! {span=> #dir #reg },
+    }
+}
+
+/// The value of an `asm!` `const` operand: an `i64` literal, or a `u64` one
+/// for a value only that holds, so that no inference default narrows it.
+fn asm_const_literal(value: i128, span: Span) -> TokenStream {
+    let mut literal = if i64::try_from(value).is_ok() {
+        Literal::i64_suffixed(value as i64)
+    } else {
+        Literal::u64_suffixed(value as u64)
+    };
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
+}
+
 fn suffixed_int_literal(value: i128, ty: &str, span: Span) -> TokenStream {
     let mut literal = match ty {
         // An unsigned `const` parameter takes the bit pattern the C constant

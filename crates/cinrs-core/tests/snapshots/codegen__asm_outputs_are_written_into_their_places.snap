@@ -1,0 +1,72 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_asm(r#\"\n        struct S { int x; long y; };\n        struct __attribute__((packed)) P { char c; int v; };\n        void f(struct S *p, int *a, int i, struct P *q) {\n            asm(\"movl $1, %0\" : \"=r\"(p->x));\n            asm(\"incl %0\" : \"+r\"(a[i++]));\n            asm(\"incl %0\" : \"+r\"(q->v));\n            asm(\"incl %0\" : \"+r\"(*&q->v));\n            asm(\"movl $7, %0\" : \"=r\"(*&q->v));\n            asm(\"movq %1, %0\" : \"=r\"(p->y) : \"r\"(a));\n        }\n        \"#)"
+---
+mod __cinrs_unit_4037fc67 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct S {
+        pub x: ::core::ffi::c_int,
+        pub y: ::core::ffi::c_long,
+    }
+    #[repr(C, packed)]
+    #[derive(Copy, Clone)]
+    pub struct P {
+        pub c: ::core::ffi::c_char,
+        pub v: ::core::ffi::c_int,
+    }
+    pub unsafe extern "C" fn f(
+        mut p: *mut S,
+        mut a: *mut ::core::ffi::c_int,
+        mut i: ::core::ffi::c_int,
+        mut q: *mut P,
+    ) {
+        unsafe {
+            ::core::arch::asm!(
+                "movl $1, {o0:e}", o0 = lateout(reg) (* p).x, options(att_syntax)
+            );
+            {
+                let __cinrs_tmp1 = a
+                    .offset(
+                        ({
+                            let __cinrs_tmp0 = i;
+                            i = i.wrapping_add(1);
+                            __cinrs_tmp0
+                        }) as ::core::primitive::isize,
+                    );
+                ::core::arch::asm!(
+                    "incl {o0:e}", o0 = inout(reg) (* __cinrs_tmp1), options(att_syntax)
+                );
+            }
+            ::core::arch::asm!(
+                "incl {o0:e}", o0 = inout(reg) (* q).v, options(att_syntax)
+            );
+            {
+                let __cinrs_tmp2 = (&raw mut (*q).v);
+                let mut __cinrs_asm0: ::core::ffi::c_int = (&raw const (*__cinrs_tmp2))
+                    .read_unaligned();
+                ::core::arch::asm!(
+                    "incl {o0:e}", o0 = inout(reg) __cinrs_asm0, options(att_syntax)
+                );
+                (&raw mut (*__cinrs_tmp2)).write_unaligned(__cinrs_asm0);
+            }
+            {
+                let __cinrs_tmp3 = (&raw mut (*q).v);
+                let __cinrs_asm0: ::core::ffi::c_int;
+                ::core::arch::asm!(
+                    "movl $7, {o0:e}", o0 = lateout(reg) __cinrs_asm0,
+                    options(att_syntax)
+                );
+                (&raw mut (*__cinrs_tmp3)).write_unaligned(__cinrs_asm0);
+            }
+            ::core::arch::asm!(
+                "movq {o1}, {o0}", o0 = lateout(reg) (* p).y, o1 = in (reg) a,
+                options(att_syntax)
+            );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_4037fc67::*;

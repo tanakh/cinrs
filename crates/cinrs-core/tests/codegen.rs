@@ -1774,3 +1774,79 @@ fn a_region_pragma_becomes_target_feature_attributes() {
         "#
     ));
 }
+
+// ---------------------------------------------------------------------------
+// inline assembly
+// ---------------------------------------------------------------------------
+
+fn generate_asm(source: &str) -> String {
+    let target = cinrs_core::target::TargetModel::from_triple("x86_64-unknown-linux-gnu")
+        .expect("a known triple");
+    generate_with(Options::gnu(Standard::C99).for_target(target), source)
+}
+
+/// Basic asm is its template and `options(att_syntax)`, nothing else: `asm!`
+/// is volatile, reads and writes memory and clobbers the flags unless told
+/// otherwise, which is GCC's reading of `asm volatile("" ::: "memory")` too.
+#[test]
+fn basic_asm_becomes_asm_with_att_syntax() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        void fences(void) {
+            asm("mfence");
+            __asm__ __volatile__("pause\n\tnop");
+            asm volatile ("" ::: "memory", "cc");
+            asm("movl %eax, %eax");
+        }
+        "#
+    ));
+}
+
+/// Extended asm: named operands in GCC's order, a tied input folded into its
+/// output as `inout … =>`, explicit registers at the operand's width (and
+/// written into the template where `%0` named one), modifiers, an immediate
+/// as `const` behind a `$`, and a clobber as `out(…) _`.
+#[test]
+fn extended_asm_maps_each_operand() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        long f(long a, int b, unsigned char c) {
+            long r;
+            int s;
+            unsigned lo, hi;
+            asm("addl %2, %0" : "=r"(s) : "r"(b), "0"(a) : "rcx");
+            asm("bsrq %1, %0" : "=&r"(r) : "rm"(a));
+            asm("notb %0" : "+q"(c));
+            asm("incl %k0" : "+r"(r));
+            asm("rdtsc" : "=a"(lo), "=d"(hi));
+            asm("movl %k1, %k0; shlq %2, %q0" : "=r"(r) : "a"(b), "i"(3));
+            asm("addl %[y], %[x]" : [x] "+r"(s) : [y] "ri"(5));
+            return r + s + c + lo + hi;
+        }
+        "#
+    ));
+}
+
+/// An output whose place is not a plain local: the place's setup — where the
+/// side effect of `i++` happens — runs once, before the statement, and the
+/// output is written straight into the place. A member of a packed record is
+/// a place Rust itself stores unaligned; a dereference of a pointer built out
+/// of one is not, so that output goes through a temporary that is read with
+/// `read_unaligned` and stored back with `write_unaligned`.
+#[test]
+fn asm_outputs_are_written_into_their_places() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        struct S { int x; long y; };
+        struct __attribute__((packed)) P { char c; int v; };
+        void f(struct S *p, int *a, int i, struct P *q) {
+            asm("movl $1, %0" : "=r"(p->x));
+            asm("incl %0" : "+r"(a[i++]));
+            asm("incl %0" : "+r"(q->v));
+            asm("incl %0" : "+r"(*&q->v));
+            asm("movl $7, %0" : "=r"(*&q->v));
+            asm("movq %1, %0" : "=r"(p->y) : "r"(a));
+        }
+        "#
+    ));
+}

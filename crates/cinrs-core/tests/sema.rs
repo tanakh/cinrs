@@ -1656,8 +1656,10 @@ fn each_operand_kind_maps_onto_asm() {
         ),
         [
             "addq {o1}, {o0} | o0 = lateout(reg), o1 = in(reg) | ",
-            "bsrl {o1}, {o0} | o0 = out(reg), o1 = in(reg) | ",
-            "addl {o1}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            // GCC prints a register at the operand's width, `asm!` at 64 bits
+            // unless told: an `int` operand is `{o0:e}`.
+            "bsrl {o1:e}, {o0:e} | o0 = out(reg), o1 = in(reg) | ",
+            "addl {o1:e}, {o0:e} | o0 = inout(reg), o1 = in(reg) | ",
             "notb {o0} | o0 = inout(reg_byte) | ",
             "incl {o0:e} | o0 = inout(reg) | ",
             "incw {o0:x}; incb {o0:l}; incb {o0:h} | o0 = inout(reg_abcd) | ",
@@ -1666,11 +1668,13 @@ fn each_operand_kind_maps_onto_asm() {
             "movl %ecx, %eax | lateout(\"eax\"), in(\"ecx\") | rsi",
             "shlq ${o1}, {o0} | o0 = inout(reg), o1 = const | ",
             // The tied input is folded into the output it is tied to, and '%2'
-            // names that output.
-            "addl {o0}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            // names that output. The operand the template never mentions is
+            // mentioned in an assembler comment: `asm!` calls an unused named
+            // operand an error, GCC does not.
+            "addl {o0:e}, {o0:e} /* {o1:e} */ | o0 = inout(reg), o1 = in(reg) | ",
             "incl ({o0}) | o0 = in(reg) | ",
             "addsd {o1}, {o0} | o0 = inout(xmm_reg), o1 = in(xmm_reg) | ",
-            "addl {o1}, {o0} | o0 = inout(reg), o1 = in(reg) | ",
+            "addl {o1:e}, {o0:e} | o0 = inout(reg), o1 = in(reg) | ",
             "movl %eax, %eax; movb %al, %al; {{|}} | in(\"eax\") | xmm1",
         ]
     );

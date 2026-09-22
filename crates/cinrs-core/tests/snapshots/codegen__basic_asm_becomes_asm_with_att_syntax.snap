@@ -1,0 +1,18 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_asm(r#\"\n        void fences(void) {\n            asm(\"mfence\");\n            __asm__ __volatile__(\"pause\\n\\tnop\");\n            asm volatile (\"\" ::: \"memory\", \"cc\");\n            asm(\"movl %eax, %eax\");\n        }\n        \"#)"
+---
+mod __cinrs_unit_a1232d00 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn fences() {
+        unsafe {
+            ::core::arch::asm!("mfence", options(att_syntax));
+            ::core::arch::asm!("pause\n\tnop", options(att_syntax));
+            ::core::arch::asm!("", options(att_syntax));
+            ::core::arch::asm!("movl %eax, %eax", options(att_syntax));
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_a1232d00::*;

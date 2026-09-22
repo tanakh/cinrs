@@ -1,0 +1,48 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_asm(r#\"\n        long f(long a, int b, unsigned char c) {\n            long r;\n            int s;\n            unsigned lo, hi;\n            asm(\"addl %2, %0\" : \"=r\"(s) : \"r\"(b), \"0\"(a) : \"rcx\");\n            asm(\"bsrq %1, %0\" : \"=&r\"(r) : \"rm\"(a));\n            asm(\"notb %0\" : \"+q\"(c));\n            asm(\"incl %k0\" : \"+r\"(r));\n            asm(\"rdtsc\" : \"=a\"(lo), \"=d\"(hi));\n            asm(\"movl %k1, %k0; shlq %2, %q0\" : \"=r\"(r) : \"a\"(b), \"i\"(3));\n            asm(\"addl %[y], %[x]\" : [x] \"+r\"(s) : [y] \"ri\"(5));\n            return r + s + c + lo + hi;\n        }\n        \"#)"
+---
+mod __cinrs_unit_55923786 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn f(
+        mut a: ::core::ffi::c_long,
+        mut b: ::core::ffi::c_int,
+        mut c: ::core::ffi::c_uchar,
+    ) -> ::core::ffi::c_long {
+        unsafe {
+            let mut r: ::core::ffi::c_long = 0;
+            let mut s: ::core::ffi::c_int = 0;
+            let mut lo: ::core::ffi::c_uint = 0;
+            let mut hi: ::core::ffi::c_uint = 0;
+            ::core::arch::asm!(
+                "addl {o0:e}, {o0:e} /* {o1:e} */", o0 = inout(reg) a as
+                ::core::ffi::c_int => s, o1 = in (reg) b, out("rcx") _,
+                options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "bsrq {o1}, {o0}", o0 = out(reg) r, o1 = in (reg) a, options(att_syntax)
+            );
+            ::core::arch::asm!("notb {o0}", o0 = inout(reg_byte) c, options(att_syntax));
+            ::core::arch::asm!("incl {o0:e}", o0 = inout(reg) r, options(att_syntax));
+            ::core::arch::asm!(
+                "rdtsc", lateout("eax") lo, lateout("edx") hi, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "movl %eax, {o0:e}; shlq ${o2}, {o0:r}", o0 = lateout(reg) r, in ("eax")
+                b, o2 = const 3i64, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "addl {o1:e}, {o0:e}", o0 = inout(reg) s, o1 = in (reg) 5 as
+                ::core::ffi::c_int, options(att_syntax)
+            );
+            return r
+                .wrapping_add(s as ::core::ffi::c_long)
+                .wrapping_add(c as ::core::ffi::c_long)
+                .wrapping_add(lo as ::core::ffi::c_long)
+                .wrapping_add(hi as ::core::ffi::c_long);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_55923786::*;
