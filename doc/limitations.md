@@ -5,9 +5,9 @@
   (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
   C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
-  the GNU side: inline assembly and the vector extensions — for which the
+  the GNU side: the vector extensions — for which the
   [Intel SIMD intrinsics](features.md#simd-intrinsics) are the answer, and the
-  diagnostic says so.
+  diagnostic says so — and the parts of inline assembly listed below.
   Two of C11's four `__STDC_NO_*` macros depend on how the expansion was
   configured, which is the standard's own way of saying that a part is left
   out. `__STDC_NO_THREADS__` follows the *target*: `<threads.h>` declares the
@@ -67,6 +67,21 @@
   not; twenty-two more that `core::arch` deprecates, keeps unstable or takes a
   Rust reference for are listed in
   [What works](features.md#simd-intrinsics).
+* [Inline assembly](features.md#inline-assembly) is x86's and x86-64's, and
+  only what Rust's `asm!` can say; the rest is refused by name, with the
+  rewrite. **No memory operands** (`"m"`, `"+m"`, `"o"`, …): pass the address
+  in a register, `"r"(&x)`, and write `(%0)` in the template. **No `rbx`**,
+  which rustc keeps for LLVM, as an operand (`"b"`) or a clobber: save and
+  restore it around the instruction with `xchg`, as the bundled `<cpuid.h>`
+  does. **No flag outputs** (`"=@ccz"`): `setz %b0` with `"=q"`. **No `%=`**:
+  a GNU as local label, `1:` … `1b`. **No `asm goto`** in this release: branch
+  in C on a value the `asm` sets. **No x87 or MMX operands**, no `"A"` pair
+  (use `"=a"` and `"=d"`), no range-checked immediates (`"I"`: write `"i"`),
+  **no Intel syntax** (`.intel_syntax`, `{att|intel}`), and no register
+  variables (`register int x asm("eax")`: write `"a"(x)`). `asm!` is unsafe, so
+  a `[[cinrs::safe]]` function cannot contain one. A register-or-memory
+  constraint (`"rm"`, `"g"`) always gets the register, which may change the
+  instruction GCC would have chosen but not the meaning.
 * `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or
   returned; the usual uses — `va_start`, `va_arg`, `va_copy`, passing a list to
   `vprintf` — are fine, and so is a **`va_list *`** parameter or local, which

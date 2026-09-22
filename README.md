@@ -68,8 +68,9 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   functions, `_Complex`, `_Atomic`, `<threads.h>`, K&R definitions, the whole
   preprocessor with `#include` and `#embed` — and the GNU extensions real code
   uses: statement expressions, `typeof`, `__attribute__((cleanup))`, nested
-  functions, `__int128`, `__builtin_*`. What has no honest translation (inline
-  assembly, `setjmp`) is a located error, never a guess.
+  functions, `__int128`, `__builtin_*`, and inline assembly, for the operand
+  kinds `asm!` has. What has no honest translation (`setjmp`) is a located
+  error, never a guess.
 * **The SIMD intrinsics, by name.** `#include <immintrin.h>` and write
   `_mm_add_epi32(a, b)`: 881 of Intel's intrinsics, SSE through AVX2 with FMA,
   AES and the BMI scalar ones, mapped straight onto `core::arch::x86_64`, whose
@@ -77,7 +78,7 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   `union` like any 16-byte type, an immediate operand becomes `core::arch`'s
   `const` generic, and `__attribute__((target("avx2")))` becomes
   `#[target_feature]`.
-* **Measured, not claimed.** 98 % of [c-testsuite], 86–89 % of [GCC's torture
+* **Measured, not claimed.** 98 % of [c-testsuite], 89–93 % of [GCC's torture
   tests][gcc-torture] and 82 % of [Clang's C conformance tests][clang-c-tests]
   — about 2,270 cases, every failure listed by name with its reason, and **not
   one of them a known bug**. See [Conformance and speed](#conformance-and-speed).
@@ -224,8 +225,10 @@ extensions][gnu-extensions] is the same for GCC's.
 
 The ones most likely to matter; [the full list][limitations] has the rest.
 
-* Not supported, each as a located error: `setjmp`/`longjmp`, inline assembly,
-  the GNU vector extensions (the Intel intrinsics are the SIMD that is here),
+* Not supported, each as a located error: `setjmp`/`longjmp`, the memory
+  operands and `asm goto` of inline assembly (which is otherwise
+  `core::arch::asm!`, x86 only), the GNU vector extensions (the Intel
+  intrinsics are the SIMD that is here),
   `_BitInt`, `_Imaginary`, an `_Atomic` aggregate.
 * `long double` is `double`.
 * The SIMD intrinsics are x86's, and only the baseline instruction set is
@@ -245,7 +248,7 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 | Corpus | Correct | Entry point |
 | --- | --- | --- |
 | [c-testsuite] — whole programs with expected output | **214 of 218 (98.2 %)** | `c99!` |
-| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,516 of 1,769 (85.7 %)**, 89.0 % on Rust 1.99 | `gnu11!` |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,577 of 1,769 (89.1 %)**, 92.6 % on Rust 1.99 | `gnu11!` |
 | [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **167 of 203 (82.3 %)** | per test |
 | glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
 

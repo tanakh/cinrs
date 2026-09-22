@@ -305,6 +305,62 @@ function pointer has nowhere to put the constant, and that is a diagnostic.
 On a 32-bit x86 target every path above reads `::core::arch::x86` instead; the
 names in it are the same.
 
+## Inline assembly
+
+An `asm` statement becomes one `::core::arch::asm!`, with the constraints
+already mapped by sema (the table is in [What
+works](features.md#inline-assembly)); what code generation adds is evaluating
+the operands and putting the outputs where C said:
+
+```c
+struct P { int x; long y; } __attribute__((packed));
+
+void f(int *a, int i, struct P *q) {
+    asm("incl %0" : "+r"(a[i++]));
+    asm("movl $7, %0" : "=r"(*&q->x));
+}
+```
+
+```rust
+{
+    let __cinrs_tmp1 = a.offset(({ let __cinrs_tmp0 = i; i = i.wrapping_add(1); __cinrs_tmp0 }) as isize);
+    ::core::arch::asm!("incl {o0:e}", o0 = inout(reg) (*__cinrs_tmp1), options(att_syntax));
+}
+{
+    let __cinrs_tmp2 = (&raw mut (*q).x);
+    let __cinrs_asm0: ::core::ffi::c_int;
+    ::core::arch::asm!("movl $7, {o0:e}", o0 = lateout(reg) __cinrs_asm0, options(att_syntax));
+    (&raw mut (*__cinrs_tmp2)).write_unaligned(__cinrs_asm0);
+}
+```
+
+An output is **written straight into its place**. A place is lowered into a
+setup, which runs once before the statement — the `i++` above — and an access
+that may be evaluated more than once, and the access is an ordinary Rust place
+expression `asm!` can write to: a local, `(*p).f`, an element. The one
+exception is a place that may be underaligned — a dereference of a pointer
+built out of a packed member, like `*&q->x` — which `asm!` would store with an
+aligned instruction. That output goes through a typed temporary, stored back
+with `write_unaligned` after the statement, and for a `"+r"` operand read with
+`read_unaligned` before it. (A member of a packed record written directly,
+`q->x`, is a place Rust already stores unaligned, and needs no temporary.)
+
+Three things in the **template** are there because `asm!` and GCC print
+operands differently:
+
+* a bare `%0` on a `reg` operand carries the operand's **width** — `{o0:e}`
+  for a 32-bit value, `{o0:x}` for 16 — because `asm!` prints the whole 64-bit
+  register unless told otherwise, and GCC prints the register the value is in;
+* an `"i"` operand is a `const`, which `asm!` substitutes as a bare number, so
+  AT&T's `$` is written in front of it: `${o1}`, with `o1 = const 3i64`;
+* an operand the template never names is mentioned in a comment at its end,
+  `/* {o1:e} */`, because `asm!` refuses a named operand nobody uses.
+
+Inputs are written with their type (`5 as c_int`), never as a bare literal,
+because an `asm!` operand has no expected type and an unsuffixed literal would
+be an `i32` whatever the C said. Register clobbers follow the operands as
+`out("rcx") _`, and `options(att_syntax)` ends every statement.
+
 ## Arithmetic
 
 `+`, `-`, `*` and the shifts **wrap** rather than panic: unsigned wrap-around

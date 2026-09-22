@@ -3,7 +3,8 @@
 Everything generated is `core`-only: `core::ffi` types, `#[repr(C)]` items, raw
 pointers, byte strings, `core::hint::unreachable_unchecked` for `unreachable()`,
 `core::mem::offset_of!` for `offsetof`, `core::sync::atomic` for `_Atomic` and
-the atomic builtins, a `#[used]` function pointer in `.init_array` for a
+the atomic builtins, `core::arch::asm!` for inline assembly, a `#[used]`
+function pointer in `.init_array` for a
 `constructor`, and the C library's own `abort` for `__builtin_trap` and
 `assert`. `goto` is a labelled block, a recovered loop or a state machine, and
 all three are `core` too. The C library is still *linked*, because the C code calls it — that

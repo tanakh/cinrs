@@ -89,8 +89,43 @@ follows [Semantic Versioning][semver].
   `__builtin_cpu_supports` under `#pragma cinrs no_std` is a located error.
   `__builtin_cpu_is` is deliberately absent — it names a microarchitecture,
   which `std_detect` cannot answer — and `__has_builtin` says so.
+* **Inline assembly.** GCC's extended and basic `asm` — `asm`, `__asm`,
+  `__asm__`, with `volatile` and `inline` — becomes `::core::arch::asm!` on x86
+  and x86-64, with the template handed over as AT&T and
+  `options(att_syntax)`. The operands are mapped rather than guessed at: every
+  one is named (`o0`, `o1`, …), `"r"`, `"q"` and `"x"` are register classes
+  (`reg_byte` for an 8-bit value), `"a"` … `"D"` are that register at the
+  operand's width, `"i"` and `"n"` are a folded `const`, a tied `"0"` becomes
+  `inout … =>`, `=`/`=&`/`+` are `lateout`/`out`/`inout`, the `k`, `w`, `b`,
+  `h` and `q` modifiers are `asm!`'s `e`, `x`, `l`, `h` and `r`, a bare `%0`
+  keeps the operand's width, and register clobbers are `out("…") _` while
+  `"memory"` and `"cc"` are what `asm!` assumes anyway. An output goes straight
+  into its place, whose side effects happen once. What `asm!` cannot say is
+  refused by name, with the rewrite: memory operands (pass `"r"(&x)` and write
+  `(%0)`), `rbx` (which rustc keeps for LLVM), `%=`, `asm goto`, flag outputs,
+  `"A"`, the x87 and MMX constraints, the range-checked immediates, Intel
+  syntax, and `asm` in a `[[cinrs::safe]]` function or for another
+  architecture. See [Inline assembly](doc/features.md#inline-assembly);
+  `tests/inline_asm.rs` checks every operand kind against the values `gcc -O2`
+  gives.
+* **`<cpuid.h>`**, bundled: GCC's `__cpuid`, `__cpuid_count`, `__get_cpuid`,
+  `__get_cpuid_count` and `__get_cpuid_max`, and the `bit_*` and `signature_*`
+  macros, in C on inline assembly that saves and restores rbx in the template
+  (`xchgq %rbx, %q1; cpuid; xchgq %rbx, %q1`) rather than naming it as an
+  operand, which rustc refuses. `__get_cpuid` passes subleaf 0, which GCC's
+  leaves undefined. An `#error` on a target that is not x86.
 
 ### Changed
+
+* **`register int x asm("eax")` says what to write instead.** An `asm` label on
+  a local variable — GCC's register variable — is still refused, and the
+  message now says to write the register as a constraint of the `asm` that
+  uses it: `"a"(x)`.
+* **GCC's C torture tests: 1,577 of 1,769 correct (89.1 %)** under `gnu11!`,
+  up from 1,516, and 1,570 (88.8 %) under `gnu89!`, up from 1,509; 1,638
+  (92.6 %) and 1,631 (92.2 %) on Rust 1.99. Sixty cases that were refused on
+  their inline assembly now run, and `execute/bitfld-5` with them. See
+  [`doc/gcc-torture.md`](doc/gcc-torture.md).
 
 * **A `goto` no longer costs the loop it was written in.** The functions whose
   jumps Rust cannot make directly are still lowered into a control-flow graph,
@@ -221,6 +256,15 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **A wide bit-field keeps its width under a cast, `_Generic` and
+  `__builtin_choose_expr`.** A value computed in the width of a bit-field wider
+  than `int` — `s.b - 8` with `unsigned long long b : 40` — wraps at forty bits,
+  as GCC's does, and the width travels on the expression that computed it. An
+  explicit cast, `_Generic` and `__builtin_choose_expr` each rebuilt that
+  expression without it, so `(unsigned long long) (s.b - 8)` with `s.b == 2`
+  wrapped at sixty-four bits and gave `0xfffffffffffffffa` where GCC gives
+  `0xfffffffffa`. GCC's `execute/bitfld-5` is the case; the inline-assembly
+  refusal in front of it had been hiding it.
 * **`__USER_LABEL_PREFIX__` is predefined.** GCC defines it as *nothing* on ELF
   and as `_` on Mach-O and 32-bit COFF, and glibc builds every large-file
   redirection out of it:

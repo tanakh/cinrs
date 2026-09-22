@@ -347,10 +347,11 @@ the rest, answered in `core` with no maths library involved), and a
 
 Everything spelled with a leading double underscore works in `c99!` too, exactly
 as it does in GCC's own `-std=c99`; only the plain spellings `typeof` and `asm`,
-and the features of later revisions, need `gnu99!`. Inline *assembly* is a clear
-error rather than a guess, and so is every other extension with no honest
-translation. [`doc/gnu-extensions.md`](gnu-extensions.md) is the catalogue, row
-by row.
+and the features of later revisions, need `gnu99!`. Inline *assembly* becomes
+Rust's `asm!` for the operand kinds `asm!` has — see [Inline
+assembly](#inline-assembly) — and the rest of it is a clear error rather than a
+guess, as is every other extension with no honest translation.
+[`doc/gnu-extensions.md`](gnu-extensions.md) is the catalogue, row by row.
 
 ## `__int128`
 
@@ -540,8 +541,9 @@ The only Rust an intrinsic produces is the call.
 * **Twenty-two names the generator left out**, each for a reason it prints.
   Ten are **deprecated** in `core::arch` and would warn on every use:
   `_mm_getcsr`, `_mm_setcsr` and the eight `_MM_GET_*`/`_MM_SET_*` wrappers over
-  them, which read and write the SSE control word — write the value you want
-  through a `__m128` and an intrinsic, or drop to inline assembly in Rust. Ten
+  them, which read and write the SSE control word — write
+  `asm volatile("stmxcsr (%0)" : : "r"(&csr) : "memory")` and its `ldmxcsr`
+  twin instead (see [Inline assembly](#inline-assembly)). Ten
   are **not stable** yet: the SM3, SM4 and SHA-512 intrinsics. And two take a
   Rust *reference* for an output: `_mulx_u32` and `_mulx_u64`, whose high half
   goes through `&mut`.
@@ -563,6 +565,131 @@ a `__m256` in a register is only possible with AVX enabled, so rustc refuses the
 definition and the call without it — the same reason `gcc -Wpsabi` warns about
 the same C. A 128-bit vector needs nothing, because SSE2 is the baseline. Both
 are documented in [Limitations](limitations.md).
+
+## Inline assembly
+
+GCC's extended asm and Rust's `asm!` are the same model — an opaque template
+and a list of operands, each with a constraint that says where it lives — so
+for the shapes real C writes (`rdtsc`, `cpuid`, `pause`, a bit scan, an
+`xchg`, a `mul` into `edx:eax`, `asm volatile("" ::: "memory")`) the
+translation is mechanical, and cinrs does it: **an `asm` statement becomes
+`::core::arch::asm!`.** `asm`, `__asm` and `__asm__` with `volatile`, `inline`
+and their double-underscore spellings all work; the plain `asm` is `gnu99!`'s,
+as it is in GCC. What `asm!` cannot say is refused, naming the constraint or
+the feature and the rewrite, because an `asm!` whose meaning differed from
+GCC's would be worse than none.
+
+```c
+asm("addl %2, %0" : "=r"(s) : "r"(b), "0"(a) : "rcx");
+```
+
+becomes
+
+```rust
+::core::arch::asm!(
+    "addl {o0:e}, {o0:e} /* {o1:e} */",
+    o0 = inout(reg) a as ::core::ffi::c_int => s,
+    o1 = in(reg) b,
+    out("rcx") _,
+    options(att_syntax),
+);
+```
+
+Every operand the template can refer to is **named** — `o` and its GCC number
+— because `asm!` refuses a positional operand after an explicit-register one
+and GCC puts no order on its operands. The template stays AT&T, which is what
+GCC's x86 templates are, so `options(att_syntax)` is always there, and nothing
+else is: `asm!` without options is volatile, reads and writes memory and
+clobbers the flags, which is GCC's most conservative reading of an `asm`, so
+`pure`, `nomem`, `readonly`, `preserves_flags` and `nostack` are never added.
+A tied input (`"0"`) is folded into the output it is tied to, and a `%2` that
+names it names that output. An operand the template never mentions — an input
+there only to keep a value live — is mentioned in a trailing assembler comment,
+because `asm!` calls an unused named operand an error and GCC does not.
+
+| GCC | `asm!` |
+| --- | --- |
+| `"r"`, and `"g"`, `"rm"`, `"ri"` (the register is chosen) | `reg`, or `reg_byte` for an 8-bit value |
+| `"=r"`, `"=&r"`, `"+r"` | `lateout`, `out`, `inout` |
+| `"q"`, `"Q"` | as `"r"`; `reg_abcd` on 32-bit x86 |
+| `"a"`, `"c"`, `"d"`, `"S"`, `"D"` | that register at the operand's width: `in("al")`, `in("eax")`, `in("rax")`, … |
+| `"x"` | `xmm_reg` |
+| `"i"`, `"n"` | `const`, folded to a constant, and written `${oN}` in the template |
+| `"0"` … `"9"` (tied to an output) | `inout(…) input => output` |
+| `%0`, `%[name]` | `{o0}` at the operand's width — `{o0:e}` for 32 bits, `{o0:x}` for 16 — or the register itself for an explicit one |
+| `%k0`, `%w0`, `%b0`, `%h0`, `%q0` | `{o0:e}`, `{o0:x}`, `{o0:l}`, `{o0:h}` (in `reg_abcd`), `{o0:r}` |
+| `%%`, `%{`, `%}`, `%\|` | `%`, `{{`, `}}`, `\|` |
+| clobber `"rax"`, `"ecx"`, `"xmm0"`, … | `out("rax") _` |
+| clobber `"memory"`, `"cc"` | nothing: `asm!` assumes both |
+
+Where a constraint offers a register *or* memory, the register is chosen, which
+may change the instruction GCC would have picked but not what the statement
+does. An explicit register cannot be named from an `asm!` template, so a `%0`
+that refers to `"a"` is written as the register — `%eax`, or `%al`, `%ax`,
+`%rax`, `%ah` for the modifiers. The operand types are C's own integers,
+pointers, `float` and `double` (and the 128-bit vector types in `"x"`); a
+`_Bool`, an `__int128` or a `struct` operand is refused. An output may be any
+lvalue but a bit-field: a member, an element, `*p`. The place's own side
+effects — the `i++` in `a[i++]` — happen once. **Basic asm**, with no colon,
+is its template and `options(att_syntax)`: `asm("mfence")`,
+`__asm__ __volatile__("pause")`.
+
+`asm!` is `unsafe`, which every generated function body already is, so inline
+assembly works in any function **but a `[[cinrs::safe]]` one**, where it is
+refused by name. It needs only `core`, so it works under `#pragma cinrs
+no_std`. It is **x86 and x86-64 only**: the template is one architecture's
+assembly and the operand mapping is x86's registers, so an `asm` for another
+target is a located error.
+
+**What is refused, and what to write instead.**
+
+* **A memory operand** — `"m"`, `"+m"`, `"=m"`, `"o"`, `"V"`, `"p"`. `asm!` has
+  none. Pass the address in a register and write the memory reference in the
+  template: `asm("incl (%0)" : : "r"(&x) : "memory")`. The template is not
+  rewritten for you.
+* **`rbx`** — the `"b"` constraint, and `rbx`, `ebx`, `bx` or `bl` as a clobber.
+  rustc keeps rbx for LLVM and refuses it as an operand or a clobber. Save and
+  restore it in the template around the instruction, with an early-clobbered
+  register for the value: `"xchgq %%rbx, %q1\n\tcpuid\n\txchgq %%rbx, %q1"` and
+  `"=&r"(b)`. That is what GCC's own `<cpuid.h>` does for 32-bit PIC code, and
+  what the bundled one does — see below. `rsp` and `rbp` are refused too.
+* **`%=`**, the number unique to each instance of a statement. `asm!` has no
+  such number; a GNU as local label is the same thing: `1:` … `jnz 1b`.
+* **`asm goto`**, and `%l0`. Not in this release: the jump to a C label has to
+  go through the function's control flow. Branch in C on a value the `asm`
+  sets.
+* **Flag outputs** (`"=@ccz"`). `asm!` has none; set a byte register from the
+  flag in the template (`setz %b0`) with `"=q"`.
+* **`"A"`**, the `edx:eax` pair: use `"=a"` and `"=d"` with two variables.
+* **The x87 and MMX registers** — `"f"`, `"t"`, `"u"`, `"y"` — which `asm!`
+  has no operand for, and `"X"`, `"R"` and the `"Y…"` family.
+* **The range-checked immediates** `"I"` … `"O"`, `"e"`, `"Z"`: write `"i"`.
+* **`%c0`, `%P0`, `%a0`**, which print a constant or an address bare: write the
+  operand with `"i"` and `%0`, or pass the address in a register.
+* **Intel syntax**: a template that opens with `.intel_syntax`, and GCC's
+  dialect alternatives `{att|intel}`. Write the AT&T form; `%{` and `%}` are a
+  literal brace.
+* **`register int x asm("eax")`**, a register variable: write the register as a
+  constraint of the `asm` that uses it, `"a"(x)`.
+
+**`<cpuid.h>`** is bundled, because GCC's names rbx as an operand. The same
+names mean the same things: `__cpuid(leaf, a, b, c, d)` and
+`__cpuid_count(leaf, subleaf, a, b, c, d)` store the four registers into four
+lvalues, `__get_cpuid_max(ext, &sig)` returns the highest leaf of a range,
+`__get_cpuid` and `__get_cpuid_count` fill four pointers and return 0 for a leaf
+the processor does not have, and the `bit_*` macros (`bit_SSE2`, `bit_AVX2`,
+`bit_BMI2`, …) and `signature_INTEL_ebx` and friends decode the answer. It is
+C on the `xchg` idiom above, nothing more. It narrows two things GCC leaves
+undefined: `__get_cpuid` passes subleaf 0 in ecx, which matters for leaf 7, and
+on 32-bit x86 `__get_cpuid_max` does not first test the EFLAGS ID bit for a
+processor older than the Pentium. On a target that is not x86 it is an `#error`
+naming the reason. `__builtin_cpu_supports` (above) is still the simpler way to
+ask about one instruction set.
+
+`tests/inline_asm.rs` runs all of this — every operand kind, the modifiers,
+member and pointer outputs, `asm` in a loop, a `switch` and a function with a
+`goto`, and `<cpuid.h>` against Rust's own `__cpuid` — with the values `gcc -O2`
+printed for the same C.
 
 ## Thread-local objects
 

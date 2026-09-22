@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **85.7 %** (`gnu11!`), 85.3 % (`gnu89!`); 89.0 % / 88.6 % on `beta` | 253: 0 bug, 3 unimplemented, 189 not planned, 61 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **89.1 %** (`gnu11!`), 88.8 % (`gnu89!`); 92.6 % / 92.2 % on `beta` | 192: 0 bug, 3 unimplemented, 127 not planned, 62 toolchain |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -39,13 +39,13 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,516 of the 1,769 run are correct (85.7 %)** under
-  `gnu11!` — 1,412 passing and 104 refused as C99 requires — and 1,509
-  (85.3 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,577 of the 1,769 run are correct (89.1 %)** under
+  `gnu11!` — 1,473 passing and 104 refused as C99 requires — and 1,570
+  (88.8 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses none of them; on `beta`, where a variadic definition
-  compiles, the same runs are 1,574 (89.0 %) and 1,567 (88.6 %). **Not one of
-  the 253 errors is a bug**; they are inline assembly, the vector extensions,
-  the complex
+  compiles, the same runs are 1,638 (92.6 %) and 1,631 (92.2 %). **Not one of
+  the 192 errors is a bug**; they are the memory operands and x87 registers of
+  inline assembly, the vector extensions, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
   implement, the definitions and `va_list`s that need Rust 1.99, and five
@@ -221,15 +221,15 @@ report breaks its error count down into them, in this order:
 | --- | --- | --- |
 | **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
 | **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
-| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: inline assembly, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
+| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the memory operands and x87 registers of inline assembly, which `asm!` has no operand for, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
 | **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. Today that is `c_variadic`, stable in 1.99 — a variadic *definition*, a `va_list` object, or a `va_list *`. |
 
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1516/1769 correct (85.7%) — 1412 passed, 104 rejected as the standard requires
-  errors: 253 — bug 0, unimplemented 3, not planned 189, toolchain 61
-  (7 not generated) — 4 m 22 s
+gcc.c-torture/execute through `gnu11!`: 1577/1769 correct (89.1%) — 1473 passed, 104 rejected as the standard requires
+  errors: 192 — bug 0, unimplemented 3, not planned 127, toolchain 62
+  (7 not generated) — 4 m 14 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.
@@ -239,7 +239,7 @@ and the old numbers are still there: `passed` is the pass rate's numerator.
 One id per line: a marker, the id, a category tag and a note.
 
 ```
-execute/20001009-2  [not-planned]    compile error: inline assembly is not supported
+execute/20061220-1  [not-planned]    compile error: the constraint "m" asks for a memory operand, …
 00213               [unimplemented]  unsupported: a `goto` out of a statement expression
 ?00140                               variadic function definition; needs Rust 1.99
 !00200                               error: "'long long' requires C99 or later"  conforming: …
@@ -363,12 +363,13 @@ Against what the three suites already do:
   has a counterpart among c-testsuite's 220 whole programs and, far more
   thoroughly, among the torture suite's 1,776. Forty files against 2,270 is not
   where the next conformance bug is hiding.
-* **What is *not* duplicated is largely what `cinrs` documents as
-  unsupported.** `asm.c` is inline assembly — a located error on purpose. It
-  would become an `!` entry on day one and teach nothing. (`unicode.c` was a
-  second until the `u8"…"`/`u"…"`/`U"…"` literals and extended identifiers
-  landed, `tls.c` a third until `_Thread_local` did, and `atomic.c` a fourth
-  until `_Atomic` did; `tests/c11.rs`, `tests/c23.rs`,
+* **What is *not* duplicated was largely what `cinrs` documented as
+  unsupported, and has since landed.** `asm.c` is inline assembly, which was a
+  located error on purpose and now translates to `asm!` for the operand kinds
+  `asm!` has; `tests/inline_asm.rs` covers that ground against `gcc -O2`'s
+  answers. (`unicode.c` was a second until the `u8"…"`/`u"…"`/`U"…"` literals
+  and extended identifiers landed, `tls.c` a third until `_Thread_local` did,
+  and `atomic.c` a fourth until `_Atomic` did; `tests/c11.rs`, `tests/c23.rs`,
   `tests/identifiers.rs`, `tests/threads.rs` and `tests/atomics.rs` cover that
   ground now.)
 * **It is not nearly free.** Every case has to be *linked against a second
