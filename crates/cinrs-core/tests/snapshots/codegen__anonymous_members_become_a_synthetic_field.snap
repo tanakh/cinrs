@@ -3,34 +3,30 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        struct Value {\n            int tag;\n            union {\n                int as_int;\n                double as_double;\n            };\n        };\n\n        int read(struct Value *v) { return v->as_int; }\n        void write(struct Value *v, double d) { v->as_double = d; }\n        struct Value make(void) {\n            struct Value v = { .tag = 2, .as_double = 1.5 };\n            return v;\n        }\n        unsigned long where(void) { return __builtin_offsetof(struct Value, as_double); }\n        \"#)"
 ---
 mod __cinrs_unit_fdfea189 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Value {
         pub tag: ::core::ffi::c_int,
         pub __cinrs_anon0: __cinrs_fdfea189_union0,
     }
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub union __cinrs_fdfea189_union0 {
         pub as_int: ::core::ffi::c_int,
         pub as_double: ::core::ffi::c_double,
     }
-    #[allow(…)]
     pub unsafe extern "C" fn read(mut v: *mut Value) -> ::core::ffi::c_int {
         unsafe {
             return (*v).__cinrs_anon0.as_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn write(mut v: *mut Value, mut d: ::core::ffi::c_double) {
         unsafe {
             (*v).__cinrs_anon0.as_double = d;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn make() -> Value {
         unsafe {
             let mut v: Value = Value {
@@ -42,7 +38,6 @@ mod __cinrs_unit_fdfea189 {
             return v;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn r#where() -> ::core::ffi::c_ulong {
         unsafe {
             return 8;

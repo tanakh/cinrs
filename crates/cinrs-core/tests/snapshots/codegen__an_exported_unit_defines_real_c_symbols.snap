@@ -3,26 +3,22 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        #pragma cinrs export\n\n        int counter;\n        static int hidden;\n\n        inline int helper(int n) { return n + 1; }\n        static int secret(int n) { return n - 1; }\n        int match(int n) { return helper(n); }\n        \"#)"
 ---
 mod __cinrs_unit_d2da4ea0 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[unsafe(no_mangle)]
     pub static mut counter: ::core::ffi::c_int = 0;
-    #[allow(…)]
     static mut hidden: ::core::ffi::c_int = 0;
-    #[allow(…)]
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn helper(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return n.wrapping_add(1);
         }
     }
-    #[allow(…)]
     unsafe extern "C" fn secret(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return n.wrapping_sub(1);
         }
     }
-    #[allow(…)]
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn r#match(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {

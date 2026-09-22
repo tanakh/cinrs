@@ -5,11 +5,13 @@ into, and what Rust code that reads or calls it has to know. [What
 works](features.md) is the tour of the language; this is the shape of the
 output.
 
-Two conventions in the snippets below. Every generated item carries an
-`#[allow(…)]` list (`non_camel_case_types`, `unused_parens`, `clippy::all` and
-two dozen more — C is not idiomatic Rust), and it is left out here. So is the
-`::core::` prefix the expansion writes in full: `c_int` below is
-`::core::ffi::c_int`.
+Two conventions in the snippets below. The unit's module opens with an
+`#![allow(…)]` list (`non_camel_case_types`, `unused_parens`, `clippy::all`
+and two dozen more — C is not idiomatic Rust) that every item inside it
+inherits; it is shown once, under [The shape of an
+expansion](#the-shape-of-an-expansion), and left out of every snippet after
+that. So is the `::core::` prefix the expansion writes in full: `c_int` below
+is `::core::ffi::c_int`.
 
 **Contents**
 
@@ -34,6 +36,7 @@ two dozen more — C is not idiomatic Rust), and it is left out here. So is the
 
 ```rust
 mod __cinrs_unit_ab49b1a7 {
+    #![allow(unknown_lints, non_camel_case_types, unused_parens, /* … */ clippy::all)]
     const _: () = { /* the data-model assertions */ };
     // the unit's items
 }
@@ -46,6 +49,13 @@ see [One block, one module](#one-block-one-module). The `const _` block states
 the [target model](cross-compilation.md#the-assertion-that-guards-it) the unit
 was translated for, so a wrong model is a compile error rather than a wrong
 `sizeof`.
+
+The lint exemptions are an *inner* attribute on the module and therefore
+written once, however many items the unit has: lint levels are inherited, so
+one list covers everything inside — `rustc`'s lints and clippy's alike — and a
+crate that denies warnings at its root sees nothing from the generated code.
+(Once per item is what this replaced: for `#include <zlib.h>`, which generates
+419 items, the repeated list was 83% of the expansion.)
 
 ## Functions
 

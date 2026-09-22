@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int shadowing(int n) {\n            int total = 0;\n            { int x = 1; total += x; }\n            { int x = 20; { int x = 300; total += x; } total += x; }\n            if (n) goto inside;\n            while (n < 0) {\n            inside:\n                total = -1;\n                n++;\n            }\n            return total;\n        }\n        \")"
 ---
 mod __cinrs_unit_386f1989 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn shadowing(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let mut total: ::core::ffi::c_int = 0;

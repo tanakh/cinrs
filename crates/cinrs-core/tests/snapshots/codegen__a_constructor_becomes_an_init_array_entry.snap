@@ -3,35 +3,29 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        static int started;\n        __attribute__((constructor)) static void begin(void) { started = 1; }\n        __attribute__((destructor)) static void end(void) { started = 0; }\n        int has_started(void) { return started; }\n        \"#)"
 ---
 mod __cinrs_unit_09a188b0 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     static mut started: ::core::ffi::c_int = 0;
-    #[allow(…)]
     unsafe extern "C" fn begin() {
         unsafe {
             started = 1;
         }
     }
-    #[allow(…)]
     unsafe extern "C" fn end() {
         unsafe {
             started = 0;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn has_started() -> ::core::ffi::c_int {
         unsafe {
             return started;
         }
     }
-    #[allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[used]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,__mod_init_func"))]
     #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".init_array"))]
     static __CINRS_INIT_09a188b0_begin: unsafe extern "C" fn() = begin;
-    #[allow(…)]
     #[used]
     #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,__mod_term_func"))]
     #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".fini_array"))]

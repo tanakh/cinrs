@@ -3,28 +3,24 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #define WIDTH 4\n        #define AREA(h) (WIDTH * (h))\n        #define MAX(a, b) ((a) > (b) ? (a) : (b))\n        #define ACCESSOR(name, expr) int name(void) { return expr; }\n\n        #if WIDTH >= 4\n        #define WIDE 1\n        #else\n        #define WIDE 0\n        #endif\n\n        ACCESSOR(width, WIDTH)\n        ACCESSOR(area_of_three, AREA(3))\n        ACCESSOR(is_wide, WIDE)\n\n        int clamp(int v) {\n            return MAX(v, WIDTH);\n        }\n\n        int table[WIDTH];\n        \")"
 ---
 mod __cinrs_unit_b637b67f {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub static mut table: [::core::ffi::c_int; 4] = [0; 4];
-    #[allow(…)]
     pub unsafe extern "C" fn width() -> ::core::ffi::c_int {
         unsafe {
             return 4;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn area_of_three() -> ::core::ffi::c_int {
         unsafe {
             return (4 as ::core::ffi::c_int).wrapping_mul(3);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn is_wide() -> ::core::ffi::c_int {
         unsafe {
             return 1;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn clamp(mut v: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return if v > 4 { v } else { 4 };

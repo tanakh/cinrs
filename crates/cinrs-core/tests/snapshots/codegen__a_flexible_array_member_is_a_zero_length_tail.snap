@@ -3,15 +3,14 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        struct Buffer { int len; int data[]; };\n\n        int sum(struct Buffer *b) {\n            int total = 0;\n            for (int i = 0; i < b->len; i++) total += b->data[i];\n            return total;\n        }\n\n        unsigned long header_size(void) { return sizeof(struct Buffer); }\n        \"#)"
 ---
 mod __cinrs_unit_517f0d70 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Buffer {
         pub len: ::core::ffi::c_int,
         pub data: [::core::ffi::c_int; 0],
     }
-    #[allow(…)]
     pub unsafe extern "C" fn sum(mut b: *mut Buffer) -> ::core::ffi::c_int {
         unsafe {
             let mut total: ::core::ffi::c_int = 0;
@@ -36,7 +35,6 @@ mod __cinrs_unit_517f0d70 {
             return total;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn header_size() -> ::core::ffi::c_ulong {
         unsafe {
             return 4;

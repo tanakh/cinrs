@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #pragma cinrs safe twice\n\n        __attribute__((cinrs_safe)) int fact(int n) {\n            if (n == 0) {\n                return 1;\n            } else {\n                return n * fact(n - 1);\n            }\n        }\n\n        int twice(int n) { return fact(n) + fact(n); }\n        \")"
 ---
 mod __cinrs_unit_db09a126 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub extern "C" fn fact(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         if n == 0 {
             return 1;
@@ -12,7 +12,6 @@ mod __cinrs_unit_db09a126 {
             return n.wrapping_mul(fact(n.wrapping_sub(1)));
         }
     }
-    #[allow(…)]
     pub extern "C" fn twice(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         return fact(n).wrapping_add(fact(n));
     }

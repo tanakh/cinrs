@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        double corner(int n, int m) {\n            double a[n][m];\n            a[1][2] = 3;\n            double (*row)[m] = a;\n            return a[1][2] + (double)sizeof a + (double)sizeof row[0] + (*row)[0];\n        }\n\n        double at(int n, int m, double a[n][m], int i, int j) {\n            return a[i][j] + (double)(sizeof a[0] / sizeof a[0][0]);\n        }\n        \"#)"
 ---
 mod __cinrs_unit_514a36ce {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn corner(
         mut n: ::core::ffi::c_int,
         mut m: ::core::ffi::c_int,
@@ -46,7 +46,6 @@ mod __cinrs_unit_514a36ce {
                 });
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn at(
         mut n: ::core::ffi::c_int,
         mut m: ::core::ffi::c_int,

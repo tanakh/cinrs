@@ -2,7 +2,7 @@
 source: crates/cinrs-core/tests/codegen.rs
 expression: attribute
 ---
-#[allow(
+#![allow(
     unknown_lints,
     arithmetic_overflow,
     clashing_extern_declarations,

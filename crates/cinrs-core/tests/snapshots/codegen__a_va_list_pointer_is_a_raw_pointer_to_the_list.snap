@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #include <stdarg.h>\n\n        int two(va_list *ap) {\n            int a = va_arg(*ap, int);\n            int b = va_arg(*ap, int);\n            return a + b;\n        }\n\n        int total(int n, ...) {\n            va_list ap;\n            va_start(ap, n);\n            va_list *p = &ap;\n            int s = two(p);\n            s += va_arg(*p, int);\n            va_end(ap);\n            return s;\n        }\n        \")"
 ---
 mod __cinrs_unit_ff4f7f80 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn two(
         mut ap: *mut ::core::ffi::VaList,
     ) -> ::core::ffi::c_int {
@@ -14,7 +14,6 @@ mod __cinrs_unit_ff4f7f80 {
             return a.wrapping_add(b);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn total(
         mut n: ::core::ffi::c_int,
         __cinrs_va: ...

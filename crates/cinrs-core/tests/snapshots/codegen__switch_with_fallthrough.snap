@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int classify(int n) {\n            int out = 0;\n            switch (n) {\n                case 0:\n                case 1:\n                    out += 1;\n                case 2:\n                    out += 10;\n                    break;\n                default:\n                    out = -1;\n            }\n            return out;\n        }\n        \")"
 ---
 mod __cinrs_unit_7bb0d305 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn classify(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let mut out: ::core::ffi::c_int = 0;

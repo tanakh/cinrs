@@ -3,13 +3,12 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int interp(int n) {\n            static void *table[] = { &&add, &&done };\n            int total = 0;\n            int i = 0;\n            goto *table[i];\n        add:\n            total += n;\n            i = 1;\n            goto *table[i];\n        done:\n            return total;\n        }\n        \")"
 ---
 mod __cinrs_unit_33d25611 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     static mut __cinrs_static_33d25611_interp_table: [*mut ::core::ffi::c_void; 2] = [
         1usize as *mut ::core::ffi::c_void,
         2usize as *mut ::core::ffi::c_void,
     ];
-    #[allow(…)]
     pub unsafe extern "C" fn interp(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let mut total: ::core::ffi::c_int = 0;

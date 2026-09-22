@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        int max(int a, int b) {\n            return ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; });\n        }\n\n        int side_effects(int n) {\n            return ({ int total = 0; for (int i = 0; i < n; i++) total += i; total; });\n        }\n\n        int elvis(int a, int b) { return a ?: b; }\n        \"#)"
 ---
 mod __cinrs_unit_7b2b5b9a {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn max(
         mut a: ::core::ffi::c_int,
         mut b: ::core::ffi::c_int,
@@ -17,7 +17,6 @@ mod __cinrs_unit_7b2b5b9a {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn side_effects(
         mut n: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
@@ -40,7 +39,6 @@ mod __cinrs_unit_7b2b5b9a {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn elvis(
         mut a: ::core::ffi::c_int,
         mut b: ::core::ffi::c_int,

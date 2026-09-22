@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        unsigned long strlen(const char *s);\n        int printf(const char *fmt, ...);\n        extern int errno;\n\n        static const char *messages[2] = {\"ok\", \"failed\"};\n\n        int report(int failed) {\n            const char *message = messages[failed != 0];\n            printf(\"%s (%lu)\\n\", message, strlen(message));\n            return errno;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_5cdf88e1 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     unsafe extern "C" {
         #[link_name = "errno"]
         pub static mut __cinrs_5cdf88e1_errno: ::core::ffi::c_int;
@@ -13,14 +13,12 @@ mod __cinrs_unit_5cdf88e1 {
         #[link_name = "printf"]
         pub fn printf(fmt: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
     }
-    #[allow(…)]
     static mut messages: [*const ::core::ffi::c_char; 2] = [
         b"ok\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
             as *const ::core::ffi::c_char,
         b"failed\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
             as *const ::core::ffi::c_char,
     ];
-    #[allow(…)]
     pub unsafe extern "C" fn report(
         mut failed: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {

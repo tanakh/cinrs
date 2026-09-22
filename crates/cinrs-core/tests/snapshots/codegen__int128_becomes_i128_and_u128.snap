@@ -3,15 +3,14 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        __int128 mul_high(long long a, long long b) {\n            __int128 product = (__int128) a * (__int128) b;\n            return product >> 64;\n        }\n\n        unsigned __int128 divide(unsigned __int128 v) {\n            return v / 3;\n        }\n\n        struct Wide { int tag; unsigned __int128 value; };\n\n        unsigned long widths(void) {\n            return sizeof (struct Wide) + __alignof__(__int128) + sizeof (__int128_t);\n        }\n\n        __uint128_t from_typedef(__int128_t v) { return (__uint128_t) v; }\n        \")"
 ---
 mod __cinrs_unit_fb37e547 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Wide {
         pub tag: ::core::ffi::c_int,
         pub value: ::core::primitive::u128,
     }
-    #[allow(…)]
     pub unsafe extern "C" fn mul_high(
         mut a: ::core::ffi::c_longlong,
         mut b: ::core::ffi::c_longlong,
@@ -22,7 +21,6 @@ mod __cinrs_unit_fb37e547 {
             return product.wrapping_shr(64);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn divide(
         mut v: ::core::primitive::u128,
     ) -> ::core::primitive::u128 {
@@ -30,13 +28,11 @@ mod __cinrs_unit_fb37e547 {
             return v / 3;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn widths() -> ::core::ffi::c_ulong {
         unsafe {
             return (32 as ::core::ffi::c_ulong).wrapping_add(16).wrapping_add(16);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn from_typedef(
         mut v: ::core::primitive::i128,
     ) -> ::core::primitive::u128 {

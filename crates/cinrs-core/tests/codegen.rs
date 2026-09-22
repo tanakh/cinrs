@@ -13,12 +13,13 @@ use proc_macro2::{TokenStream, TokenTree};
 
 /// Expands `source` and pretty-prints the result.
 ///
-/// The long `#[allow(…)]` every item carries is collapsed to a placeholder: it
-/// is identical everywhere and covered by its own test, so leaving it in would
-/// bury the code these snapshots exist to show. The short one on the glob
-/// re-export is left alone, since it says something about that line. The
-/// [data-model check](the_data_model_is_asserted) every unit opens with is
-/// collapsed for the same reason.
+/// The long `#![allow(…)]` at the head of the unit's module is collapsed to a
+/// placeholder: it is the same in every expansion and covered by its own test,
+/// so leaving it in would bury the code these snapshots exist to show. The
+/// short `#[allow(…)]` on the glob re-export is left alone, since it says
+/// something about that line. The [data-model
+/// check](the_data_model_is_asserted) every unit opens with is collapsed for
+/// the same reason.
 fn generate(source: &str) -> String {
     generate_for(Standard::C99, source)
 }
@@ -100,30 +101,24 @@ fn collapse_data_model_check(code: &str) -> String {
     out
 }
 
-/// Replaces the long lint exemption every generated item carries with a
-/// placeholder.
+/// Replaces the unit module's lint exemption with a placeholder.
 ///
-/// It is identical everywhere and has a test of its own, so leaving it in
-/// would bury the code these snapshots exist to show. Matching is on the
+/// It is the same in every expansion and has a test of its own, so leaving it
+/// in would bury the code these snapshots exist to show. Matching is on the
 /// *text* rather than on whole lines because `prettyplease` wraps the list
-/// differently inside a macro invocation than in front of an item; the short
-/// `#[allow(…)]` on the glob re-export says something about that line and is
-/// recognised by not mentioning `clippy::all`.
+/// differently depending on how deep the module sits. The short `#[allow(…)]`
+/// on the glob re-export is an *outer* attribute and is therefore left alone,
+/// which is what says something about that line.
 fn collapse_allow_attributes(code: &str) -> String {
-    const OPEN: &str = "#[allow(";
+    const OPEN: &str = "#![allow(";
     const CLOSE: &str = ")]";
     let mut out = String::with_capacity(code.len());
     let mut rest = code;
     while let Some(start) = rest.find(OPEN) {
         let after = &rest[start + OPEN.len()..];
         let Some(end) = after.find(CLOSE) else { break };
-        if !after[..end].contains("clippy::all") {
-            out.push_str(&rest[..start + OPEN.len() + end + CLOSE.len()]);
-            rest = &after[end + CLOSE.len()..];
-            continue;
-        }
         out.push_str(&rest[..start]);
-        out.push_str("#[allow(…)]");
+        out.push_str("#![allow(…)]");
         rest = &after[end + CLOSE.len()..];
     }
     out.push_str(rest);
@@ -132,17 +127,22 @@ fn collapse_allow_attributes(code: &str) -> String {
 
 /// The lint exemptions are part of the contract: a naive translation of C
 /// trips a lot of Rust lints, and a user must never see them.
+///
+/// One inner attribute at the head of the unit's module covers every item
+/// inside it, which is what keeps the expansion from being four fifths
+/// `#[allow(…)]`; see `cinrs_core`'s `in_module`.
 #[test]
-fn generated_items_carry_the_lint_exemptions() {
+fn the_unit_module_carries_the_lint_exemptions() {
     let input = TokenStream::from_str("int f(void) { return 0; }").expect("valid tokens");
     let output = expand(input, &Options::new(Standard::C99));
     let file: syn::File = syn::parse2(output).expect("valid Rust");
-    // The items live one module deep; the list itself is what is snapshotted,
-    // so it is taken back out to the left margin.
+    // The attribute is the first thing in the module body, as an inner one has
+    // to be; the list itself is what is snapshotted, so it is taken back out to
+    // the left margin.
     let attribute = prettyplease::unparse(&file)
         .lines()
-        .skip_while(|line| !line.trim_start().starts_with("#[allow("))
-        .take_while(|line| !line.trim_start().starts_with("pub "))
+        .skip_while(|line| !line.trim_start().starts_with("#![allow("))
+        .take_while(|line| !line.trim_start().starts_with("const "))
         .map(|line| line.strip_prefix("    ").unwrap_or(line))
         .collect::<Vec<_>>()
         .join("\n");

@@ -3,13 +3,12 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        static void note(int *p);\n\n        int jumping(int c) {\n            int a __attribute__((cleanup(note))) = 1;\n            if (c < 0) goto inside;\n            while (c) {\n                int b __attribute__((cleanup(note))) = 2;\n                if (b) {\n                    continue;\n                }\n            inside:\n                goto out;\n            }\n            return a;\n        out:\n            return 0;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_ed73c93d {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     unsafe extern "C" {
         #[link_name = "note"]
         pub fn note(p: *mut ::core::ffi::c_int);
     }
-    #[allow(…)]
     pub unsafe extern "C" fn jumping(mut c: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let mut a: ::core::ffi::c_int = 0;

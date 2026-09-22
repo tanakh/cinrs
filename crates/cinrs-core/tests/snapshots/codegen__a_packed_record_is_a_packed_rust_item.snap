@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        struct __attribute__((packed)) Header {\n            unsigned char kind;\n            unsigned int length;\n            unsigned short flags : 12;\n        };\n\n        #pragma pack(2)\n        struct Halved { char c; int x; short s; };\n        #pragma pack()\n\n        struct Moved { char c; __attribute__((aligned(16))) int x; };\n\n        unsigned int length_of(struct Header *h) { return h->length; }\n        \"#)"
 ---
 mod __cinrs_unit_a87d9fcd {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C, packed)]
     #[derive(Copy, Clone)]
     pub struct Header {
@@ -12,7 +12,6 @@ mod __cinrs_unit_a87d9fcd {
         pub length: ::core::ffi::c_uint,
         pub __cinrs_bits0: [::core::primitive::u8; 2],
     }
-    #[allow(…)]
     impl Header {
         #[inline]
         pub fn flags(&self) -> ::core::ffi::c_ushort {
@@ -33,7 +32,6 @@ mod __cinrs_unit_a87d9fcd {
             self.__cinrs_bits0[1] = (raw >> 8) as ::core::primitive::u8;
         }
     }
-    #[allow(…)]
     #[repr(C, packed(2))]
     #[derive(Copy, Clone)]
     pub struct Halved {
@@ -41,7 +39,6 @@ mod __cinrs_unit_a87d9fcd {
         pub x: ::core::ffi::c_int,
         pub s: ::core::ffi::c_short,
     }
-    #[allow(…)]
     #[repr(C, align(16))]
     #[derive(Copy, Clone)]
     pub struct Moved {
@@ -49,7 +46,6 @@ mod __cinrs_unit_a87d9fcd {
         pub __cinrs_pad0: [::core::primitive::u8; 15],
         pub x: ::core::ffi::c_int,
     }
-    #[allow(…)]
     pub unsafe extern "C" fn length_of(mut h: *mut Header) -> ::core::ffi::c_uint {
         unsafe {
             return (*h).length;

@@ -3,13 +3,12 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        _Noreturn void die(const char *why);\n\n        int checked(int n) {\n            if (n > 0) return n;\n            die(\"not positive\");\n        }\n        \"#)"
 ---
 mod __cinrs_unit_a52dbf73 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     unsafe extern "C" {
         #[link_name = "die"]
         pub fn die(why: *const ::core::ffi::c_char);
     }
-    #[allow(…)]
     pub unsafe extern "C" fn checked(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             if n > 0 {

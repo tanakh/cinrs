@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #include <stddef.h>\n\n        struct Mixed { char tag; int count; double weight; };\n        struct Nested { int head; struct Mixed rows[4]; };\n\n        size_t weight_offset(void) {\n            return offsetof(struct Mixed, weight);\n        }\n\n        char probe[offsetof(struct Nested, rows[2].count)];\n        \")"
 ---
 mod __cinrs_unit_a33ac3ff {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Mixed {
@@ -12,22 +12,16 @@ mod __cinrs_unit_a33ac3ff {
         pub count: ::core::ffi::c_int,
         pub weight: ::core::ffi::c_double,
     }
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Nested {
         pub head: ::core::ffi::c_int,
         pub rows: [Mixed; 4],
     }
-    #[allow(…)]
     pub type size_t = ::core::ffi::c_ulong;
-    #[allow(…)]
     pub type ptrdiff_t = ::core::ffi::c_long;
-    #[allow(…)]
     pub type wchar_t = ::core::ffi::c_int;
-    #[allow(…)]
     pub static mut probe: [::core::ffi::c_char; 44] = [0; 44];
-    #[allow(…)]
     pub unsafe extern "C" fn weight_offset() -> ::core::ffi::c_ulong {
         unsafe {
             return 8;

@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        void *first(unsigned long n) {\n            char *a = __builtin_alloca(n);\n            char *b = __builtin_alloca(2 * n);\n            a[0] = b[0];\n            return a;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_6af487af {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn first(
         mut n: ::core::ffi::c_ulong,
     ) -> *mut ::core::ffi::c_void {

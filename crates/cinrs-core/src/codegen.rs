@@ -15,7 +15,6 @@
 //! functions. A C function becomes
 //!
 //! ```text
-//! #[allow(…)]
 //! pub unsafe extern "C" fn name(mut p: ::core::ffi::c_int) -> ::core::ffi::c_int {
 //!     unsafe { … }
 //! }
@@ -27,9 +26,13 @@
 //! Rust module both `#include` the same header. `#[inline]` is added for an
 //! `inline` function, and the body is wrapped in a single `unsafe` block
 //! because edition 2024 no longer treats the body of an `unsafe fn` as an
-//! unsafe block. The `#[allow(…)]` list covers everything a naive translation
-//! provokes: unused bindings, redundant parentheses, non-Rust naming, code a
-//! human can see is unreachable, and so on.
+//! unsafe block. Nothing here carries a lint exemption of its own: everything
+//! this module generates goes inside that one module, whose head carries a
+//! single `#![allow(…)]` — an inner attribute, so every item under it
+//! inherits it — for everything a naive translation provokes: unused
+//! bindings, redundant parentheses, non-Rust naming, code a human can see is
+//! unreachable, and so on. [`crate::expand`] is what writes it, and says why
+//! it is written once per unit rather than once per item.
 //!
 //! A function the unit marked [safe](crate::sema::check_safe) —
 //! `[[cinrs::safe]]`, `__attribute__((cinrs_safe))` or `#pragma cinrs safe` —
@@ -901,39 +904,6 @@ fn cleanup_guard_ty() -> Ident {
     Ident::new("__cinrs_cleanup", Span::mixed_site())
 }
 
-fn allow_attr(span: Span) -> TokenStream {
-    quote_spanned! {span=>
-        #[allow(
-            unknown_lints,
-            arithmetic_overflow,
-            clashing_extern_declarations,
-            dead_code,
-            improper_ctypes,
-            improper_ctypes_definitions,
-            invalid_runtime_symbol_definitions,
-            non_camel_case_types,
-            non_snake_case,
-            non_upper_case_globals,
-            overflowing_literals,
-            static_mut_refs,
-            suspicious_runtime_symbol_definitions,
-            unconditional_panic,
-            unpredictable_function_pointer_comparisons,
-            unreachable_code,
-            unreachable_patterns,
-            unused_assignments,
-            unused_braces,
-            unused_comparisons,
-            unused_labels,
-            unused_mut,
-            unused_parens,
-            unused_unsafe,
-            unused_variables,
-            clippy::all
-        )]
-    }
-}
-
 // ---------------------------------------------------------------------------
 // the generator
 // ---------------------------------------------------------------------------
@@ -1496,18 +1466,16 @@ impl<'a> Codegen<'a> {
             let span = self.sp(def.range);
             let name = self.c_ident(&def.rust_name, span);
             let int = self.ty(Ty::Int, span);
-            let attrs = allow_attr(span);
             // C says an enumerated type is compatible with an implementation
             // defined integer type; every ABI this targets picks `int`.
-            out.extend(quote_spanned! {span=> #attrs pub type #name = #int; });
+            out.extend(quote_spanned! {span=> pub type #name = #int; });
         }
         for constant in &self.program.enum_constants {
             let span = self.sp(constant.range);
             let name = self.c_ident(&constant.rust_name, span);
             let ty = self.ty(constant.ty, span);
             let value = bare_int_literal(constant.value, constant.ty, span);
-            let attrs = allow_attr(span);
-            out.extend(quote_spanned! {span=> #attrs pub const #name: #ty = #value; });
+            out.extend(quote_spanned! {span=> pub const #name: #ty = #value; });
         }
         for typedef in &self.program.typedefs {
             // No alias is generated for `va_list`, which is what the
@@ -1521,8 +1489,7 @@ impl<'a> Codegen<'a> {
             let span = self.sp(typedef.range);
             let name = self.c_ident(&typedef.rust_name, span);
             let ty = self.ty(typedef.ty, span);
-            let attrs = allow_attr(span);
-            out.extend(quote_spanned! {span=> #attrs pub type #name = #ty; });
+            out.extend(quote_spanned! {span=> pub type #name = #ty; });
         }
         out
     }
@@ -1557,10 +1524,8 @@ impl<'a> Codegen<'a> {
         for (align, range) in wanted {
             let span = self.sp(range);
             let name = align_wrapper_ident(align, span);
-            let attrs = allow_attr(span);
             let literal = Literal::u64_unsuffixed(align);
             out.extend(quote_spanned! {span=>
-                #attrs
                 #[repr(C, align(#literal))]
                 #[derive(Copy, Clone)]
                 pub struct #name<T>(pub T);
@@ -1623,7 +1588,6 @@ impl<'a> Codegen<'a> {
     /// member is the `[T; 0]` the type says it is.
     fn record_body(&self, record: &ir::RecordDef, name: &Ident, tail: Option<u64>) -> TokenStream {
         let span = self.sp(record.range);
-        let attrs = allow_attr(span);
         // `Copy` is what makes a C struct behave like one: assigning it,
         // passing it and returning it all copy the bytes.
         let derives = match (record.align, record.packed) {
@@ -1654,7 +1618,7 @@ impl<'a> Codegen<'a> {
             // A tag that is never completed can still be pointed at. An empty
             // body is the closest Rust has to C's incomplete type.
             return quote_spanned! {span=>
-                #attrs #derives pub struct #name { _incomplete: [#byte; 0] }
+                #derives pub struct #name { _incomplete: [#byte; 0] }
             };
         }
         let mut fields = TokenStream::new();
@@ -1701,8 +1665,8 @@ impl<'a> Codegen<'a> {
         }
         let body = braced(fields, span);
         match record.kind {
-            RecordKind::Struct => quote_spanned! {span=> #attrs #derives pub struct #name #body },
-            RecordKind::Union => quote_spanned! {span=> #attrs #derives pub union #name #body },
+            RecordKind::Struct => quote_spanned! {span=> #derives pub struct #name #body },
+            RecordKind::Union => quote_spanned! {span=> #derives pub union #name #body },
         }
     }
 
@@ -1725,8 +1689,7 @@ impl<'a> Codegen<'a> {
             return TokenStream::new();
         }
         let name = self.c_ident(&record.rust_name, span);
-        let attrs = allow_attr(span);
-        quote_spanned! {span=> #attrs impl #name { #methods } }
+        quote_spanned! {span=> impl #name { #methods } }
     }
 
     /// Reads the bytes a bit-field overlaps into one unsigned integer.
@@ -2121,9 +2084,8 @@ impl<'a> Codegen<'a> {
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
         }
-        let attrs = allow_attr(span);
         let links = self.link_attrs(&symbols, span);
-        quote_spanned! {span=> #attrs #links unsafe extern "C" { #items } }
+        quote_spanned! {span=> #links unsafe extern "C" { #items } }
     }
 
     /// `#[link(name = "…")]` for every `#pragma cinrs link` the unit wrote, and
@@ -2237,7 +2199,6 @@ impl<'a> Codegen<'a> {
         let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
         let init = self.binding_init(var.object, init, span);
-        let attrs = allow_attr(span);
         let (vis, export) = if *exported {
             let export = if self.program.export {
                 let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
@@ -2261,7 +2222,6 @@ impl<'a> Codegen<'a> {
         // anywhere, and reading or writing one directly (never taking a
         // reference) is what keeps edition 2024's `static_mut_refs` quiet.
         quote_spanned! {span=>
-            #attrs
             #export
             #section
             #vis static mut #name: #ty = #init;
@@ -2302,7 +2262,6 @@ impl<'a> Codegen<'a> {
         let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
         let init = self.static_init(&var.init, object.ty, span);
         let init = self.binding_init(var.object, init, span);
-        let attrs = allow_attr(span);
         let vis = if *exported {
             quote_spanned! {span=> pub }
         } else {
@@ -2315,12 +2274,11 @@ impl<'a> Codegen<'a> {
         } else {
             value
         };
-        // The `#[allow(…)]` goes on the `static` rather than on the macro
-        // invocation: an attribute in front of one is ignored, with a warning
-        // of `rustc`'s own saying so.
+        // The lint exemptions are the unit module's own (see
+        // [`crate::in_module`]), and a `thread_local!` is expanded inside it
+        // like anything else, so the `static` it generates inherits them.
         quote_spanned! {span=>
             ::std::thread_local! {
-                #attrs
                 #vis static #name: #cell = #value;
             }
         }
@@ -2421,7 +2379,6 @@ impl<'a> Codegen<'a> {
             let ty = self.ty(func.sig.ret, span);
             quote_spanned! {span=> -> #ty }
         };
-        let attrs = allow_attr(span);
         // A definition is a Rust item rather than a C symbol unless the unit
         // asked for real symbols, so an `__asm__("name")` label on one only
         // means something there — and there it names the symbol the item
@@ -2481,7 +2438,6 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> unsafe }
         };
         quote_spanned! {span=>
-            #attrs
             #export
             #inline
             #cold
@@ -2522,11 +2478,9 @@ impl<'a> Codegen<'a> {
         elf_literal.set_span(span);
         let mut apple_literal = Literal::string(apple);
         apple_literal.set_span(span);
-        let attrs = allow_attr(span);
         // The section name is the one thing about this that is not portable,
         // so it is chosen at compile time rather than assumed.
         quote_spanned! {span=>
-            #attrs
             #[used]
             #[cfg_attr(target_vendor = "apple", unsafe(link_section = #apple_literal))]
             #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = #elf_literal))]
@@ -2542,9 +2496,7 @@ impl<'a> Codegen<'a> {
     /// function, since it says the same thing either way.
     fn init_array_guard(&self) -> TokenStream {
         let span = self.map.span(SourceRange::at(0));
-        let attrs = allow_attr(span);
         quote_spanned! {span=>
-            #attrs
             const _: () = {
                 #[cfg(not(any(target_os = "linux", target_os = "android",
                               target_os = "freebsd", target_os = "netbsd",
@@ -3355,13 +3307,10 @@ impl<'a> Codegen<'a> {
     /// type, which GCC ignores.
     fn cleanup_guard_item(&self, span: Span) -> TokenStream {
         let name = cleanup_guard_ty();
-        let attrs = allow_attr(span);
         let p = Ident::new("P", Span::mixed_site());
         let r = Ident::new("R", Span::mixed_site());
         quote_spanned! {span=>
-            #attrs
             struct #name<#p: ::core::marker::Copy, #r>(#p, unsafe extern "C" fn(#p) -> #r);
-            #attrs
             impl<#p: ::core::marker::Copy, #r> ::core::ops::Drop for #name<#p, #r> {
                 fn drop(&mut self) {
                     unsafe {

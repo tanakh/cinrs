@@ -3,15 +3,14 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr#\"\n        struct Aligned { _Alignas(16) int first; char rest; };\n        unsigned long size(void) { return sizeof(struct Aligned); }\n        \"#)"
 ---
 mod __cinrs_unit_e04320b8 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C, align(16))]
     #[derive(Copy, Clone)]
     pub struct Aligned {
         pub first: ::core::ffi::c_int,
         pub rest: ::core::ffi::c_char,
     }
-    #[allow(…)]
     pub unsafe extern "C" fn size() -> ::core::ffi::c_ulong {
         unsafe {
             return 16;

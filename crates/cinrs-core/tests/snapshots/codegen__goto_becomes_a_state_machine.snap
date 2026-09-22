@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int countdown(int n, int start_inside) {\n            int steps = 0;\n            if (start_inside) goto inside;\n            while (n > 0) {\n                n--;\n            inside:\n                steps++;\n            }\n            return steps * 10 + n;\n        }\n        \")"
 ---
 mod __cinrs_unit_e25ccc91 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn countdown(
         mut n: ::core::ffi::c_int,
         mut start_inside: ::core::ffi::c_int,

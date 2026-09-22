@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        unsigned long sum(int n) {\n            unsigned long total = 0;\n            for (int i = 0; i < n; i++) {\n                char buf[i + 1];\n                buf[i] = (char)i;\n                total += sizeof buf + (unsigned long)buf[i];\n            }\n            return total;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_dbedfd3e {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn sum(mut n: ::core::ffi::c_int) -> ::core::ffi::c_ulong {
         unsafe {
             let mut total: ::core::ffi::c_ulong = 0;

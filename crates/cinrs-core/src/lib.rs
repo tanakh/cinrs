@@ -1121,6 +1121,32 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
 /// that Rust calls it by the name its author gave it.
 ///
 /// There is no `use super::*`: C code never refers to a Rust item.
+///
+/// # The lint exemptions
+///
+/// The module's head carries the one `#![allow(…)]` the whole expansion
+/// needs. A faithful translation of C trips a great many of Rust's lints, and
+/// not one of them says anything about the C the user wrote: a parameter the
+/// function never reads, a parenthesis C needed and Rust does not, a name
+/// that is not `snake_case`, two declarations of one symbol that do not
+/// match, a comparison that is always true, a statement after a `return`, an
+/// `extern` signature Rust calls improper, arithmetic that overflows in a
+/// branch that never runs. Clippy's lints are in the list for the same
+/// reason. `unknown_lints` comes first so that a compiler that has not heard
+/// of one of the newer names — `invalid_runtime_symbol_definitions`, say —
+/// does not warn about the list itself.
+///
+/// It is an *inner* attribute, which is why it has to come before anything
+/// else in the body; everything the unit generates is inside this module, and
+/// lint levels are inherited, so one attribute covers every item, however
+/// deeply nested, whatever the crate root denies, and for clippy as much as
+/// for `rustc`.
+///
+/// One attribute per unit rather than one per item is what makes it
+/// affordable. The list is 585 bytes and `#include <zlib.h>` generates 419
+/// items, so the same exemption repeated on each of them was 83% of that
+/// expansion — 245 KB of 294 KB — parsed by `rustc` and by rust-analyzer on
+/// every build.
 fn in_module(items: TokenStream, unit_id: u64) -> TokenStream {
     if items.is_empty() {
         // An empty translation unit expands to nothing at all, rather than to
@@ -1129,14 +1155,44 @@ fn in_module(items: TokenStream, unit_id: u64) -> TokenStream {
     }
     let span = Span::call_site();
     let ident = Ident::new(&format!("__cinrs_unit_{:08x}", unit_id as u32), span);
-    // `ambiguous_glob_reexports` is what a name two units both export trips,
-    // and it is not a problem until Rust code uses that name — which is an
-    // error of its own, with a message that says what to do. `unknown_lints`
-    // comes first so that an older compiler may not have heard of it.
     quote! {
         mod #ident {
+            #![allow(
+                unknown_lints,
+                arithmetic_overflow,
+                clashing_extern_declarations,
+                dead_code,
+                improper_ctypes,
+                improper_ctypes_definitions,
+                invalid_runtime_symbol_definitions,
+                non_camel_case_types,
+                non_snake_case,
+                non_upper_case_globals,
+                overflowing_literals,
+                static_mut_refs,
+                suspicious_runtime_symbol_definitions,
+                unconditional_panic,
+                unpredictable_function_pointer_comparisons,
+                unreachable_code,
+                unreachable_patterns,
+                unused_assignments,
+                unused_braces,
+                unused_comparisons,
+                unused_labels,
+                unused_mut,
+                unused_parens,
+                unused_unsafe,
+                unused_variables,
+                clippy::all
+            )]
+
             #items
         }
+        // The re-export needs one of its own, which the module's cannot
+        // cover: `ambiguous_glob_reexports` is what a name two units both
+        // export trips, and it is not a problem until Rust code uses that
+        // name — which is an error of its own, with a message that says what
+        // to do.
         #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
         pub use #ident::*;
     }

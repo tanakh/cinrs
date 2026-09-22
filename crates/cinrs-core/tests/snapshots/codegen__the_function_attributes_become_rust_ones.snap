@@ -3,20 +3,18 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r#\"\n        __attribute__((always_inline)) int fast(int n) { return n + 1; }\n        __attribute__((noinline, cold)) int slow(int n) { return n + 2; }\n        __attribute__((deprecated(\"use fast\"))) int old(int n) { return n; }\n        __attribute__((section(\".text.hot\"))) int placed(void) { return 1; }\n        int renamed(int n) __asm__(\"other_symbol\");\n        int call_renamed(int n) { return renamed(n); }\n        \"#)"
 ---
 mod __cinrs_unit_c25379d4 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     unsafe extern "C" {
         #[link_name = "other_symbol"]
         pub fn renamed(n: ::core::ffi::c_int) -> ::core::ffi::c_int;
     }
-    #[allow(…)]
     #[inline(always)]
     pub unsafe extern "C" fn fast(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return n.wrapping_add(1);
         }
     }
-    #[allow(…)]
     #[inline(never)]
     #[cold]
     pub unsafe extern "C" fn slow(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -24,21 +22,18 @@ mod __cinrs_unit_c25379d4 {
             return n.wrapping_add(2);
         }
     }
-    #[allow(…)]
     #[deprecated(note = "use fast")]
     pub unsafe extern "C" fn old(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return n;
         }
     }
-    #[allow(…)]
     #[unsafe(link_section = ".text.hot")]
     pub unsafe extern "C" fn placed() -> ::core::ffi::c_int {
         unsafe {
             return 1;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn call_renamed(
         mut n: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {

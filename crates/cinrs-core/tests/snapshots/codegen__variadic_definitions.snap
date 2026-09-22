@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        #include <stdarg.h>\n\n        int vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap);\n\n        int sum(int n, ...) {\n            va_list ap;\n            int total = 0;\n            va_start(ap, n);\n            for (int i = 0; i < n; i++) {\n                total += va_arg(ap, int);\n            }\n            va_end(ap);\n            return total;\n        }\n\n        int format(char *buf, unsigned long size, const char *fmt, ...) {\n            va_list ap;\n            va_list copy;\n            va_start(ap, fmt);\n            va_copy(copy, ap);\n            int written = vsnprintf(buf, size, fmt, copy);\n            double first = va_arg(ap, double);\n            va_end(ap);\n            return written + (int) first;\n        }\n        \")"
 ---
 mod __cinrs_unit_f47d9b27 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     unsafe extern "C" {
         #[link_name = "vsnprintf"]
         pub fn vsnprintf(
@@ -14,7 +14,6 @@ mod __cinrs_unit_f47d9b27 {
             ap: ::core::ffi::VaList,
         ) -> ::core::ffi::c_int;
     }
-    #[allow(…)]
     pub unsafe extern "C" fn sum(
         mut n: ::core::ffi::c_int,
         __cinrs_va: ...
@@ -38,7 +37,6 @@ mod __cinrs_unit_f47d9b27 {
             return total;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn format(
         mut buf: *mut ::core::ffi::c_char,
         mut size: ::core::ffi::c_ulong,

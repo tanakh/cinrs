@@ -3,16 +3,12 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int counter;\n        enum Level { Low, High };\n\n        int bump(int counter) {\n            int Low = counter + 1;\n            return Low;\n        }\n\n        int step(int n) {\n            switch (n) {\n                int counter;\n            case 0:\n                counter = 1;\n                return counter;\n            }\n            return 0;\n        }\n        \")"
 ---
 mod __cinrs_unit_679b7a79 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub type Level = ::core::ffi::c_int;
-    #[allow(…)]
     pub const Low: ::core::ffi::c_int = 0;
-    #[allow(…)]
     pub const High: ::core::ffi::c_int = 1;
-    #[allow(…)]
     pub static mut counter: ::core::ffi::c_int = 0;
-    #[allow(…)]
     pub unsafe extern "C" fn bump(
         mut counter_1: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
@@ -21,7 +17,6 @@ mod __cinrs_unit_679b7a79 {
             return Low_1;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn step(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             {

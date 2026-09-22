@@ -3,20 +3,20 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr\"\n        _Thread_local int counter = 1;\n        static _Thread_local long private_total;\n\n        int bump(int by) {\n            counter += by;\n            return counter;\n        }\n\n        int *address(void) { return &counter; }\n\n        int calls(void) {\n            static _Thread_local int n = 0;\n            return ++n;\n        }\n        \")"
 ---
 mod __cinrs_unit_28cf9952 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
     ::std::thread_local! {
-        #[allow(…)] pub static counter : ::core::cell::UnsafeCell < ::core::ffi::c_int
-        > = const { ::core::cell::UnsafeCell::new(1) };
+        pub static counter : ::core::cell::UnsafeCell < ::core::ffi::c_int > = const {
+        ::core::cell::UnsafeCell::new(1) };
     }
     ::std::thread_local! {
-        #[allow(…)] static private_total : ::core::cell::UnsafeCell <
-        ::core::ffi::c_long > = const { ::core::cell::UnsafeCell::new(0) };
+        static private_total : ::core::cell::UnsafeCell < ::core::ffi::c_long > = const {
+        ::core::cell::UnsafeCell::new(0) };
     }
     ::std::thread_local! {
-        #[allow(…)] static __cinrs_static_28cf9952_calls_n : ::core::cell::UnsafeCell <
+        static __cinrs_static_28cf9952_calls_n : ::core::cell::UnsafeCell <
         ::core::ffi::c_int > = const { ::core::cell::UnsafeCell::new(0) };
     }
-    #[allow(…)]
     pub unsafe extern "C" fn bump(mut by: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let __cinrs_tmp0 = counter
@@ -29,7 +29,6 @@ mod __cinrs_unit_28cf9952 {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn address() -> *mut ::core::ffi::c_int {
         unsafe {
             return {
@@ -39,7 +38,6 @@ mod __cinrs_unit_28cf9952 {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn calls() -> ::core::ffi::c_int {
         unsafe {
             return {

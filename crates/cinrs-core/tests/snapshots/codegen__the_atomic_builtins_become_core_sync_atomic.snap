@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr\"\n        int load(int *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }\n        void store(int *p, int v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }\n        int fetch_add(int *p, int v) { return __atomic_fetch_add(p, v, __ATOMIC_RELAXED); }\n        int add_fetch(int *p, int v) { return __atomic_add_fetch(p, v, __ATOMIC_SEQ_CST); }\n        int nand(int *p, int v) { return __atomic_fetch_nand(p, v, __ATOMIC_SEQ_CST); }\n        int cas(int *p, int *expected, int desired) {\n            return __atomic_compare_exchange_n(p, expected, desired, 1,\n                                               __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);\n        }\n        int test_and_set(char *p) { return __atomic_test_and_set(p, __ATOMIC_ACQUIRE); }\n        void clear(char *p) { __atomic_clear(p, __ATOMIC_RELEASE); }\n        void fences(void) {\n            __atomic_thread_fence(__ATOMIC_SEQ_CST);\n            __atomic_signal_fence(__ATOMIC_ACQUIRE);\n        }\n        double load_double(double *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }\n        int *ptr_add(int **p) { return __atomic_fetch_add(p, 8, __ATOMIC_SEQ_CST); }\n        int older(int *p, int v) { return __sync_fetch_and_add(p, v); }\n        int older_cas(int *p, int old, int fresh) {\n            return __sync_val_compare_and_swap(p, old, fresh);\n        }\n        void unlock(int *p) { __sync_lock_release(p); }\n        \")"
 ---
 mod __cinrs_unit_1592d15d {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn load(mut p: *mut ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return ::core::sync::atomic::AtomicI32::from_ptr(
@@ -13,7 +13,6 @@ mod __cinrs_unit_1592d15d {
                 .load(::core::sync::atomic::Ordering::Acquire) as ::core::ffi::c_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn store(
         mut p: *mut ::core::ffi::c_int,
         mut v: ::core::ffi::c_int,
@@ -26,7 +25,6 @@ mod __cinrs_unit_1592d15d {
                 );
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn fetch_add(
         mut p: *mut ::core::ffi::c_int,
         mut v: ::core::ffi::c_int,
@@ -42,7 +40,6 @@ mod __cinrs_unit_1592d15d {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn add_fetch(
         mut p: *mut ::core::ffi::c_int,
         mut v: ::core::ffi::c_int,
@@ -58,7 +55,6 @@ mod __cinrs_unit_1592d15d {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn nand(
         mut p: *mut ::core::ffi::c_int,
         mut v: ::core::ffi::c_int,
@@ -93,7 +89,6 @@ mod __cinrs_unit_1592d15d {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn cas(
         mut p: *mut ::core::ffi::c_int,
         mut expected: *mut ::core::ffi::c_int,
@@ -121,7 +116,6 @@ mod __cinrs_unit_1592d15d {
             }) as ::core::ffi::c_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn test_and_set(
         mut p: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
@@ -133,14 +127,12 @@ mod __cinrs_unit_1592d15d {
                 as ::core::ffi::c_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn clear(mut p: *mut ::core::ffi::c_char) {
         unsafe {
             ::core::sync::atomic::AtomicU8::from_ptr(p as *mut ::core::primitive::u8)
                 .store(0, ::core::sync::atomic::Ordering::Release);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn fences() {
         unsafe {
             ::core::sync::atomic::fence(::core::sync::atomic::Ordering::SeqCst);
@@ -149,7 +141,6 @@ mod __cinrs_unit_1592d15d {
             );
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn load_double(
         mut p: *mut ::core::ffi::c_double,
     ) -> ::core::ffi::c_double {
@@ -162,7 +153,6 @@ mod __cinrs_unit_1592d15d {
             );
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn ptr_add(
         mut p: *mut *mut ::core::ffi::c_int,
     ) -> *mut ::core::ffi::c_int {
@@ -198,7 +188,6 @@ mod __cinrs_unit_1592d15d {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn older(
         mut p: *mut ::core::ffi::c_int,
         mut v: ::core::ffi::c_int,
@@ -214,7 +203,6 @@ mod __cinrs_unit_1592d15d {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn older_cas(
         mut p: *mut ::core::ffi::c_int,
         mut old: ::core::ffi::c_int,
@@ -236,7 +224,6 @@ mod __cinrs_unit_1592d15d {
             }) as ::core::ffi::c_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn unlock(mut p: *mut ::core::ffi::c_int) {
         unsafe {
             ::core::sync::atomic::AtomicI32::from_ptr(p as *mut ::core::primitive::i32)

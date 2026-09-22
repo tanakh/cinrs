@@ -3,14 +3,11 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int counter = 0;\n        static long private_total;\n\n        static void bump(void) {\n            static int calls = 1;\n            calls++;\n            counter += calls;\n            private_total += counter;\n        }\n\n        int match(int type) {\n            bump();\n            return type + counter;\n        }\n        \")"
 ---
 mod __cinrs_unit_716967fa {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub static mut counter: ::core::ffi::c_int = 0;
-    #[allow(…)]
     static mut private_total: ::core::ffi::c_long = 0;
-    #[allow(…)]
     static mut __cinrs_static_716967fa_bump_calls: ::core::ffi::c_int = 1;
-    #[allow(…)]
     unsafe extern "C" fn bump() {
         unsafe {
             __cinrs_static_716967fa_bump_calls = __cinrs_static_716967fa_bump_calls
@@ -19,7 +16,6 @@ mod __cinrs_unit_716967fa {
             private_total = private_total.wrapping_add(counter as ::core::ffi::c_long);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn r#match(
         mut r#type: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {

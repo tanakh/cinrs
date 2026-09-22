@@ -3,8 +3,8 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        int report(int a, int b) {\n            int tally = 0;\n\n            void note(int value) { tally += value; }\n\n            note(a);\n            note(b);\n            return tally;\n        }\n\n        int plain(int n) {\n            int doubled(int x) { return x * 2; }\n            return doubled(n);\n        }\n        \")"
 ---
 mod __cinrs_unit_b6ca14ab {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub unsafe extern "C" fn report(
         mut a: ::core::ffi::c_int,
         mut b: ::core::ffi::c_int,
@@ -16,7 +16,6 @@ mod __cinrs_unit_b6ca14ab {
             return tally;
         }
     }
-    #[allow(…)]
     unsafe extern "C" fn __cinrs_report_note(
         __env_tally: *mut ::core::ffi::c_int,
         mut value: ::core::ffi::c_int,
@@ -25,13 +24,11 @@ mod __cinrs_unit_b6ca14ab {
             (*__env_tally) = (*__env_tally).wrapping_add(value);
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn plain(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return __cinrs_plain_doubled(n);
         }
     }
-    #[allow(…)]
     unsafe extern "C" fn __cinrs_plain_doubled(
         mut x: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {

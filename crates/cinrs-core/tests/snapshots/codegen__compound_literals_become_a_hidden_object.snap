@@ -3,19 +3,16 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate(r\"\n        struct S { int a; int b; };\n\n        struct S *global = &(struct S){ 1, 2 };\n\n        int local(int n) {\n            struct S *p = &(struct S){ n, n + 1 };\n            int total = 0;\n            for (int i = 0; i < n; i++) {\n                total += (int[]){ i, i * 2 }[1];\n            }\n            return p->a + p->b + total;\n        }\n        \")"
 ---
 mod __cinrs_unit_e8e1058d {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct S {
         pub a: ::core::ffi::c_int,
         pub b: ::core::ffi::c_int,
     }
-    #[allow(…)]
     pub static mut global: *mut S = unsafe { (&raw mut __cinrs_e8e1058d_literal0) };
-    #[allow(…)]
     static mut __cinrs_e8e1058d_literal0: S = S { a: 1, b: 2 };
-    #[allow(…)]
     pub unsafe extern "C" fn local(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             let mut __cinrs_e8e1058d_literal1: S = ::core::mem::zeroed::<S>();

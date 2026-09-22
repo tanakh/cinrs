@@ -3,15 +3,13 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr\"\n        int anchor;\n        _Thread_local int *cursor = &anchor;\n        int read(void) { return *cursor; }\n        \")"
 ---
 mod __cinrs_unit_c9d1e7a2 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub static mut anchor: ::core::ffi::c_int = 0;
     ::std::thread_local! {
-        #[allow(…)] pub static cursor : ::core::cell::UnsafeCell < * mut
-        ::core::ffi::c_int > = ::core::cell::UnsafeCell::new(unsafe { (& raw mut anchor)
-        });
+        pub static cursor : ::core::cell::UnsafeCell < * mut ::core::ffi::c_int > =
+        ::core::cell::UnsafeCell::new(unsafe { (& raw mut anchor) });
     }
-    #[allow(…)]
     pub unsafe extern "C" fn read() -> ::core::ffi::c_int {
         unsafe {
             return (*({

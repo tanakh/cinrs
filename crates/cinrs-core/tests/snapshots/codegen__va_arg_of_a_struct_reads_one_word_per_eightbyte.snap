@@ -3,22 +3,20 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr\"\n        #include <stdarg.h>\n\n        /* One SSE eightbyte then one INTEGER eightbyte. */\n        struct Mixed { double d; int i; };\n        /* The other way round, which is not the same classification. */\n        struct Other { int i; double d; };\n        /* Two floats share the first eightbyte; the third has its own. */\n        struct Three { float a, b, c; };\n        /* Thirteen bytes of `char` are two INTEGER eightbytes. */\n        struct Bytes { char x[13]; };\n\n        double read_them(int n, ...) {\n            va_list ap;\n            va_start(ap, n);\n            struct Mixed m = va_arg(ap, struct Mixed);\n            struct Other o = va_arg(ap, struct Other);\n            struct Three t = va_arg(ap, struct Three);\n            struct Bytes b = va_arg(ap, struct Bytes);\n            va_end(ap);\n            return m.d + m.i + o.i + o.d + t.a + t.b + t.c + b.x[12];\n        }\n        \")"
 ---
 mod __cinrs_unit_3f73a1c1 {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Mixed {
         pub d: ::core::ffi::c_double,
         pub i: ::core::ffi::c_int,
     }
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Other {
         pub i: ::core::ffi::c_int,
         pub d: ::core::ffi::c_double,
     }
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Three {
@@ -26,13 +24,11 @@ mod __cinrs_unit_3f73a1c1 {
         pub b: ::core::ffi::c_float,
         pub c: ::core::ffi::c_float,
     }
-    #[allow(…)]
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Bytes {
         pub x: [::core::ffi::c_char; 13],
     }
-    #[allow(…)]
     pub unsafe extern "C" fn read_them(
         mut n: ::core::ffi::c_int,
         __cinrs_va: ...

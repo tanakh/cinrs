@@ -3,14 +3,12 @@ source: crates/cinrs-core/tests/codegen.rs
 expression: "generate_for(Standard::C11,\nr\"\n        _Atomic int counter;\n        _Atomic(int *) cursor;\n\n        int read(void) { return counter; }\n        void write(int v) { counter = v; }\n        int bump(void) { return ++counter; }\n        int add(int v) { return counter += v; }\n        int scale(int v) { return counter *= v; }\n        int *step(void) { return cursor++; }\n        \")"
 ---
 mod __cinrs_unit_0218c48c {
+    #![allow(…)]
     const _: () = { /* the data-model check */ };
-    #[allow(…)]
     pub static mut counter: ::core::ffi::c_int = 0 as ::core::ffi::c_int;
-    #[allow(…)]
     pub static mut cursor: *mut ::core::ffi::c_int = ::core::ptr::null_mut::<
         ::core::ffi::c_int,
     >();
-    #[allow(…)]
     pub unsafe extern "C" fn read() -> ::core::ffi::c_int {
         unsafe {
             return ::core::sync::atomic::AtomicI32::from_ptr(
@@ -19,7 +17,6 @@ mod __cinrs_unit_0218c48c {
                 .load(::core::sync::atomic::Ordering::SeqCst) as ::core::ffi::c_int;
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn write(mut v: ::core::ffi::c_int) {
         unsafe {
             ::core::sync::atomic::AtomicI32::from_ptr(
@@ -31,7 +28,6 @@ mod __cinrs_unit_0218c48c {
                 );
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn bump() -> ::core::ffi::c_int {
         unsafe {
             return {
@@ -44,7 +40,6 @@ mod __cinrs_unit_0218c48c {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn add(mut v: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return {
@@ -57,7 +52,6 @@ mod __cinrs_unit_0218c48c {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn scale(mut v: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
             return {
@@ -90,7 +84,6 @@ mod __cinrs_unit_0218c48c {
             };
         }
     }
-    #[allow(…)]
     pub unsafe extern "C" fn step() -> *mut ::core::ffi::c_int {
         unsafe {
             return {

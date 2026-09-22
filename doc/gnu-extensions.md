@@ -215,7 +215,7 @@ spellings work, and so does C23's `[[gnu::name]]`.
 | `vector_size(N)` | occasional | 🟡 refused | See vector extensions. |
 | `nonnull`, `returns_nonnull`, `malloc`, `pure`, `const`, `leaf`, `nothrow`, `access(…)`, `alloc_size`, `alloc_align`, `sentinel`, `returns_twice`, `no_sanitize`, `noclone`, `noipa`, `optimize(…)`, `target(…)`, `error(…)`, `warning(…)`, `designated_init`, `artificial`, `gnu_inline`, `externally_visible` | common in library headers, rare in bodies | 🟢 accepted | Optimisation and diagnostic hints only. |
 | `transparent_union`, `may_alias`, `nonstring` | rare | 🟢 accepted | Ignored. |
-| `unused`, `used`, `maybe_unused` | very common | 🟢 accepted | Every generated item already carries `#[allow(dead_code)]`. |
+| `unused`, `used`, `maybe_unused` | very common | 🟢 accepted | The unit's module already allows `dead_code`, and every item in it inherits that. |
 | `fallthrough` | common | 🟢 supported | Accepted and dropped: a `switch` group falls through in the generated Rust either way. |
 | `nodiscard`, `unsequenced`, `reproducible` | rare | 🟢 accepted | C23's, and answered by `__has_c_attribute`. |
 | `stdcall`, `cdecl`, `fastcall` | rare | 🟢 accepted | The generated code is `extern "C"` throughout. |
