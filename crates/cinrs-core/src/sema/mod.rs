@@ -118,8 +118,9 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::{
     self, ConstValue, Expr, ExprKind, FuncId, INT128_TYPEDEF_NAMES, LoopId, ObjectId, Place,
     PlaceKind, Program, RecordId, Signature, Storage, SwitchId, Ty, Types, VA_LIST_NAMES,
+    X86_VECTOR_TYPEDEF_NAMES,
 };
-use crate::target::TargetModel;
+use crate::target::{Arch, TargetModel};
 
 /// Runs semantic analysis over a parsed translation unit.
 ///
@@ -169,6 +170,19 @@ pub fn analyze(
 ///   `#pragma cinrs export` cannot export one.
 pub fn check_pragmas(program: &Program) -> Diagnostics {
     let mut diags = Diagnostics::new();
+    if program.no_std {
+        for range in &program.cpu_supports {
+            diags.error(
+                *range,
+                "'__builtin_cpu_supports' requires std; this unit says no_std. It becomes \
+                 `std::is_x86_feature_detected!`, and `core` has no processor detection — \
+                 `cpuid` is not something a library can do without one. Ask for the \
+                 instruction set with __attribute__((target(\"…\"))) and let the caller \
+                 guarantee it, or drop the no_std pragma"
+                    .to_owned(),
+            );
+        }
+    }
     if !program.no_std && !program.export {
         return diags;
     }
@@ -194,6 +208,16 @@ pub fn check_pragmas(program: &Program) -> Diagnostics {
         }
     }
     diags
+}
+
+/// `'a', 'b' and 'c'`, for a diagnostic that lists the names it knows.
+pub(super) fn list_of_names(names: &[&str]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
+    match quoted.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    }
 }
 
 /// Applies `#pragma cinrs safe` and checks every function that is to be
@@ -273,6 +297,19 @@ pub fn check_safe(program: &mut Program, named: &[crate::pp::SafeName]) -> Diagn
                  dereferences",
                 func.name
             )
+        } else if let Some(feature) = func.target_features.first() {
+            // `#[target_feature]` makes a function unsafe to *call* from
+            // anywhere that does not have the same instruction set — even a
+            // function Rust would otherwise call safely — which is exactly the
+            // promise `[[cinrs::safe]]` makes. The two cannot both hold.
+            format!(
+                "'{}' asks for the '{feature}' instruction set, so it cannot be safe: Rust makes \
+                 a '#[target_feature]' function unsafe to call from anywhere that does not have \
+                 that instruction set, which is the opposite of what [[cinrs::safe]] promises. \
+                 Whether the processor really has it is something only the caller knows — \
+                 '__builtin_cpu_supports' is how to ask",
+                func.name
+            )
         } else {
             continue;
         };
@@ -289,11 +326,36 @@ pub fn check_safe(program: &mut Program, named: &[crate::pp::SafeName]) -> Diagn
     for call in &program.calls {
         let caller = program.function(call.caller);
         let callee = program.function(call.callee);
-        if !caller.is_safe()
-            || callee.is_safe()
-            || callee.is_extern()
-            || refused.contains(&(call.callee.0 as usize))
-        {
+        // A caller whose own request was refused above had it *taken back*, so
+        // `is_safe` is already false for it and this is the only test needed.
+        if !caller.is_safe() {
+            continue;
+        }
+        // An [x86 intrinsic](crate::x86) is a `#[target_feature]` function, so
+        // calling one needs either an `unsafe` block — which a safe function
+        // does not have — or a caller that has the instruction set, which a
+        // safe function cannot ask for (see the refusal above). `rustc` would
+        // say so itself, at the caret on the C; saying it here names the
+        // instruction set and what to do about it.
+        if let Some(intr) = callee.intrinsic {
+            let feature = if intr.feature.is_empty() {
+                "an instruction set".to_owned()
+            } else {
+                format!("the '{}' instruction set", intr.feature)
+            };
+            diags.error(
+                call.range,
+                format!(
+                    "'{}' needs {feature}, so it cannot be called from the safe function '{}': \
+                     Rust makes every '#[target_feature]' function unsafe to call, because only \
+                     the program knows whether the processor running it has those instructions. \
+                     Drop [[cinrs::safe]] from '{}' and let its Rust caller write 'unsafe'",
+                    intr.name, caller.name, caller.name
+                ),
+            );
+            continue;
+        }
+        if callee.is_safe() || callee.is_extern() || refused.contains(&(call.callee.0 as usize)) {
             continue;
         }
         diags.error(
@@ -912,6 +974,24 @@ impl<'a> Sema<'a> {
                     range: SourceRange::at(0),
                 }),
             );
+        }
+        // The x86 vector types, which the bundled `<xmmintrin.h>` and
+        // `<immintrin.h>` `typedef` to `__m128` and the rest. They are the
+        // compiler's because GCC's own header writes them as
+        // `__attribute__((vector_size(16)))`, which this front end refuses —
+        // and only on an x86 target, where there is a `core::arch` type to
+        // generate them as. [`crate::parse`] gates them the same way, so on any
+        // other target the name is simply not a type name.
+        if matches!(sema.target.arch, Arch::X86 | Arch::X86_64) {
+            for (name, ty) in X86_VECTOR_TYPEDEF_NAMES {
+                sema.scopes[0].entries.insert(
+                    (*name).to_owned(),
+                    Entry::Typedef(TypedefEntry {
+                        resolved: Ok(*ty),
+                        range: SourceRange::at(0),
+                    }),
+                );
+            }
         }
         sema
     }

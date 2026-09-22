@@ -39,6 +39,9 @@ pub enum Attribute {
     Aligned,
     /// `section("…")`: `#[unsafe(link_section = "…")]`.
     Section,
+    /// `target("avx2")`: `#[target_feature(enable = "avx2")]`, which is what
+    /// lets a function use an instruction set above the target's baseline.
+    Target,
     /// `constructor`, optionally with a priority: run before `main`.
     Constructor,
     /// `destructor`, likewise: run after it.
@@ -82,7 +85,9 @@ pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
     ),
     (
         "vector_size",
-        "is not supported: the vector extensions need `core::simd`, which is unstable",
+        "is not supported: the vector extensions need `core::simd`, which is unstable. \
+         The Intel intrinsics are the SIMD cinrs has: <immintrin.h> declares them and a call \
+         becomes the `core::arch` function of the same name",
     ),
     (
         "scalar_storage_order",
@@ -112,6 +117,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "packed" => Attribute::Packed,
         "aligned" | "alignas" => Attribute::Aligned,
         "section" => Attribute::Section,
+        "target" => Attribute::Target,
         "constructor" => Attribute::Constructor,
         "destructor" => Attribute::Destructor,
         "cleanup" => Attribute::Cleanup,
@@ -194,7 +200,6 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
     "returns_twice",
     "sentinel",
     "stdcall",
-    "target",
     "target_clones",
     "transparent_union",
     "unavailable",
@@ -313,6 +318,12 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "copysign",
     "copysignf",
     "copysignl",
+    // `__builtin_cpu_is` is deliberately absent: it names a microarchitecture
+    // — `"sandybridge"`, `"znver3"` — and `std_detect` answers about
+    // instruction sets, so a program that guards on `__has_builtin` takes the
+    // branch that asks about the instruction it wants to use.
+    "cpu_init",
+    "cpu_supports",
     "cproj",
     "cprojf",
     "cprojl",

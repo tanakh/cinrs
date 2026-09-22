@@ -1,0 +1,8 @@
+error: '__builtin_cpu_supports' requires std; this unit says no_std. It becomes `std::is_x86_feature_detected!`, and `core` has no processor detection — `cpuid` is not something a library can do without one. Ask for the instruction set with __attribute__((target("…"))) and let the caller guarantee it, or drop the no_std pragma
+  --> tests/ui/simd_cpu_supports_no_std.rs:15:16
+   |
+15 |         return __builtin_cpu_supports("avx2");
+   |                ^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 1 previous error
+

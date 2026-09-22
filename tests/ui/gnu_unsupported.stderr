@@ -4,7 +4,7 @@ error: 'weak' is not supported on a function definition: Rust's `#[linkage]` is 
 13 |     __attribute__((weak)) int defined_weak(void) { return 1; }
    |                    ^^^^
 
-error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
+error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable. The Intel intrinsics are the SIMD cinrs has: <immintrin.h> declares them and a call becomes the `core::arch` function of the same name
   --> tests/ui/gnu_unsupported.rs:15:37
    |
 15 |     typedef int v4si __attribute__((vector_size(16)));

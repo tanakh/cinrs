@@ -558,6 +558,32 @@ impl Sema<'_> {
         if self.program.function(id).is_nested() {
             self.nested_addresses.push((id, range));
         }
+        // An [x86 intrinsic](crate::x86) whose operand has to be an integer
+        // constant expression has no address to take: code generation writes
+        // the constant into a turbofish, and a function pointer has nowhere to
+        // put one. GCC says the same thing in different words — its header
+        // makes those ones macros, or `__always_inline__` functions its own
+        // back end then refuses to take the address of. Everything else *does*
+        // get an address: see [`crate::codegen`]'s shim.
+        if let Some(intr) = self.program.function(id).intrinsic
+            && !intr.imm.is_empty()
+        {
+            let which = if intr.imm.len() == 1 {
+                format!("argument {}", usize::from(intr.imm[0].index) + 1)
+            } else {
+                "one of its arguments".to_owned()
+            };
+            self.error(
+                range,
+                format!(
+                    "the address of '{}' cannot be taken: {which} is an immediate operand of the \
+                     instruction, which has to be a compile-time constant, and a function pointer \
+                     has no way to carry one. Write a wrapper function with the constant in it and \
+                     take that address instead",
+                    intr.name
+                ),
+            );
+        }
         let sig = self.program.function(id).sig.clone();
         let func = if sig.prototyped {
             self.program
@@ -2160,6 +2186,19 @@ impl Sema<'_> {
         if failed {
             return None;
         }
+        // An [x86 intrinsic](crate::x86) whose operand Intel requires to be an
+        // integer constant expression is a `const` generic in `core::arch`, so
+        // the argument has to be folded here: what code generation writes is a
+        // turbofish, and there is nothing to put in it otherwise. Valid C
+        // already has a constant there — every compiler that has these
+        // intrinsics requires one — so this is a diagnostic about C, not a
+        // limitation of the mapping.
+        if let Callee::Direct(id) = &target
+            && let Some(intr) = self.program.function(*id).intrinsic
+            && !self.fold_immediates(intr, &mut values, args)
+        {
+            return None;
+        }
         Some(Expr::new(
             ExprKind::Call {
                 callee: target,
@@ -2168,6 +2207,56 @@ impl Sema<'_> {
             sig.ret,
             range,
         ))
+    }
+
+    /// Folds the immediate operands of a call to an x86 intrinsic in place.
+    ///
+    /// `false` says one of them was not a constant and the diagnostic has been
+    /// reported.
+    fn fold_immediates(
+        &mut self,
+        intr: &'static crate::x86::Intrinsic,
+        values: &mut [Expr],
+        args: &[ast::Expr],
+    ) -> bool {
+        let mut ok = true;
+        for imm in intr.imm {
+            let index = usize::from(imm.index);
+            let Some(value) = values.get(index) else {
+                continue;
+            };
+            if matches!(value.kind, ExprKind::Int(_)) {
+                continue;
+            }
+            let (ty, range) = (value.ty, value.range);
+            // `values` and `self` are separate, and the borrow of `value` ends
+            // with this call — which is what lets the store below happen
+            // without cloning the operand's tree.
+            match self.const_eval(value) {
+                Some(crate::ir::ConstValue::Int(folded)) => {
+                    values[index] = Expr::int(ty.wrap(folded, &self.target), ty, range);
+                }
+                _ => {
+                    ok = false;
+                    // The caret goes on the argument as it was written, which
+                    // is where the constant has to be.
+                    let at = args.get(index).map_or(range, |arg| arg.range);
+                    self.error(
+                        at,
+                        format!(
+                            "argument {} of '{}' has to be an integer constant expression: it is \
+                             an immediate operand of the instruction, and '{}' takes it as a \
+                             compile-time constant (Intel's compilers require one too). Write the \
+                             value, a macro such as _MM_SHUFFLE(3, 2, 1, 0), or an enumerator",
+                            index + 1,
+                            intr.name,
+                            intr.name
+                        ),
+                    );
+                }
+            }
+        }
+        ok
     }
 
     /// Declares `extern int f();` at file scope, as a call to an undeclared
@@ -2201,6 +2290,10 @@ impl Sema<'_> {
             section: None,
             asm_label: None,
             init_kind: None,
+            target_features: Vec::new(),
+            // An implicit declaration has no prototype, and an intrinsic only
+            // ever arrives with one — from the bundled header.
+            intrinsic: None,
             safe: None,
             locals: Vec::new(),
             uses_alloca: false,
@@ -2265,11 +2358,24 @@ impl Sema<'_> {
                     // the implicit declaration would turn a diagnostic this
                     // crate can give into a link error nobody can read.
                     if name.name.starts_with("__builtin_") {
+                        // `__builtin_ia32_*` is GCC's *internal* name for an
+                        // x86 instruction, which its own `<immintrin.h>`
+                        // wraps; the Intel spelling is the one cinrs maps, and
+                        // saying so is the difference between "no such
+                        // builtin" and a rewrite anyone can do.
+                        let hint = if name.name.starts_with("__builtin_ia32_") {
+                            ". It is GCC's internal name for an x86 instruction: write the Intel \
+                             intrinsic instead — '_mm_add_epi32' rather than \
+                             '__builtin_ia32_paddd128' — which <immintrin.h> declares and cinrs \
+                             maps onto Rust's core::arch"
+                        } else {
+                            ""
+                        };
                         self.error(
                             callee.range,
                             format!(
                                 "'{}' is not a builtin this crate implements, and a \
-                                 '__builtin_' name is never implicitly declared",
+                                 '__builtin_' name is never implicitly declared{hint}",
                                 name.name
                             ),
                         );

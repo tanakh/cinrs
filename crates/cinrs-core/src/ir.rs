@@ -83,6 +83,25 @@ pub const VA_LIST_NAMES: &[&str] = &["__builtin_va_list"];
 pub const INT128_TYPEDEF_NAMES: &[(&str, Ty)] =
     &[("__int128_t", Ty::Int128), ("__uint128_t", Ty::UInt128)];
 
+/// The `typedef` names the compiler owns for the x86 vector types, with the
+/// [`Ty`] each one means.
+///
+/// `__m128` and its five relatives are the compiler's types, not the library's:
+/// GCC writes them in `<xmmintrin.h>` as `__attribute__((vector_size(16)))`,
+/// which cinrs has no equivalent of, so the bundled header writes
+/// `typedef __cinrs_m128 __m128;` over a name seeded into the parser's and
+/// sema's outermost scopes — exactly the arrangement [`VA_LIST_NAMES`] uses
+/// for `va_list`. A translation unit that does not include the header may
+/// therefore still use `__m128` as an identifier of its own.
+pub const X86_VECTOR_TYPEDEF_NAMES: &[(&str, Ty)] = &[
+    ("__cinrs_m128", Ty::Vector(VecTy::M128)),
+    ("__cinrs_m128d", Ty::Vector(VecTy::M128d)),
+    ("__cinrs_m128i", Ty::Vector(VecTy::M128i)),
+    ("__cinrs_m256", Ty::Vector(VecTy::M256)),
+    ("__cinrs_m256d", Ty::Vector(VecTy::M256d)),
+    ("__cinrs_m256i", Ty::Vector(VecTy::M256i)),
+];
+
 /// The builtin C23's `unreachable()` stands for.
 ///
 /// The bundled `<stddef.h>` writes `#define unreachable() __builtin_unreachable()`,
@@ -210,6 +229,17 @@ pub enum Ty {
     /// The type is opaque: it has no size, nothing may point at it, and it may
     /// only be a local variable or a parameter — see [`crate::sema`] for why.
     VaList,
+    /// One of x86's vector types: `__m128`, `__m128i`, `__m128d`, `__m256`,
+    /// `__m256i` or `__m256d`.
+    ///
+    /// Opaque, exactly as C sees it: there is no arithmetic on one, no
+    /// conversion to or from one, and no way to reach a lane except through an
+    /// intrinsic or through a union. What it *is* is an object of a known size
+    /// and alignment — sixteen or thirty-two bytes, aligned to itself — which
+    /// is what makes it a member, an element, a parameter, a return value and
+    /// the thing a `union { __m128i v; int i[4]; }` punnes. Code generation
+    /// writes `::core::arch::x86_64::__m128i`, whose layout is the same.
+    Vector(VecTy),
     /// `_Atomic T`, for a scalar `T` (C11 6.7.2.4).
     ///
     /// It is the type of an *object*, never of a value: reading an atomic
@@ -232,6 +262,50 @@ pub enum Ty {
     /// it is checked against a type that silences further complaints instead of
     /// "use of undeclared identifier".
     Error,
+}
+
+/// Which x86 vector type a [`Ty::Vector`] is.
+///
+/// The name is the same in C and in `core::arch`, which is the whole point:
+/// the generated Rust says `::core::arch::x86_64::__m128i` and Rust's type has
+/// the size, the alignment and the calling convention C's has.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum VecTy {
+    /// `__m128`: four `float` lanes.
+    M128,
+    /// `__m128i`: sixteen bytes of integer lanes, whatever width.
+    M128i,
+    /// `__m128d`: two `double` lanes.
+    M128d,
+    /// `__m256`: eight `float` lanes.
+    M256,
+    /// `__m256i`: thirty-two bytes of integer lanes.
+    M256i,
+    /// `__m256d`: four `double` lanes.
+    M256d,
+}
+
+impl VecTy {
+    /// The name, which C and `core::arch` spell the same way.
+    pub fn name(self) -> &'static str {
+        match self {
+            VecTy::M128 => "__m128",
+            VecTy::M128i => "__m128i",
+            VecTy::M128d => "__m128d",
+            VecTy::M256 => "__m256",
+            VecTy::M256i => "__m256i",
+            VecTy::M256d => "__m256d",
+        }
+    }
+
+    /// `sizeof`, which is also `_Alignof`: a vector type is aligned to its own
+    /// width on every x86 ABI, and so is Rust's.
+    pub fn bytes(self) -> u64 {
+        match self {
+            VecTy::M128 | VecTy::M128i | VecTy::M128d => 16,
+            VecTy::M256 | VecTy::M256i | VecTy::M256d => 32,
+        }
+    }
 }
 
 /// A pointer type: what it points at, and whether that is `const`.
@@ -1095,6 +1169,16 @@ impl Types {
                 size: 16,
                 align: target.int128_align,
             },
+            // A vector type is aligned to its own width — sixteen bytes for a
+            // `__m128i`, thirty-two for a `__m256i` — which is both what the
+            // x86 ABIs say and what `core::arch`'s types have. The scalar rule
+            // below would clamp it to [`TargetModel::max_scalar_align`], which
+            // is eight, and a `_mm_load_si128` from an object aligned to eight
+            // faults.
+            Ty::Vector(vec) => Layout {
+                size: vec.bytes(),
+                align: vec.bytes(),
+            },
             scalar => {
                 let size = scalar.size_bytes(target);
                 // A scalar is aligned to its own width, up to whatever the ABI
@@ -1208,6 +1292,7 @@ impl Ty {
             Ty::Record(_) => "struct",
             Ty::Enum(_) => "enum",
             Ty::VaList => "va_list",
+            Ty::Vector(vec) => vec.name(),
             Ty::Atomic(_) => "_Atomic",
             Ty::Error => "<error>",
         }
@@ -1251,6 +1336,15 @@ impl Ty {
     /// Whether this is `va_list`.
     pub fn is_va_list(self) -> bool {
         self == Ty::VaList
+    }
+
+    /// Whether this is one of x86's vector types.
+    ///
+    /// They are neither arithmetic nor scalar — nothing C does to a number can
+    /// be done to one — so every operator asks this before complaining, and
+    /// says "use an intrinsic" rather than the generic "invalid operands".
+    pub fn is_vector(self) -> bool {
+        matches!(self, Ty::Vector(_))
     }
 
     /// Whether this stands for something already reported as ill formed.
@@ -1376,6 +1470,10 @@ impl Ty {
             Ty::ComplexFloat => 64,
             Ty::ComplexDouble => 128,
             Ty::Pointer(_) => target.ptr_bits,
+            // Not a number of *value* bits — a vector type has no value this
+            // crate reasons about — but the width the object occupies, which
+            // is what `sizeof` asks for through [`Ty::size_bytes`].
+            Ty::Vector(vec) => (vec.bytes() * 8) as u32,
             // An atomic type's width is its underlying one's, which needs the
             // arena; nothing asks this about one, because every value has
             // already had the `_Atomic` taken off it.
@@ -1895,6 +1993,19 @@ pub struct Function {
     /// Whether `__attribute__((constructor))` asked for it to run before
     /// `main`, or `destructor` for after it.
     pub init_kind: Option<InitKind>,
+    /// The instruction sets `__attribute__((target("…")))` or
+    /// `#pragma GCC target("…")` asked for, in Rust's spelling, which the
+    /// generated item carries as `#[target_feature(enable = "…")]`.
+    ///
+    /// Only a *definition* can carry them: an `extern` declaration has no item
+    /// for the attribute to go on, and the function it names was compiled
+    /// somewhere else.
+    pub target_features: Vec<String>,
+    /// Set when this name is an [x86 intrinsic](crate::x86) rather than a
+    /// symbol: a call to it is generated as `::core::arch::x86_64::<name>`,
+    /// and it is left out of the unit's `extern` block because there is
+    /// nothing to link.
+    pub intrinsic: Option<&'static crate::x86::Intrinsic>,
     /// Where the function was asked to be [safe](crate::sema::check_safe), if
     /// it was: `[[cinrs::safe]]`, `__attribute__((cinrs_safe))` or
     /// `#pragma cinrs safe`.
@@ -2086,6 +2197,14 @@ pub struct Program {
     /// Filled in after semantic analysis, for the same reason as
     /// [`Program::link_libraries`].
     pub export: bool,
+    /// Every `__builtin_cpu_supports` the unit wrote, by where it was written.
+    ///
+    /// It becomes `::std::is_x86_feature_detected!`, and `core` has no CPU
+    /// detection at all — so a unit that said `#pragma cinrs no_std` cannot
+    /// have one. The pragma is only known after semantic analysis, which is
+    /// why the sites are collected rather than checked where they are met; see
+    /// [`crate::sema::check_pragmas`].
+    pub cpu_supports: Vec<SourceRange>,
     /// Whether `#pragma cinrs no_std` said the expansion goes into a
     /// `#![no_std]` crate.
     ///
@@ -2186,8 +2305,16 @@ impl Program {
     }
 
     /// Whether anything at all has to go into the `extern` block.
+    ///
+    /// An [x86 intrinsic](crate::x86) does not count: it is declared like any
+    /// other function and generated as a call to `core::arch`, so a unit whose
+    /// only declarations came from `<immintrin.h>` needs no block at all.
     pub fn has_externs(&self) -> bool {
-        !self.externs.is_empty() || self.functions.iter().any(Function::is_extern)
+        !self.externs.is_empty()
+            || self
+                .functions
+                .iter()
+                .any(|func| func.is_extern() && func.intrinsic.is_none())
     }
 }
 
@@ -2327,6 +2454,17 @@ pub enum BuiltinOp {
     /// `__builtin_fpclassify(nan, inf, normal, subnormal, zero, x)`: the one
     /// of the first five operands the sixth one's class selects.
     Fpclassify,
+    /// `__builtin_cpu_supports("avx2")`: whether the processor running the
+    /// program has that instruction set, as an `int`.
+    ///
+    /// It becomes `::std::is_x86_feature_detected!("avx2")`, which is the same
+    /// question asked of the same `cpuid` leaves. The payload is the row of
+    /// [`crate::x86::TARGET_FEATURES`] the instruction set is in, so that
+    /// [`BuiltinOp`] stays two bytes wide — it is a field of [`ExprKind`], and
+    /// every expression in the program pays for whatever the largest variant
+    /// is. Several Rust features for one GCC name (`abm` is LZCNT and POPCNT)
+    /// are `&&`ed together; [`crate::x86::detect_features`] is the lookup.
+    CpuSupports(u8),
     /// `__builtin_cproj(z)`: C99 7.3.9.5's projection onto the Riemann sphere.
     ///
     /// Everything is itself except a value with an infinite part, which becomes

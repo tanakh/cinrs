@@ -532,6 +532,14 @@ pub struct Attributes {
     pub aligned: Option<Alignment>,
     /// `section("…")`.
     pub section: Option<Spanned<String>>,
+    /// `target("avx2")`, `target("sse4.2,popcnt")`, `target("avx2", "fma")`:
+    /// the instruction sets the function is compiled for, one entry per name,
+    /// in GCC's spelling and with the range of the attribute that wrote it.
+    ///
+    /// Also what `#pragma GCC target` leaves behind for the functions after
+    /// it; the parser puts the pragma's list here when the declaration writes
+    /// no attribute of its own.
+    pub target: Vec<Spanned<String>>,
     /// `constructor`, whose priority is parsed and ignored.
     pub constructor: Option<SourceRange>,
     /// `destructor`, likewise.
@@ -581,6 +589,10 @@ impl Attributes {
         self.packed = self.packed.or(other.packed);
         self.aligned = self.aligned.take().or(other.aligned);
         self.section = self.section.take().or(other.section);
+        // Two `target` attributes on one declaration add up, exactly as two
+        // `-m` switches do: `__attribute__((target("avx2"))) __attribute__
+        // ((target("fma"))) void f(void)` asks for both.
+        self.target.extend(other.target);
         self.constructor = self.constructor.or(other.constructor);
         self.destructor = self.destructor.or(other.destructor);
         self.cleanup = self.cleanup.take().or(other.cleanup);

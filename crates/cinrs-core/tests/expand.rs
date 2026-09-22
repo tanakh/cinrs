@@ -750,10 +750,14 @@ fn a_diagnostic_inside_a_header_names_the_header_and_points_at_the_directive() {
 /// written in `_Atomic`, which a `c99!` block refuses by design, and
 /// `<complex.h>` is an `#error` when the complex types are switched off, which
 /// is what `__STDC_NO_COMPLEX__` promises the program.
+///
+/// `<mmintrin.h>` is an `#error` by design too — `core::arch` has no MMX and no
+/// `__m64`, so there is nothing to map — and is checked by
+/// `tests/ui/simd_not_x86.rs` instead.
 #[test]
 fn every_bundled_header_compiles_on_its_own() {
     for (name, _) in cinrs_core::include::BUNDLED {
-        if *name == "setjmp.h" {
+        if *name == "setjmp.h" || *name == "mmintrin.h" {
             continue;
         }
         let standard = if *name == "stdatomic.h" {
@@ -1374,4 +1378,75 @@ fn a_declared_functions_name_goes_through_the_usual_spelling() {
     let output = expand_for("x86_64-unknown-linux-gnu", "int self(int n);");
     assert!(output.contains("pub fn self_ ("), "{output}");
     assert!(output.contains("# [link_name = \"self\"]"), "{output}");
+}
+
+/// **An x86 intrinsic produces no item at all.**
+///
+/// `<immintrin.h>` declares nearly nine hundred prototypes, and not one of them
+/// may reach the expansion: there is no symbol to link, and a `pub fn
+/// _mm_add_ps` in the unit's `extern` block would be glob re-exported into the
+/// user's module, where it would clash with the `use core::arch::x86_64::*`
+/// that any Rust code doing its own SIMD writes. The only Rust an intrinsic
+/// produces is the call expression at each call site.
+#[test]
+fn an_intrinsic_produces_no_item() {
+    let output = expand_for(
+        "x86_64-unknown-linux-gnu",
+        "#include <immintrin.h>\n\
+         int lanes(const int *p) {\n\
+             __m128i v = _mm_loadu_si128((const __m128i *) p);\n\
+             return _mm_movemask_epi8(_mm_add_epi32(v, v));\n\
+         }",
+    );
+    // Not one `_mm_` item, and no `extern` block for them to have gone into.
+    assert!(!output.contains("pub fn _mm"), "{output}");
+    assert!(!output.contains("link_name"), "{output}");
+    assert!(!output.contains("unsafe extern \"C\" {"), "{output}");
+    // What it does produce: the calls, fully qualified.
+    assert!(
+        output.contains(":: core :: arch :: x86_64 :: _mm_add_epi32 ("),
+        "{output}"
+    );
+    assert!(
+        output.contains(":: core :: arch :: x86_64 :: _mm_loadu_si128 ("),
+        "{output}"
+    );
+    // The `typedef`s the header writes are ordinary type aliases, as they are
+    // in C: `__m128i` names something the user's C may also name.
+    assert!(
+        output.contains("pub type __m128i = :: core :: arch :: x86_64 :: __m128i ;"),
+        "{output}"
+    );
+    // A unit that mixes an intrinsic with a real library call still gets a
+    // block, holding only the library function.
+    let mixed = expand_for(
+        "x86_64-unknown-linux-gnu",
+        "#include <immintrin.h>\n#include <stdlib.h>\n\
+         int lanes(const int *p) {\n\
+             __m128i v = _mm_loadu_si128((const __m128i *) p);\n\
+             return abs(_mm_movemask_epi8(v));\n\
+         }",
+    );
+    assert!(!mixed.contains("pub fn _mm"), "{mixed}");
+    assert!(
+        mixed.contains("# [link_name = \"abs\"] pub fn abs ("),
+        "{mixed}"
+    );
+}
+
+/// The 32-bit target reaches `core::arch::x86` instead, with the same names.
+#[test]
+fn a_32_bit_x86_target_uses_the_other_arch_module() {
+    let output = expand_for(
+        "i686-unknown-linux-gnu",
+        "#include <immintrin.h>\n\
+         int lanes(const int *p) {\n\
+             return _mm_movemask_epi8(_mm_loadu_si128((const __m128i *) p));\n\
+         }",
+    );
+    assert!(
+        output.contains(":: core :: arch :: x86 :: _mm_loadu_si128 ("),
+        "{output}"
+    );
+    assert!(!output.contains("x86_64"), "{output}");
 }

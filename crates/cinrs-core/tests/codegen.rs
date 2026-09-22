@@ -1713,3 +1713,64 @@ fn an_initialised_flexible_array_member_gets_a_companion_type() {
         "#
     ));
 }
+
+/// The x86 intrinsics: a call becomes the `core::arch` function of the same
+/// name, an immediate operand becomes a turbofish, and `target` becomes
+/// `#[target_feature]`.
+///
+/// Nothing at all is generated *for* the intrinsics themselves — the header
+/// declares nearly nine hundred of them and there is no symbol behind any of
+/// them — so the `extern` block this unit would otherwise open with is absent.
+/// The target is named so that the snapshot reads the same on a machine that is
+/// not x86-64.
+#[test]
+fn an_intrinsic_call_becomes_a_core_arch_call() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        #include <immintrin.h>
+
+        int sum4(const int *p) {
+            __m128i v = _mm_loadu_si128((const __m128i *) p);
+            __m128i s = _mm_add_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 3, 2)));
+            return _mm_cvtsi128_si32(_mm_slli_epi32(s, 3));
+        }
+
+        __attribute__((target("avx2,fma"))) float wide(const float *p) {
+            __m256 v = _mm256_loadu_ps(p);
+            return _mm256_cvtss_f32(_mm256_add_ps(v, v));
+        }
+
+        int detect(void) { return __builtin_cpu_supports("avx2"); }
+        "#
+    ));
+}
+
+/// `#pragma GCC target` reaches the functions *defined* after it, successive
+/// pragmas accumulate, `pop_options` puts the set back, and an attribute
+/// written on a function wins over the region outright — on either side of the
+/// return type, since GCC takes it in both places.
+#[test]
+fn a_region_pragma_becomes_target_feature_attributes() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        int before(void) { return 0; }
+
+        #pragma GCC push_options
+        #pragma GCC target("avx2")
+        int inside(void) { return 1; }
+
+        #pragma GCC target("fma")
+        int deeper(void) { return 2; }
+
+        __attribute__((target("sse4.2"))) int its_own(void) { return 3; }
+        int __attribute__((target("popcnt"))) before_the_name(void) { return 4; }
+
+        #pragma GCC pop_options
+        int after(void) { return 5; }
+        "#
+    ));
+}

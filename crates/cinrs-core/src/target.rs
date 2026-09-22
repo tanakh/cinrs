@@ -124,11 +124,35 @@ impl Arch {
     pub fn macros(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Arch::X86 => &[("__i386__", "1"), ("__i386", "1")],
+            // `__SSE__` and `__SSE2__` are here because *every* x86-64 target
+            // has SSE2: it is in the System V and the Microsoft ABI both, and
+            // `rustc`'s own baseline. Nothing above them is, and a procedural
+            // macro cannot see `-C target-feature` or `-C target-cpu`, so a
+            // program that tests `#ifdef __AVX2__` takes the baseline branch
+            // here — the run-time question is `__builtin_cpu_supports("avx2")`
+            // and the way to ask for the instructions is
+            // `__attribute__((target("avx2")))`. `__SSE_MATH__` says what a
+            // program really wants to know from the pair: floating-point
+            // arithmetic goes through SSE rather than through x87, so a
+            // `double` is a `double` and not an 80-bit temporary.
+            //
+            // 32-bit x86 gets neither. Rust's `i686-*` targets do enable SSE2,
+            // but `i586-*` does not and [`Arch`] does not tell the two apart,
+            // and claiming SSE2 where there is none would send a program down a
+            // path its processor cannot run.
+            //
+            // `__MMX__` is deliberately absent although GCC predefines it on
+            // x86-64: `core::arch` has no MMX and no `__m64`, so the branch it
+            // would open leads to a diagnostic rather than to code.
             Arch::X86_64 => &[
                 ("__x86_64__", "1"),
                 ("__x86_64", "1"),
                 ("__amd64__", "1"),
                 ("__amd64", "1"),
+                ("__SSE__", "1"),
+                ("__SSE2__", "1"),
+                ("__SSE_MATH__", "1"),
+                ("__SSE2_MATH__", "1"),
             ],
             Arch::Aarch64 => &[("__aarch64__", "1")],
             Arch::Arm => &[("__arm__", "1")],

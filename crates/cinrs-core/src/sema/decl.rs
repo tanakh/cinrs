@@ -8,6 +8,7 @@ use crate::ir::{
     self, ConstValue, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind, Signature,
     StaticVar, Stmt, Storage, Ty, TypedefItem,
 };
+use crate::target::Arch;
 
 use super::types::Completeness;
 use super::{ConvContext, Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
@@ -2007,6 +2008,57 @@ impl Sema<'_> {
             prototyped: self.is_prototyped(func),
         };
 
+        // Is this one of the [x86 intrinsics](crate::x86)? The bundled
+        // `<immintrin.h>` declares eight hundred of them, and a call to one is
+        // generated as `::core::arch::x86_64::<name>` rather than as a call to
+        // a symbol, because there is no symbol.
+        //
+        // The test is deliberately conservative — the same name, a prototype,
+        // not variadic, and no definition in this unit — so a program that has
+        // a `_mm_add_ps` of its own gets its own function. The header is what
+        // puts the real declarations in scope; nothing here reads it.
+        let intrinsic = (definition.is_none()
+            && matches!(self.target.arch, Arch::X86 | Arch::X86_64)
+            && sig.prototyped
+            && !sig.variadic)
+            .then(|| crate::x86::lookup(&name.name))
+            .flatten();
+        // A declaration of one of those names that does *not* match is refused
+        // rather than left to be a symbol: there is no `_mm_add_ps` to link
+        // against, so a call to it would be an unresolved reference nobody can
+        // read. The way to get the real one is to include the header.
+        let intrinsic = match intrinsic {
+            Some(intr) if intr.x86_64_only && self.target.arch != Arch::X86_64 => {
+                self.error(
+                    name.range,
+                    format!(
+                        "'{}' is an x86 intrinsic that Rust's core::arch has only on x86-64, and \
+                         this unit is being translated for x86",
+                        intr.name
+                    ),
+                );
+                None
+            }
+            Some(intr) if usize::from(intr.arity) != sig.params.len() => {
+                self.error(
+                    name.range,
+                    format!(
+                        "'{}' is an x86 intrinsic and takes {} argument{}, not {}: this \
+                         declaration does not match the one <immintrin.h> gives it, and there is \
+                         no symbol of that name to link against. Include the header instead of \
+                         declaring it",
+                        intr.name,
+                        intr.arity,
+                        if intr.arity == 1 { "" } else { "s" },
+                        sig.params.len(),
+                    ),
+                );
+                None
+            }
+            other => other,
+        };
+        let target_features = self.target_features(attrs);
+
         // A nested function has no linkage: its name lives in the block it was
         // written in, where it shadows whatever a file-scope declaration of the
         // same name means, and the only declaration it can be a redeclaration
@@ -2098,6 +2150,20 @@ impl Sema<'_> {
                     .asm_label
                     .take()
                     .or_else(|| asm_label.map(|label| label.node.clone()));
+                // GCC takes the union of the `target` attributes written on
+                // the declarations of one function, as it does for every other
+                // attribute; the definition's are simply added to whatever a
+                // prototype above it asked for.
+                for feature in target_features {
+                    if !entry.target_features.contains(&feature) {
+                        entry.target_features.push(feature);
+                    }
+                }
+                // A unit that *defines* `_mm_add_ps` means its own function,
+                // whatever the name says, so the mapping is taken back.
+                if definition.is_some() {
+                    entry.intrinsic = None;
+                }
                 if definition.is_some() {
                     entry.range = name.range;
                 }
@@ -2133,6 +2199,8 @@ impl Sema<'_> {
                     section: attrs.section.as_ref().map(|s| s.node.clone()),
                     asm_label: asm_label.map(|label| label.node.clone()),
                     init_kind,
+                    target_features,
+                    intrinsic,
                     safe: attrs.safe,
                     locals: Vec::new(),
                     uses_alloca: false,
@@ -2152,6 +2220,80 @@ impl Sema<'_> {
             }
         };
         Some(id)
+    }
+
+    /// What `__attribute__((target("…")))` asks for, in Rust's spelling.
+    ///
+    /// GCC's attribute takes the same names its `-m` switches do and cinrs
+    /// turns each one into a `#[target_feature(enable = "…")]` on the
+    /// generated item, which is the same promise: the function may use that
+    /// instruction set, and it is the program's business to have checked that
+    /// the processor running it has one. [`crate::x86::TARGET_FEATURES`] is
+    /// the mapping, and everything it does not carry is a diagnostic rather
+    /// than a silent omission — an ignored `target` would be a function
+    /// compiled for the baseline and a program that crashes on the first AVX
+    /// instruction it does not have.
+    fn target_features(&mut self, attrs: &ast::Attributes) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for asked in &attrs.target {
+            let name = asked.node.as_str();
+            if !matches!(self.target.arch, Arch::X86 | Arch::X86_64) {
+                self.error(
+                    asked.range,
+                    format!(
+                        "'target' is only mapped on x86 targets, and this unit is being \
+                         translated for {}",
+                        self.target.arch.as_str()
+                    ),
+                );
+                continue;
+            }
+            // `target("arch=haswell")` names a processor, and `target("no-sse")`
+            // takes an instruction set away; Rust's attribute can do neither.
+            if let Some((key, _)) = name.split_once('=') {
+                self.error(
+                    asked.range,
+                    format!(
+                        "'target(\"{name}\")' selects a processor: Rust's #[target_feature] only \
+                         enables an instruction set, so '{key}=' has no equivalent. Name the \
+                         instruction sets the function needs instead, as in target(\"avx2,fma\")"
+                    ),
+                );
+                continue;
+            }
+            if let Some(rest) = name.strip_prefix("no-").or_else(|| name.strip_prefix('-')) {
+                self.error(
+                    asked.range,
+                    format!(
+                        "'target(\"{name}\")' turns an instruction set off, which Rust's \
+                         #[target_feature] cannot do: it only enables. Leave '{rest}' out of the \
+                         list instead"
+                    ),
+                );
+                continue;
+            }
+            if let Some(why) = crate::x86::unsupported_feature(name) {
+                self.error(asked.range, format!("'target(\"{name}\")': {why}"));
+                continue;
+            }
+            let Some(features) = crate::x86::target_features(name) else {
+                self.error(
+                    asked.range,
+                    format!(
+                        "unknown instruction set '{name}' in a 'target' attribute; the ones cinrs \
+                         maps onto Rust's #[target_feature] are {}",
+                        super::list_of_names(&crate::x86::feature_names())
+                    ),
+                );
+                continue;
+            };
+            for feature in features {
+                if !out.iter().any(|have| have == feature) {
+                    out.push((*feature).to_owned());
+                }
+            }
+        }
+        out
     }
 
     /// The parameter list an old-style (K&R) definition really declares.

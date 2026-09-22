@@ -1,0 +1,14 @@
+error: <cinrs>/immintrin.h:29:1: #error "the Intel intrinsics headers are x86 only; this unit is being translated for another architecture. Guard the #include with #ifdef __x86_64__, or see doc/features.md, 'SIMD intrinsics'."
+  --> tests/ui/simd_not_x86.rs:15:5
+   |
+15 |     #include <immintrin.h>
+   |     ^
+
+error: <cinrs>/mmintrin.h:15:1: #error "<mmintrin.h>: cinrs has no MMX and no '__m64' — Rust's core::arch dropped them. Use the SSE2 forms in <emmintrin.h>: '_mm_add_pi16' is '_mm_add_epi16', and so on."
+  --> tests/ui/simd_not_x86.rs:20:5
+   |
+20 |     #include <mmintrin.h>
+   |     ^
+
+error: aborting due to 2 previous errors
+

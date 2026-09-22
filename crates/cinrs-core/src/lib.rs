@@ -113,6 +113,7 @@ pub mod regions;
 pub mod reloop;
 pub mod sema;
 pub mod target;
+pub mod x86;
 
 use std::path::{Path, PathBuf};
 
@@ -715,9 +716,18 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         no_std,
         crate_path,
         pack_events,
+        target_events,
     } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
     let packing = pp::PackMap::new(pack_events);
-    let unit = parse::parse(&tokens, unit_range, &packing, &options, &mut diagnostics);
+    let targets = pp::TargetOptionMap::new(target_events);
+    let unit = parse::parse(
+        &tokens,
+        unit_range,
+        &packing,
+        &targets,
+        &options,
+        &mut diagnostics,
+    );
     // Annotate here rather than at the end: every diagnostic is annotated
     // exactly once, right after the pass that produced it.
     expansions.annotate(&mut diagnostics);

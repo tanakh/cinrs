@@ -400,8 +400,26 @@ literal naming a macro`.
 ```c
 #pragma GCC poison gets sprintf
 #pragma GCC warning "this build is untested"
+
+#pragma GCC push_options
+#pragma GCC target("avx2")
+void wide(const int *p) { … }          /* compiled with AVX2 */
+#pragma GCC pop_options
+void narrow(const int *p) { … }        /* and this one is not */
 ```
 
+* **`#pragma GCC target("avx2")`** asks for an instruction set for every function
+  *defined* after it — the same request `__attribute__((target("avx2")))` makes
+  on one function, and it becomes the same `#[target_feature(enable = "avx2")]`.
+  Successive `target` pragmas accumulate, as GCC's do, and an attribute written
+  on a function wins over the pragma outright. **`#pragma GCC push_options`**
+  saves the set in force, **`#pragma GCC pop_options`** puts it back, and
+  **`#pragma GCC reset_options`** goes back to the baseline. The names are
+  checked where a `target` attribute's are, so the two give the same diagnostics
+  in the same words; see [SIMD intrinsics](features.md#simd-intrinsics) for the
+  GCC-to-LLVM name table and what is refused. `#pragma GCC optimize(…)` and
+  pushing and popping *it* are the same directives and are ignored: there is no
+  optimiser here to instruct.
 * **`#pragma GCC poison a b c`** takes identifiers and means they are never to
   be written again; using one afterwards is `attempt to use the poisoned
   identifier 'a'`. A token that is not an identifier is an error.

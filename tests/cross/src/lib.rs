@@ -189,3 +189,68 @@ const _: () = assert!(
 /// use, so this is a second look at the same thing from the Rust side.
 const _: () = assert!(size_of::<c_int>() == 4);
 const _: () = assert!(size_of::<c_char>() == 1);
+
+// ---------------------------------------------------------------------------
+// the x86 SIMD intrinsics, on every x86 target this crate is checked for
+// ---------------------------------------------------------------------------
+
+/// The Intel intrinsics, guarded the way portable C guards them.
+///
+/// Three things are being checked here that only a real `rustc` can answer.
+/// The module the generated code names is `core::arch::x86_64` on a 64-bit
+/// target and `core::arch::x86` on `i686`, and both have to resolve; the
+/// vector types have to be usable in a `#![no_std]` crate, which they are,
+/// because they are `core`'s; and the layout `cinrs` gave a `union` with a
+/// `__m128i` in it has to be the one `rustc` gives — on the Microsoft ABI as
+/// much as on the System V one, which is what `x86_64-pc-windows-msvc` is in
+/// the list for.
+///
+/// On a target that is not x86 the whole block preprocesses away to nothing,
+/// which is also worth checking: the header is an `#error`, and a program that
+/// guards the include the way this does must not meet it.
+cinrs::c11! {
+    #if defined(__x86_64__) || defined(__i386__)
+    #include <immintrin.h>
+
+    _Static_assert(sizeof(__m128) == 16, "a 128-bit vector is sixteen bytes");
+    _Static_assert(_Alignof(__m128i) == 16, "and sixteen-byte aligned");
+    _Static_assert(sizeof(__m256d) == 32, "a 256-bit vector is thirty-two bytes");
+    _Static_assert(_Alignof(__m256i) == 32, "and thirty-two-byte aligned");
+    _Static_assert(__SIZEOF_POINTER__ == 4 || __SIZEOF_POINTER__ == 8, "");
+
+    /* SSE2 is the x86-64 baseline, so this needs no `target` attribute. */
+    union lanes {
+        __m128i v;
+        int i[4];
+    };
+
+    int lane_sum(const int *p) {
+        union lanes u;
+        u.v = _mm_add_epi32(_mm_loadu_si128((const __m128i *) p), _mm_set1_epi32(1));
+        return u.i[0] + u.i[3] + _mm_movemask_epi8(u.v);
+    }
+
+    int shifted(int x) {
+        return _mm_cvtsi128_si32(_mm_slli_epi32(_mm_set1_epi32(x), 3));
+    }
+
+    /* A 256-bit vector reaches this one through a pointer, so no function here
+     * needs the `avx` feature for the ABI's sake; the intrinsics inside do, and
+     * the attribute is what says so. */
+    __attribute__((target("avx2"))) void widen(const int *src, void *dst) {
+        _mm256_storeu_si256((__m256i *) dst, _mm256_loadu_si256((const __m256i *) src));
+    }
+    #endif
+}
+
+/// The `union` `cinrs` generated has the size and the alignment of the vector
+/// type in it, which is what makes punning a `__m128i` through one work.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+const _: () = {
+    assert!(size_of::<lanes>() == 16);
+    assert!(align_of::<lanes>() == 16);
+    // The `typedef`s the header wrote are aliases for `core::arch`'s own types,
+    // whichever module those came from.
+    assert!(size_of::<__m256i>() == 32);
+    assert!(align_of::<__m256i>() == 32);
+};

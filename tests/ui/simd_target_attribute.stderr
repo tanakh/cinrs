@@ -1,0 +1,44 @@
+error: 'target("avx512f")': AVX-512 is still unstable in rustc's core::arch on the Rust version this crate supports, so cinrs does not map it
+  --> tests/ui/simd_target_attribute.rs:20:20
+   |
+20 |     __attribute__((target("avx512f"))) int too_new(void) { return 4; }
+   |                    ^^^^^^
+
+error: 'target("arch=haswell")' selects a processor: Rust's #[target_feature] only enables an instruction set, so 'arch=' has no equivalent. Name the instruction sets the function needs instead, as in target("avx2,fma")
+  --> tests/ui/simd_target_attribute.rs:22:20
+   |
+22 |     __attribute__((target("arch=haswell"))) int a_processor(void) { return 5; }
+   |                    ^^^^^^
+
+error: 'target("no-sse2")' turns an instruction set off, which Rust's #[target_feature] cannot do: it only enables. Leave 'sse2' out of the list instead
+  --> tests/ui/simd_target_attribute.rs:24:20
+   |
+24 |     __attribute__((target("no-sse2"))) int turned_off(void) { return 6; }
+   |                    ^^^^^^
+
+error: unknown instruction set 'frobnicate' in a 'target' attribute; the ones cinrs maps onto Rust's #[target_feature] are 'abm', 'adx', 'aes', 'avx', 'avx2', 'bmi', 'bmi2', 'cx16', 'f16c', 'fma', 'fxsr', 'lzcnt', 'movbe', 'pclmul', 'popcnt', 'rdrnd', 'rdseed', 'sha', 'sse', 'sse2', 'sse3', 'sse4', 'sse4.1', 'sse4.2', 'ssse3' and 'xsave'
+  --> tests/ui/simd_target_attribute.rs:26:20
+   |
+26 |     __attribute__((target("frobnicate"))) int made_up(void) { return 7; }
+   |                    ^^^^^^
+
+error: 'target("mmx")': Rust's core::arch has no MMX and no '__m64'; the SSE2 forms in <emmintrin.h> do the same work
+  --> tests/ui/simd_target_attribute.rs:28:20
+   |
+28 |     __attribute__((target("mmx"))) int no_mmx(void) { return 8; }
+   |                    ^^^^^^
+
+error: unknown instruction set 'frobnicate'; the ones cinrs can ask the processor about are 'abm', 'adx', 'aes', 'avx', 'avx2', 'bmi', 'bmi2', 'cx16', 'f16c', 'fma', 'fxsr', 'lzcnt', 'movbe', 'pclmul', 'popcnt', 'rdrnd', 'rdseed', 'sha', 'sse', 'sse2', 'sse3', 'sse4', 'sse4.1', 'sse4.2', 'ssse3' and 'xsave'. A processor *name* — what GCC's __builtin_cpu_is takes — has no equivalent: ask about the instruction you mean to use
+  --> tests/ui/simd_target_attribute.rs:31:39
+   |
+31 |         return __builtin_cpu_supports("frobnicate");
+   |                                       ^^^^^^^^^^^^
+
+error: '__builtin_cpu_is' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
+  --> tests/ui/simd_target_attribute.rs:35:16
+   |
+35 |         return __builtin_cpu_is("haswell");
+   |                ^^^^^^^^^^^^^^^^
+
+error: aborting due to 7 previous errors
+

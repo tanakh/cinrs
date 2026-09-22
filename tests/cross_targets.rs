@@ -32,7 +32,9 @@ use std::process::Command;
 const TARGETS: &[(&str, &str)] = &[
     (
         "i686-unknown-linux-gnu",
-        "ILP32, and the i386 System V alignment of 'long long'",
+        "ILP32, the i386 System V alignment of 'long long', and the one target \
+         where the SIMD intrinsics resolve through 'core::arch::x86' rather than \
+         'core::arch::x86_64'",
     ),
     (
         "x86_64-pc-windows-gnu",
@@ -41,7 +43,8 @@ const TARGETS: &[(&str, &str)] = &[
     (
         "x86_64-pc-windows-msvc",
         "LLP64 again, with the Microsoft C library: the one target where a unit \
-         that calls 'printf' links 'legacy_stdio_definitions'",
+         that calls 'printf' links 'legacy_stdio_definitions' — and the x86 SIMD \
+         intrinsics on a second x86-64 ABI",
     ),
     ("wasm32-unknown-unknown", "ILP32 with no operating system"),
     (

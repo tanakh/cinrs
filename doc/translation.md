@@ -187,6 +187,7 @@ FILE *get_stdout(void) { return stdout; }
 | `struct S`, `union U` | `#[repr(C)] #[derive(Copy, Clone)]` items with `pub` members |
 | `enum E` | `pub type E = c_int;` plus one `pub const` per enumerator |
 | `int (*)(void *)` | `Option<unsafe extern "C" fn(*mut c_void) -> c_int>`, so that a null function pointer is representable |
+| `__m128`, `__m128i`, `__m256d`, … | `::core::arch::x86_64::__m128` and its relatives — `core`'s own types, sixteen or thirty-two bytes and aligned to themselves, which is what lets a `union` punne one |
 
 ```c
 struct Point { int x; int y; };
@@ -214,6 +215,95 @@ For the C names Rust cannot spell — a keyword, `self`, `$` — see [Names Rust
 would not take](features.md#names-rust-would-not-take). One C name is one Rust
 name everywhere it appears: as an item, as a member, in a designator and in a
 bit-field accessor.
+
+## SIMD intrinsics
+
+A call to one of the Intel intrinsics is **not** a call to a symbol: there is no
+`_mm_add_ps` anywhere to link against. It becomes the `core::arch` function of
+the same name, which is where the instruction really is:
+
+```c
+#include <immintrin.h>
+
+int sum4(const int *p) {
+    __m128i v = _mm_loadu_si128((const __m128i *) p);
+    __m128i s = _mm_add_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 3, 2)));
+    return _mm_cvtsi128_si32(_mm_slli_epi32(s, 3));
+}
+
+__attribute__((target("avx2,fma"))) float wide(const float *p) { … }
+```
+
+```rust
+pub type __m128i = ::core::arch::x86_64::__m128i;      // and its five relatives
+
+pub unsafe extern "C" fn sum4(mut p: *const c_int) -> c_int {
+    unsafe {
+        let mut v: ::core::arch::x86_64::__m128i =
+            ::core::arch::x86_64::_mm_loadu_si128(p as *const ::core::arch::x86_64::__m128i);
+        let mut s: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_add_epi32(
+            v,
+            ::core::arch::x86_64::_mm_shuffle_epi32::<{ 78i32 }>(v),
+        );
+        return ::core::arch::x86_64::_mm_cvtsi128_si32(
+            ::core::arch::x86_64::_mm_slli_epi32::<{ 3i32 }>(s),
+        );
+    }
+}
+
+#[target_feature(enable = "avx2")]
+#[target_feature(enable = "fma")]
+pub unsafe extern "C" fn wide(mut p: *const c_float) -> c_float { … }
+```
+
+Three things to read out of that.
+
+The **turbofish**. `_MM_SHUFFLE(1, 0, 3, 2)` folded to 78 and
+`_mm_slli_epi32(s, 3)`'s `3` moved out of the argument list, because those
+operands are immediates of the instruction and `core::arch` carries them as
+`const` generics. Sema folds each one and diagnoses a non-constant; the literal
+is written with the Rust type of the `const` parameter, in a block, so that a
+negative or unsigned one is still a const argument Rust parses.
+
+The **`#[target_feature]`**, one attribute per instruction set the `target`
+attribute asked for, in LLVM's spelling rather than GCC's. Because the body of
+every generated function is one `unsafe` block, an intrinsic can be called
+without it: an `unsafe` block satisfies Rust's rule on its own, and the
+attribute is what a function that means to be *given* the instruction set says.
+
+And what is **not** there: no `extern "C"` block. `<immintrin.h>` declared eight
+hundred and eighty-one functions in this unit and not one of them produced an
+item — no `pub fn _mm_add_ps`, nothing in the glob re-export, nothing to link.
+The `pub type __m128i = …` aliases are there because the header wrote
+`typedef`s, exactly as it does in C.
+
+The one intrinsic that produces an item is one whose **address** is taken, which
+GCC allows because its intrinsics are `static inline` functions. `core::arch`'s
+have the Rust ABI, so the unit gets a private shim of the C signature:
+
+```rust
+#[inline]
+#[target_feature(enable = "sse2")]
+unsafe extern "C" fn __cinrs_intrinsic__mm_add_epi32(
+    __cinrs_arg0: ::core::arch::x86_64::__m128i,
+    __cinrs_arg1: ::core::arch::x86_64::__m128i,
+) -> ::core::arch::x86_64::__m128i {
+    unsafe { ::core::arch::x86_64::_mm_add_epi32(__cinrs_arg0, __cinrs_arg1) }
+}
+```
+
+and `&_mm_add_epi32` is `Some(__cinrs_intrinsic__mm_add_epi32 as unsafe extern
+"C" fn(…) -> …)`. One shim per intrinsic however many times its address is
+taken, private to the unit's module, and hygienic — nothing the C declares can
+name it. An intrinsic with an immediate operand has no address at all, because a
+function pointer has nowhere to put the constant, and that is a diagnostic.
+
+`__builtin_cpu_supports("avx2")` becomes
+`((::std::is_x86_feature_detected!("avx2")) as c_int)`, and
+`__builtin_cpu_init()` becomes `{}`.
+
+On a 32-bit x86 target every path above reads `::core::arch::x86` instead; the
+names in it are the same.
 
 ## Arithmetic
 

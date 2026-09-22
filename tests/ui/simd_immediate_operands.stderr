@@ -1,0 +1,20 @@
+error: argument 2 of '_mm_slli_epi32' has to be an integer constant expression: it is an immediate operand of the instruction, and '_mm_slli_epi32' takes it as a compile-time constant (Intel's compilers require one too). Write the value, a macro such as _MM_SHUFFLE(3, 2, 1, 0), or an enumerator
+  --> tests/ui/simd_immediate_operands.rs:18:31
+   |
+18 |         v = _mm_slli_epi32(v, n);
+   |                               ^
+
+error: argument 2 of '_mm_shuffle_epi32' has to be an integer constant expression: it is an immediate operand of the instruction, and '_mm_shuffle_epi32' takes it as a compile-time constant (Intel's compilers require one too). Write the value, a macro such as _MM_SHUFFLE(3, 2, 1, 0), or an enumerator
+  --> tests/ui/simd_immediate_operands.rs:23:34
+   |
+23 |         v = _mm_shuffle_epi32(v, sel);
+   |                                  ^^^
+
+error: the address of '_mm_slli_epi32' cannot be taken: argument 2 is an immediate operand of the instruction, which has to be a compile-time constant, and a function pointer has no way to carry one. Write a wrapper function with the constant in it and take that address instead
+  --> tests/ui/simd_immediate_operands.rs:34:24
+   |
+34 |         return (void *)_mm_slli_epi32;
+   |                        ^^^^^^^^^^^^^^
+
+error: aborting due to 3 previous errors
+

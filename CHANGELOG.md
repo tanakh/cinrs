@@ -10,6 +10,86 @@ follows [Semantic Versioning][semver].
 
 ## Unreleased
 
+### Added
+
+* **The x86 SIMD intrinsics.** `#include <immintrin.h>` and write Intel's
+  intrinsics the way real C does: `__m128`, `__m128i`, `__m128d`, `__m256`,
+  `__m256i` and `__m256d` are types, and 881 functions — SSE, SSE2, SSE3, SSSE3,
+  SSE4.1, SSE4.2, AVX, AVX2, FMA, AES, PCLMUL, SHA, and the BMI1, BMI2, POPCNT
+  and LZCNT scalar ones — are declared. There is no vector language and no new
+  syntax: **the mapping is by name.** A call to `_mm_add_ps(a, b)` becomes
+  `::core::arch::x86_64::_mm_add_ps(a, b)`, which works because `core::arch` was
+  generated from the same Intel data Intel's own headers are. The bundled
+  headers' prototypes were *read out of `core::arch`'s source* by a maintainer
+  tool that writes both the header and the table driving the mapping
+  (`crates/cinrs-core/tests/x86_intrinsics.rs`), so a declaration and the
+  function it resolves to cannot drift apart — and a test that needs no
+  toolchain checks the two committed files against each other on every run.
+  `<xmmintrin.h>`, `<emmintrin.h>`, `<pmmintrin.h>`, `<tmmintrin.h>`,
+  `<smmintrin.h>`, `<nmmintrin.h>`, `<wmmintrin.h>`, `<avxintrin.h>`,
+  `<avx2intrin.h>`, `<x86intrin.h>` and `<popcntintrin.h>` are bundled too, in
+  the layering GCC and Clang give them, so code written for an older compiler
+  finds its instruction set under the header name it expects. The macros come
+  with them: `_MM_SHUFFLE`, `_MM_SHUFFLE2`, `_MM_TRANSPOSE4_PS`, `_MM_HINT_*`,
+  `_MM_FROUND_*`, `_CMP_*`, `_SIDD_*` and the rest, with the values GCC's
+  headers give them.
+
+  The vector types are ordinary objects of a known size and alignment —
+  sixteen or thirty-two bytes, aligned to themselves — so they work as locals,
+  parameters, return values, `static`s, array elements, `struct` members and the
+  members of the `union { __m128i v; int32_t i[4]; }` that most code reaches a
+  lane through. An **immediate operand** is a `const` generic in `core::arch`,
+  so the argument is folded and written into a turbofish
+  (`_mm_slli_epi32::<{ 3i32 }>(v)`); a non-constant is a diagnostic naming the
+  intrinsic, which is what Intel's own compilers say too. Taking the **address**
+  of an intrinsic works — GCC's are `static inline` functions, so real code does
+  — through a private `extern "C"` shim per intrinsic; an intrinsic with an
+  immediate operand has no address, and that is a diagnostic. **Nothing is
+  exported**: those 881 prototypes add not one item to the unit's `extern` block
+  or to its glob re-export, so a `use core::arch::x86_64::*` in the surrounding
+  Rust cannot clash with them.
+
+  See [SIMD intrinsics](doc/features.md#simd-intrinsics) for the coverage per
+  instruction set and the nineteen intrinsics whose `core::arch` signature C
+  cannot spell; `tests/simd.rs` runs every family, with the expected values
+  computed in scalar C in the same block and cross-checked against `gcc -O2`.
+  What stays refused, now with a diagnostic that names the intrinsic to write
+  instead: the GNU vector extensions,
+  `__attribute__((vector_size))` and `__builtin_ia32_*`. What is not here:
+  AVX-512 (every one of its target features is still unstable in rustc on this
+  crate's minimum supported version), and MMX and `__m64`, which `core::arch`
+  dropped — `<mmintrin.h>` is an `#error` that names the SSE2 form of each
+  intrinsic.
+
+* **`__attribute__((target("avx2")))` and `#pragma GCC target`.** GCC's way of
+  telling one function which instruction sets it may use becomes
+  `#[target_feature(enable = "avx2")]` on the generated item, with GCC's name
+  for an instruction set translated to LLVM's (`bmi` is `bmi1`, `pclmul` is
+  `pclmulqdq`, `cx16` is `cmpxchg16b`, `sse4` is both halves of SSE4, `abm` is
+  LZCNT and POPCNT together). Several names in one string, several attributes on
+  one declaration, and successive pragmas all accumulate, as GCC's do; `#pragma
+  GCC push_options` and `pop_options` bracket a region and an attribute on a
+  function wins over the pragma. A name rustc has not stabilised, a processor
+  (`target("arch=haswell")`) and turning an instruction set *off*
+  (`target("no-avx")`) are each refused with the reason, because an ignored
+  `target` would be a function compiled for the baseline and a program that
+  faults on the first instruction it has not got. On a `[[cinrs::safe]]`
+  function it is refused too: `#[target_feature]` makes a function unsafe to
+  *call*, which is the opposite of what safe promises.
+
+* **`__builtin_cpu_supports` and `__builtin_cpu_init`.** Since a procedural
+  macro cannot see rustc's `-C target-feature`, only the architecture baseline is
+  predefined — `__SSE__`, `__SSE2__`, `__SSE_MATH__` and `__SSE2_MATH__` on
+  x86-64, and nothing above them — so `#ifdef __AVX2__` takes the other branch
+  and the run-time question is the one to ask.
+  `__builtin_cpu_supports("avx2")` is `std::is_x86_feature_detected!("avx2")`,
+  reading the same `cpuid` leaves GCC's own builtin does and answering as an
+  `int`; it takes GCC's spellings. `__builtin_cpu_init()` is accepted and does
+  nothing, Rust's detection being lazy. Both need `std`, so
+  `__builtin_cpu_supports` under `#pragma cinrs no_std` is a located error.
+  `__builtin_cpu_is` is deliberately absent — it names a microarchitecture,
+  which `std_detect` cannot answer — and `__has_builtin` says so.
+
 ### Changed
 
 * **A `goto` no longer costs the loop it was written in.** The functions whose
@@ -41,9 +121,9 @@ follows [Semantic Versioning][semver].
   the machine and 19 do — every one of them a computed `goto`. `execute/medce-1`,
   which asks the optimiser to delete a call to an undefined `link_error()`
   inside `if (0)`, now compiles and passes. [`doc/benchmarks.md`](doc/benchmarks.md)
-  was regenerated after the change: `statemachine` is at 0.99×, 32 of the 39
-  programs are within 10 % of `gcc -O2` or faster, and every output still
-  matches.
+  was regenerated after the change: `statemachine` is at 0.99×, 32 of the 40
+  programs (the SIMD kernel below included) are within 10 % of `gcc -O2` or
+  faster, and every output still matches.
 
 * **The bundled headers are ISO C; POSIX comes from the platform.** `<unistd.h>`,
   `<fcntl.h>`, `<strings.h>` and `<sys/types.h>` are no longer bundled. They were

@@ -1,0 +1,14 @@
+error: '_mm_add_ps' is an x86 intrinsic and takes 2 arguments, not 0: this declaration does not match the one <immintrin.h> gives it, and there is no symbol of that name to link against. Include the header instead of declaring it
+  --> tests/ui/simd_declared_by_hand.rs:13:9
+   |
+13 |     int _mm_add_ps(void);
+   |         ^^^^^^^^^^
+
+error: '_pdep_u64' is an x86 intrinsic that Rust's core::arch has only on x86-64, and this unit is being translated for x86
+  --> tests/ui/simd_declared_by_hand.rs:26:24
+   |
+26 |     unsigned long long _pdep_u64(unsigned long long, unsigned long long);
+   |                        ^^^^^^^^^
+
+error: aborting due to 2 previous errors
+

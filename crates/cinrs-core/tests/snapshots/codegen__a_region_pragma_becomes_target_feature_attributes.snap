@@ -1,0 +1,45 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr#\"\n        int before(void) { return 0; }\n\n        #pragma GCC push_options\n        #pragma GCC target(\"avx2\")\n        int inside(void) { return 1; }\n\n        #pragma GCC target(\"fma\")\n        int deeper(void) { return 2; }\n\n        __attribute__((target(\"sse4.2\"))) int its_own(void) { return 3; }\n        int __attribute__((target(\"popcnt\"))) before_the_name(void) { return 4; }\n\n        #pragma GCC pop_options\n        int after(void) { return 5; }\n        \"#)"
+---
+mod __cinrs_unit_9df19687 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn before() -> ::core::ffi::c_int {
+        unsafe {
+            return 0;
+        }
+    }
+    #[target_feature(enable = "avx2")]
+    pub unsafe extern "C" fn inside() -> ::core::ffi::c_int {
+        unsafe {
+            return 1;
+        }
+    }
+    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "fma")]
+    pub unsafe extern "C" fn deeper() -> ::core::ffi::c_int {
+        unsafe {
+            return 2;
+        }
+    }
+    #[target_feature(enable = "sse4.2")]
+    pub unsafe extern "C" fn its_own() -> ::core::ffi::c_int {
+        unsafe {
+            return 3;
+        }
+    }
+    #[target_feature(enable = "popcnt")]
+    pub unsafe extern "C" fn before_the_name() -> ::core::ffi::c_int {
+        unsafe {
+            return 4;
+        }
+    }
+    pub unsafe extern "C" fn after() -> ::core::ffi::c_int {
+        unsafe {
+            return 5;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_9df19687::*;

@@ -1,0 +1,51 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr#\"\n        #include <immintrin.h>\n\n        int sum4(const int *p) {\n            __m128i v = _mm_loadu_si128((const __m128i *) p);\n            __m128i s = _mm_add_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 3, 2)));\n            return _mm_cvtsi128_si32(_mm_slli_epi32(s, 3));\n        }\n\n        __attribute__((target(\"avx2,fma\"))) float wide(const float *p) {\n            __m256 v = _mm256_loadu_ps(p);\n            return _mm256_cvtss_f32(_mm256_add_ps(v, v));\n        }\n\n        int detect(void) { return __builtin_cpu_supports(\"avx2\"); }\n        \"#)"
+---
+mod __cinrs_unit_de41b25e {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub type __m128 = ::core::arch::x86_64::__m128;
+    pub type __m128i = ::core::arch::x86_64::__m128i;
+    pub type __m128d = ::core::arch::x86_64::__m128d;
+    pub type __m256 = ::core::arch::x86_64::__m256;
+    pub type __m256i = ::core::arch::x86_64::__m256i;
+    pub type __m256d = ::core::arch::x86_64::__m256d;
+    pub unsafe extern "C" fn sum4(
+        mut p: *const ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut v: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_loadu_si128(
+                p as *const ::core::arch::x86_64::__m128i,
+            );
+            let mut s: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_add_epi32(
+                v,
+                ::core::arch::x86_64::_mm_shuffle_epi32::<{ 78i32 }>(v),
+            );
+            return ::core::arch::x86_64::_mm_cvtsi128_si32(
+                ::core::arch::x86_64::_mm_slli_epi32::<{ 3i32 }>(s),
+            );
+        }
+    }
+    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "fma")]
+    pub unsafe extern "C" fn wide(
+        mut p: *const ::core::ffi::c_float,
+    ) -> ::core::ffi::c_float {
+        unsafe {
+            let mut v: ::core::arch::x86_64::__m256 = ::core::arch::x86_64::_mm256_loadu_ps(
+                p,
+            );
+            return ::core::arch::x86_64::_mm256_cvtss_f32(
+                ::core::arch::x86_64::_mm256_add_ps(v, v),
+            );
+        }
+    }
+    pub unsafe extern "C" fn detect() -> ::core::ffi::c_int {
+        unsafe {
+            return ((::std::is_x86_feature_detected!("avx2")) as ::core::ffi::c_int);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_de41b25e::*;

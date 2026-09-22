@@ -28,6 +28,7 @@ use crate::gnu;
 use crate::ir::{
     self, BinOp, BuiltinOp, Expr, ExprKind, FloatClass, FloatOrder, FuncId, Function, Signature, Ty,
 };
+use crate::target::Arch;
 
 use super::{Entry, Sema};
 
@@ -140,6 +141,24 @@ impl Sema<'_> {
                 let folds = self.const_eval(&value).is_some() || constant_string(&value);
                 Some(Expr::int(i128::from(folds), Ty::Int, range))
             }
+            // GCC's `__builtin_cpu_init` runs the `cpuid` queries that fill the
+            // table `__builtin_cpu_supports` reads, and is only needed from a
+            // constructor that runs before the library's own initialiser.
+            // `std_detect` does its own lazy one-time detection, so there is
+            // nothing to run: the call evaluates to nothing, which is what a
+            // `void` builtin is.
+            "cpu_init" => {
+                self.builtin_arity(name, args, 0, range)?;
+                Some(Expr::new(
+                    ExprKind::Builtin {
+                        op: BuiltinOp::Discard,
+                        args: Vec::new(),
+                    },
+                    Ty::Void,
+                    range,
+                ))
+            }
+            "cpu_supports" => self.cpu_supports(args, range),
             "popcount" | "popcountl" | "popcountll" => {
                 self.bit_builtin(name, BuiltinOp::Popcount, args, range)
             }
@@ -534,7 +553,7 @@ impl Sema<'_> {
         } else {
             Ty::Double
         };
-        let Some(text) = self.string_argument(name, &args[0]) else {
+        let Some(text) = self.string_argument(name, "the payload", &args[0]) else {
             // The operand still has to be checked, and an error is already out.
             self.expr(&args[0]);
             return None;
@@ -557,9 +576,9 @@ impl Sema<'_> {
         Some(Expr::new(ExprKind::Float(f64::from_bits(bits)), ty, range))
     }
 
-    /// The text of a string-literal argument, which is all `__builtin_nan`
-    /// accepts.
-    fn string_argument(&mut self, name: &str, arg: &ast::Expr) -> Option<String> {
+    /// The text of a string-literal argument, which is all `__builtin_nan` and
+    /// `__builtin_cpu_supports` accept.
+    fn string_argument(&mut self, name: &str, what: &str, arg: &ast::Expr) -> Option<String> {
         if let ast::ExprKind::Str(literal) = &arg.kind
             && let Some(bytes) = literal.as_bytes()
         {
@@ -567,9 +586,71 @@ impl Sema<'_> {
         }
         self.error(
             arg.range,
-            format!("the argument of '{name}' must be a string literal naming the payload"),
+            format!("the argument of '{name}' must be a string literal naming {what}"),
         );
         None
+    }
+
+    /// `__builtin_cpu_supports("avx2")`, which becomes
+    /// `::std::is_x86_feature_detected!("avx2")`.
+    ///
+    /// This is the run-time half of the SIMD story, and the half that matters:
+    /// a procedural macro cannot see rustc's `-C target-feature`, so cinrs
+    /// predefines only the x86-64 baseline — `__SSE__` and `__SSE2__` — and a
+    /// program that wants AVX2 asks the processor rather than the compiler.
+    /// The answer is an `int`, exactly as GCC's builtin returns.
+    fn cpu_supports(&mut self, args: &[ast::Expr], range: SourceRange) -> Option<Expr> {
+        self.builtin_arity("__builtin_cpu_supports", args, 1, range)?;
+        if !matches!(self.target.arch, Arch::X86 | Arch::X86_64) {
+            self.error(
+                range,
+                format!(
+                    "'__builtin_cpu_supports' is x86 only, and this unit is being translated for \
+                     {}",
+                    self.target.arch.as_str()
+                ),
+            );
+            return None;
+        }
+        let asked = self.string_argument(
+            "__builtin_cpu_supports",
+            "an instruction set, as in __builtin_cpu_supports(\"avx2\")",
+            &args[0],
+        )?;
+        if let Some(why) = crate::x86::unsupported_feature(&asked) {
+            self.error(
+                args[0].range,
+                format!("'__builtin_cpu_supports(\"{asked}\")': {why}"),
+            );
+            return None;
+        }
+        let Some(row) = crate::x86::feature_row(&asked) else {
+            self.error(
+                args[0].range,
+                format!(
+                    "unknown instruction set '{asked}'; the ones cinrs can ask the processor \
+                     about are {}. A processor *name* — what GCC's __builtin_cpu_is takes — has \
+                     no equivalent: ask about the instruction you mean to use",
+                    super::list_of_names(&crate::x86::feature_names())
+                ),
+            );
+            return None;
+        };
+        // `is_x86_feature_detected!` is a `std` macro: `core` has no CPU
+        // detection at all, and there is nothing to fall back on. The unit's
+        // `no_std` is only known once the pragmas have been read, so the site
+        // is recorded and [`super::check_pragmas`] reports it.
+        self.program.cpu_supports.push(range);
+        Some(Expr::new(
+            ExprKind::Builtin {
+                // The row fits in a byte; `crate::x86` asserts that the table
+                // never outgrows one.
+                op: BuiltinOp::CpuSupports(row as u8),
+                args: Vec::new(),
+            },
+            Ty::Int,
+            range,
+        ))
     }
 
     /// An operand of a builtin with a fixed floating prototype, converted to
@@ -990,6 +1071,10 @@ impl Sema<'_> {
             section: None,
             asm_label: None,
             init_kind: None,
+            target_features: Vec::new(),
+            // A `__builtin_memcpy` is `memcpy`, which is a symbol; nothing
+            // here is ever an intrinsic mapped onto `core::arch`.
+            intrinsic: None,
             safe: None,
             locals: Vec::new(),
             uses_alloca: false,

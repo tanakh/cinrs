@@ -490,6 +490,12 @@ static PROGRAMS: &[Program] = &[
         note: "integer and floating division by run-time divisors",
         ..program("divide", "kernels/divide.c", Group::Kernel)
     },
+    Program {
+        args: &["200000", "4000"],
+        note: "SSE2 intrinsics against the same kernels in scalar C: dot product, \
+               sum of absolute differences, memchr",
+        ..program("simd-dot", "kernels/simd_dot.c", Group::Kernel)
+    },
 ];
 
 /// Programs that are deliberately absent, and why. Printed in the report so

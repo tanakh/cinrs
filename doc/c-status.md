@@ -202,6 +202,15 @@ the *host*, so a cross build gets no default directories at all and must point
 is the whole of it, with the table of what glibc's headers do in this front
 end.
 
+And the model does not reach what a *processor* has rather than what its ABI
+says. Which instruction sets a build may use is `rustc`'s `-C target-feature`
+and `-C target-cpu`, which a procedural macro cannot see, so only the
+architecture's baseline is predefined — `__SSE__` and `__SSE2__` on x86-64, and
+nothing above them. A program that dispatches on the processor asks at run time
+with `__builtin_cpu_supports("avx2")` and tells a function which instructions it
+may use with `__attribute__((target("avx2")))`; see
+[SIMD intrinsics](features.md#simd-intrinsics).
+
 ## C99
 
 | Feature | Paper | cinrs | Notes |

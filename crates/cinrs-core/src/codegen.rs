@@ -170,7 +170,7 @@
 //! nothing at all, because the list ends when its value is dropped. See
 //! [`crate::sema`]'s `va` module for the model.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 
@@ -217,6 +217,10 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     if cg.uses_cleanup.get() {
         items.extend(cg.cleanup_guard_item(Span::call_site()));
     }
+    // The shims the unit needs for the intrinsics whose address it took; see
+    // [`Codegen::address_taken`]. Collected while the bodies were generated,
+    // so this has to come after them.
+    items.extend(cg.intrinsic_shim_items());
     items.extend(out);
     items
 }
@@ -1090,6 +1094,17 @@ struct Codegen<'a> {
     uses_complex: Cell<bool>,
     /// Whether anything in the unit needs the `cleanup` drop guard item.
     uses_cleanup: Cell<bool>,
+    /// Every [x86 intrinsic](crate::x86) whose *address* the unit took, in the
+    /// order it first did.
+    ///
+    /// An intrinsic is not a symbol, and `core::arch`'s function has the Rust
+    /// ABI, so its address is not an `unsafe extern "C" fn` pointer and cannot
+    /// be made into one. What C asks for is a function of that signature that
+    /// does what the intrinsic does, which is a shim — and GCC's own headers
+    /// are exactly that, `__always_inline__` functions whose address is
+    /// therefore takeable. One is generated per intrinsic, private to the
+    /// unit's module, and the same `FuncId` used twice shares it.
+    address_taken: RefCell<Vec<ir::FuncId>>,
     /// The state number of every label a `&&label` took the address of, over
     /// the whole unit.
     ///
@@ -1176,6 +1191,7 @@ impl<'a> Codegen<'a> {
             uses_int128: Cell::new(false),
             uses_complex: Cell::new(false),
             uses_cleanup: Cell::new(false),
+            address_taken: RefCell::new(Vec::new()),
             label_states,
             region_names: HashMap::new(),
             region_kinds: HashMap::new(),
@@ -1341,6 +1357,18 @@ impl<'a> Codegen<'a> {
             // The lifetime is elided: `VaList` only ever appears as the type of
             // a parameter or of a local, where elision does the right thing.
             Ty::VaList => "VaList",
+            // `core::arch`'s own `__m128i` and friends: the same name, the
+            // same size, the same alignment and the same calling convention
+            // as C's, which is what makes the intrinsics a name-level mapping
+            // rather than a translation. The module is `x86_64` or `x86`
+            // depending on the [target model](crate::target); a unit that
+            // reaches one of these types on any other architecture never got
+            // past the `#error` in the bundled header.
+            Ty::Vector(vec) => {
+                let module = self.arch_module(span);
+                let name = Ident::new(vec.name(), span);
+                return quote_spanned! {span=> ::core::arch::#module::#name };
+            }
             Ty::Pointer(id) => {
                 let pointer = self.program.types.pointer_type(id);
                 if let Ty::Func(func) = pointer.pointee {
@@ -1394,6 +1422,22 @@ impl<'a> Codegen<'a> {
         };
         let ident = Ident::new(name, span);
         quote_spanned! {span=> ::core::ffi::#ident }
+    }
+
+    /// The `core::arch` submodule the x86 intrinsics and vector types live in:
+    /// `x86_64` for a 64-bit target and `x86` for a 32-bit one.
+    ///
+    /// The two modules have the same names in them — `core::arch::x86` has
+    /// `_mm_add_epi32` too — so only the path differs between the targets.
+    /// Anything else is unreachable: the bundled `<immintrin.h>` is an
+    /// `#error` on a target that is neither.
+    fn arch_module(&self, span: Span) -> Ident {
+        let name = if self.options.target.arch == crate::target::Arch::X86 {
+            "x86"
+        } else {
+            "x86_64"
+        };
+        Ident::new(name, span)
     }
 
     /// The path of the runtime module the generated code calls: `::cinrs::rt`,
@@ -2105,6 +2149,17 @@ impl<'a> Codegen<'a> {
             if !func.is_extern() || self.beyond_toolchain(func) {
                 continue;
             }
+            // An [x86 intrinsic](crate::x86) has no symbol: a call to it is
+            // generated as `::core::arch::x86_64::<name>`, and declaring one
+            // here would put a `pub fn _mm_add_ps` into the unit's module —
+            // which the facade glob re-exports, so it would clash with a
+            // `use core::arch::x86_64::*` in the user's own code and link
+            // against nothing if it were ever called. The bundled
+            // `<immintrin.h>` declares eight hundred of them; **none** of
+            // them reaches the generated Rust.
+            if func.intrinsic.is_some() {
+                continue;
+            }
             let fspan = self.sp(func.range);
             // The C name, through the same mapping every other name goes
             // through: a keyword becomes `r#yield`, `a$b` becomes
@@ -2512,6 +2567,11 @@ impl<'a> Codegen<'a> {
             }
             None => TokenStream::new(),
         };
+        // `__attribute__((target("avx2")))`, which is the same promise
+        // `#[target_feature(enable = "avx2")]` makes: the body may use that
+        // instruction set, and a caller has to have checked that the
+        // processor has it — with `__builtin_cpu_supports`, as in C.
+        let target_feature = self.target_feature_attrs(func, span);
         // A function the unit asked to be safe is generated without `unsafe`,
         // and its body without the `unsafe` block, so that `rustc` checks every
         // operation in it; see [`crate::sema::check_safe`] for what that
@@ -2527,8 +2587,25 @@ impl<'a> Codegen<'a> {
             #cold
             #deprecated
             #section
+            #target_feature
             #vis #unsafety extern "C" fn #name(#params) #ret
         }
+    }
+
+    /// One `#[target_feature(enable = "…")]` per instruction set the function
+    /// asked for.
+    ///
+    /// One attribute per name rather than one attribute with several `enable`s
+    /// — both are legal, and this reads as the list of `-m` switches it came
+    /// from.
+    fn target_feature_attrs(&self, func: &Function, span: Span) -> TokenStream {
+        let mut out = TokenStream::new();
+        for feature in &func.target_features {
+            let mut literal = Literal::string(feature);
+            literal.set_span(span);
+            out.extend(quote_spanned! {span=> #[target_feature(enable = #literal)] });
+        }
+        out
     }
 
     /// The `static` that puts a `constructor` or `destructor` function into the
@@ -3802,6 +3879,110 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// `Some(f as unsafe extern "C" fn(…) -> R)`: a function name used as a
+    /// value.
+    ///
+    /// A method of its own rather than an arm of [`Codegen::expr`]'s match
+    /// because that function is the recursion this module is bounded by, and in
+    /// an unoptimised build every temporary of every arm has a stack slot of
+    /// its own; see `expand.rs`'s `codegen_of_deeply_nested_input_fits_in_a_
+    /// small_stack`.
+    fn func_addr(&self, id: ir::FuncId, span: Span) -> Value {
+        let function = self.program.function(id);
+        let name = if function.intrinsic.is_some() {
+            self.intrinsic_shim_name(id, span)
+        } else {
+            self.function_path(function, span)
+        };
+        let signature = self.function_pointer_ty(function, span);
+        Value::new(
+            quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) },
+            prec::CALL,
+        )
+    }
+
+    /// The name of the shim that stands for an x86 intrinsic whose address was
+    /// taken, remembering that the unit needs it.
+    ///
+    /// `Span::mixed_site()` is the same hygiene the cleanup guard type uses: it
+    /// puts the name out of reach of anything the C declares, so no
+    /// `__cinrs_intrinsic_…` a program writes for itself can collide with it.
+    fn intrinsic_shim_name(&self, id: ir::FuncId, span: Span) -> TokenStream {
+        let function = self.program.function(id);
+        {
+            let mut wanted = self.address_taken.borrow_mut();
+            if !wanted.contains(&id) {
+                wanted.push(id);
+            }
+        }
+        let name = Ident::new(
+            &format!("__cinrs_intrinsic_{}", function.name),
+            Span::mixed_site(),
+        );
+        quote_spanned! {span=> #name }
+    }
+
+    /// One `unsafe extern "C" fn` per intrinsic whose address the unit took,
+    /// forwarding to `core::arch`.
+    ///
+    /// The shim carries the intrinsic's own `#[target_feature]`, which is what
+    /// GCC's `__always_inline__` header function carries too: without it a
+    /// 256-bit vector could not be passed by value through the C ABI at all,
+    /// and rustc refuses the definition. It is private to the unit's module —
+    /// `pub` would put a name into the glob re-export that no C declared — and
+    /// `#[inline]` so that the indirect call through it costs nothing when the
+    /// optimiser can see the target. `#[inline(always)]` is deliberately *not*
+    /// used: rustc refuses it together with `#[target_feature]`.
+    fn intrinsic_shim_items(&self) -> TokenStream {
+        let mut out = TokenStream::new();
+        for id in self.address_taken.borrow().iter() {
+            let function = self.program.function(*id);
+            let Some(intr) = function.intrinsic else {
+                continue;
+            };
+            let span = self.sp(function.range);
+            let name = Ident::new(
+                &format!("__cinrs_intrinsic_{}", function.name),
+                Span::mixed_site(),
+            );
+            let mut params = TokenStream::new();
+            let mut args = TokenStream::new();
+            for (index, ty) in function.sig.params.iter().enumerate() {
+                if index > 0 {
+                    params.extend(quote_spanned! {span=> , });
+                    args.extend(quote_spanned! {span=> , });
+                }
+                let pname = Ident::new(&format!("__cinrs_arg{index}"), Span::mixed_site());
+                let pty = self.ty(*ty, span);
+                params.extend(quote_spanned! {span=> #pname: #pty });
+                args.extend(quote_spanned! {span=> #pname });
+            }
+            let ret = if function.sig.ret.is_void() {
+                TokenStream::new()
+            } else {
+                let ty = self.ty(function.sig.ret, span);
+                quote_spanned! {span=> -> #ty }
+            };
+            let feature = if intr.feature.is_empty() {
+                TokenStream::new()
+            } else {
+                let mut literal = Literal::string(intr.feature);
+                literal.set_span(span);
+                quote_spanned! {span=> #[target_feature(enable = #literal)] }
+            };
+            let module = self.arch_module(span);
+            let call = Ident::new(intr.name, span);
+            out.extend(quote_spanned! {span=>
+                #[inline]
+                #feature
+                unsafe extern "C" fn #name(#params) #ret {
+                    unsafe { ::core::arch::#module::#call(#args) }
+                }
+            });
+        }
+        out
+    }
+
     /// `f as unsafe extern "C" fn(…) -> R`, the function a drop guard holds.
     fn func_pointer(&self, id: ir::FuncId, span: Span) -> TokenStream {
         let function = self.program.function(id);
@@ -4210,15 +4391,7 @@ impl<'a> Codegen<'a> {
                 }
             }
             ExprKind::AddrOf(place) => self.address_of(place, expr.ty, span),
-            ExprKind::FuncAddr(id) => {
-                let function = self.program.function(*id);
-                let name = self.function_path(function, span);
-                let signature = self.function_pointer_ty(function, span);
-                Value::new(
-                    quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) },
-                    prec::CALL,
-                )
-            }
+            ExprKind::FuncAddr(id) => self.func_addr(*id, span),
             // GNU's `&&label`. The value is the state number the label's block
             // was given, cast to the pointer type the expression has — which
             // is what makes `goto *` a store to the state variable, and what
@@ -4808,6 +4981,25 @@ impl<'a> Codegen<'a> {
                     out.extend(self.expr_stmt(arg));
                 }
                 Value::new(quote_spanned! {span=> { #out } }, prec::BLOCK)
+            }
+            // `__builtin_cpu_supports("avx2")` asks the processor, exactly as
+            // it does in C, and the answer is an `int` because that is what
+            // GCC's builtin returns. Several features for one GCC name — `abm`
+            // is LZCNT and POPCNT — are all of them or nothing.
+            BuiltinOp::CpuSupports(row) => {
+                let mut test = TokenStream::new();
+                for (index, feature) in crate::x86::detect_features(row).iter().enumerate() {
+                    if index > 0 {
+                        test.extend(quote_spanned! {span=> && });
+                    }
+                    let mut literal = Literal::string(feature);
+                    literal.set_span(span);
+                    // The root path, not `std::arch`'s: `is_x86_feature_detected`
+                    // has been a `std` root macro since 1.27, which is older
+                    // than anything this crate supports.
+                    test.extend(quote_spanned! {span=> ::std::is_x86_feature_detected!(#literal) });
+                }
+                Value::new(quote_spanned! {span=> ((#test) as #int) }, prec::LOWEST)
             }
             // One block of the function's arena per call, rounded up to a
             // whole number of `u128`s so that the pointer is 16-byte aligned.
@@ -5865,6 +6057,14 @@ impl<'a> Codegen<'a> {
     }
 
     fn call(&mut self, callee: &Callee, args: &[Expr], span: Span) -> Value {
+        // An [x86 intrinsic](crate::x86) is not a symbol: the call is the
+        // function of the same name in `core::arch`, with the immediate
+        // operands moved into a turbofish.
+        if let Callee::Direct(id) = callee
+            && let Some(intr) = self.program.function(*id).intrinsic
+        {
+            return self.intrinsic_call(intr, args, span);
+        }
         let sig = self.callee_signature(callee);
         // A call through a function type with *no prototype* passes as many
         // arguments as it was given, each with the default argument promotions
@@ -5966,6 +6166,70 @@ impl<'a> Codegen<'a> {
         }
         let call = parenthesize(tokens, span);
         Value::new(quote_spanned! {span=> #target #call }, prec::CALL)
+    }
+
+    /// A call to an x86 intrinsic: `::core::arch::x86_64::_mm_slli_epi32::<{
+    /// 3i32 }>(v)`.
+    ///
+    /// Everything about it lines up by construction — the bundled header's
+    /// prototype was generated from the very signature `rustc` will check the
+    /// call against — so there is none of the reinterpreting an ordinary call
+    /// may need. Two things are not a plain transliteration:
+    ///
+    /// * the operands Intel requires to be integer constant expressions are
+    ///   `const` generics in `core::arch`, so they move out of the argument
+    ///   list into a turbofish. Sema has already folded each one to an
+    ///   [`ExprKind::Int`] and reported the ones it could not (see
+    ///   [`crate::x86::Intrinsic::imm`]);
+    /// * the literal carries the `const` parameter's own type, and is wrapped
+    ///   in a block, so that a negative value is still a const argument Rust
+    ///   parses.
+    fn intrinsic_call(
+        &mut self,
+        intr: &'static crate::x86::Intrinsic,
+        args: &[Expr],
+        span: Span,
+    ) -> Value {
+        let module = self.arch_module(span);
+        let name = Ident::new(intr.name, span);
+        let mut generics = TokenStream::new();
+        for (index, imm) in intr.imm.iter().enumerate() {
+            if index > 0 {
+                generics.extend(quote_spanned! {span=> , });
+            }
+            let value = match args.get(usize::from(imm.index)).map(|arg| &arg.kind) {
+                Some(ExprKind::Int(value)) => *value,
+                // Unreachable: sema folds every immediate and reports the ones
+                // it cannot, and a unit with an error generates stubs rather
+                // than this. A zero keeps the expansion parseable.
+                _ => 0,
+            };
+            let literal = suffixed_int_literal(value, imm.rust_ty, span);
+            generics.extend(quote_spanned! {span=> { #literal } });
+        }
+        let turbofish = if generics.is_empty() {
+            TokenStream::new()
+        } else {
+            quote_spanned! {span=> ::<#generics> }
+        };
+
+        let mut tokens = TokenStream::new();
+        let mut written = 0usize;
+        for (index, arg) in args.iter().enumerate() {
+            if intr.immediate_at(index).is_some() {
+                continue;
+            }
+            if written > 0 {
+                tokens.extend(quote_spanned! {span=> , });
+            }
+            written += 1;
+            tokens.extend(self.expr_at(arg, arg.ty));
+        }
+        let call = parenthesize(tokens, span);
+        Value::new(
+            quote_spanned! {span=> ::core::arch::#module::#name #turbofish #call },
+            prec::CALL,
+        )
     }
 
     /// The hidden arguments a call to a lifted nested function opens with.
@@ -7816,6 +8080,25 @@ fn message_literal(text: &str, span: Span) -> TokenStream {
 /// An array length, which Rust counts in `usize`.
 fn usize_literal(value: u64, span: Span) -> TokenStream {
     let mut literal = Literal::usize_unsuffixed(value as usize);
+    literal.set_span(span);
+    TokenStream::from(TokenTree::Literal(literal))
+}
+
+/// An integer literal with the Rust suffix `ty` names: `3i32`, `7u32`.
+///
+/// It is what an x86 intrinsic's immediate operand becomes, where the type of
+/// `core::arch`'s `const` parameter has to be written out because a const
+/// argument is not inferred from the parameter.
+fn suffixed_int_literal(value: i128, ty: &str, span: Span) -> TokenStream {
+    let mut literal = match ty {
+        // An unsigned `const` parameter takes the bit pattern the C constant
+        // was reduced to, which is what a mask written as `-1` means.
+        "u32" => Literal::u32_suffixed(value as u32),
+        "u64" => Literal::u64_suffixed(value as u64),
+        "i64" => Literal::i64_suffixed(value as i64),
+        // `i32` is what every immediate operand in `core::arch` is.
+        _ => Literal::i32_suffixed(value as i32),
+    };
     literal.set_span(span);
     TokenStream::from(TokenTree::Literal(literal))
 }

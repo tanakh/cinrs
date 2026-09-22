@@ -765,12 +765,49 @@ pub struct Preprocessed {
     /// in [`Preprocessed::tokens`] it takes effect at; [`PackMap`] answers what
     /// was in force where a `struct` was defined.
     pub pack_events: Vec<(usize, Option<u32>)>,
+    /// Every `#pragma GCC target` the unit wrote, as `(token index, names)`.
+    ///
+    /// Recorded the same way [`Preprocessed::pack_events`] is, and read the
+    /// same way: [`TargetOptionMap`] answers what was in force where a
+    /// function was defined.
+    pub target_events: Vec<(usize, Vec<(String, SourceRange)>)>,
 }
 
 /// What `#pragma pack` asked for, at every point of the token list.
 #[derive(Clone, Debug, Default)]
 pub struct PackMap {
     events: Vec<(usize, Option<u32>)>,
+}
+
+/// What `#pragma GCC target` asked for, at every point of the token list.
+///
+/// GCC's directive applies to the functions *defined* after it, so the answer
+/// depends on where in the stream the definition stands — exactly as
+/// [`PackMap`]'s does for a `struct`. An empty list is the usual answer: the
+/// map is empty unless the unit wrote the directive at all.
+#[derive(Clone, Debug, Default)]
+pub struct TargetOptionMap {
+    events: Vec<(usize, Vec<(String, SourceRange)>)>,
+}
+
+impl TargetOptionMap {
+    /// Builds the map from the preprocessor's events, which are in order.
+    pub fn new(events: Vec<(usize, Vec<(String, SourceRange)>)>) -> Self {
+        Self { events }
+    }
+
+    /// Whether any `#pragma GCC target` was written at all.
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// The instruction sets in force at token `index`.
+    pub fn at(&self, index: usize) -> &[(String, SourceRange)] {
+        let at = self.events.partition_point(|(pos, _)| *pos <= index);
+        self.events[..at]
+            .last()
+            .map_or(&[][..], |(_, names)| names.as_slice())
+    }
 }
 
 impl PackMap {
@@ -819,6 +856,7 @@ pub fn preprocess(
         no_std: pp.no_std,
         crate_path: pp.crate_path,
         pack_events: pp.pack_events,
+        target_events: pp.target_events,
     }
 }
 
@@ -1194,6 +1232,13 @@ struct Pp<'a> {
     pack_stack: Vec<Option<u32>>,
     /// Every change of that value, by the index in `out` it takes effect at.
     pack_events: Vec<(usize, Option<u32>)>,
+    /// The instruction sets `#pragma GCC target` is currently asking for, in
+    /// GCC's spelling and with the range of the directive that named each.
+    target_features: Vec<(String, SourceRange)>,
+    /// What `#pragma GCC push_options` saved.
+    target_stack: Vec<Vec<(String, SourceRange)>>,
+    /// Every change of that list, by the index in `out` it takes effect at.
+    target_events: Vec<(usize, Vec<(String, SourceRange)>)>,
     /// The name of the outermost file, which `__BASE_FILE__` reports.
     base_file: String,
     /// The include guard of a file that has one: its name, and the macro that
@@ -1281,6 +1326,9 @@ impl<'a> Pp<'a> {
             pack: None,
             pack_stack: Vec::new(),
             pack_events: Vec::new(),
+            target_features: Vec::new(),
+            target_stack: Vec::new(),
+            target_events: Vec::new(),
             base_file: ctx.file_name.clone(),
             guards: HashMap::new(),
             user_headers: Vec::new(),
@@ -2630,12 +2678,82 @@ impl Pp<'_> {
                 self.diags
                     .warning(range, format!("#pragma GCC warning {text}"));
             }
+            // `#pragma GCC target("avx2")` asks for an instruction set for
+            // every function *defined* after it, which is the same request
+            // `__attribute__((target("avx2")))` makes on one function.
+            Some("target") => self.target_options_pragma(&rest[1..], range),
+            // `push_options` saves the set in force and `pop_options` puts it
+            // back; `reset_options` goes back to the command line's, which
+            // here is the baseline. GCC's `optimize` and `push/pop` of it are
+            // the same directives, and the optimisation half of them has
+            // nothing to say to a front end that does not optimise.
+            Some("push_options") => {
+                let saved = self.target_features.clone();
+                self.target_stack.push(saved);
+            }
+            Some("pop_options") => {
+                if let Some(saved) = self.target_stack.pop() {
+                    self.set_target_features(saved);
+                }
+            }
+            Some("reset_options") => self.set_target_features(Vec::new()),
             // `diagnostic push/pop/ignored/warning/error`, `system_header`,
             // `visibility` and the rest: there are no warnings of ours to
             // suppress and no visibility to set, so they are accepted and
             // ignored.
             _ => {}
         }
+    }
+
+    /// `#pragma GCC target("avx2")` and `#pragma GCC target("sse4.2,popcnt")`.
+    ///
+    /// GCC's rule is that the options accumulate until a `pop_options` or a
+    /// `reset_options`, and that they apply to the functions *defined* after
+    /// the directive — not to the ones already defined, and not to
+    /// declarations. That is what [`TargetOptionMap`] answers, against the
+    /// position in the token stream the directive stood at.
+    ///
+    /// The names themselves are not checked here: they are checked once, in
+    /// [sema](crate::sema), so that the attribute and the pragma give the same
+    /// diagnostics in the same words.
+    fn target_options_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        let mut names = self.target_features.clone();
+        let mut found = false;
+        for tok in rest {
+            let TokenKind::Str(lit) = &tok.kind else {
+                continue;
+            };
+            let Some(bytes) = lit.as_bytes() else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            for part in text.split(',') {
+                let part = part.trim();
+                if !part.is_empty() {
+                    found = true;
+                    if !names.iter().any(|(have, _)| have == part) {
+                        names.push((part.to_owned(), tok.range));
+                    }
+                }
+            }
+        }
+        if !found {
+            self.diags.error(
+                range,
+                "#pragma GCC target needs a string literal naming an instruction set, as in \
+                 #pragma GCC target(\"avx2\")"
+                    .to_owned(),
+            );
+            return;
+        }
+        self.set_target_features(names);
+    }
+
+    /// Records a new set of instruction sets in force from here on.
+    fn set_target_features(&mut self, names: Vec<(String, SourceRange)>) {
+        self.target_features = names.clone();
+        let at = self.out.len();
+        self.target_events.push((at, names));
     }
 
     /// The text of a pragma that carries a message.

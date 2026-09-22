@@ -1,0 +1,20 @@
+error: '_mm_set1_epi32' needs the 'sse2' instruction set, so it cannot be called from the safe function 'lanes': Rust makes every '#[target_feature]' function unsafe to call, because only the program knows whether the processor running it has those instructions. Drop [[cinrs::safe]] from 'lanes' and let its Rust caller write 'unsafe'
+  --> tests/ui/simd_safe.rs:16:21
+   |
+16 |         __m128i v = _mm_set1_epi32(a);
+   |                     ^^^^^^^^^^^^^^
+
+error: '_mm_cvtsi128_si32' needs the 'sse2' instruction set, so it cannot be called from the safe function 'lanes': Rust makes every '#[target_feature]' function unsafe to call, because only the program knows whether the processor running it has those instructions. Drop [[cinrs::safe]] from 'lanes' and let its Rust caller write 'unsafe'
+  --> tests/ui/simd_safe.rs:17:16
+   |
+17 |         return _mm_cvtsi128_si32(v);
+   |                ^^^^^^^^^^^^^^^^^
+
+error: 'wide' asks for the 'avx2' instruction set, so it cannot be safe: Rust makes a '#[target_feature]' function unsafe to call from anywhere that does not have that instruction set, which is the opposite of what [[cinrs::safe]] promises. Whether the processor really has it is something only the caller knows — '__builtin_cpu_supports' is how to ask
+  --> tests/ui/simd_safe.rs:20:7
+   |
+20 |     [[cinrs::safe]] __attribute__((target("avx2"))) int wide(int a) {
+   |       ^^^^^
+
+error: aborting due to 3 previous errors
+

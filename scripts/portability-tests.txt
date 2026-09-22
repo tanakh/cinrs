@@ -13,7 +13,15 @@
 # the C library through the bundled headers. `declared_names` is here because
 # the names a *declaration* is generated under are the names Rust calls the
 # platform's library by, and the Microsoft runtime is the one that renames some
-# of them (`time` is `_time64`) and defines others inline.
+# of them (`time` is `_time64`) and defines others inline. `simd` is here
+# because the x86 SIMD intrinsics are the one feature whose *calling convention*
+# differs between the two x86-64 ABIs: a 128-bit vector goes in a register on
+# both, a 256-bit one does not, and the Microsoft ABI is where a `__m256i`
+# parameter is passed by reference. The file is `#![cfg(target_arch =
+# "x86_64")]`, so on an Arm macOS runner it compiles to nothing and passes, and
+# every instruction set above the x86-64 baseline is guarded by
+# `is_x86_feature_detected!` so that a runner without AVX2 skips those
+# assertions rather than faulting.
 #
 # What is left out, and why:
 #
@@ -71,6 +79,7 @@ preprocessor
 primitive_names
 prototypes
 scopes
+simd
 threads
 units
 user_headers

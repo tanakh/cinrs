@@ -1,0 +1,44 @@
+error: invalid operands to binary '+' ('__m128i' and '__m128i')
+  --> tests/ui/simd_vector_operators.rs:15:16
+   |
+15 |         return a + b;
+   |                ^
+
+error: invalid operand of type '__m128i' to unary operator '=='
+  --> tests/ui/simd_vector_operators.rs:19:16
+   |
+19 |         return a == b;
+   |                ^
+
+error: subscripted value is not an array or pointer ('__m128i' invalid)
+  --> tests/ui/simd_vector_operators.rs:23:16
+   |
+23 |         return v[0];
+   |                ^
+
+error: a cast to '__m128i' is not allowed; only scalar types can be cast to
+  --> tests/ui/simd_vector_operators.rs:27:17
+   |
+27 |         return (__m128i)x;
+   |                 ^^^^^^^
+
+error: cannot cast an expression of type '__m128i' to 'long long'
+  --> tests/ui/simd_vector_operators.rs:31:27
+   |
+31 |         return (long long)v;
+   |                           ^
+
+error: value of type '__m128i' is not contextually convertible to a condition
+  --> tests/ui/simd_vector_operators.rs:35:16
+   |
+35 |         return v ? 1 : 0;
+   |                ^
+
+error: '__builtin_ia32_pmovmskb128' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared. It is GCC's internal name for an x86 instruction: write the Intel intrinsic instead — '_mm_add_epi32' rather than '__builtin_ia32_paddd128' — which <immintrin.h> declares and cinrs maps onto Rust's core::arch
+  --> tests/ui/simd_vector_operators.rs:39:16
+   |
+39 |         return __builtin_ia32_pmovmskb128(_mm_setzero_si128());
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: aborting due to 7 previous errors
+

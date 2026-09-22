@@ -1,0 +1,794 @@
+//! The maintainer tool that writes the x86 intrinsics table and the bundled
+//! headers' prototype lists, and the check that the two committed files agree.
+//!
+//! `cinrs` maps a call to an Intel intrinsic straight onto the function of the
+//! same name in `core::arch::x86_64` (or `core::arch::x86`), so the two have to
+//! agree about every name, every parameter type and every operand that is an
+//! immediate. Rather than transcribe eight hundred signatures by hand, they are
+//! *read out of the standard library's own source*: `library/stdarch` is what
+//! `core::arch` is built from, it is installed by `rustup component add
+//! rust-src`, and the declaration `cinrs` bundles is a translation of the
+//! signature `rustc` will type check the call against.
+//!
+//! Two tests live here:
+//!
+//! * [`regenerate`] is `#[ignore]`d — it is a maintainer tool, run by hand with
+//!   `cargo test -p cinrs-core --test x86_intrinsics -- --ignored --nocapture`
+//!   when the minimum supported Rust version moves. It rewrites the generated
+//!   regions of `include/*intrin.h` and the whole of `src/x86/table.rs`, and
+//!   prints what it left out and why.
+//! * [`header_and_table_agree`] runs every time and needs no `rust-src`: it
+//!   reads the two committed files and checks that they declare exactly the
+//!   same names with exactly the same arities and immediate positions. A hand
+//!   edit to one of them and not the other is what it is there to catch.
+//!
+//! The source of truth is the **oldest** toolchain the crate supports, not the
+//! newest: an intrinsic that only exists in a later release must not be
+//! declared, or a unit that compiles here would not compile on the minimum
+//! supported Rust version. `CINRS_STDARCH` points the generator at a checkout;
+//! failing that it asks `rustc` for its sysroot.
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+// ---------------------------------------------------------------------------
+// what is covered
+// ---------------------------------------------------------------------------
+
+/// The `core_arch` source files that are read, with the bundled header each
+/// one's prototypes go into and the marker that names the region.
+///
+/// The header layout is GCC's and Clang's: `<xmmintrin.h>` is SSE,
+/// `<emmintrin.h>` includes it and adds SSE2, and so on up to `<nmmintrin.h>`;
+/// `<immintrin.h>` includes the whole chain and adds everything 256-bit and
+/// everything scalar. Code that was written for one of the older compilers
+/// includes the header its instruction set arrived in, which is why they are
+/// separate files rather than one.
+const FAMILIES: &[Family] = &[
+    Family::new("sse", "xmmintrin.h", "sse"),
+    Family::new("sse2", "emmintrin.h", "sse2"),
+    Family::new("sse3", "pmmintrin.h", "sse3"),
+    Family::new("ssse3", "tmmintrin.h", "ssse3"),
+    Family::new("sse41", "smmintrin.h", "sse4.1"),
+    Family::new("sse42", "nmmintrin.h", "sse4.2"),
+    Family::new("aes", "wmmintrin.h", "aes"),
+    Family::new("pclmulqdq", "wmmintrin.h", "pclmulqdq"),
+    Family::new("avx", "immintrin.h", "avx"),
+    Family::new("avx2", "immintrin.h", "avx2"),
+    Family::new("fma", "immintrin.h", "fma"),
+    Family::new("sha", "immintrin.h", "sha"),
+    Family::new("bmi1", "immintrin.h", "bmi1").also("bmi"),
+    Family::new("bmi2", "immintrin.h", "bmi2"),
+    Family::new("abm", "immintrin.h", "lzcnt"),
+];
+
+/// One `core_arch` source file and where its declarations belong.
+struct Family {
+    /// The file stem under `core_arch/src/x86` and `core_arch/src/x86_64`.
+    file: &'static str,
+    /// The bundled header the prototypes are written into.
+    header: &'static str,
+    /// The `#[target_feature]` name the file is expected to carry, which is
+    /// also the name the generated region is keyed by.
+    ///
+    /// `abm.rs` is the exception: it holds both `lzcnt` and `popcnt`, and each
+    /// declaration keeps the feature its own attribute named.
+    region: &'static str,
+    /// A second stem to look for, because the two directories do not always
+    /// agree: BMI1 is `x86/bmi1.rs` and `x86_64/bmi.rs`.
+    alt: &'static str,
+}
+
+impl Family {
+    const fn new(file: &'static str, header: &'static str, region: &'static str) -> Self {
+        Self {
+            file,
+            header,
+            region,
+            alt: "",
+        }
+    }
+
+    /// The same family under a second file name.
+    const fn also(mut self, alt: &'static str) -> Self {
+        self.alt = alt;
+        self
+    }
+
+    /// The file stems to look for, in order.
+    fn stems(&self) -> Vec<&'static str> {
+        if self.alt.is_empty() {
+            vec![self.file]
+        } else {
+            vec![self.file, self.alt]
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the extracted signatures
+// ---------------------------------------------------------------------------
+
+/// One intrinsic, as the `core_arch` source declares it.
+#[derive(Clone, Debug)]
+struct Intrinsic {
+    name: String,
+    /// The `#[target_feature(enable = "…")]` the function carries.
+    feature: String,
+    /// The C parameter types, immediates included, in C argument order.
+    params: Vec<String>,
+    /// The C return type.
+    ret: String,
+    /// `(argument index, Rust const type)` for every operand that is a
+    /// `const` generic in Rust and an integer constant expression in C.
+    imm: Vec<(usize, String)>,
+    /// Whether the declaration only exists in `core::arch::x86_64`.
+    x86_64_only: bool,
+}
+
+/// Why a declaration was left out, for the report the generator prints.
+#[derive(Debug)]
+struct Skipped {
+    name: String,
+    reason: String,
+}
+
+// ---------------------------------------------------------------------------
+// reading the standard library's source
+// ---------------------------------------------------------------------------
+
+/// The `core_arch/src` directory, from `CINRS_STDARCH` or from the sysroot.
+fn core_arch_src() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CINRS_STDARCH") {
+        return Some(PathBuf::from(dir));
+    }
+    let out = Command::new(std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into()))
+        .arg("--print")
+        .arg("sysroot")
+        .output()
+        .ok()?;
+    let sysroot = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
+    let dir = sysroot.join("lib/rustlib/src/rust/library/stdarch/crates/core_arch/src");
+    dir.is_dir().then_some(dir)
+}
+
+/// The attribute and signature of every `pub fn` in one source file.
+///
+/// The format `stdarch` is written in is regular enough to read line by line:
+/// an item is a run of doc comments and attributes followed by a `pub fn` whose
+/// signature may be wrapped over several lines. Anything else — a `mod`, a
+/// `use`, an `unsafe extern` block of LLVM declarations — resets the run.
+fn scan(text: &str) -> Vec<(Vec<String>, String)> {
+    let mut out = Vec::new();
+    let mut attrs: Vec<String> = Vec::new();
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.starts_with("#[") || trimmed.starts_with("#!") {
+            let mut attr = trimmed.to_owned();
+            // `#[deprecated(since = "…", note = "…")]` is written over three
+            // lines; join until the brackets balance.
+            while depth(&attr, '[', ']') > 0 {
+                match lines.next() {
+                    Some(next) => {
+                        attr.push(' ');
+                        attr.push_str(next.trim());
+                    }
+                    None => break,
+                }
+            }
+            attrs.push(attr);
+            continue;
+        }
+        if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub unsafe fn ") {
+            let mut sig = trimmed.to_owned();
+            while depth(&sig, '(', ')') > 0 || !sig.contains('{') {
+                match lines.next() {
+                    Some(next) => {
+                        sig.push(' ');
+                        sig.push_str(next.trim());
+                    }
+                    None => break,
+                }
+            }
+            out.push((std::mem::take(&mut attrs), sig));
+            continue;
+        }
+        attrs.clear();
+    }
+    out
+}
+
+/// How far `text` is left unclosed, counting `open` against `close`.
+///
+/// String literals inside an attribute never hold a bracket in this source, so
+/// a plain count is enough.
+fn depth(text: &str, open: char, close: char) -> i32 {
+    text.chars().fold(0, |d, c| {
+        if c == open {
+            d + 1
+        } else if c == close {
+            d - 1
+        } else {
+            d
+        }
+    })
+}
+
+/// The `"…"` an attribute such as `#[target_feature(enable = "sse2")]` holds.
+fn quoted(attr: &str) -> Option<&str> {
+    let start = attr.find('"')? + 1;
+    let rest = &attr[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// The Rust type spelled `rust`, as C spells it — or `None` when C cannot.
+///
+/// The integer widths follow Intel's own prototypes rather than a literal
+/// reading of the Rust type: Intel writes `char` for the eight-bit lanes of
+/// `_mm_set_epi8` and `__int64` for the sixty-four-bit ones, and real code
+/// passes plain `int` expressions to both, so the parameter has to be the type
+/// that code was written against.
+fn c_type(rust: &str) -> Option<String> {
+    let rust = rust.trim();
+    if let Some(pointee) = rust.strip_prefix("*const ") {
+        return Some(format!("const {} *", c_type(pointee)?));
+    }
+    if let Some(pointee) = rust.strip_prefix("*mut ") {
+        return Some(format!("{} *", c_type(pointee)?));
+    }
+    Some(
+        match rust {
+            "()" | "" => "void",
+            "i8" => "char",
+            "u8" => "unsigned char",
+            "i16" => "short",
+            "u16" => "unsigned short",
+            "i32" => "int",
+            "u32" => "unsigned int",
+            "i64" => "long long",
+            "u64" => "unsigned long long",
+            "f32" => "float",
+            "f64" => "double",
+            "__m128" | "__m128i" | "__m128d" | "__m256" | "__m256i" | "__m256d" => rust,
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
+/// Splits a parameter or generic list on the commas that are at depth zero.
+fn split_top(list: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for c in list.chars() {
+        match c {
+            '(' | '[' | '<' => depth += 1,
+            ')' | ']' | '>' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(std::mem::take(&mut current));
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Turns one scanned item into an [`Intrinsic`], or says why it was left out.
+fn convert(attrs: &[String], sig: &str, x86_64_only: bool) -> Result<Intrinsic, Skipped> {
+    let after_fn = sig.split_once("fn ").map_or(sig, |(_, rest)| rest);
+    let name_end = after_fn
+        .find(['<', '('])
+        .unwrap_or_else(|| after_fn.len().min(1));
+    let name = after_fn[..name_end].trim().to_owned();
+    let skip = |reason: &str| {
+        Err(Skipped {
+            name: name.clone(),
+            reason: reason.to_owned(),
+        })
+    };
+
+    if !attrs.iter().any(|a| a.starts_with("#[stable(")) {
+        return skip("not stable in core::arch");
+    }
+    if attrs.iter().any(|a| a.starts_with("#[deprecated")) {
+        return skip("deprecated in core::arch");
+    }
+    // `_mm_pause` is the one intrinsic here that needs no instruction set at
+    // all — `pause` is a `rep; nop` on everything back to the 386 — and it
+    // carries no `#[target_feature]`. An empty feature name says so.
+    let feature = attrs
+        .iter()
+        .find(|a| a.starts_with("#[target_feature("))
+        .and_then(|a| quoted(a))
+        .unwrap_or("");
+
+    // The generic list, and after it the parameter list and the return type.
+    let rest = &after_fn[name_end..];
+    let (generics, rest) = match rest.strip_prefix('<') {
+        Some(inner) => {
+            let end = close(inner, '<', '>');
+            (&inner[..end], &inner[end + 1..])
+        }
+        None => ("", rest),
+    };
+    let Some(open) = rest.find('(') else {
+        return skip("unreadable signature");
+    };
+    let params_text = &rest[open + 1..];
+    let end = close(params_text, '(', ')');
+    let (params_text, tail) = (&params_text[..end], &params_text[end + 1..]);
+    let ret_text = match tail.split_once("->") {
+        Some((_, r)) => r.split('{').next().unwrap_or("").trim(),
+        None => "()",
+    };
+
+    let Some(ret) = c_type(ret_text) else {
+        return skip(&format!("return type '{ret_text}' has no C spelling"));
+    };
+    let mut params = Vec::new();
+    for param in split_top(params_text) {
+        let Some((_, ty)) = param.split_once(':') else {
+            return skip("unreadable parameter");
+        };
+        match c_type(ty) {
+            Some(c) => params.push(c),
+            None => return skip(&format!("parameter type '{}' has no C spelling", ty.trim())),
+        }
+    }
+
+    // `#[rustc_legacy_const_generics(1)]` is `core::arch`'s own record of where
+    // the operand went in Intel's C prototype: the const generics, in the order
+    // they are declared, belong at these argument indices. It is what makes the
+    // turbofish reconstructible from a C call.
+    let mut imm = Vec::new();
+    if !generics.trim().is_empty() {
+        let Some(legacy) = attrs
+            .iter()
+            .find(|a| a.starts_with("#[rustc_legacy_const_generics("))
+        else {
+            return skip("a const generic with no #[rustc_legacy_const_generics]");
+        };
+        let inner = &legacy["#[rustc_legacy_const_generics(".len()..];
+        let indices: Vec<usize> = inner[..close(inner, '(', ')')]
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect();
+        let consts: Vec<String> = split_top(generics)
+            .iter()
+            .filter_map(|g| g.trim().strip_prefix("const ").map(str::to_owned))
+            .collect();
+        if indices.len() != consts.len() {
+            return skip("a generic that is not a const operand");
+        }
+        for (index, generic) in indices.iter().zip(&consts) {
+            let Some((_, ty)) = generic.split_once(':') else {
+                return skip("unreadable const generic");
+            };
+            imm.push((*index, ty.trim().to_owned()));
+            // Intel writes the immediate as `const int`; the C prototype has
+            // to have a parameter there for the argument to be checked at all.
+            let spelling = match ty.trim() {
+                "i32" => "const int",
+                "u32" => "const unsigned int",
+                other => return skip(&format!("a const operand of type '{other}'")),
+            };
+            if *index > params.len() {
+                return skip("an immediate past the end of the argument list");
+            }
+            params.insert(*index, spelling.to_owned());
+        }
+    }
+
+    Ok(Intrinsic {
+        name,
+        feature: feature.to_owned(),
+        params,
+        ret,
+        imm,
+        x86_64_only,
+    })
+}
+
+/// The index of the bracket that closes the one `text` opens after.
+fn close(text: &str, open: char, close: char) -> usize {
+    let mut depth = 1i32;
+    for (index, c) in text.char_indices() {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return index;
+            }
+        }
+    }
+    text.len()
+}
+
+/// The `pub const _CMP_EQ_OQ: i32 = 0x00;` declarations of one source file,
+/// which the header repeats as `#define`s.
+fn constants(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("pub const _") else {
+            continue;
+        };
+        let Some((name, rest)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some((ty, value)) = rest.split_once('=') else {
+            continue;
+        };
+        let value = value.trim().trim_end_matches(';').trim();
+        // `!0` is Rust's; nothing this header repeats needs it.
+        if value.starts_with('!') {
+            continue;
+        }
+        let suffix = if ty.trim() == "u32" { "u" } else { "" };
+        // A value written in terms of other constants keeps that spelling; the
+        // header defines them in order, so the macro expands the same way.
+        // A literal is rewritten in hexadecimal, because `stdarch` writes some
+        // of them in Rust's `0b0000_0001` form, which C has no spelling for.
+        let value = if value.contains('|') || value.contains("<<") {
+            format!("({value})")
+        } else {
+            let digits = value.replace('_', "");
+            let number = digits
+                .strip_prefix("0x")
+                .and_then(|d| u64::from_str_radix(d, 16).ok())
+                .or_else(|| {
+                    digits
+                        .strip_prefix("0b")
+                        .and_then(|d| u64::from_str_radix(d, 2).ok())
+                })
+                .or_else(|| digits.parse().ok());
+            match number {
+                Some(n) => format!("0x{n:04x}{suffix}"),
+                None => format!("{value}{suffix}"),
+            }
+        };
+        out.push((format!("_{}", name.trim()), value));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// writing the generated regions
+// ---------------------------------------------------------------------------
+
+/// The opening line of a generated region.
+fn region_begin(kind: &str) -> String {
+    format!("/* @generated {kind} — see crates/cinrs-core/tests/x86_intrinsics.rs */")
+}
+
+/// The closing line of a generated region.
+const REGION_END: &str = "/* @generated end */";
+
+/// Replaces the body of the region `kind` in `text` with `body`.
+fn splice(text: &str, kind: &str, body: &str) -> String {
+    let begin = region_begin(kind);
+    let Some(start) = text.find(&begin) else {
+        panic!("no '{begin}' region to fill");
+    };
+    let after = start + begin.len();
+    let end = text[after..]
+        .find(REGION_END)
+        .unwrap_or_else(|| panic!("region '{kind}' is not closed"))
+        + after;
+    format!("{}\n{body}{}", &text[..after], &text[end..])
+}
+
+/// The C declaration of one intrinsic.
+fn declaration(intr: &Intrinsic) -> String {
+    let params = if intr.params.is_empty() {
+        "void".to_owned()
+    } else {
+        intr.params.join(", ")
+    };
+    // `const T *` reads as `const T *` and `T *` as `T *`; the space before the
+    // star is already in the type.
+    format!("{} {}({});", intr.ret, intr.name, params)
+}
+
+// ---------------------------------------------------------------------------
+// the tests
+// ---------------------------------------------------------------------------
+
+/// Rewrites the generated regions of the bundled headers and the whole of
+/// `src/x86/table.rs` from the installed `stdarch` source.
+#[test]
+#[ignore = "maintainer tool: rewrites the bundled headers and src/x86/table.rs"]
+fn regenerate() {
+    let Some(src) = core_arch_src() else {
+        panic!(
+            "no stdarch source: run `rustup component add rust-src`, or set CINRS_STDARCH to a \
+             core_arch/src directory"
+        );
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut all: Vec<Intrinsic> = Vec::new();
+    let mut skipped: Vec<Skipped> = Vec::new();
+    // header -> region -> lines
+    let mut regions: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
+    let mut consts: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+
+    for family in FAMILIES {
+        for (dir, x86_64_only) in [("x86", false), ("x86_64", true)] {
+            let Some(text) = family.stems().iter().find_map(|stem| {
+                std::fs::read_to_string(src.join(dir).join(format!("{stem}.rs"))).ok()
+            }) else {
+                continue;
+            };
+            if !x86_64_only {
+                let found = constants(&text);
+                if !found.is_empty() {
+                    consts.entry(family.header).or_default().extend(found);
+                }
+            }
+            let mut found: Vec<Intrinsic> = Vec::new();
+            for (attrs, sig) in scan(&text) {
+                match convert(&attrs, &sig, x86_64_only) {
+                    Ok(intr) => found.push(intr),
+                    Err(why) => skipped.push(why),
+                }
+            }
+            found.sort_by(|a, b| a.name.cmp(&b.name));
+            let lines = regions
+                .entry(family.header)
+                .or_default()
+                .entry(family.region)
+                .or_default();
+            if x86_64_only && !found.is_empty() {
+                lines.push("#ifdef __x86_64__".to_owned());
+            }
+            for intr in &found {
+                lines.push(declaration(intr));
+            }
+            if x86_64_only && !found.is_empty() {
+                lines.push("#endif".to_owned());
+            }
+            all.extend(found);
+        }
+    }
+
+    for (header, by_region) in &regions {
+        let path = root.join("include").join(header);
+        let mut text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for (region, lines) in by_region {
+            text = splice(&text, region, &format!("{}\n", lines.join("\n")));
+        }
+        if let Some(values) = consts.get(header) {
+            let body: String = values
+                .iter()
+                .map(|(name, value)| format!("#define {name} {value}\n"))
+                .collect();
+            text = splice(&text, "constants", &body);
+        }
+        std::fs::write(&path, text).unwrap();
+    }
+
+    all.sort_by(|a, b| a.name.cmp(&b.name));
+    all.dedup_by(|a, b| a.name == b.name);
+    std::fs::write(root.join("src/x86/table.rs"), table_source(&all)).unwrap();
+
+    skipped.sort_by(|a, b| (&a.reason, &a.name).cmp(&(&b.reason, &b.name)));
+    let mut by_reason: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for s in &skipped {
+        by_reason
+            .entry(s.reason.as_str())
+            .or_default()
+            .push(s.name.as_str());
+    }
+    println!("{} intrinsics declared", all.len());
+    for (reason, names) in &by_reason {
+        println!(
+            "  skipped ({reason}): {} — {}",
+            names.len(),
+            names.join(" ")
+        );
+    }
+}
+
+/// The text of `src/x86/table.rs`.
+fn table_source(all: &[Intrinsic]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "//! The x86 intrinsics `cinrs` maps onto `core::arch`, by name.\n\
+         //!\n\
+         //! **Generated** by `crates/cinrs-core/tests/x86_intrinsics.rs` from the\n\
+         //! `stdarch` source the standard library is built from; do not edit. The\n\
+         //! bundled `<immintrin.h>` and its companions declare exactly these names,\n\
+         //! and the same generator writes both, so a prototype and its mapping cannot\n\
+         //! disagree.\n\
+         //!\n\
+         //! Sorted by name: [`super::lookup`] is a binary search.\n\n\
+         use super::{Imm, Intrinsic};\n\n\
+         /// Every intrinsic this crate knows, sorted by name.\n\
+         ///\n\
+         /// One line per entry, which `rustfmt` would otherwise turn into six\n\
+         /// thousand: the table is read as a table, and `header_and_table_agree`\n\
+         /// parses these lines.\n\
+         #[rustfmt::skip]\n\
+         pub(super) static INTRINSICS: &[Intrinsic] = &[\n",
+    );
+    for intr in all {
+        let imm: String = intr
+            .imm
+            .iter()
+            .map(|(index, ty)| format!("Imm {{ index: {index}, rust_ty: \"{ty}\" }}, "))
+            .collect();
+        let imm = if imm.is_empty() {
+            "&[]".to_owned()
+        } else {
+            format!("&[{}]", imm.trim_end().trim_end_matches(','))
+        };
+        let _ = writeln!(
+            out,
+            "    Intrinsic {{ name: \"{}\", feature: \"{}\", arity: {}, imm: {imm}, \
+             x86_64_only: {} }},",
+            intr.name,
+            intr.feature,
+            intr.params.len(),
+            intr.x86_64_only,
+        );
+    }
+    out.push_str("];\n");
+    out
+}
+
+/// The committed header and the committed table declare the same names.
+///
+/// This is the test that runs in CI: it needs no `rust-src` and no network, and
+/// it is what catches a hand edit to one of the two generated files.
+#[test]
+fn header_and_table_agree() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let table = std::fs::read_to_string(root.join("src/x86/table.rs")).unwrap();
+
+    let mut from_table: BTreeMap<String, (usize, Vec<usize>)> = BTreeMap::new();
+    for line in table.lines() {
+        let Some(rest) = line.trim().strip_prefix("Intrinsic { name: \"") else {
+            continue;
+        };
+        let (name, rest) = rest.split_once('"').unwrap();
+        let arity: usize = rest
+            .split_once("arity: ")
+            .and_then(|(_, r)| r.split(',').next())
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let imm: Vec<usize> = rest
+            .match_indices("index: ")
+            .map(|(at, _)| {
+                rest[at + "index: ".len()..]
+                    .split(',')
+                    .next()
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        from_table.insert(name.to_owned(), (arity, imm));
+    }
+    assert_eq!(
+        from_table.len(),
+        cinrs_core::x86::count(),
+        "the file and the compiled-in table disagree"
+    );
+    // `doc/features.md` prints the count per instruction set and the total, and
+    // a regeneration that changes either leaves that table stale. The number is
+    // here so that the prose cannot quietly go out of date.
+    assert_eq!(
+        from_table.len(),
+        881,
+        "the intrinsics table changed size: update the table in doc/features.md, \
+         \"SIMD intrinsics\", and this number"
+    );
+    let mut by_feature: BTreeMap<&str, usize> = BTreeMap::new();
+    for intr in cinrs_core::x86::all() {
+        *by_feature.entry(intr.feature).or_default() += 1;
+    }
+    assert_eq!(
+        by_feature,
+        BTreeMap::from([
+            ("", 1),
+            ("aes", 6),
+            ("avx", 184),
+            ("avx2", 193),
+            ("bmi1", 17),
+            ("bmi2", 6),
+            ("fma", 32),
+            ("lzcnt", 2),
+            ("pclmulqdq", 1),
+            ("popcnt", 2),
+            ("sha", 7),
+            ("sse", 97),
+            ("sse2", 226),
+            ("sse3", 11),
+            ("sse4.1", 61),
+            ("sse4.2", 19),
+            ("ssse3", 16),
+        ]),
+        "the per-instruction-set counts in doc/features.md are these"
+    );
+
+    let mut from_headers: BTreeMap<String, (usize, Vec<usize>)> = BTreeMap::new();
+    for header in [
+        "xmmintrin.h",
+        "emmintrin.h",
+        "pmmintrin.h",
+        "tmmintrin.h",
+        "smmintrin.h",
+        "nmmintrin.h",
+        "wmmintrin.h",
+        "immintrin.h",
+    ] {
+        let text = std::fs::read_to_string(root.join("include").join(header)).unwrap();
+        let mut generated = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with("/* @generated") {
+                generated = !line.contains("end");
+                continue;
+            }
+            if !generated || !line.ends_with(");") {
+                continue;
+            }
+            let Some(open) = line.find('(') else { continue };
+            let name = line[..open].rsplit([' ', '*']).next().unwrap().to_owned();
+            let args = &line[open + 1..line.len() - 2];
+            let params: Vec<&str> = if args.trim() == "void" {
+                Vec::new()
+            } else {
+                args.split(',').collect()
+            };
+            let imm = params
+                .iter()
+                .enumerate()
+                // An immediate is spelled `const int`; `const int *` is a
+                // pointer to constant memory, which is a runtime operand.
+                .filter(|(_, p)| matches!(p.trim(), "const int" | "const unsigned int"))
+                .map(|(index, _)| index)
+                .collect();
+            from_headers.insert(name, (params.len(), imm));
+        }
+    }
+
+    let only_table: Vec<&String> = from_table
+        .keys()
+        .filter(|name| !from_headers.contains_key(*name))
+        .collect();
+    let only_header: Vec<&String> = from_headers
+        .keys()
+        .filter(|name| !from_table.contains_key(*name))
+        .collect();
+    assert!(
+        only_table.is_empty() && only_header.is_empty(),
+        "the table and the headers disagree; in the table only: {only_table:?}; in the headers \
+         only: {only_header:?}"
+    );
+    for (name, entry) in &from_table {
+        assert_eq!(
+            Some(entry),
+            from_headers.get(name),
+            "'{name}' has a different arity or immediate position in the header"
+        );
+    }
+}

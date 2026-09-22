@@ -791,7 +791,7 @@ fn the_wide_character_limits_survive_both_headers() {
 
 use std::str::FromStr;
 
-use cinrs_core::{Env, Level, Options, Os, Standard, TargetModel, analyze, include, sema};
+use cinrs_core::{Arch, Env, Level, Options, Os, Standard, TargetModel, analyze, include, sema};
 use proc_macro2::TokenStream;
 
 /// The models the branches inside the headers choose between.
@@ -828,13 +828,50 @@ fn libc_is_modelled(model: &str) -> bool {
     target.os == Os::Linux && matches!(target.env, Env::Gnu | Env::Musl)
 }
 
+/// The headers that only exist on an *architecture*, and so refuse on every
+/// other one.
+///
+/// The Intel intrinsics headers are the whole list: `__m128i` and
+/// `_mm_add_epi32` are mapped onto `core::arch::x86_64` (or `core::arch::x86`),
+/// and there is nothing on any other architecture to map them onto — NEON is a
+/// different instruction set with different names. So each is an `#error` where
+/// it cannot work, which is what lets a portable program guard the `#include`
+/// and take the other branch.
+const X86_ONLY: &[&str] = &[
+    "avx2intrin.h",
+    "avxintrin.h",
+    "emmintrin.h",
+    "immintrin.h",
+    "nmmintrin.h",
+    "pmmintrin.h",
+    "popcntintrin.h",
+    "smmintrin.h",
+    "tmmintrin.h",
+    "wmmintrin.h",
+    "x86intrin.h",
+    "xmmintrin.h",
+];
+
+/// What an [`X86_ONLY`] header says on a target that is not x86, if `model` is
+/// one.
+fn arch_refusal(name: &str, model: &str) -> Option<&'static str> {
+    let target = TargetModel::from_triple(model).expect("a model this crate knows");
+    (X86_ONLY.contains(&name) && !matches!(target.arch, Arch::X86 | Arch::X86_64))
+        .then_some("the Intel intrinsics headers are x86 only")
+}
+
 /// The headers that are an `#error` on purpose.
 ///
 /// `<setjmp.h>` always: `setjmp`/`longjmp` have no translation, and a header
-/// that says so is more use than a missing one. `<complex.h>` only when the
-/// `complex` feature is off, which is exactly what `__STDC_NO_COMPLEX__`
-/// promises the program.
-const REFUSED: &[(&str, &str)] = &[("setjmp.h", "setjmp")];
+/// that says so is more use than a missing one. `<mmintrin.h>` always too:
+/// `core::arch` dropped MMX and `__m64`, so there is nothing to map, and the
+/// header names the SSE2 form of each intrinsic instead. `<complex.h>` only
+/// when the `complex` feature is off, which is exactly what
+/// `__STDC_NO_COMPLEX__` promises the program.
+const REFUSED: &[(&str, &str)] = &[
+    ("setjmp.h", "setjmp"),
+    ("mmintrin.h", "cinrs has no MMX and no '__m64'"),
+];
 
 /// The header whose refusal depends on a cargo feature; see [`REFUSED`].
 fn feature_refusal(name: &str) -> Option<&'static str> {
@@ -890,6 +927,7 @@ fn every_bundled_header_compiles_alone_for_every_model() {
                 .find(|(header, _)| header == name)
                 .map(|(_, message)| *message)
                 .or_else(|| feature_refusal(name))
+                .or_else(|| arch_refusal(name, model))
                 .or_else(|| {
                     (!libc_is_modelled(model))
                         .then(|| {

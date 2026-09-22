@@ -44,9 +44,10 @@ use crate::ast::*;
 use crate::capture::SourceRange;
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::gnu;
-use crate::ir::{INT128_TYPEDEF_NAMES, VA_LIST_NAMES};
+use crate::ir::{INT128_TYPEDEF_NAMES, VA_LIST_NAMES, X86_VECTOR_TYPEDEF_NAMES};
 use crate::lex::{Keyword, Punct, StrKind, StrLit, TokenKind};
-use crate::pp::{Origin, PackMap, Token};
+use crate::pp::{Origin, PackMap, TargetOptionMap, Token};
+use crate::target::Arch;
 use crate::{Gating, Options, Standard};
 
 /// The spelling of `_Noreturn` that every standard accepts.
@@ -107,6 +108,7 @@ pub fn parse(
     tokens: &[Token],
     unit_range: SourceRange,
     packing: &PackMap,
+    targets: &TargetOptionMap,
     options: &Options,
     diags: &mut Diagnostics,
 ) -> TranslationUnit {
@@ -143,6 +145,18 @@ pub fn parse(
     for (name, _) in INT128_TYPEDEF_NAMES {
         builtins.syms.insert((*name).to_owned(), SymKind::Typedef);
     }
+    // The x86 vector types, which the bundled `<xmmintrin.h>` and
+    // `<immintrin.h>` `typedef` to `__m128` and the rest. GCC writes them as
+    // `__attribute__((vector_size(16)))`, which this front end has no
+    // equivalent of, so they are the compiler's names here — and only on an x86
+    // target, where there is a `core::arch` type to generate them as. On any
+    // other one the name means nothing, which is the honest answer: the header
+    // that would introduce it is an `#error` there.
+    if matches!(options.target.arch, Arch::X86 | Arch::X86_64) {
+        for (name, _) in X86_VECTOR_TYPEDEF_NAMES {
+            builtins.syms.insert((*name).to_owned(), SymKind::Typedef);
+        }
+    }
     let mut parser = Parser {
         tokens,
         pos: 0,
@@ -152,6 +166,8 @@ pub fn parse(
         gating: options.gating(),
         in_extension: false,
         packing,
+        targets,
+        decl_start: 0,
         last_range,
         depth: 0,
         records: Vec::new(),
@@ -226,6 +242,11 @@ struct Parser<'a> {
     in_extension: bool,
     /// What `#pragma pack` was asking for, by token position.
     packing: &'a PackMap,
+    /// What `#pragma GCC target` was asking for, by token position.
+    targets: &'a TargetOptionMap,
+    /// The token the external declaration being parsed starts at, which is
+    /// where `#pragma GCC target` is asked what is in force.
+    decl_start: usize,
     /// Range of the most recently consumed token, used to close node ranges.
     last_range: SourceRange,
     /// Current recursion depth; reset at every external declaration.
@@ -636,6 +657,28 @@ impl Parser<'_> {
                 }
                 return Ok(());
             }
+            Some(gnu::Attribute::Target) => {
+                // GCC spells the list either way: one string with commas in
+                // it — `target("avx2,fma")` — or one string per set. Both are
+                // split here, so sema sees a flat list of names.
+                let text = self.attribute_strings()?;
+                let range = self.span_to_here(start);
+                if text.is_empty() {
+                    self.error(
+                        range,
+                        "'target' takes one or more string literals naming an instruction set, \
+                         as in target(\"avx2\")",
+                    );
+                    return Ok(());
+                }
+                for part in text.iter().flat_map(|s| s.split(',')) {
+                    let part = part.trim();
+                    if !part.is_empty() {
+                        attrs.target.push(Spanned::new(part.to_owned(), range));
+                    }
+                }
+                return Ok(());
+            }
             _ => {}
         }
         self.skip_attribute_args()?;
@@ -708,6 +751,44 @@ impl Parser<'_> {
             self.advance();
         }
         Ok(name)
+    }
+
+    /// Every string literal an attribute's argument clause holds, in order.
+    ///
+    /// `target("avx2", "fma")` is two of them and `target("avx2,fma")` is one;
+    /// what the caller does with the commas is the caller's business.
+    fn attribute_strings(&mut self) -> PResult<Vec<String>> {
+        let mut out = Vec::new();
+        if !self.at_punct(Punct::LParen) {
+            return Ok(out);
+        }
+        self.advance();
+        let mut depth = 1i32;
+        while depth > 0 && !self.at_eof() {
+            if let TokenKind::Str(lit) = self.peek().kind.clone() {
+                let range = self.cur_range();
+                let literal = self.parse_string_literal(lit, range);
+                if let ExprKind::Str(lit) = literal.kind
+                    && let Ok(text) =
+                        String::from_utf8(lit.values.iter().map(|v| *v as u8).collect())
+                {
+                    out.push(text);
+                }
+                // `parse_string_literal` consumed the run of literals.
+                continue;
+            }
+            if self.at_punct(Punct::LParen) {
+                depth += 1;
+            } else if self.at_punct(Punct::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    break;
+                }
+            }
+            self.advance();
+        }
+        Ok(out)
     }
 
     /// The single string literal an attribute's argument clause holds, if it
@@ -849,6 +930,13 @@ impl Parser<'_> {
                 }
                 continue;
             }
+            // Where this external declaration starts, which is what
+            // `#pragma GCC target` is answered against: the directive applies
+            // to what is written after it, and the position must be taken
+            // before the body is read — a `pop_options` written just after the
+            // closing brace records itself at the token the parser will be
+            // sitting on by then.
+            self.decl_start = before;
             match self.parse_external_decl() {
                 Ok(item) => items.push(item),
                 Err(Bail) => self.recover_top_level(before),
@@ -1083,12 +1171,26 @@ impl Parser<'_> {
         };
         self.pop_scope();
 
+        let mut attrs = declarator.attrs;
+        // `#pragma GCC target("avx2")` applies to every function *defined*
+        // after it until a `pop_options` or a `reset_options`, which is the
+        // same request the attribute makes — so it is folded in here and
+        // nothing downstream has to know which of the two was written. An
+        // attribute on the function itself wins outright, as it does in GCC:
+        // the pragma is the default for a region, not an addition to what a
+        // function asked for. GCC accepts the attribute on either side of the
+        // return type, so both halves are asked.
+        if attrs.target.is_empty() && specs.attrs.target.is_empty() && !self.targets.is_empty() {
+            for (feature, range) in self.targets.at(self.decl_start) {
+                attrs.target.push(Spanned::new(feature.clone(), *range));
+            }
+        }
         Ok(ExternalDecl::Function(FunctionDef {
             specifiers: specs,
             name,
             ty: declarator.ty,
             kr_decls,
-            attrs: declarator.attrs,
+            attrs,
             asm_label: declarator.asm_label,
             body,
             uses_label_addrs: self.label_addrs != before,
