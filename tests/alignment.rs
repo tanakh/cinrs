@@ -98,16 +98,31 @@ fn a_thread_local_object_is_aligned_where_it_asked_to_be() {
 
         _Thread_local _Alignas(64) int per_thread[4];
 
-        int thread_local_aligned(void) {
+        int thread_local_value(void) {
             per_thread[2] = 9;
-            return ((uintptr_t) per_thread % 64 == 0) && per_thread[2] == 9;
+            return per_thread[2] == 9;
+        }
+        int thread_local_aligned(void) {
+            return (uintptr_t) per_thread % 64 == 0;
         }
     }
 
-    assert_eq!(unsafe { thread_local_aligned() }, 1);
-    // Every thread's copy, not only the first one's.
-    let other = std::thread::spawn(|| unsafe { thread_local_aligned() });
+    // The object itself, on this thread and on another: every thread's copy,
+    // not only the first one's.
+    assert_eq!(unsafe { thread_local_value() }, 1);
+    let other = std::thread::spawn(|| unsafe { thread_local_value() });
     assert_eq!(other.join().unwrap(), 1);
+
+    // Its alignment. Not on Apple's platforms: dyld allocates a thread's
+    // thread-local storage with `malloc`, which aligns to 16, and honours no
+    // stricter alignment a variable asks for — a C compiler's `_Thread_local
+    // _Alignas(64)` is in the same position there. See doc/limitations.md.
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        assert_eq!(unsafe { thread_local_aligned() }, 1);
+        let other = std::thread::spawn(|| unsafe { thread_local_aligned() });
+        assert_eq!(other.join().unwrap(), 1);
+    }
 }
 
 // ---------------------------------------------------------------------------

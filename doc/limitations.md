@@ -32,7 +32,11 @@
   binding is generated inside a one-field wrapper that carries the alignment
   (`#[repr(C, align(64))] struct __cinrs_align_64<T>(pub T);`) and every use of
   it goes through the field: **Rust code reads `buf.0`**. The C program sees
-  none of it — `sizeof buf` is the object's own size.
+  none of it — `sizeof buf` is the object's own size. One platform cannot
+  deliver it for a *thread-local* object: on macOS, dyld allocates a thread's
+  thread-local storage with `malloc`, which aligns to 16 bytes and honours no
+  stricter request, so `_Thread_local _Alignas(64)` gets 16 there — from a C
+  compiler as much as from `cinrs`.
 * A `constexpr` object is a *constant*: its value is folded wherever the name
   is used (so it may be an array bound or a `case` label), and there is
   nothing to take the address of. Only the arithmetic types are accepted.

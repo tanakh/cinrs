@@ -268,6 +268,15 @@ types and the literals — `char16_t`, `u"…"`, `U'x'` — need no library and 
 a *call* to one of those six is `Undefined symbols for architecture arm64`
 from the linker, exactly as it would be from C.
 
+One more thing on the same platform is the runtime's rather than the library's:
+a **thread-local object aligned past 16 bytes** does not get that alignment.
+dyld allocates each thread's thread-local storage with `malloc`, which aligns
+to 16, and honours no stricter request a variable makes, so
+`_Thread_local _Alignas(64) int a[4];` is 16-byte aligned on macOS — as it is
+from a C compiler there. Every other kind of over-aligned object (automatic,
+`static`, file-scope) is aligned as asked; see
+[Limitations](limitations.md).
+
 ## What is run where
 
 Nothing above says that the library on the other end agrees with the header
