@@ -537,7 +537,12 @@ invisible unless the last applies:
   with nothing but whitespace and comments between and nothing left over. A match
   gives the same text the first way would, so everything else — `__FILE__`, a
   quoted `#include` searching beside the file, `include_str!` rebuild tracking,
-  the identity of the unit — is unchanged.
+  the identity of the unit — is unchanged. The search is remembered for the
+  process that made it — the file list for a couple of seconds, each file's text
+  for as long as the file reports the modification time and length it was read at
+  — so the burst of expansions one edit provokes walks the crate once instead of
+  once per block, while a file that was just saved is read again by the very next
+  expansion.
 * **From the tokens alone.** Where the invocation is not found either, the text
   is rebuilt from the tokens: one space between two of them, none where the host
   says they were written together, so `->`, `<<=`, `&&` and `++` stay single

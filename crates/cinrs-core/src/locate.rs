@@ -41,6 +41,55 @@
 //! host gave no positions at all, and the work it may do then is capped in
 //! every direction — see [`Caps`].
 //!
+//! # The cache
+//!
+//! A host with no positions asks for this search once per block, and the blocks
+//! come in bursts: rust-analyzer re-expands every macro of a crate after one
+//! edit. This repository's own tests hold some five hundred of them, and the
+//! walk each expansion repeated is a hundred directories and five thousand
+//! entries — measured at 25 ms a block in the unoptimized build a proc-macro
+//! server runs (8 ms with optimizations), so thirteen seconds of that server's
+//! time for one re-analysis of a tree in which nothing changed between the first
+//! block and the last. Remembering it brings the block to 0.95 ms, which is one
+//! `stat` per candidate and the token matching. So the search remembers, per
+//! process and per directory:
+//!
+//! * **The candidate list, for [two seconds](LISTING_WINDOW).** Asking whether a
+//!   listing is still right means asking every directory, and asking every
+//!   directory *is* the walk; a directory's own modification time would answer
+//!   only about entries added and removed, which is not what an edit changes.
+//!   A short window costs one re-walk a second or two after a file is created,
+//!   renamed or deleted, and spares the other few hundred.
+//! * **The text of each file, with the `(mtime, len)` it was read at**, for as
+//!   long as the file still reports them. The search already asks every
+//!   candidate for its metadata before reading it, so this costs no extra call
+//!   and needs no window at all: the expansion after a save reads the file
+//!   again, because the file itself says to.
+//! * **The [sites](Site) in that text**, which is what the scan above finds.
+//!   They follow from the text alone, the entry point's name being compared
+//!   against a site rather than during the scan.
+//!
+//! Three things make that safe to do:
+//!
+//! * **A stale text cannot win.** Verification walks the tokens the host handed
+//!   over across the text one by one, so a text that is out of date fails to
+//!   match — exactly as an unsaved buffer's does — and the block falls back to
+//!   its tokens. The cache can cost a match; it cannot invent one.
+//! * **The answer does not depend on the cache.** Every candidate is charged its
+//!   length against the [byte budget](Caps::total_bytes) whether its text came
+//!   from the disk or from memory, and a listing is reused only when it was
+//!   collected under the same [`Caps`], so a cold search and a warm one accept
+//!   the same candidate.
+//! * **Memory is bounded by the ceiling that was already there.** Everything
+//!   cached, over every directory, is bounded by the [`total_bytes`](Caps) a
+//!   single search may read; passing it throws the whole cache away rather than
+//!   letting it grow a directory at a time. At most [`DIRS`] directories are
+//!   kept, the one longest unused going first.
+//!
+//! One mutex guards the whole of it, held to look a text up or to put one in and
+//! never across a read of the disk, because a proc-macro server may expand on
+//! several threads at once.
+//!
 //! # Several candidates
 //!
 //! Two invocations with the same tokens are common rather than exotic — a test
@@ -71,7 +120,10 @@
 //! None of this can reach a build. `rustc` gives the positions, so the file and
 //! the place in it are known exactly and this module is never entered.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::capture::{AnchorList, FlatKind, FlatTok, shares_previous_span};
 
@@ -87,7 +139,10 @@ use crate::capture::{AnchorList, FlatKind, FlatTok, shares_previous_span};
 /// The defaults are far above any hand-written crate and far below anything
 /// that would be felt: a few thousand files, a few megabytes each, thirty-two
 /// megabytes in all.
-#[derive(Clone, Copy, Debug)]
+///
+/// They are also part of what a [remembered](self#the-cache) candidate list is
+/// keyed by, since they decide which files the walk collects at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Caps {
     /// The greatest number of `.rs` files considered.
     pub files: usize,
@@ -176,8 +231,9 @@ impl Search<'_> {
         let quoted = quoted_includes(toks);
         let mut first: Option<Slice> = None;
         let mut budget = self.caps.total_bytes;
-        for path in self.candidate_files() {
-            let Ok(meta) = std::fs::metadata(&path) else {
+        let candidates = self.candidate_files();
+        for path in candidates.iter() {
+            let Ok(meta) = std::fs::metadata(path) else {
                 continue;
             };
             let len = meta.len();
@@ -189,37 +245,73 @@ impl Search<'_> {
                 // and answer from it.
                 break;
             }
+            // Charged whether the text is read or remembered, so that a warm
+            // cache cannot let a search reach a candidate a cold one would not;
+            // see [the cache](self#the-cache).
             budget -= len;
-            let Ok(text) = std::fs::read_to_string(&path) else {
+            let Some(file) = self.file(path, &meta) else {
                 continue;
             };
-            let Some(sites) = sites(&text, self.entry_names) else {
+            let Some(sites) = file.sites.as_deref() else {
                 continue;
             };
-            for site in sites {
-                let Some(found) = verify(&text, site.body, toks) else {
-                    continue;
-                };
-                if !accept(&path) {
-                    continue;
-                }
-                let (line, column) = line_column(&text, found.start);
-                let slice = Slice {
-                    path: path.clone(),
-                    text: text[found.start..found.end].to_owned(),
-                    anchors: found.anchors,
-                    line,
-                    column,
-                };
-                if headers_exist_beside(&slice.path, &quoted) {
-                    return Some(slice);
-                }
-                if first.is_none() {
-                    first = Some(slice);
+            let text = file.text.as_str();
+            // The sites whose name was asked for, then the rest, each group in
+            // the order the bodies start — which is the order the scan left them
+            // in. The name is not part of what is cached: the text says where
+            // the sites are, the entry point which of them are likely.
+            for wanted in [true, false] {
+                for site in sites {
+                    if site.named(text, self.entry_names) != wanted {
+                        continue;
+                    }
+                    let Some(found) = verify(text, site.body.clone(), toks) else {
+                        continue;
+                    };
+                    if !accept(path) {
+                        continue;
+                    }
+                    let (line, column) = line_column(text, found.start);
+                    let slice = Slice {
+                        path: path.clone(),
+                        text: text[found.start..found.end].to_owned(),
+                        anchors: found.anchors,
+                        line,
+                        column,
+                    };
+                    if headers_exist_beside(&slice.path, &quoted) {
+                        return Some(slice);
+                    }
+                    if first.is_none() {
+                        first = Some(slice);
+                    }
                 }
             }
         }
         first
+    }
+
+    /// The text of one candidate and the sites in it, from the
+    /// [cache](self#the-cache) when the file still reports the `(mtime, len)`
+    /// the text was read at, and from the disk otherwise.
+    ///
+    /// [`None`] only when the file cannot be read or is not UTF-8, which is what
+    /// passing over it means everywhere else here too.
+    fn file(&self, path: &Path, meta: &std::fs::Metadata) -> Option<File> {
+        let stamp = (meta.modified().ok(), meta.len());
+        if let Some(hit) = cache().file(self.dir, path, stamp) {
+            return Some(hit);
+        }
+        #[cfg(test)]
+        counted(|counts| counts.reads += 1);
+        let text = std::fs::read_to_string(path).ok()?;
+        let file = File {
+            stamp,
+            sites: sites(&text).map(Arc::from),
+            text: Arc::new(text),
+        };
+        cache().remember_file(self.dir, path, &file, self.caps.total_bytes);
+        Some(file)
     }
 
     /// The `.rs` files of the crate, in the order they are tried: **sorted by
@@ -235,12 +327,21 @@ impl Search<'_> {
     /// that is not a regular `.rs` file: a symbolic link is never followed,
     /// which is also what keeps a link pointing at its own ancestor from
     /// turning the walk into a loop.
-    fn candidate_files(&self) -> Vec<PathBuf> {
+    ///
+    /// The walk is the expensive half of the search, so its result is
+    /// [remembered](self#the-cache) for a short while: a burst of expansions
+    /// after one edit walks the crate once.
+    fn candidate_files(&self) -> Arc<[PathBuf]> {
+        if let Some(listed) = cache().listing(self.dir, &self.caps) {
+            return listed;
+        }
         let mut out = Vec::new();
         let mut dirs = 0usize;
         self.walk(self.dir, 0, &mut dirs, &mut out);
         out.sort();
-        out
+        let files: Arc<[PathBuf]> = Arc::from(out);
+        cache().remember_listing(self.dir, self.caps, &files);
+        files
     }
 
     fn walk(&self, dir: &Path, depth: usize, dirs: &mut usize, out: &mut Vec<PathBuf>) {
@@ -248,6 +349,8 @@ impl Search<'_> {
             return;
         }
         *dirs += 1;
+        #[cfg(test)]
+        counted(|counts| counts.dirs += 1);
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -286,6 +389,240 @@ impl Search<'_> {
         }
         for subdir in subdirs {
             self.walk(&subdir, depth + 1, dirs, out);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the cache
+// ---------------------------------------------------------------------------
+
+/// How long a candidate list is believed without walking the crate again.
+///
+/// Long enough that the burst of expansions one edit provokes walks once, short
+/// enough that a file created, renamed or deleted is a candidate — or stops
+/// being one — while the editor is still on the same screen. What an *edit*
+/// changes is never hidden by it: a file's text is keyed by what the file says
+/// about itself, not by this. See [the cache](self#the-cache).
+const LISTING_WINDOW: Duration = Duration::from_secs(2);
+
+/// The greatest number of crate directories remembered at once.
+///
+/// A proc-macro server serves a whole workspace, so this is not one; and the
+/// candidate list of a directory is a few thousand paths, so it is not many.
+/// Passing it throws away the directory that has gone longest unsearched, which
+/// in a workspace whose crates are analysed in turn is the one furthest from
+/// being asked for again.
+const DIRS: usize = 8;
+
+/// What a file has to still report for its remembered text to be used: the
+/// modification time it was read at, when the platform gives one, and its
+/// length.
+type Stamp = (Option<SystemTime>, u64);
+
+/// One file as it was last read.
+#[derive(Clone)]
+struct File {
+    /// What the file reported when this text was read; see [`Stamp`].
+    stamp: Stamp,
+    /// The file's text.
+    text: Arc<String>,
+    /// The invocations in `text`, in the order the bodies start, or [`None`]
+    /// when the file does not scan at all — which is worth remembering too, so
+    /// that a file that does not compile is scanned once rather than once per
+    /// block.
+    sites: Option<Arc<[Site]>>,
+}
+
+/// One crate directory's candidate list.
+struct Listing {
+    /// The candidate files, in the order they are tried.
+    files: Arc<[PathBuf]>,
+    /// The caps the walk was made under, which decide what it collected.
+    caps: Caps,
+    /// When it was collected; see [`LISTING_WINDOW`].
+    at: Instant,
+}
+
+/// Everything remembered about one crate directory.
+struct Dir {
+    /// The directory, which is what the entry is found by.
+    dir: PathBuf,
+    /// Its candidate list, while there is one worth keeping.
+    listing: Option<Listing>,
+    /// The text of every file read from it, by path.
+    files: HashMap<PathBuf, File>,
+    /// The bytes those texts hold.
+    bytes: u64,
+    /// When this entry was last asked about, which is what decides the order
+    /// entries are thrown away in.
+    used: Instant,
+}
+
+/// The whole cache; see [the module docs](self#the-cache).
+#[derive(Default)]
+struct Cache {
+    /// One entry per directory searched, in no particular order.
+    dirs: Vec<Dir>,
+    /// The bytes every entry's texts hold together.
+    bytes: u64,
+}
+
+/// The one cache, which lives as long as the process.
+static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+
+/// The cache, locked.
+///
+/// Nothing but the cache's own bookkeeping runs while the lock is held — never a
+/// read of the disk, and nothing that can panic — so a poisoned lock is not a
+/// state this can really be in; and a procedural macro that gave up over a cache
+/// would be the worst answer available, so a poisoned one is used anyway.
+fn cache() -> MutexGuard<'static, Cache> {
+    CACHE
+        .get_or_init(|| Mutex::new(Cache::default()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl Cache {
+    /// The entry for `dir`, made if there is none, marked as just used.
+    fn dir(&mut self, dir: &Path) -> &mut Dir {
+        if let Some(at) = self.dirs.iter().position(|entry| entry.dir == dir) {
+            let entry = &mut self.dirs[at];
+            entry.used = Instant::now();
+            return entry;
+        }
+        while self.dirs.len() >= DIRS {
+            self.forget_oldest();
+        }
+        self.dirs.push(Dir {
+            dir: dir.to_owned(),
+            listing: None,
+            files: HashMap::new(),
+            bytes: 0,
+            used: Instant::now(),
+        });
+        self.dirs.last_mut().expect("the entry just pushed")
+    }
+
+    /// Throws away the directory that has gone longest unsearched.
+    fn forget_oldest(&mut self) {
+        let Some(at) = (0..self.dirs.len()).min_by_key(|at| self.dirs[*at].used) else {
+            return;
+        };
+        let gone = self.dirs.swap_remove(at);
+        self.bytes -= gone.bytes;
+    }
+
+    /// The candidate list of `dir`, while it is worth believing: collected under
+    /// the same caps, and no older than [`LISTING_WINDOW`].
+    fn listing(&mut self, dir: &Path, caps: &Caps) -> Option<Arc<[PathBuf]>> {
+        let listing = self.dir(dir).listing.as_ref()?;
+        (listing.caps == *caps && listing.at.elapsed() < LISTING_WINDOW)
+            .then(|| Arc::clone(&listing.files))
+    }
+
+    /// Remembers a walk's result as the candidate list of `dir`.
+    fn remember_listing(&mut self, dir: &Path, caps: Caps, files: &Arc<[PathBuf]>) {
+        self.dir(dir).listing = Some(Listing {
+            files: Arc::clone(files),
+            caps,
+            at: Instant::now(),
+        });
+    }
+
+    /// The remembered text of `path` under `dir`, when the file still reports
+    /// the `(mtime, len)` it was read at.
+    fn file(&mut self, dir: &Path, path: &Path, stamp: Stamp) -> Option<File> {
+        let file = self.dir(dir).files.get(path)?;
+        (file.stamp == stamp).then(|| file.clone())
+    }
+
+    /// Remembers `file` as the text of `path` under `dir`.
+    ///
+    /// `cap` is the [`Caps::total_bytes`] of the search doing the remembering:
+    /// what one search may read is also all the cache may hold, and passing it
+    /// empties the cache rather than shrinking it, since a ceiling that let the
+    /// cache grow one directory at a time would be no ceiling.
+    fn remember_file(&mut self, dir: &Path, path: &Path, file: &File, cap: u64) {
+        let len = file.text.len() as u64;
+        let entry = self.dir(dir);
+        let was = entry
+            .files
+            .insert(path.to_owned(), file.clone())
+            .map_or(0, |old| old.text.len() as u64);
+        entry.bytes = entry.bytes + len - was;
+        self.bytes = self.bytes + len - was;
+        if self.bytes > cap {
+            self.dirs.clear();
+            self.bytes = 0;
+        }
+    }
+}
+
+/// Makes one crate's candidate list as old as the window, so that a test can
+/// watch the walk happen again without waiting two seconds for it.
+///
+/// One crate's and not every crate's, because the tests run concurrently and a
+/// test that watches its own crate being walked may not have another's ageing
+/// done to it.
+#[cfg(test)]
+fn expire_listing(dir: &Path) {
+    let mut cache = cache();
+    let entry = cache.dir(dir);
+    entry.listing = entry.listing.take().and_then(|listing| {
+        // A monotonic clock too young to subtract from is no reason to fail a
+        // test: forgetting the listing is where the window leads anyway.
+        Instant::now()
+            .checked_sub(LISTING_WINDOW)
+            .map(|then| Listing {
+                at: then,
+                ..listing
+            })
+    });
+}
+
+/// What the searches on this thread have asked of the file system, which is what
+/// the cache's tests watch.
+///
+/// Per thread rather than per process, because the test harness runs tests
+/// concurrently and each of them on a thread of its own.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Counts {
+    /// Directories listed — [`Search::walk`]'s `read_dir` calls.
+    dirs: usize,
+    /// Files read.
+    reads: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static COUNTS: std::cell::Cell<Counts> = const { std::cell::Cell::new(Counts { dirs: 0, reads: 0 }) };
+}
+
+#[cfg(test)]
+fn counted(f: impl FnOnce(&mut Counts)) {
+    COUNTS.with(|counts| {
+        let mut now = counts.get();
+        f(&mut now);
+        counts.set(now);
+    });
+}
+
+#[cfg(test)]
+impl Counts {
+    /// What this thread has done since the process started.
+    fn now() -> Self {
+        COUNTS.with(std::cell::Cell::get)
+    }
+
+    /// What it has done since `self` was read.
+    fn since(self) -> Self {
+        let now = Self::now();
+        Self {
+            dirs: now.dirs - self.dirs,
+            reads: now.reads - self.reads,
         }
     }
 }
@@ -396,25 +733,36 @@ fn line_column(text: &str, at: usize) -> (usize, usize) {
 struct Site {
     /// The bytes strictly between the delimiters.
     body: std::ops::Range<usize>,
-    /// Whether the identifier before the `!` is one of the names searched for.
-    named: bool,
+    /// The identifier before the `!`, as a range of the same text.
+    ///
+    /// Not the answer to "is this the name asked for?" but what the answer is
+    /// read off, so that a site follows from the text alone and can be
+    /// [remembered](self#the-cache) with it however the block is spelled.
+    name: std::ops::Range<usize>,
 }
 
-/// Every `name! (…)`, `name! […]` and `name! {…}` in `text`, in the order they
-/// are tried: the ones whose name was asked for first, then the rest, each
-/// group in the order the bodies start.
+impl Site {
+    /// Whether this site's name is one of `names` — which only decides whether
+    /// it is looked at before the rest; see [`Search::entry_names`].
+    fn named(&self, text: &str, names: &[&str]) -> bool {
+        names.contains(&&text[self.name.clone()])
+    }
+}
+
+/// Every `name! (…)`, `name! […]` and `name! {…}` in `text`, in the order the
+/// bodies start.
 ///
 /// [`None`] means the scan lost its way and nothing in the file may be believed:
 /// a delimiter that closes nothing or closes the wrong thing, an unterminated
 /// comment or character literal. (An unterminated *raw string* only ends the
 /// scan, since what precedes it was read correctly.) Either way the file is
 /// passed over, and it does not compile as it stands anyway.
-fn sites(text: &str, names: &[&str]) -> Option<Vec<Site>> {
+fn sites(text: &str) -> Option<Vec<Site>> {
     let bytes = text.as_bytes();
     let mut out: Vec<Site> = Vec::new();
     // The open delimiters currently entered: where the body starts, which
     // character closes it, and the name of the macro it is the body of.
-    let mut open: Vec<(usize, u8, Option<bool>)> = Vec::new();
+    let mut open: Vec<(usize, u8, Option<std::ops::Range<usize>>)> = Vec::new();
     // The identifier last read, and then whether a `!` followed it: a site is
     // `ident`, `!` and an open delimiter, with nothing but whitespace and
     // comments in between.
@@ -485,10 +833,7 @@ fn sites(text: &str, names: &[&str]) -> Option<Vec<Site>> {
             continue;
         }
         if let Some(close) = closing_delimiter(b) {
-            let named = bang
-                .take()
-                .map(|range| names.contains(&&text[range.clone()]));
-            open.push((at + 1, close, named));
+            open.push((at + 1, close, bang.take()));
             ident = None;
             at += 1;
             continue;
@@ -497,14 +842,14 @@ fn sites(text: &str, names: &[&str]) -> Option<Vec<Site>> {
             // Rust cannot be lexed with unbalanced delimiters outside a comment
             // or a literal, so a mismatch here means the scan has lost its way
             // and nothing it goes on to find may be believed.
-            let (start, close, named) = open.pop()?;
+            let (start, close, name) = open.pop()?;
             if close != b {
                 return None;
             }
-            if let Some(named) = named {
+            if let Some(name) = name {
                 out.push(Site {
                     body: start..at,
-                    named,
+                    name,
                 });
             }
             ident = None;
@@ -517,7 +862,10 @@ fn sites(text: &str, names: &[&str]) -> Option<Vec<Site>> {
         at += 1;
     }
 
-    out.sort_by_key(|site| (!site.named, site.body.start));
+    // A site is found when its body *closes*, so a nested one is found before
+    // the site it is nested in; the order they are tried in starts from where
+    // each body begins, and no two bodies begin in the same place.
+    out.sort_by_key(|site| site.body.start);
     Some(out)
 }
 
@@ -786,13 +1134,20 @@ fn skip_trivia(bytes: &[u8], mut at: usize, limit: usize) -> Option<usize> {
 mod tests {
     use super::*;
 
-    /// The bodies `sites` finds, as text, in the order they are tried.
+    /// The bodies `sites` finds, as text, in the order they are tried: the ones
+    /// whose name was asked for first, then the rest — which is what
+    /// [`Search::find`] does with them.
     fn found(text: &str, names: &[&str]) -> Vec<String> {
-        sites(text, names)
-            .expect("the fixture scans")
-            .into_iter()
-            .map(|site| text[site.body].to_owned())
-            .collect()
+        let sites = sites(text).expect("the fixture scans");
+        let mut out = Vec::new();
+        for wanted in [true, false] {
+            for site in &sites {
+                if site.named(text, names) == wanted {
+                    out.push(text[site.body.clone()].to_owned());
+                }
+            }
+        }
+        out
     }
 
     #[test]
@@ -819,10 +1174,11 @@ mod tests {
 
     #[test]
     fn an_identifier_that_merely_ends_with_the_name_is_not_a_site() {
-        assert_eq!(found("xc99! { a }", &["c99"]), vec![" a "]);
-        assert!(!found("xc99! { a }", &["c99"]).is_empty());
-        let sites = sites("xc99! { a }", &["c99"]).expect("scans");
-        assert!(!sites[0].named);
+        let text = "xc99! { a }";
+        assert_eq!(found(text, &["c99"]), vec![" a "]);
+        let sites = sites(text).expect("scans");
+        assert!(!sites[0].named(text, &["c99"]));
+        assert!(sites[0].named(text, &["xc99"]));
     }
 
     #[test]
@@ -883,11 +1239,11 @@ mod tests {
     #[test]
     fn a_file_that_cannot_be_scanned_is_passed_over() {
         // A delimiter that closes nothing.
-        assert!(sites("} c99! { a }", &["c99"]).is_none());
+        assert!(sites("} c99! { a }").is_none());
         // Mismatched delimiters.
-        assert!(sites("c99! ( a } ", &["c99"]).is_none());
+        assert!(sites("c99! ( a } ").is_none());
         // An unterminated block comment.
-        assert!(sites("/* c99! { a }", &["c99"]).is_none());
+        assert!(sites("/* c99! { a }").is_none());
     }
 
     #[test]
@@ -1200,5 +1556,115 @@ mod tests {
             ..Caps::default()
         };
         assert!(krate.find_with("int x;", no_dirs).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // the cache
+    // -----------------------------------------------------------------------
+
+    /// Held by every test that counts what the file system was asked for.
+    ///
+    /// The cache is one per process, so the test that fills it past its ceiling
+    /// empties every crate's, and a test watching its own crate may not have
+    /// that happen behind its back. Nothing else here can: no other test
+    /// remembers a text under a ceiling small enough to pass.
+    static WATCHING: Mutex<()> = Mutex::new(());
+
+    fn watching() -> MutexGuard<'static, ()> {
+        WATCHING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn a_burst_of_searches_walks_the_crate_once() {
+        let _watching = watching();
+        let krate = Crate::new("burst");
+        krate
+            .file("src/lib.rs", "c99! { int x; }\n")
+            .file("src/other.rs", "// nothing to find here\n");
+
+        let before = Counts::now();
+        assert!(krate.find("int x;").is_some());
+        // The crate root and `src`; and one file read, since `src/lib.rs` sorts
+        // before `src/other.rs` and the search stops at the match.
+        assert_eq!(
+            before.since(),
+            Counts { dirs: 2, reads: 1 },
+            "the first search does the work"
+        );
+
+        // What an editor asks for after one edit: every block of the crate over
+        // again. Nothing on disk has changed, so nothing is walked or read a
+        // second time — only each candidate's own metadata is asked for.
+        let before = Counts::now();
+        for _ in 0..16 {
+            assert!(krate.find("int x;").is_some());
+        }
+        assert_eq!(
+            before.since(),
+            Counts::default(),
+            "the rest of the burst is served from memory"
+        );
+    }
+
+    #[test]
+    fn a_file_saved_again_is_read_again() {
+        let krate = Crate::new("edited");
+        krate.file("src/lib.rs", "c99! { int x = 1; }\n");
+        assert!(krate.find("int x = 1;").is_some());
+
+        // The editor saves. The candidate list is still the one from a moment
+        // ago, but a text is remembered under what the file reports about itself,
+        // so the very next expansion sees the new bytes — no window, no wait.
+        krate.file("src/lib.rs", "c99! { int x = 22; }\n");
+        assert!(krate.find("int x = 22;").is_some());
+        // And the text that is gone is gone: nothing matches it any more.
+        assert!(krate.find("int x = 1;").is_none());
+    }
+
+    #[test]
+    fn a_new_file_becomes_a_candidate_when_the_crate_is_walked_again() {
+        let krate = Crate::new("listed");
+        krate.file("src/a.rs", "c99! { int x; }\n");
+        assert!(krate.find("int x;").is_some());
+
+        // A file that did not exist when the crate was listed is not a candidate
+        // yet. That is the whole of what the window costs — and the block it
+        // holds is answered from its tokens meanwhile, as it would be anyway
+        // while the file was unsaved.
+        let written = Instant::now();
+        krate.file("src/b.rs", "c99! { int y; }\n");
+        let missed = krate.find("int y;").is_none();
+        if written.elapsed() < LISTING_WINDOW {
+            assert!(missed, "the listing is the one from before the file");
+        }
+        // Once the listing is as old as the window, it is a candidate.
+        expire_listing(&krate.dir);
+        assert!(krate.find("int y;").is_some());
+    }
+
+    #[test]
+    fn everything_is_forgotten_when_the_ceiling_is_passed() {
+        let _watching = watching();
+        // Two crates whose texts do not fit in the cache together: what one
+        // search may read is all the cache may hold.
+        let caps = Caps {
+            total_bytes: 600,
+            ..Caps::default()
+        };
+        let pad = "pad".repeat(100);
+        let a = Crate::new("ceiling-a");
+        a.file("src/lib.rs", &format!("// {pad}\nc99! {{ int x; }}\n"));
+        let b = Crate::new("ceiling-b");
+        b.file("src/lib.rs", &format!("// {pad}\nc99! {{ int y; }}\n"));
+
+        assert!(a.find_with("int x;", caps).is_some());
+        assert!(b.find_with("int y;", caps).is_some());
+        let before = Counts::now();
+        assert!(a.find_with("int x;", caps).is_some());
+        let again = before.since();
+        assert!(again.reads > 0, "the text was thrown away: {again:?}");
+        assert!(again.dirs > 0, "and so was the listing: {again:?}");
     }
 }

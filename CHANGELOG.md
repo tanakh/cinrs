@@ -60,6 +60,25 @@ follows [Semantic Versioning][semver].
   `tests/system_headers.rs` compares every shared layout against `cc`'s over the
   platform's headers alone, because claiming a guard is a promise about layout.
 
+* **A block under rust-analyzer no longer searches the crate from scratch.**
+  Where the host gives a procedural macro no source positions, a raw-token block
+  finds its own text by walking the crate's `.rs` files and proving which
+  invocation is its own — and it used to do the whole walk again for every block.
+  That is a hundred directories and five thousand entries here, 25 ms a block in
+  the unoptimized build a proc-macro server runs, and some thirteen seconds of
+  that server's time each time an editor re-analysed this repository's own five
+  hundred blocks. The search now remembers, per process: the file list for two
+  seconds, since one edit provokes a burst of expansions and nothing on disk
+  moves between the first and the last; and each file's text for as long as the
+  file still reports the modification time and length it was read at, which the
+  search asks for anyway before reading it. A block costs 0.95 ms instead of
+  25 ms, a file that was just saved is read again by the very next expansion, and
+  nothing about which invocation is found can change — every candidate is still
+  charged against the same byte budget, and a text that is out of date fails to
+  match token for token exactly as an unsaved buffer's does. `cargo build` never
+  went near any of this: it has the positions. See
+  `crates/cinrs-core/src/locate.rs`.
+
 ### Added
 
 * **SQLite compiles.** `scripts/check-sqlite.sh` downloads the SQLite 3.53.4
