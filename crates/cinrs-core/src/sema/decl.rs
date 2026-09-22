@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{
-    self, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind, Signature, StaticVar, Stmt,
-    Storage, Ty, TypedefItem,
+    self, ConstValue, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind, Signature,
+    StaticVar, Stmt, Storage, Ty, TypedefItem,
 };
 
 use super::types::Completeness;
@@ -2794,6 +2794,15 @@ impl Sema<'_> {
                 Some(self.const_to_expr(value, ty, range))
             }
             _ if ty.is_pointer() => {
+                // C99 6.6p9 lets an address constant be offset by *any*
+                // integer constant expression, not only by a literal:
+                // `&sqlite3UpperToLower[256-OP_Ne]` is SQLite's, and a
+                // hand-written `SQLITE_INT_TO_PTR(i|(b*JSON_BLOB))` is the
+                // same thing one cast further out. Nothing below recognises
+                // an unfolded subscript, so the integer parts are folded
+                // first — which also keeps the emitted `static` free of
+                // arithmetic Rust would have to redo.
+                let expr = self.fold_pointer_constant(expr);
                 // `(char *) 1 + 2` is a constant, but a Rust `.offset()` on a
                 // pointer with no provenance is not: the arithmetic is done
                 // here instead, and what is left is one integer cast.
@@ -2817,6 +2826,65 @@ impl Sema<'_> {
                 None
             }
         }
+    }
+
+    /// Folds the integer constant subexpressions of a pointer value, leaving
+    /// its shape alone.
+    ///
+    /// The shapes an *address constant* may take are listed in
+    /// [`Sema::is_address_constant`], and each of them has room for an integer
+    /// constant expression: the subscript of `&a[i]`, the offset of `p + i`,
+    /// the integer of `(T *) i`. C99 6.6p9 asks only that it *be* a constant
+    /// expression, so folding it here is what makes
+    ///
+    /// ```c
+    /// static const unsigned char *aLTb = &sqlite3UpperToLower[256-OP_Ne];
+    /// ```
+    ///
+    /// an address constant rather than a diagnostic. Anything that does not
+    /// fold is left exactly as it was, so the caller's check — and its error —
+    /// still see the expression the program wrote.
+    fn fold_pointer_constant(&mut self, expr: Expr) -> Expr {
+        let (ty, range) = (expr.ty, expr.range);
+        if ty.is_integer() {
+            return match self.const_eval(&expr) {
+                Some(ConstValue::Int(value)) => Expr::int(value, ty, range),
+                _ => expr,
+            };
+        }
+        let kind = match expr.kind {
+            ExprKind::Cast(inner) => ExprKind::Cast(Box::new(self.fold_pointer_constant(*inner))),
+            ExprKind::PtrOffset { ptr, index, sub } => ExprKind::PtrOffset {
+                ptr: Box::new(self.fold_pointer_constant(*ptr)),
+                index: Box::new(self.fold_pointer_constant(*index)),
+                sub,
+            },
+            ExprKind::AddrOf(place) => ExprKind::AddrOf(self.fold_place_constant(place)),
+            other => other,
+        };
+        Expr::new(kind, ty, range)
+    }
+
+    /// [`Sema::fold_pointer_constant`] for the place under an `&`.
+    fn fold_place_constant(&mut self, place: Place) -> Place {
+        let kind = match place.kind {
+            PlaceKind::Index { base, index } => PlaceKind::Index {
+                base: Box::new(self.fold_pointer_constant(*base)),
+                index: Box::new(self.fold_pointer_constant(*index)),
+            },
+            PlaceKind::Field {
+                base,
+                record,
+                index,
+            } => PlaceKind::Field {
+                base: Box::new(self.fold_place_constant(*base)),
+                record,
+                index,
+            },
+            PlaceKind::Deref(ptr) => PlaceKind::Deref(Box::new(self.fold_pointer_constant(*ptr))),
+            other => other,
+        };
+        Place { kind, ..place }
     }
 
     /// Folds a pointer value built entirely out of integer constants into one

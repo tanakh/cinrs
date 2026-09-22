@@ -124,16 +124,25 @@ platform splits `PATH`, and searched after both the pragma's directories and
 
 ```c
 #pragma cinrs system_include
+#include <unistd.h>
 #include <sys/stat.h>
 ```
 
-Puts the **platform's own** include directories on the search path, which is
-how a unit reaches a type whose layout only the platform knows — `struct stat`,
-`DIR`, `pthread_mutex_t`, the real `FILE`. Written plain they go *after* the
-bundled headers, so cinrs's own `<stdio.h>` and `<string.h>` still win and only
-a header cinrs does not carry comes from the machine. Written
-`system_include first` they go before, which is how a unit asks for the
-platform's version of a header cinrs does carry.
+Puts the **platform's own** include directories on the search path. Two things
+need it: **POSIX**, because the bundled set is ISO C and nothing else — every
+POSIX header comes from the platform, where it is complete and consistent with
+its neighbours — and any type whose layout only the platform knows, `struct
+stat`, `DIR`, `pthread_mutex_t`, the real `FILE`.
+
+Written plain the directories go *after* the bundled headers, so cinrs's own
+`<stdio.h>`, `<string.h>` and `<time.h>` still win and everything else comes
+from the machine. Written `system_include first` they go before, which is how a
+unit asks for the platform's version of a header cinrs does carry — the real
+`FILE`, or the POSIX additions to an ISO C header such as `<time.h>`'s
+`nanosleep` and `clock_gettime`.
+
+With the switch **off**, a POSIX header is a diagnostic that names this pragma
+rather than only the directories it searched.
 
 The argument is a bare word rather than a string, so that it reads as the
 switch it is. Like `include_path`, it takes effect where it stands and has to

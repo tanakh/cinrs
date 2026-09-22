@@ -191,7 +191,7 @@ use crate::include;
 use crate::lex::{
     self, IntLit, Keyword, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind,
 };
-use crate::target::{Env, Os, TargetModel, TargetSource};
+use crate::target::{Arch, Env, Os, TargetModel, TargetSource};
 use crate::{Dialect, Gating, Options, Standard};
 
 // ---------------------------------------------------------------------------
@@ -497,6 +497,8 @@ struct MacroDef {
     name_range: SourceRange,
     /// Whether this macro was built in rather than written by the user.
     predefined: bool,
+    /// Which set of headers the `#define` was written in; see [`DefSite`].
+    site: DefSite,
     /// The value this macro computes, for the ones that are not just tokens.
     builtin: Option<Builtin>,
 }
@@ -1107,6 +1109,41 @@ struct OpenFile {
     /// it leaves unterminated is reported against it rather than leaking into
     /// the file that included it.
     cond_base: usize,
+    /// Which set of headers this file belongs to, for [`Pp::define`]'s one rule
+    /// about a macro two of them both define.
+    site: DefSite,
+}
+
+/// Which set of headers a `#define` was written in.
+///
+/// It matters for exactly one thing: a macro that a bundled header and one of
+/// the platform's own *both* define. The two describe the same C library, so
+/// where they disagree it is a disagreement about spelling rather than about
+/// the platform — glibc writes `CLOCKS_PER_SEC` as `((__clock_t) 1000000)` and
+/// the bundled `<time.h>` writes `1000000` — and the platform's own copy is the
+/// authoritative one. See [`Pp::define`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DefSite {
+    /// The translation unit itself, or a header the program supplied.
+    Program,
+    /// One of the [bundled headers](include::BUNDLED).
+    Bundled,
+    /// One of the platform's own headers.
+    Platform,
+}
+
+impl DefSite {
+    /// Which of the two definitions of one macro to keep, when a bundled header
+    /// and a platform header disagree about it. `None` when this is not that
+    /// situation and the disagreement is a real one.
+    fn resolves(previous: Self, next: Self) -> Option<Self> {
+        match (previous, next) {
+            (DefSite::Bundled, DefSite::Platform) | (DefSite::Platform, DefSite::Bundled) => {
+                Some(DefSite::Platform)
+            }
+            _ => None,
+        }
+    }
 }
 
 struct Pp<'a> {
@@ -1219,6 +1256,7 @@ impl<'a> Pp<'a> {
                 found_in: None,
                 key: ctx.file_name.clone(),
                 cond_base: 0,
+                site: DefSite::Program,
             }],
             pending: Vec::new(),
             out: Vec::new(),
@@ -3068,7 +3106,7 @@ impl Pp<'_> {
                         searched.join(", ")
                     ),
                 };
-                self.diags.error(range, message);
+                self.diags.error(range, message + &self.posix_hint(&name));
                 return;
             }
         };
@@ -3090,6 +3128,27 @@ impl Pp<'_> {
             self.user_headers.push(path.clone());
         }
         self.open_file(found, range);
+    }
+
+    /// What to add to a "file not found" for a POSIX header while the
+    /// platform's own directories are switched off.
+    ///
+    /// The bundled set is ISO C; POSIX comes from the platform. A program that
+    /// asks for `<unistd.h>` without saying so has not written a typo, it has
+    /// left out one line — and the diagnostic that only lists the directories
+    /// searched leaves the reader to work that out. Empty for every other name,
+    /// and empty once the switch is on, where a missing POSIX header really is
+    /// a missing file.
+    fn posix_hint(&self, name: &str) -> String {
+        if self.search.system_mode().is_on() || !include::is_posix_header(name) {
+            return String::new();
+        }
+        format!(
+            ". The bundled headers are ISO C; POSIX headers such as <{name}> come from the \
+             platform, which '#pragma cinrs system_include' (or {}=1 in the environment) \
+             switches on",
+            include::SYSTEM_ENV_VAR
+        )
     }
 
     // -- #embed -------------------------------------------------------------
@@ -3369,6 +3428,13 @@ impl Pp<'_> {
         });
         self.files
             .push(FileEntry::new(found.text, base, 1, found.name));
+        let site = if found.system {
+            DefSite::Platform
+        } else if matches!(found.origin, include::Origin::Bundled) {
+            DefSite::Bundled
+        } else {
+            DefSite::Program
+        };
         self.open.push(OpenFile {
             input,
             pos: 0,
@@ -3376,6 +3442,7 @@ impl Pp<'_> {
             found_in: found.found_in,
             key: found.key,
             cond_base: self.conds.len(),
+            site,
         });
     }
 
@@ -3593,6 +3660,7 @@ impl Pp<'_> {
             body,
             name_range: name_tok.range,
             predefined: false,
+            site: self.cur().site,
             builtin: None,
         };
         if !self.check_body(&def, &name, range) {
@@ -3603,14 +3671,36 @@ impl Pp<'_> {
             && !previous.predefined
             && !previous.same_as(&def)
         {
-            self.diags.push(
-                Diagnostic::error(name_tok.range, format!("macro '{name}' redefined"))
-                    .with_note_at(
-                        previous.name_range,
-                        format!("previous definition of '{name}' is"),
-                    ),
-            );
-            return;
+            // A bundled header and one of the platform's own are two
+            // descriptions of the *same* C library, and with
+            // `#pragma cinrs system_include` a program has both in play: it
+            // includes the bundled `<time.h>`, and glibc's `<pthread.h>` then
+            // reaches glibc's `bits/time.h`. Where the two spell one macro
+            // differently — `CLOCKS_PER_SEC` is `1000000` here and
+            // `((__clock_t) 1000000)` there — the disagreement is about
+            // spelling, not about the platform, and the platform's own copy is
+            // the authoritative one. So it wins, and nothing is reported.
+            //
+            // Every other pair is a real redefinition and keeps its
+            // diagnostic, including a program that redefines a bundled macro:
+            // that one is the program's mistake, not a mismatch between two
+            // models of the same library.
+            match DefSite::resolves(previous.site, def.site) {
+                Some(DefSite::Platform) if def.site == DefSite::Platform => {}
+                // The platform got there first; the bundled header stands
+                // aside rather than overwriting it.
+                Some(_) => return,
+                None => {
+                    self.diags.push(
+                        Diagnostic::error(name_tok.range, format!("macro '{name}' redefined"))
+                            .with_note_at(
+                                previous.name_range,
+                                format!("previous definition of '{name}' is"),
+                            ),
+                    );
+                    return;
+                }
+            }
         }
         self.macros.insert(name, Arc::new(def));
     }
@@ -4776,6 +4866,7 @@ impl Pp<'_> {
                 body,
                 name_range: SourceRange::at(self.base),
                 predefined: true,
+                site: DefSite::Program,
                 builtin: None,
             }),
         );
@@ -4821,6 +4912,7 @@ impl Pp<'_> {
                 body,
                 name_range: SourceRange::at(self.base),
                 predefined: true,
+                site: DefSite::Program,
                 builtin,
             }),
         );
@@ -4888,6 +4980,31 @@ fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
     if target.has_int128 {
         out.push(("__SIZEOF_INT128__", "16".to_owned()));
     }
+
+    // The prefix the assembler puts in front of a C name, which GCC defines as
+    // *nothing* on ELF and as `_` on Mach-O and on 32-bit COFF.
+    //
+    // It has to be here, empty body and all, because glibc builds every
+    // large-file redirection out of it:
+    //
+    //     #define __ASMNAME(cname) __ASMNAME2 (__USER_LABEL_PREFIX__, cname)
+    //     #define __ASMNAME2(prefix, cname) __STRING (prefix) cname
+    //     extern int open64 (…) __asm__ (__ASMNAME ("open64"));
+    //
+    // With the macro undefined, `__STRING` stringifies the *token* and the
+    // symbol comes out as `__USER_LABEL_PREFIX__open64` — which compiles and
+    // then fails to link, which is the worst kind of wrong. That is what
+    // happened to SQLite under `#pragma cinrs system_include`, whose
+    // `<fcntl.h>` and `<sys/stat.h>` are glibc's.
+    out.push((
+        "__USER_LABEL_PREFIX__",
+        match (target.os, target.arch) {
+            (Os::Darwin, _) => "_".to_owned(),
+            // 32-bit COFF decorates; x86-64 PE does not.
+            (Os::Windows, Arch::X86) => "_".to_owned(),
+            _ => String::new(),
+        },
+    ));
 
     // Byte order, spelled the way GCC spells it.
     out.push(("__ORDER_LITTLE_ENDIAN__", "1234".to_owned()));

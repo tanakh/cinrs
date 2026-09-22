@@ -1,0 +1,44 @@
+# The crate `scripts/check-sqlite.sh` builds and runs.
+#
+# Deliberately outside the workspace — the empty `[workspace]` table below is
+# what detaches it — because it needs a 9 MB file that is not in this repository:
+# the SQLite amalgamation, which the script downloads into `target/sqlite/` and
+# verifies against the SHA3-256 that sqlite.org publishes. An ordinary
+# `cargo build` of this repository does not touch it, and neither does CI.
+#
+# What it is for: SQLite is the largest single C translation unit anyone actually
+# ships — 269,649 lines of C in one file, a 7,000-line `switch` with `goto`s
+# for the virtual machine, tables of function pointers, variadic definitions,
+# bit-fields, `union` initialisers — and compiling it is the honest measure of
+# whether this crate translates C rather than a subset of it.
+[package]
+name = "cinrs-sqlite-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+# `c_variadic`, which the twenty variadic functions the amalgamation *defines* —
+# `sqlite3_mprintf`, `sqlite3_snprintf`, `sqlite3_log`, `sqlite3_config` among
+# them — need in order to be definitions rather than declarations.
+rust-version = "1.99"
+
+[workspace]
+
+[features]
+# `SQLITE_THREADSAFE=1`, SQLite's own default: the serialized threading mode,
+# which on a Unix means pthreads. This is the configuration the library is
+# shipped in.
+default = ["threadsafe"]
+threadsafe = []
+# `SQLITE_THREADSAFE=0`: no mutexes at all. A separate *unit* rather than a
+# `#define` passed in, because the pragma and the macro both have to be in the
+# text — see `src/lib.rs`.
+nothreads = []
+# Link the platform's own `libsqlite3` as well and compare the two on the same
+# query. Switched on by `scripts/check-sqlite.sh` when the library is there.
+system-sqlite = []
+
+[dependencies]
+cinrs = { path = "../.." }
+
+[lib]
+path = "src/lib.rs"

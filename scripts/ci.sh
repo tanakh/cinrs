@@ -4,9 +4,10 @@
 # `--no-default-features` build, and the documentation.
 #
 #   scripts/ci.sh            fmt, clippy, the workspace tests, no-default-features, docs
-#   scripts/ci.sh --full     the above, then the rust-analyzer check and the three
-#                            conformance harnesses, each skipped with a note when
-#                            what it needs — a binary, a corpus — is absent
+#   scripts/ci.sh --full     the above, then the rust-analyzer check, the SQLite
+#                            check and the three conformance harnesses, each
+#                            skipped with a note when what it needs — a binary, a
+#                            corpus, the network, Rust 1.99 — is absent
 #
 # Every step runs under the two ceilings this project does not run anything
 # without — `ulimit -v` on the address space and `timeout(1)` on the clock. A
@@ -125,6 +126,23 @@ if [ "$FULL" -eq 1 ]; then
     else
         say "ci: FAILED: scripts/check-rust-analyzer.sh"
         FAILED+=("scripts/check-rust-analyzer.sh")
+    fi
+
+    # SQLite, compiled from the amalgamation: the largest single C translation
+    # unit anyone ships, and the one check that needs the *network* — the 9 MB of
+    # C is downloaded and verified against the hash sqlite.org publishes rather
+    # than committed here. It is therefore in `--full` only and not in CI, and
+    # like the harnesses it skips itself with a note where what it needs is
+    # absent: below Rust 1.99 there is no `c_variadic` and SQLite defines three
+    # variadic functions. It brings its own ceilings, so it is not wrapped in
+    # `step`.
+    say ""
+    say "=== scripts/check-sqlite.sh ==="
+    if scripts/check-sqlite.sh; then
+        say "ci: ok: scripts/check-sqlite.sh"
+    else
+        say "ci: FAILED: scripts/check-sqlite.sh"
+        FAILED+=("scripts/check-sqlite.sh")
     fi
 
     # Each harness in its default *guard* mode: every case not in the

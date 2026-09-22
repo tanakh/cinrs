@@ -1,0 +1,186 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr\"\n        typedef int (*logger)(int);\n        struct config { logger xLog; };\n        struct config global;\n        _Atomic(logger) hook;\n\n        void store(logger f) { __atomic_store_n(&global.xLog, f, __ATOMIC_SEQ_CST); }\n        logger load(void) { return __atomic_load_n(&global.xLog, __ATOMIC_SEQ_CST); }\n        logger swap(logger f) { return __atomic_exchange_n(&global.xLog, f, __ATOMIC_SEQ_CST); }\n        int cas(logger *e, logger d) {\n            return __atomic_compare_exchange_n(&global.xLog, e, d, 0,\n                                               __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);\n        }\n        void assign(logger f) { hook = f; }\n        logger read(void) { return hook; }\n        \")"
+---
+mod __cinrs_unit_320ff4dd {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct config {
+        pub xLog: ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+    }
+    pub type logger = ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    >;
+    pub static mut global: config = unsafe { ::core::mem::zeroed::<config>() };
+    pub static mut hook: ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > = ::core::option::Option::<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    >::None;
+    pub unsafe extern "C" fn store(
+        mut f: ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+    ) {
+        unsafe {
+            ::core::sync::atomic::AtomicPtr::<
+                ::core::ffi::c_void,
+            >::from_ptr((&raw mut global.xLog) as *mut *mut ::core::ffi::c_void)
+                .store(
+                    ::core::mem::transmute::<
+                        ::core::option::Option<
+                            unsafe extern "C" fn(
+                                ::core::ffi::c_int,
+                            ) -> ::core::ffi::c_int,
+                        >,
+                        *mut ::core::ffi::c_void,
+                    >(f),
+                    ::core::sync::atomic::Ordering::SeqCst,
+                );
+        }
+    }
+    pub unsafe extern "C" fn load() -> ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > {
+        unsafe {
+            return ::core::mem::transmute::<
+                *mut ::core::ffi::c_void,
+                ::core::option::Option<
+                    unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                >,
+            >(
+                ::core::sync::atomic::AtomicPtr::<
+                    ::core::ffi::c_void,
+                >::from_ptr((&raw mut global.xLog) as *mut *mut ::core::ffi::c_void)
+                    .load(::core::sync::atomic::Ordering::SeqCst),
+            );
+        }
+    }
+    pub unsafe extern "C" fn swap(
+        mut f: ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+    ) -> ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > {
+        unsafe {
+            return ::core::mem::transmute::<
+                *mut ::core::ffi::c_void,
+                ::core::option::Option<
+                    unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                >,
+            >(
+                ::core::sync::atomic::AtomicPtr::<
+                    ::core::ffi::c_void,
+                >::from_ptr((&raw mut global.xLog) as *mut *mut ::core::ffi::c_void)
+                    .swap(
+                        ::core::mem::transmute::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                            *mut ::core::ffi::c_void,
+                        >(f),
+                        ::core::sync::atomic::Ordering::SeqCst,
+                    ),
+            );
+        }
+    }
+    pub unsafe extern "C" fn cas(
+        mut e: *mut ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+        mut d: ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return ({
+                let __cinrs_tmp0 = e;
+                match ::core::sync::atomic::AtomicPtr::<
+                    ::core::ffi::c_void,
+                >::from_ptr((&raw mut global.xLog) as *mut *mut ::core::ffi::c_void)
+                    .compare_exchange(
+                        ::core::mem::transmute::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                            *mut ::core::ffi::c_void,
+                        >(*__cinrs_tmp0),
+                        ::core::mem::transmute::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                            *mut ::core::ffi::c_void,
+                        >(d),
+                        ::core::sync::atomic::Ordering::SeqCst,
+                        ::core::sync::atomic::Ordering::SeqCst,
+                    )
+                {
+                    ::core::result::Result::Ok(_) => true,
+                    ::core::result::Result::Err(__cinrs_tmp1) => {
+                        *__cinrs_tmp0 = ::core::mem::transmute::<
+                            *mut ::core::ffi::c_void,
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                        >(__cinrs_tmp1);
+                        false
+                    }
+                }
+            }) as ::core::ffi::c_int;
+        }
+    }
+    pub unsafe extern "C" fn assign(
+        mut f: ::core::option::Option<
+            unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+        >,
+    ) {
+        unsafe {
+            ::core::sync::atomic::AtomicPtr::<
+                ::core::ffi::c_void,
+            >::from_ptr((&raw mut hook) as *mut *mut ::core::ffi::c_void)
+                .store(
+                    ::core::mem::transmute::<
+                        ::core::option::Option<
+                            unsafe extern "C" fn(
+                                ::core::ffi::c_int,
+                            ) -> ::core::ffi::c_int,
+                        >,
+                        *mut ::core::ffi::c_void,
+                    >(f),
+                    ::core::sync::atomic::Ordering::SeqCst,
+                );
+        }
+    }
+    pub unsafe extern "C" fn read() -> ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > {
+        unsafe {
+            return ::core::mem::transmute::<
+                *mut ::core::ffi::c_void,
+                ::core::option::Option<
+                    unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                >,
+            >(
+                ::core::sync::atomic::AtomicPtr::<
+                    ::core::ffi::c_void,
+                >::from_ptr((&raw mut hook) as *mut *mut ::core::ffi::c_void)
+                    .load(::core::sync::atomic::Ordering::SeqCst),
+            );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_320ff4dd::*;

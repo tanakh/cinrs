@@ -150,15 +150,16 @@ string literal, and C that already lives in a file goes in whole. Details:
 
 ### Headers
 
-The standard headers, and the handful of POSIX ones small programs reach for,
-are bundled and written against a model of the target, so a block means the
-same thing on every machine. Your own headers are found next to the `.rs` file
-(`#pragma cinrs include_path "…"` adds directories), and editing one rebuilds
-the crate. The platform's own headers — `struct stat`, `DIR`,
-`pthread_mutex_t` — are one pragma away:
+The ISO C standard headers are bundled and written against a model of the
+target, so a block means the same thing on every machine. Your own headers are
+found next to the `.rs` file (`#pragma cinrs include_path "…"` adds
+directories), and editing one rebuilds the crate. POSIX and the platform's own
+headers — `<unistd.h>`, `<pthread.h>`, `struct stat`, `DIR` — are one pragma
+away:
 
 ```c
 #pragma cinrs system_include
+#include <unistd.h>
 #include <sys/stat.h>
 ```
 

@@ -1518,6 +1518,31 @@ fn a_thread_local_whose_initializer_names_an_item_is_not_const() {
     ));
 }
 
+/// An *address constant* (C99 6.6p9) in a static initialiser: the offset a C
+/// compiler would leave to the linker becomes a place expression under
+/// `&raw`, and the integer constant expression it is offset by is folded here
+/// rather than left for Rust to redo.
+#[test]
+fn an_address_constant_becomes_a_raw_place() {
+    insta::assert_snapshot!(generate(
+        r"
+        #define BASE 4
+        const unsigned char table[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+        const unsigned char *at = &table[BASE + 2 - 1];
+        const unsigned char *decayed = table + BASE;
+        const unsigned char *bytes = (const unsigned char *)&table[1];
+
+        struct point { int x; int y; int v[3]; };
+        struct point line[2] = { { 1, 2, { 3, 4, 5 } }, { 6, 7, { 8, 9, 10 } } };
+        int *member = &line[1].v[2];
+
+        int f(int n) { return n; }
+        int (*fp)(int) = f;
+        void *number = (void *)(__PTRDIFF_TYPE__)(1 | (1 * 16));
+        "
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // atomics
 // ---------------------------------------------------------------------------
@@ -1538,6 +1563,33 @@ fn an_atomic_object_is_reached_through_from_ptr() {
         int add(int v) { return counter += v; }
         int scale(int v) { return counter *= v; }
         int *step(void) { return cursor++; }
+        "
+    ));
+}
+
+/// A function pointer goes through the same `AtomicPtr<c_void>` as any other
+/// pointer, with a `transmute` at each end: `as` does not convert between a
+/// raw pointer and an `Option<fn>`, and the two have the same size and the
+/// same null.
+#[test]
+fn an_atomic_function_pointer_transmutes_through_atomic_ptr() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        typedef int (*logger)(int);
+        struct config { logger xLog; };
+        struct config global;
+        _Atomic(logger) hook;
+
+        void store(logger f) { __atomic_store_n(&global.xLog, f, __ATOMIC_SEQ_CST); }
+        logger load(void) { return __atomic_load_n(&global.xLog, __ATOMIC_SEQ_CST); }
+        logger swap(logger f) { return __atomic_exchange_n(&global.xLog, f, __ATOMIC_SEQ_CST); }
+        int cas(logger *e, logger d) {
+            return __atomic_compare_exchange_n(&global.xLog, e, d, 0,
+                                               __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        }
+        void assign(logger f) { hook = f; }
+        logger read(void) { return hook; }
         "
     ));
 }

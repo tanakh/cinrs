@@ -208,8 +208,6 @@ impl Sema<'_> {
         let Some(_) = ir::atomic_class(self.types(), inner, &self.target) else {
             let reason = if inner.is_int128() {
                 "there is no stable 128-bit atomic in `core::sync::atomic`"
-            } else if self.types().is_func_pointer(inner) {
-                "a function pointer is an `Option<fn>` in Rust, which no atomic holds"
             } else {
                 "only the scalar types have a lock-free atomic in `core::sync::atomic`, and \
                  nothing in the generated Rust could stand for a lock"

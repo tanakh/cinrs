@@ -8,6 +8,125 @@ follows [Semantic Versioning][semver].
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
+## Unreleased
+
+### Changed
+
+* **The bundled headers are ISO C; POSIX comes from the platform.** `<unistd.h>`,
+  `<fcntl.h>`, `<strings.h>` and `<sys/types.h>` are no longer bundled. They were
+  small incomplete copies — no `access`, `fsync` or `sysconf`, no `struct flock`
+  or `F_RDLCK`, no `ETIMEDOUT` — and worse, a program that switched the
+  platform's own headers on with `#pragma cinrs system_include` still got the
+  bundled ones, which is the opposite of what it had asked for. The story is one
+  sentence now: the bundled set is the headers ISO C describes (plus
+  `<alloca.h>`, which is this crate's own), and POSIX comes from the platform,
+  complete and consistent with `<sys/stat.h>` and `<pthread.h>`.
+
+  **This is breaking for a program that included one of those four without the
+  pragma.** Add one line:
+
+  ```c
+  #pragma cinrs system_include
+  #include <unistd.h>
+  ```
+
+  or set `CINRS_SYSTEM_INCLUDE=1` for the whole crate. A program that asks for a
+  POSIX header with the switch off now gets a diagnostic that says so and names
+  the pragma, rather than only the directories that were searched.
+
+  Two things follow. **Apple's platforms get a default** at last: the SDK's
+  include directory is asked of `xcrun --show-sdk-path`, once per process, so a
+  macOS user switches the platform on exactly as a Linux user does instead of
+  having to set `CINRS_SYSTEM_INCLUDE_PATH`. And **the bundled `<errno.h>` is
+  complete**: the whole POSIX.1-2017 `E*` set, at each platform family's own
+  values — glibc and musl's from the kernel's `asm-generic`, Apple's from xnu,
+  Windows' from the Universal CRT, with `EDEADLK` 36 and `ETXTBSY` 139 there
+  rather than the Linux 35 and 26, and Darwin's `ENOTSUP` 45 distinct from its
+  `EOPNOTSUPP` 102. MIPS and SPARC on Linux get only what ISO C requires, their
+  kernels renumbering everything above 34.
+
+* **A bundled header and a platform header may now define the same type.** In
+  plain `system_include` mode a unit holds both sets at once — the bundled
+  `<time.h>` for `struct timespec`, glibc's `<pthread.h>` for
+  `pthread_cond_timedwait` — and that used to be three errors: "redefinition of
+  'struct timespec'", "redefinition of 'struct tm'" and "macro 'CLOCKS_PER_SEC'
+  redefined". Every definition in the bundled `<time.h>` now tests and then
+  claims the per-type guard macro glibc, musl and mingw-w64 use for the same
+  type (`_STRUCT_TIMESPEC`, `__struct_tm_defined`, `__time_t_defined`,
+  `__clock_t_defined`, and the `__DEFINED_*` and `_*_DEFINED` spellings), the way
+  mingw-w64 and musl coexist with each other; and where a bundled header and a
+  platform header define the same *macro* differently, the platform's definition
+  wins without a diagnostic, since the two are descriptions of one C library.
+  `tests/system_headers.rs` compares every shared layout against `cc`'s over the
+  platform's headers alone, because claiming a guard is a promise about layout.
+
+### Added
+
+* **SQLite compiles.** `scripts/check-sqlite.sh` downloads the SQLite 3.53.4
+  amalgamation — 9.5 MB, 269,649 lines of C in one file — verifies it against
+  the SHA3-256 sqlite.org publishes, and builds and runs
+  `tests/sqlite-fixture/`: one `include_gnu11!`, in both of SQLite's threading
+  configurations, with an in-memory database, a `CREATE TABLE`, three inserts, a
+  `SELECT` through `sqlite3_prepare_v2`/`step`/`column_int` and a Rust
+  `extern "C"` function called from SQL. The 9 MB is not committed and the check
+  is in `scripts/ci.sh --full` only, since it needs the network; it needs Rust
+  1.99 as well, because the amalgamation *defines* twenty variadic functions.
+  It is the largest single C translation unit anyone ships, and what it
+  exercises that no small program does — and what it costs — is in
+  [`doc/testsuites.md`](doc/testsuites.md).
+
+* **Atomic operations on a function pointer.** Loading, storing, exchanging and
+  compare-exchanging an object of function-pointer type — `_Atomic(void (*)
+  (void))`, `<stdatomic.h>`'s `atomic_store` on one, and the `__atomic_*`,
+  `__sync_*` and `__c11_atomic_*` builtins — used to be refused with "a
+  function pointer is an `Option<fn>` in Rust, which no atomic holds". It goes
+  through the same `AtomicPtr<c_void>` as any other pointer now, with a
+  `transmute` at each end: an `Option<unsafe extern "C" fn(…)>` is
+  pointer-sized and uses the null pointer as its `None`, which is exactly the
+  representation C gives a function pointer. Arithmetic (`__atomic_fetch_add`
+  and friends) is still refused, because C has none on a function pointer
+  either. See `tests/atomics.rs`.
+
+### Fixed
+
+* **`__USER_LABEL_PREFIX__` is predefined.** GCC defines it as *nothing* on ELF
+  and as `_` on Mach-O and 32-bit COFF, and glibc builds every large-file
+  redirection out of it:
+
+  ```c
+  #define __ASMNAME(cname) __ASMNAME2 (__USER_LABEL_PREFIX__, cname)
+  #define __ASMNAME2(prefix, cname) __STRING (prefix) cname
+  extern int open64 (…) __asm__ (__ASMNAME ("open64"));
+  ```
+
+  With the macro undefined, `__STRING` stringified the token itself and the
+  symbol came out as `__USER_LABEL_PREFIX__open64` — which compiled and then
+  failed to *link*, the worst kind of wrong. It bit every program that reached
+  glibc's `<fcntl.h>` or `<sys/stat.h>` with `#pragma cinrs system_include`.
+
+* **`_Float32` and its relatives may be defined by a `typedef`.** TS 18661-3
+  lets an implementation either make `_Float32` a keyword or leave it to the
+  library, and glibc does the second: with `_GNU_SOURCE` its
+  `bits/floatn-common.h` writes `typedef float _Float32;` for a compiler that
+  has no such keyword, and `<math.h>` then declares the `f32`/`f64`/`f32x`
+  function families in terms of it. Those names were refused outright, which
+  cost **1,671 errors on one `#include <math.h>`** under `_GNU_SOURCE` and made
+  `#pragma cinrs system_include first` unusable for any program that defines it —
+  SQLite does. A name a `typedef` has defined is now an ordinary `typedef` name;
+  only the *keyword* use, with nothing having defined it, is still refused with
+  the reason. `doc/system-headers.md`'s table is re-measured with `_GNU_SOURCE`
+  as well as without: sixty-six of the sixty-seven platform headers either way.
+
+* **An address constant may be offset by an *expression*.** C99 6.6p9 lets the
+  integer a static initialiser's address constant is offset by be any integer
+  constant expression, not only a literal; only a literal was recognised, so
+  `static const unsigned char *p = &table[256 - OP_Ne];` — and the
+  `((void *)(intptr_t)(flags | MASK))` a table of descriptors is full of — were
+  refused as "initializer is not a compile-time constant expression". The
+  integer parts of such an initialiser are now folded before the check, which
+  also keeps the arithmetic out of the generated `static`. See
+  `tests/address_constants.rs`.
+
 ## 0.1.0 — 2026-09-22
 
 First release. A procedural macro that takes a C translation unit and

@@ -22,8 +22,19 @@
 #include <stdio.h>
 
 /* `unsigned short` on Windows, `int` on Apple's platforms, `unsigned int`
- * elsewhere — which is what `__WINT_TYPE__` already says. */
+ * elsewhere — which is what `__WINT_TYPE__` already says.
+ *
+ * Guarded with the platform's own guard names, for the reason the bundled
+ * `<time.h>` is: with `#pragma cinrs system_include` a unit may hold this header
+ * and one of the platform's that defines the same type. glibc's is
+ * `__wint_t_defined` in `bits/types/wint_t.h`, plus `_WINT_T`, which it shares
+ * with the compiler's own `<stddef.h>`; musl's is `__DEFINED_wint_t`. */
+#if !defined(__wint_t_defined) && !defined(_WINT_T) && !defined(__DEFINED_wint_t)
 typedef __WINT_TYPE__ wint_t;
+#define __wint_t_defined 1
+#define _WINT_T 1
+#define __DEFINED_wint_t 1
+#endif
 
 /* The range of whatever `wchar_t` turned out to be; <stdint.h> defines the
  * same two macros, and either header may be included first. */
@@ -43,6 +54,14 @@ typedef __WINT_TYPE__ wint_t;
 #define WEOF ((wint_t)(0xffffffffu))
 #endif
 
+/* Guarded the same way: glibc's `bits/types/mbstate_t.h` says
+ * `__mbstate_t_defined`, musl's `alltypes.h` says `__DEFINED_mbstate_t`, and the
+ * Microsoft runtime says `_MBSTATET_DEFINED`. Unlike the types above, the one
+ * below is an *anonymous* `struct`, so a second `typedef` of the name would be a
+ * different type rather than a benign repetition — which makes the guard the
+ * only thing that could keep the two apart. */
+#if !defined(__mbstate_t_defined) && !defined(__DEFINED_mbstate_t) \
+    && !defined(_MBSTATET_DEFINED)
 #if defined(_WIN32)
 /* The Microsoft library's `_Mbstatet`: eight bytes, four-byte aligned. */
 typedef struct {
@@ -66,6 +85,10 @@ typedef struct {
         char __wchb[4];
     } __value;
 } mbstate_t;
+#endif
+#define __mbstate_t_defined 1
+#define __DEFINED_mbstate_t 1
+#define _MBSTATET_DEFINED 1
 #endif
 
 /* Only `wcsftime` needs it, and only through a pointer; a program that wants

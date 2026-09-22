@@ -46,6 +46,7 @@ safe
 aggregates
 pointers
 portability
+address_constants
 alignment
 atomics
 bitfields

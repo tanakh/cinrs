@@ -1,10 +1,11 @@
 //! The atomic types and operations that are refused rather than mistranslated.
 //!
 //! Two kinds of refusal are here. C's own constraints — `_Atomic` on an array
-//! or a function type — and the ones this crate adds, every one of them a type
-//! `core::sync::atomic` has nothing for: an aggregate, a 128-bit integer, a
-//! function pointer. An atomic `struct` is the one that is perfectly good C:
-//! it needs a lock, and there is nothing in the generated Rust to be one.
+//! or a function type, arithmetic on a function pointer — and the ones this
+//! crate adds, every one of them a type `core::sync::atomic` has nothing for:
+//! an aggregate, a 128-bit integer. An atomic `struct` is the one that is
+//! perfectly good C: it needs a lock, and there is nothing in the generated
+//! Rust to be one.
 
 cinrs::c11! {
     struct pair { int a, b; };
@@ -18,8 +19,9 @@ cinrs::c11! {
 
     _Atomic function fun; //~ ERROR: may not be applied to the function type 'int (void)'
 
+    /* A function pointer is fine: an `Option<fn>` is pointer-sized with a
+       null niche, so it goes through `AtomicPtr` like any other pointer. */
     _Atomic(int (*)(void)) callback;
-    //~^ ERROR: a function pointer is an `Option<fn>` in Rust
 
     _Atomic __int128 wide; //~ ERROR: there is no stable 128-bit atomic
 
@@ -56,6 +58,14 @@ cinrs::c11! {
     int pointer_or(int **p) {
         return __atomic_fetch_or(p, 1, __ATOMIC_SEQ_CST) != 0;
         //~^ ERROR: does not work on a pointer object: only '+' and '-' do
+    }
+
+    /* Loading and storing one is allowed; there is no arithmetic on a
+       function pointer in C, so there is none here either. */
+    int (*hook)(void);
+    int hook_add(void) {
+        return __atomic_fetch_add(&hook, 1, __ATOMIC_SEQ_CST) != 0;
+        //~^ ERROR: there is no arithmetic on a function pointer
     }
 
     int bool_add(_Atomic _Bool *p) {

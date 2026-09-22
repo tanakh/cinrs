@@ -273,6 +273,66 @@ would write it, and needs no corpus; it is part of an ordinary `cargo test`.
 `CINRS_EXPECTED_LISTS_BLESS=1 cargo test --test expected_lists` tidies a hand
 edit up without running a suite.
 
+## One real program: SQLite
+
+A suite of small programs and one large program answer different questions. The
+three harnesses above ask whether each construct is translated correctly;
+`scripts/check-sqlite.sh` asks whether a quarter of a million lines of somebody
+else's C, written for GCC and never adjusted for this compiler, builds and works.
+
+It downloads the **SQLite 3.53.4 amalgamation** — 9.5 MB, 269,649 lines of C in
+one file, public domain — from the pinned URL in the script, verifies it
+against the SHA3-256 that sqlite.org publishes, and builds `tests/sqlite-fixture`,
+a crate outside the workspace holding one `include_gnu11!`. The 9 MB is not
+committed; the script is what makes the check reproducible without it. Then it
+opens an in-memory database, creates a table, inserts rows, reads them back
+through `sqlite3_prepare_v2`/`step`/`column_int`, calls a Rust `extern "C"`
+function from SQL through `sqlite3_create_function`, and closes.
+
+Both configurations are built: `SQLITE_THREADSAFE=1`, SQLite's own default, which
+on a Unix means pthreads; and `SQLITE_THREADSAFE=0`.
+
+What it exercises that no small program does: the virtual machine
+(`sqlite3VdbeExec`, a 7,000-line `switch` inside a `for(;;)` with `goto`s into and
+out of it, which becomes a control-flow graph), tables of function pointers
+(`sqlite3_vfs`, `sqlite3_io_methods`), twenty variadic *definitions*
+(`sqlite3_mprintf`, `sqlite3_snprintf`, `sqlite3_log`, `sqlite3_config` and the
+rest — the one thing that needs **Rust 1.99** and `c_variadic`), `va_list`
+forwarding, bit-fields in `Expr` and `Table`, `union`
+initialisers, `__builtin_expect`, address constants into other objects, atomic
+stores through a function pointer, and the platform's POSIX headers through
+`#pragma cinrs system_include`.
+
+It is in `scripts/ci.sh --full` only, because it needs the network, and it skips
+itself with a note — successfully, like a harness without its corpus — on a
+toolchain older than 1.99.
+
+### The numbers, measured once
+
+On an x86-64 laptop under WSL2, glibc 2.43, `cargo +beta` 1.99.0-beta.6, SQLite
+3.53.4:
+
+| | value |
+| --- | --- |
+| front end alone (lex, preprocess, parse, sema) | 0.69 s, 316 MB peak RSS |
+| `rustc`, debug | 3.8 s, 584 MB peak RSS |
+| `rustc`, release | 25 s, 608 MB peak RSS |
+| the translated library, debug | 41 MB rlib |
+| the translated library, release | 24 MB rlib |
+| the linked test binary, release | 2.8 MB |
+| the smoke test itself | 0.1 s |
+| one small prepared query, release | 86 µs |
+| the same query through the platform's `libsqlite3` | 24 µs |
+
+The last two are the only ones that need a caveat, and they need a large one:
+they are one loop in one process, the platform's library is a *different
+release* (3.46.1 here) built by GCC with SQLite's own recommended options, and a
+`SELECT count(*), sum(n) … WHERE n > ?` over a thousand rows is a full scan
+rather than anything a profile would recognise. Read the ratio as "the same
+order of magnitude, about three and a half times", not as a benchmark. The
+general picture — what is fast and what is not, and why — is in
+[`doc/benchmarks.md`](benchmarks.md).
+
 ## Should there be a fourth? — chibicc
 
 [chibicc](https://github.com/rui314/chibicc)'s `test/` directory is the obvious

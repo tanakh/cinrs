@@ -2503,6 +2503,16 @@ pub enum AtomicClass {
     },
     /// An object pointer, which is `AtomicPtr`.
     Ptr,
+    /// A *function* pointer, which is also an `AtomicPtr` — but whose C value
+    /// is an `Option<unsafe extern "C" fn(…)>` in Rust rather than a raw
+    /// pointer, so the two ends of every operation are a `transmute` instead
+    /// of a cast.
+    ///
+    /// That transmute is sound because an `Option<fn>` is pointer-sized with
+    /// the null pointer as its `None` niche, which is exactly the
+    /// representation C gives a function pointer that may be null. Arithmetic
+    /// is not: C has none on a function pointer, and neither has this.
+    FnPtr,
 }
 
 impl AtomicClass {
@@ -2510,7 +2520,7 @@ impl AtomicClass {
     pub fn rust_name(self) -> &'static str {
         match self {
             AtomicClass::Bool => "AtomicBool",
-            AtomicClass::Ptr => "AtomicPtr",
+            AtomicClass::Ptr | AtomicClass::FnPtr => "AtomicPtr",
             AtomicClass::Float { bytes } => match bytes {
                 4 => "AtomicU32",
                 _ => "AtomicU64",
@@ -2533,7 +2543,7 @@ impl AtomicClass {
     pub fn repr_name(self) -> &'static str {
         match self {
             AtomicClass::Bool => "bool",
-            AtomicClass::Ptr => "",
+            AtomicClass::Ptr | AtomicClass::FnPtr => "",
             AtomicClass::Float { bytes } => match bytes {
                 4 => "u32",
                 _ => "u64",
@@ -2685,8 +2695,7 @@ impl AtomicExpr {
 ///
 /// The width comes from the target model, which the [data-model
 /// check](crate::codegen) makes safe to rely on. `None` means there is no
-/// atomic of that width or shape: a 128-bit integer, a function pointer, an
-/// aggregate.
+/// atomic of that width or shape: a 128-bit integer, an aggregate.
 pub fn atomic_class(types: &Types, ty: Ty, target: &TargetModel) -> Option<AtomicClass> {
     let ty = types.unatomic(ty);
     if ty == Ty::Bool {
@@ -2703,8 +2712,12 @@ pub fn atomic_class(types: &Types, ty: Ty, target: &TargetModel) -> Option<Atomi
         let bytes = ty.size_bytes(target);
         return matches!(bytes, 4 | 8).then_some(AtomicClass::Float { bytes });
     }
-    if ty.is_pointer() && !types.is_func_pointer(ty) {
-        return Some(AtomicClass::Ptr);
+    if ty.is_pointer() {
+        return Some(if types.is_func_pointer(ty) {
+            AtomicClass::FnPtr
+        } else {
+            AtomicClass::Ptr
+        });
     }
     None
 }

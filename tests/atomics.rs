@@ -1017,6 +1017,136 @@ fn an_operand_that_is_only_evaluated_is_still_evaluated() {
 }
 
 // ---------------------------------------------------------------------------
+// function pointers
+// ---------------------------------------------------------------------------
+
+c11! {
+    #include <stdatomic.h>
+
+    /* SQLite's `AtomicStore(&sqlite3GlobalConfig.xLog, xLog)` is this: an
+     * ordinary member of function-pointer type, written through an atomic
+     * store so that a reader never sees half a pointer. In Rust the value is
+     * an `Option<unsafe extern "C" fn(…)>`, which is pointer-sized with the
+     * null pointer as its `None`, so it goes through the same `AtomicPtr` as
+     * any other pointer with a `transmute` at each end. */
+    typedef int (*logger)(int);
+
+    int twice(int n) { return n * 2; }
+    int thrice(int n) { return n * 3; }
+
+    struct config { int flags; logger xLog; };
+    struct config global;
+
+    void set_log(logger f) { __atomic_store_n(&global.xLog, f, __ATOMIC_SEQ_CST); }
+    logger get_log(void) { return __atomic_load_n(&global.xLog, __ATOMIC_SEQ_CST); }
+    logger swap_log(logger f) { return __atomic_exchange_n(&global.xLog, f, __ATOMIC_SEQ_CST); }
+
+    int cas_log(logger *expected, logger desired) {
+        return __atomic_compare_exchange_n(&global.xLog, expected, desired, 0,
+                                           __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    }
+
+    int call_log(int n) {
+        logger f = __atomic_load_n(&global.xLog, __ATOMIC_SEQ_CST);
+        if (f == 0) return -1;
+        return f(n);
+    }
+
+    int log_is_null(void) { return __atomic_load_n(&global.xLog, __ATOMIC_SEQ_CST) == 0; }
+
+    /* The same object as a real `_Atomic`, through the header's generic
+     * functions and through a plain assignment, which is an atomic store. */
+    _Atomic(logger) hook;
+
+    void set_hook(logger f) { atomic_store(&hook, f); }
+    logger get_hook(void) { return atomic_load(&hook); }
+    logger swap_hook(logger f) { return atomic_exchange(&hook, f); }
+    int cas_hook(logger *e, logger d) { return atomic_compare_exchange_strong(&hook, e, d); }
+    void assign_hook(logger f) { hook = f; }
+    int call_hook(int n) { logger f = hook; return f == 0 ? -1 : f(n); }
+
+    /* `__sync_*` says the same thing about the same object. */
+    logger sync_swap_hook(logger f) { return __sync_lock_test_and_set(&global.xLog, f); }
+    int sync_cas_hook(logger old, logger new_) {
+        return __sync_bool_compare_and_swap(&global.xLog, old, new_);
+    }
+}
+
+#[test]
+fn a_function_pointer_is_loaded_and_stored_atomically() {
+    unsafe {
+        // A null function pointer is `None`, and reads back as one.
+        assert_eq!(log_is_null(), 1);
+        assert_eq!(call_log(10), -1);
+
+        set_log(Some(twice));
+        assert_eq!(log_is_null(), 0);
+        assert_eq!(call_log(10), 20);
+        assert_eq!({ get_log() }.expect("a function")(21), 42);
+
+        // An exchange answers the old value and installs the new one.
+        let old = swap_log(Some(thrice));
+        assert_eq!(old.expect("the old function")(10), 20);
+        assert_eq!(call_log(10), 30);
+
+        // A compare-exchange that succeeds, then one that fails and writes
+        // back what it saw.
+        let mut expected: Option<unsafe extern "C" fn(core::ffi::c_int) -> core::ffi::c_int> =
+            Some(thrice);
+        assert_eq!(cas_log(&mut expected, Some(twice)), 1);
+        assert_eq!(call_log(10), 20);
+
+        let mut wrong = Some(thrice as unsafe extern "C" fn(core::ffi::c_int) -> core::ffi::c_int);
+        assert_eq!(cas_log(&mut wrong, None), 0);
+        assert_eq!(
+            wrong.expect("the observed value")(10),
+            20,
+            "the value it saw was written back"
+        );
+        assert_eq!(call_log(10), 20, "and nothing was stored");
+
+        // Storing a null pointer back, through the CAS this time.
+        let mut seen = Some(twice as unsafe extern "C" fn(core::ffi::c_int) -> core::ffi::c_int);
+        assert_eq!(cas_log(&mut seen, None), 1);
+        assert_eq!(log_is_null(), 1);
+
+        // `__sync_lock_test_and_set` is an exchange, and the old value is null.
+        assert!(sync_swap_hook(Some(twice)).is_none());
+        assert_eq!(call_log(4), 8);
+        assert_eq!(sync_cas_hook(Some(twice), Some(thrice)), 1);
+        assert_eq!(call_log(4), 12);
+        assert_eq!(sync_cas_hook(Some(twice), None), 0);
+        assert_eq!(call_log(4), 12);
+    }
+}
+
+#[test]
+fn an_atomic_object_of_function_pointer_type() {
+    unsafe {
+        assert_eq!(call_hook(10), -1);
+
+        set_hook(Some(twice));
+        assert_eq!(call_hook(10), 20);
+        assert_eq!({ get_hook() }.expect("a function")(3), 6);
+
+        let old = swap_hook(Some(thrice));
+        assert_eq!(old.expect("the old function")(10), 20);
+        assert_eq!(call_hook(10), 30);
+
+        let mut expected: Option<unsafe extern "C" fn(core::ffi::c_int) -> core::ffi::c_int> =
+            Some(thrice);
+        assert_eq!(cas_hook(&mut expected, Some(twice)), 1);
+        assert_eq!(call_hook(10), 20);
+
+        // A plain assignment to an `_Atomic` object is an atomic store.
+        assign_hook(Some(thrice));
+        assert_eq!(call_hook(10), 30);
+        assign_hook(None);
+        assert_eq!(call_hook(10), -1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the other entry points
 // ---------------------------------------------------------------------------
 

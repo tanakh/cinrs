@@ -808,9 +808,6 @@ const MODELS: &[&str] = &[
     "wasm32-unknown-unknown",
 ];
 
-/// The POSIX headers, which say so with an `#error` on a Windows target.
-const POSIX_ONLY: &[&str] = &["fcntl.h", "strings.h", "unistd.h"];
-
 /// The headers that model a *C library* rather than only a data model, and so
 /// refuse on every target whose library they do not know.
 ///
@@ -887,14 +884,12 @@ fn header_errors_with(name: &str, options: &Options) -> Vec<String> {
 fn every_bundled_header_compiles_alone_for_every_model() {
     for (name, _) in include::BUNDLED {
         for model in MODELS {
-            let windows = model.contains("windows");
             let errors = header_errors(name, model);
             let refused = REFUSED
                 .iter()
                 .find(|(header, _)| header == name)
                 .map(|(_, message)| *message)
                 .or_else(|| feature_refusal(name))
-                .or_else(|| (windows && POSIX_ONLY.contains(name)).then_some("POSIX"))
                 .or_else(|| {
                     (!libc_is_modelled(model))
                         .then(|| {
@@ -954,14 +949,18 @@ fn threads_h_compiles_in_every_entry_point() {
 // ---------------------------------------------------------------------------
 //
 // Everything above is ISO C and runs anywhere the crate does. What follows is
-// POSIX, and every one of the four is `#[cfg(target_os = "linux")]`: the
-// numbers and widths asserted are glibc's own — `SIGUSR1` is 10 on Linux and
-// 30 on the BSDs, `mode_t` is four bytes on Linux and two on Apple's platforms
-// — so they say what *this* library does rather than what POSIX requires, and
-// a second POSIX library would need its own answers rather than these. On
-// Windows the bundled `<unistd.h>`, `<fcntl.h>` and `<strings.h>` are each an
-// `#error` naming the reason and the nearest equivalent, which is the right
-// answer and is what `tests/ui` checks.
+// POSIX, and every one of these is `#[cfg(target_os = "linux")]`: the numbers
+// and widths asserted are glibc's own — `SIGUSR1` is 10 on Linux and 30 on the
+// BSDs, `mode_t` is four bytes on Linux and two on Apple's platforms — so they
+// say what *this* library does rather than what POSIX requires, and a second
+// POSIX library would need its own answers rather than these.
+//
+// None of these headers is bundled: the bundled set is ISO C, and POSIX comes
+// from the platform. So each unit below says `#pragma cinrs system_include`,
+// which is the whole of what a program has to do differently — and is what
+// these tests exist to show. `<signal.h>` is the exception and needs no pragma:
+// it is an ISO C header, and the bundled one carries the POSIX signal numbers
+// for the platforms it models.
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -1006,6 +1005,7 @@ fn signal_numbers_and_handlers() {
 #[test]
 fn the_system_typedefs_have_the_platform_widths() {
     c99! {
+        #pragma cinrs system_include
         #include <sys/types.h>
         #include <stddef.h>
 
@@ -1016,7 +1016,14 @@ fn the_system_typedefs_have_the_platform_widths() {
                 && sizeof(uid_t) == 4 && sizeof(gid_t) == 4
                 && sizeof(mode_t) == 4
                 && sizeof(time_t) == sizeof(long)
-                && sizeof(caddr_t) == sizeof(char *);
+                /* `caddr_t` used to be here; it is BSD's rather than POSIX's,
+                 * and glibc puts it behind `__USE_MISC`, which an ISO entry
+                 * point's `__STRICT_ANSI__` switches off. These three are
+                 * POSIX's own and are declared whatever the feature-test
+                 * macros say. */
+                && sizeof(dev_t) == sizeof(unsigned long)
+                && sizeof(nlink_t) == sizeof(unsigned long)
+                && sizeof(blkcnt_t) == sizeof(long);
         }
 
         /* Signed, which is what makes `read` able to report -1. */
@@ -1033,6 +1040,7 @@ fn the_system_typedefs_have_the_platform_widths() {
 #[test]
 fn unistd_and_fcntl_reach_the_real_system_calls() {
     c99! {
+        #pragma cinrs system_include
         #include <fcntl.h>
         #include <unistd.h>
         #include <string.h>
@@ -1072,6 +1080,7 @@ fn unistd_and_fcntl_reach_the_real_system_calls() {
 #[test]
 fn the_bsd_string_functions() {
     c99! {
+        #pragma cinrs system_include
         #include <strings.h>
 
         int case_insensitive(void) {

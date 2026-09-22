@@ -28,12 +28,19 @@
 //!
 //! # What is refused
 //!
-//! A 16-byte object (`__int128`), because there is no stable `AtomicU128`; a
-//! function pointer, which has no raw-pointer spelling in Rust; arithmetic on
-//! a floating object, which GCC also rejects; an object whose ABI alignment is
-//! narrower than its size, which no `from_ptr` may be built on; and a memory
-//! order the operation does not allow, which Rust would panic on at run time
-//! and which C makes undefined.
+//! A 16-byte object (`__int128`), because there is no stable `AtomicU128`;
+//! arithmetic on a floating object, which GCC also rejects, and arithmetic on
+//! a *function* pointer, which C has none of either; an object whose ABI
+//! alignment is narrower than its size, which no `from_ptr` may be built on;
+//! and a memory order the operation does not allow, which Rust would panic on
+//! at run time and which C makes undefined.
+//!
+//! A function pointer *is* allowed to be loaded, stored, exchanged and
+//! compare-exchanged. Its Rust spelling is an `Option<unsafe extern "C"
+//! fn(…)>` rather than a raw pointer, so it goes through the same
+//! `AtomicPtr<c_void>` as an object pointer with a `transmute` at each end —
+//! sound because an `Option<fn>` is pointer-sized and uses the null pointer as
+//! its `None`. `AtomicStore(&sqlite3GlobalConfig.xLog, xLog)` is why.
 
 use crate::ast;
 use crate::capture::SourceRange;
@@ -686,8 +693,6 @@ impl Sema<'_> {
         }
         let reason = if ty.is_int128() {
             "there is no stable 128-bit atomic in `core::sync::atomic`"
-        } else if self.types().is_func_pointer(ty) {
-            "a function pointer is an `Option<fn>` in Rust, which no atomic holds"
         } else if ty.is_record() || ty.is_array() {
             "only the scalar types have a lock-free atomic in `core::sync::atomic`"
         } else {
@@ -792,6 +797,21 @@ impl Sema<'_> {
                     format!(
                         "'{}' does not work on '{}': the atomic arithmetic builtins take an \
                          integer or a pointer object",
+                        call.name,
+                        self.tyname(object.value_ty)
+                    ),
+                );
+                None
+            }
+            // A function pointer may be loaded, stored and exchanged, but not
+            // added to: C has no arithmetic on one at all, the pointee has no
+            // size, and Rust has no `wrapping_byte_offset` for an `fn`.
+            AtomicClass::FnPtr => {
+                self.error(
+                    call.range,
+                    format!(
+                        "'{}' does not work on '{}': there is no arithmetic on a function \
+                         pointer",
                         call.name,
                         self.tyname(object.value_ty)
                     ),

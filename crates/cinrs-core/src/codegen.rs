@@ -4607,7 +4607,7 @@ impl<'a> Codegen<'a> {
 
     /// `::core::sync::atomic::AtomicU32`, or `AtomicPtr<c_void>`.
     fn atomic_path(&self, class: AtomicClass, span: Span) -> TokenStream {
-        if class == AtomicClass::Ptr {
+        if matches!(class, AtomicClass::Ptr | AtomicClass::FnPtr) {
             let void = self.pointee_ty(Ty::Void, span);
             return quote_spanned! {span=>
                 ::core::sync::atomic::AtomicPtr::<#void>
@@ -4621,9 +4621,10 @@ impl<'a> Codegen<'a> {
     ///
     /// Every pointer goes through one `AtomicPtr<c_void>`: all object pointers
     /// have the same representation, and the value is cast back to the C type
-    /// it came from as it comes out.
+    /// it came from as it comes out. A function pointer goes through the same
+    /// one, transmuted rather than cast.
     fn atomic_repr_ty(&self, class: AtomicClass, span: Span) -> TokenStream {
-        if class == AtomicClass::Ptr {
+        if matches!(class, AtomicClass::Ptr | AtomicClass::FnPtr) {
             let void = self.pointee_ty(Ty::Void, span);
             return quote_spanned! {span=> *mut #void };
         }
@@ -4665,11 +4666,27 @@ impl<'a> Codegen<'a> {
                 let target = self.ty(ty, span);
                 Value::new(quote_spanned! {span=> #value as #target }, prec::CAST).type_end(true)
             }
+            // `*mut c_void` to `Option<unsafe extern "C" fn(…)>`: `as` does
+            // not go that way, and the two have the same size and the same
+            // null, so the conversion is one `transmute` with both types
+            // written out — an inferred one here would be a bug waiting to
+            // happen.
+            AtomicClass::FnPtr => {
+                let repr = self.atomic_repr_ty(class, span);
+                let target = self.ty(ty, span);
+                Value::new(
+                    quote_spanned! {span=>
+                        ::core::mem::transmute::<#repr, #target>(#value)
+                    },
+                    prec::CALL,
+                )
+            }
         }
     }
 
-    /// A C value, as the Rust primitive the atomic holds.
-    fn value_to_repr(&self, class: AtomicClass, value: Value, span: Span) -> TokenStream {
+    /// A C value, as the Rust primitive the atomic holds. `ty` is the C type
+    /// the value has, which only the function-pointer class needs.
+    fn value_to_repr(&self, class: AtomicClass, ty: Ty, value: Value, span: Span) -> TokenStream {
         match class {
             AtomicClass::Bool => value.at(prec::LOWEST, span),
             AtomicClass::Float { bytes } => {
@@ -4681,6 +4698,15 @@ impl<'a> Codegen<'a> {
                 let repr = self.atomic_repr_ty(class, span);
                 let value = value.at(prec::CAST, span);
                 quote_spanned! {span=> #value as #repr }
+            }
+            // The other half of [`Codegen::repr_to_value`]'s transmute.
+            AtomicClass::FnPtr => {
+                let repr = self.atomic_repr_ty(class, span);
+                let source = self.ty(ty, span);
+                let value = value.at(prec::LOWEST, span);
+                quote_spanned! {span=>
+                    ::core::mem::transmute::<#source, #repr>(#value)
+                }
             }
         }
     }
@@ -4811,7 +4837,7 @@ impl<'a> Codegen<'a> {
             return quote_spanned! {span=> () };
         };
         let value = self.expr(value);
-        self.value_to_repr(atomic.class, value, span)
+        self.value_to_repr(atomic.class, atomic.value_ty, value, span)
     }
 
     /// `__atomic_compare_exchange_n`, which writes the value it observed back
@@ -4832,7 +4858,12 @@ impl<'a> Codegen<'a> {
         let desired = self.atomic_operand(atomic, span);
         let slot = self.temporary();
         let seen = self.temporary();
-        let current = self.value_to_repr(class, Value::atom(quote_spanned! {span=> *#slot }), span);
+        let current = self.value_to_repr(
+            class,
+            ty,
+            Value::atom(quote_spanned! {span=> *#slot }),
+            span,
+        );
         let method = Ident::new(
             if weak {
                 "compare_exchange_weak"
@@ -4877,7 +4908,7 @@ impl<'a> Codegen<'a> {
         let expected = match &atomic.expected {
             Some(expected) => {
                 let value = self.expr(expected);
-                self.value_to_repr(class, value, span)
+                self.value_to_repr(class, ty, value, span)
             }
             None => return Value::atom(quote_spanned! {span=> false }),
         };
@@ -5043,7 +5074,7 @@ impl<'a> Codegen<'a> {
             let value = match &kind {
                 PlaceRmw::Compound { value, compute, .. } => {
                     let tokens = self.expr_at(value, *compute);
-                    self.value_to_repr(class, Value::new(tokens, prec::LOWEST), span)
+                    self.value_to_repr(class, ty, Value::new(tokens, prec::LOWEST), span)
                 }
                 PlaceRmw::Step { .. } => quote_spanned! {span=> 1 },
             };
@@ -5069,7 +5100,7 @@ impl<'a> Codegen<'a> {
         let param = self.temporary();
         let current = self.repr_to_value(class, ty, quote_spanned! {span=> #param }, span);
         let updated = self.apply_place_rmw(&kind, current, ty, &operand, span);
-        let updated = self.value_to_repr(class, updated, span);
+        let updated = self.value_to_repr(class, ty, updated, span);
         let loop_result =
             self.atomic_cas_loop(&object, &param, updated, ir::MemOrder::SeqCst, span);
         let tail = match want {
@@ -6632,10 +6663,10 @@ impl<'a> Codegen<'a> {
     /// The statement that stores `value` into a lowered place.
     fn write(&self, place: &LoweredPlace, value: TokenStream, span: Span) -> TokenStream {
         let access = &place.access;
-        if let Some((class, _)) = place.atomic {
+        if let Some((class, ty)) = place.atomic {
             let object = self.atomic_object_of(place, span);
             let order = self.ordering(ir::MemOrder::SeqCst, span);
-            let value = self.value_to_repr(class, Value::new(value, prec::LOWEST), span);
+            let value = self.value_to_repr(class, ty, Value::new(value, prec::LOWEST), span);
             return quote_spanned! {span=> #object.store(#value, #order); };
         }
         match &place.bits {

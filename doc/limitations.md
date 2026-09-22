@@ -71,6 +71,18 @@
   computes the wrong thing.
 * Each invocation is one translation unit. Two blocks may share a header, but
   the types it declares are then two distinct Rust types — one per unit.
+* **In plain `system_include`, the POSIX additions to an ISO C header are not
+  visible.** `<time.h>`, `<signal.h>`, `<stdio.h>`, `<stdlib.h>`, `<string.h>`
+  and `<locale.h>` are ISO C headers that POSIX *adds to* — `nanosleep` and
+  `clock_gettime` in `<time.h>`, `sigaction` in `<signal.h>`, `fileno` and
+  `popen` in `<stdio.h>`, `setenv` and `mkstemp` in `<stdlib.h>`, `strdup` in
+  `<string.h>`. The bundled copy declares the ISO C part, and in the plain mode
+  the bundled copy is the one that wins, so a call to one of the additions is
+  "implicit declaration of function". `#pragma cinrs system_include first` takes
+  every header from the platform and has all of POSIX; see
+  [The switch](system-headers.md#the-switch). (A *whole* POSIX header —
+  `<unistd.h>`, `<fcntl.h>`, `<pthread.h>` — is unaffected: the bundled set has
+  none of those, so the platform's is what either mode finds.)
 * **A macro is not exported to Rust.** A function a unit declares becomes an
   item Rust can call and a `struct` becomes a type Rust can build, but an
   object-like macro (`Z_OK`, `SEEK_SET`, `PATH_MAX`) becomes no `pub const`, and

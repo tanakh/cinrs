@@ -11,6 +11,12 @@
 # `target/rust-analyzer-fixture`.
 /tests/rust-analyzer-fixture/Cargo.lock
 
+# `tests/sqlite-fixture` is the same again, for `scripts/check-sqlite.sh`. Its
+# artifacts go to `target/sqlite-fixture`, and the 9 MB of C it compiles is
+# downloaded into `target/sqlite` rather than committed.
+/tests/sqlite-fixture/Cargo.lock
+/tests/sqlite-fixture/target
+
 # insta writes these next to the blessed snapshots when one fails
 *.snap.new
 *.pending-snap

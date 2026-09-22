@@ -1853,8 +1853,21 @@ impl Parser<'_> {
             // of TS 18661-3's set. None of them is a type specifier here, and
             // without this they would look like an identifier and turn one
             // refusal into "type specifier missing" plus whatever follows.
+            //
+            // A name a `typedef` has *defined* is not this case, and is let
+            // through to the typedef path below. TS 18661-3 says a
+            // conforming implementation may spell `_Float32` as a keyword or
+            // leave it to the library, and glibc does the second: with
+            // `_GNU_SOURCE` its `bits/floatn-common.h` writes
+            // `typedef float _Float32;` for a compiler that has no such
+            // keyword — which this one is, claiming `__GNUC__` 4.2.1 — and
+            // `<math.h>` then declares four hundred functions in terms of it.
+            // Those are ordinary `float`s and there is nothing to refuse; what
+            // is refused is the *keyword* case, a program writing `_Float32`
+            // with nothing having defined it.
             if !has_type
                 && let Some(name) = self.peek().ident()
+                && !self.is_typedef_name(name)
                 && let Some(what) = extended_float_type(name)
             {
                 let range = self.cur_range();
@@ -4203,6 +4216,11 @@ impl Parser<'_> {
 /// one — which is all a header ever writes, and only behind a
 /// `__GNUC_PREREQ` that this crate's `__GNUC__` does not meet — is one clear
 /// refusal rather than an "implicit int" cascade.
+///
+/// The names are only refused where nothing has *defined* them: a
+/// `typedef float _Float32;`, which is what glibc writes for a compiler with no
+/// such keyword, makes `_Float32` an ordinary `typedef` name and the caller
+/// lets it through. See [`Parser::declaration_specifiers`].
 fn extended_float_type(name: &str) -> Option<&'static str> {
     match name {
         "__float128" | "_Float128" | "_Float128x" => Some("binary128"),

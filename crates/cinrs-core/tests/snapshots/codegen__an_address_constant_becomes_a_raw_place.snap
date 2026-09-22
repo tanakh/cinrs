@@ -1,0 +1,53 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        #define BASE 4\n        const unsigned char table[] = { 1, 2, 3, 4, 5, 6, 7, 8 };\n        const unsigned char *at = &table[BASE + 2 - 1];\n        const unsigned char *decayed = table + BASE;\n        const unsigned char *bytes = (const unsigned char *)&table[1];\n\n        struct point { int x; int y; int v[3]; };\n        struct point line[2] = { { 1, 2, { 3, 4, 5 } }, { 6, 7, { 8, 9, 10 } } };\n        int *member = &line[1].v[2];\n\n        int f(int n) { return n; }\n        int (*fp)(int) = f;\n        void *number = (void *)(__PTRDIFF_TYPE__)(1 | (1 * 16));\n        \")"
+---
+mod __cinrs_unit_265e15ae {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct point {
+        pub x: ::core::ffi::c_int,
+        pub y: ::core::ffi::c_int,
+        pub v: [::core::ffi::c_int; 3],
+    }
+    pub static mut table: [::core::ffi::c_uchar; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    pub static mut at: *const ::core::ffi::c_uchar = unsafe {
+        ((&raw mut table).cast::<::core::ffi::c_uchar>() as *const ::core::ffi::c_uchar)
+            .offset(5)
+    };
+    pub static mut decayed: *const ::core::ffi::c_uchar = unsafe {
+        ((&raw mut table).cast::<::core::ffi::c_uchar>() as *const ::core::ffi::c_uchar)
+            .offset(4)
+    };
+    pub static mut bytes: *const ::core::ffi::c_uchar = unsafe {
+        ((&raw mut table).cast::<::core::ffi::c_uchar>() as *const ::core::ffi::c_uchar)
+            .offset(1)
+    };
+    pub static mut line: [point; 2] = [
+        point { x: 1, y: 2, v: [3, 4, 5] },
+        point { x: 6, y: 7, v: [8, 9, 10] },
+    ];
+    pub static mut member: *mut ::core::ffi::c_int = unsafe {
+        ({
+            let __cinrs_tmp0 = (&raw mut line).cast::<point>().offset(1);
+            (&raw mut (*__cinrs_tmp0).v).cast::<::core::ffi::c_int>()
+        })
+            .offset(2)
+    };
+    pub static mut fp: ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > = ::core::option::Option::Some(
+        f as unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    );
+    pub static mut number: *mut ::core::ffi::c_void = 17 as ::core::ffi::c_ulong
+        as *mut ::core::ffi::c_void;
+    pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return n;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_265e15ae::*;

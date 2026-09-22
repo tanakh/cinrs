@@ -1,0 +1,32 @@
+error: <unistd.h> file not found; searched: <cinrs>. The bundled headers are ISO C; POSIX headers such as <unistd.h> come from the platform, which '#pragma cinrs system_include' (or CINRS_SYSTEM_INCLUDE=1 in the environment) switches on
+  --> tests/ui/posix_headers_come_from_the_platform.rs:13:5
+   |
+13 |     #include <unistd.h>
+   |     ^
+
+error: <sys/stat.h> file not found; searched: <cinrs>. The bundled headers are ISO C; POSIX headers such as <sys/stat.h> come from the platform, which '#pragma cinrs system_include' (or CINRS_SYSTEM_INCLUDE=1 in the environment) switches on
+  --> tests/ui/posix_headers_come_from_the_platform.rs:14:5
+   |
+14 |     #include <sys/stat.h>
+   |     ^
+
+error: <pthread.h> file not found; searched: <cinrs>. The bundled headers are ISO C; POSIX headers such as <pthread.h> come from the platform, which '#pragma cinrs system_include' (or CINRS_SYSTEM_INCLUDE=1 in the environment) switches on
+  --> tests/ui/posix_headers_come_from_the_platform.rs:15:5
+   |
+15 |     #include <pthread.h>
+   |     ^
+
+error: <nowhere.h> file not found; searched: <cinrs>
+  --> tests/ui/posix_headers_come_from_the_platform.rs:16:5
+   |
+16 |     #include <nowhere.h>
+   |     ^
+
+error: "unistd.h" file not found; searched: tests/ui, <cinrs>. The bundled headers are ISO C; POSIX headers such as <unistd.h> come from the platform, which '#pragma cinrs system_include' (or CINRS_SYSTEM_INCLUDE=1 in the environment) switches on
+  --> tests/ui/posix_headers_come_from_the_platform.rs:17:5
+   |
+17 |     #include "unistd.h"
+   |     ^
+
+error: aborting due to 5 previous errors
+
