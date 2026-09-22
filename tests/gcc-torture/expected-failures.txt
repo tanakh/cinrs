@@ -48,15 +48,12 @@
 ?execute/20000519-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 !execute/20000717-3                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20000822-1                    [not-planned]    compile error: the address of the nested function 'f2' cannot be taken: it uses the enclosing function's 'i', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'f2' to file scope and pass what it uses as parameters
-execute/20001009-2                    [not-planned]    compile error: inline assembly is not supported
 execute/20010122-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/20020107-1                    [not-planned]    compile error: inline assembly is not supported
 !execute/20020314-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20020412-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 !execute/20020819-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20021127-1                    [not-planned]    runtime: killed by signal 6 — the case *defines* `long long llabs(long long)` as a function that aborts and requires the builtin to be expanded inline rather than called. Defining a standard library function is undefined behaviour (7.1.3p2), and cinrs calls what the program defined
 execute/20030125-1                    [not-planned]    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
-execute/20030222-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20030323-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030811-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ?execute/20030914-2                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -70,21 +67,15 @@ execute/20041201-1                    [not-planned]    compile error: a complex 
 ?execute/20041214-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/20041218-2                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20050121-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/20050203-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20050316-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050316-2                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050316-3                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050604-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20050607-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20060420-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20061031-1                    [not-planned]    compile error: inline assembly is not supported
-execute/20061220-1                    [not-planned]    compile error: inline assembly is not supported
+execute/20061220-1                    [not-planned]    compile error: the constraint "m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 execute/20070919-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/20071211-1                    [not-planned]    compile error: inline assembly is not supported
 ?execute/20071213-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/20071220-1                    [not-planned]    compile error: inline assembly is not supported
-execute/20071220-2                    [not-planned]    compile error: inline assembly is not supported
-execute/20080122-1                    [not-planned]    compile error: inline assembly is not supported
 execute/20101011-1                    [not-planned]    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
 !execute/20120427-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/20120427-2                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -177,7 +168,6 @@ execute/930406-1                      [unimplemented]  compile error: a label ca
 !execute/950605-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/950621-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/960218-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-execute/960312-1                      [not-planned]    compile error: inline assembly is not supported
 !execute/960402-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/960830-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/961112-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -185,8 +175,7 @@ execute/960312-1                      [not-planned]    compile error: inline ass
 ?execute/980608-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/980716-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/990106-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-execute/990130-1                      [not-planned]    compile error: inline assembly is not supported
-execute/990413-2                      [not-planned]    compile error: inline assembly is not supported
+execute/990413-2                      [not-planned]    compile error: the constraint "t" (an x87 stack register) is not supported: 'asm!' has no operand on the x87 register stack
 execute/991014-1                      [not-planned]    compile error: values of the type `[i16; 4611686018427387648]` are too big for the target architecture — the case asks only for `sizeof` of a quarter-of-the-address-space array, and `rustc` will not name the type at all
 ?execute/991216-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/alias-2                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
@@ -194,7 +183,7 @@ execute/alias-3                       [not-planned]    compile error: 'alias' is
 execute/alias-4                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
 execute/align-3                       [not-planned]    compile error: 'aligned' is not supported on a function; Rust has no way to say it
 execute/align-nest                    [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
-execute/bitfld-5                      [not-planned]    compile error: inline assembly is not supported
+execute/bitfld-5                      [bug]            runtime: killed by signal 6 — `s.b - 8` on a 40-bit `unsigned long long` bit-field: GCC gives the member a 40-bit type and wraps the arithmetic modulo 2^40, cinrs computes it in `unsigned long long` as Clang does (clang -O2 aborts on this case too). C leaves bit-field types other than `int`, `unsigned int` and `_Bool` implementation-defined (C11 6.7.2.1p5, p10). Masked by the old inline-assembly refusal until its `asm("")` became supported
 execute/built-in-setjmp               [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/builtin-types-compatible-p    [not-planned]    runtime: killed by signal 6 — it requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous enums to answer no; `long double` is `double` here and an untagged `enum` is `int`, both documented mappings
 !execute/cmpdi-1                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -217,7 +206,6 @@ execute/loop-2g                       [not-planned]    compile error: <sys/mman.
 !execute/loop-3                                        error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-3b                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-3c                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-execute/misalign                      [not-planned]    compile error: inline assembly is not supported
 !execute/mod-1                                         error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 ?execute/multi-ix                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/nest-stdar-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older) — the nested function is variadic, which is the only thing in the case's way
@@ -225,20 +213,17 @@ execute/nestfunc-3                    [not-planned]    compile error: the addres
 execute/nestfunc-5                    [not-planned]    compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/nestfunc-6                    [not-planned]    compile error: 'goto nonlocal' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/packed-aligned                [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
-execute/pr103376                      [not-planned]    compile error: inline assembly is not supported
+execute/pr103376                      [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 execute/pr104604                      [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr105613                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr105777                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr105777.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
 execute/pr108292                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr108498-1                    [not-planned]    compile error: inline assembly is not supported
 execute/pr109040                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr109938                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr109938.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
 execute/pr109986                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr109986.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-execute/pr110252-2                    [not-planned]    compile error: inline assembly is not supported
 execute/pr110817-1                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-2                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-3                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr114552                      [not-planned]    compile error: inline assembly is not supported
 ?execute/pr117432                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/pr120630                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr121957                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -256,83 +241,40 @@ execute/pr24135                       [not-planned]    compile error: 'goto xlab
 execute/pr28865                       [unimplemented]  compile error: initialization of flexible array member in a nested context — GCC takes it inside a `union` whose other member already makes the object big enough, which cinrs does not
 execute/pr30314                       [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
 execute/pr38151                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/pr38533                       [not-planned]    compile error: inline assembly is not supported
-execute/pr40022                       [not-planned]    compile error: inline assembly is not supported
-execute/pr40657                       [not-planned]    compile error: inline assembly is not supported
-execute/pr41239                       [not-planned]    compile error: inline assembly is not supported
+execute/pr40657                       [not-planned]    compile error: the constraint "=m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
+?execute/pr41239                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr41935                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/pr43385                       [not-planned]    compile error: inline assembly is not supported
-execute/pr43560                       [not-planned]    compile error: inline assembly is not supported
 ?execute/pr44575                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr44852                       [not-planned]    compile error: inline assembly is not supported
 ?execute/pr44942                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr45695                       [not-planned]    compile error: inline assembly is not supported
-execute/pr46309                       [not-planned]    compile error: inline assembly is not supported
 execute/pr47237                       [not-planned]    compile error: '__builtin_apply' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr47925                       [not-planned]    compile error: inline assembly is not supported
-execute/pr49218                       [not-planned]    compile error: inline assembly is not supported
-execute/pr49279                       [not-planned]    compile error: inline assembly is not supported
-execute/pr49390                       [not-planned]    compile error: inline assembly is not supported
 execute/pr51447                       [not-planned]    compile error: 'goto nonlocal_lab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
-execute/pr51581-1                     [not-planned]    compile error: inline assembly is not supported
-execute/pr51581-2                     [not-planned]    compile error: inline assembly is not supported
-execute/pr51877                       [not-planned]    compile error: inline assembly is not supported
-execute/pr51933                       [not-planned]    compile error: inline assembly is not supported
-execute/pr52286                       [not-planned]    compile error: inline assembly is not supported
 execute/pr53645                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr53645-2                     [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 !execute/pr55875                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 ?execute/pr56205                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr56837                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/pr56866                       [not-planned]    compile error: inline assembly is not supported
 !execute/pr56982                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. gnu89! accepts the implicit 'int' and stops later in the same case
-execute/pr57344-1                     [not-planned]    compile error: inline assembly is not supported
-execute/pr57344-2                     [not-planned]    compile error: inline assembly is not supported
-execute/pr57344-3                     [not-planned]    compile error: inline assembly is not supported
-execute/pr57344-4                     [not-planned]    compile error: inline assembly is not supported
-execute/pr58277-1                     [not-planned]    compile error: inline assembly is not supported
-execute/pr58419                       [not-planned]    compile error: inline assembly is not supported
 execute/pr60003                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr60960                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr63641                       [not-planned]    compile error: inline assembly is not supported
 execute/pr64242                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ?execute/pr64979                                       compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/pr65053-1                     [not-planned]    compile error: inline assembly is not supported
-execute/pr65053-2                     [not-planned]    compile error: inline assembly is not supported
 execute/pr65427                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr65648                       [not-planned]    compile error: inline assembly is not supported
-execute/pr65956                       [not-planned]    compile error: inline assembly is not supported
-execute/pr68328                       [not-planned]    compile error: inline assembly is not supported
 ?execute/pr68390                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-execute/pr69320-2                     [not-planned]    compile error: inline assembly is not supported
-execute/pr69691                       [not-planned]    compile error: inline assembly is not supported
 execute/pr70903                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-2                     [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr78438                       [not-planned]    compile error: inline assembly is not supported
-execute/pr78726                       [not-planned]    compile error: inline assembly is not supported
-execute/pr79354                       [not-planned]    compile error: inline assembly is not supported
-execute/pr79737-2                     [not-planned]    compile error: inline assembly is not supported
 ?execute/pr80421                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr80692                       [not-planned]    compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
-execute/pr81588                       [not-planned]    compile error: inline assembly is not supported
 execute/pr82210                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/pr82954                       [not-planned]    compile error: inline assembly is not supported
-execute/pr84478                       [not-planned]    compile error: inline assembly is not supported
 execute/pr84521                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr84524                       [not-planned]    compile error: inline assembly is not supported
-execute/pr85156                       [not-planned]    compile error: inline assembly is not supported
+execute/pr85156                       [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 execute/pr85169                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr85331                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr85756                       [not-planned]    compile error: inline assembly is not supported
 execute/pr86659-1                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr86659-2                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr87623                       [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
-execute/pr88904                       [not-planned]    compile error: inline assembly is not supported
 execute/pr92618                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr92904                       [not-planned]    compile error: va_arg with '__int128' is not supported: Rust's `VaArgSafe` covers the 128-bit types only behind the unstable `c_variadic_int128` feature
-execute/pr93945                       [not-planned]    compile error: inline assembly is not supported
-execute/pr94130                       [not-planned]    compile error: inline assembly is not supported
 execute/pr94412                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr94524-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr94524-2                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -351,7 +293,7 @@ execute/stdarg-1                      [not-planned]    compile error: va_list is
 execute/stdarg-2                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-3                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 ?execute/stdarg-4                                      compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-execute/stkalign                      [not-planned]    compile error: inline assembly is not supported
+execute/stkalign                      [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 !execute/strct-pack-3                                  error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 ?execute/strct-stdarg-1                                compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/strct-varg-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
@@ -388,7 +330,6 @@ execute/va-arg-trap-1                 [not-planned]    compile error: va_list is
 ?execute/vprintf-1                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 ?execute/vprintf-chk-1                                 compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 ieee/bfloat16-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16b' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-ieee/builtin-issignaling-1            [not-planned]    compile error: inline assembly is not supported
 ieee/cdivchkd                         [not-planned]    runtime: killed by signal 6 — GCC's own accuracy check for `double _Complex` division, four quotients whose operands' exponents are hundreds apart. Two of the four are within what `cinrs_rt::complex::div_f64` gives; the other two need libgcc's power-of-two prescaling of both operands, which is beyond Smith's algorithm. C leaves the accuracy of complex arithmetic implementation-defined (Annex G.6). `ieee/cdivchkf` and `ieee/cdivchkld` pass
 ieee/float128-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float128x-builtin-issignaling-1  [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
@@ -399,5 +340,4 @@ ieee/float64-builtin-issignaling-1    [not-planned]    compile error: third_part
 ieee/float64x-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf64x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/fp-cmp-7                         [not-planned]    compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and expects the optimiser to delete the call: `if (x > __builtin_inf()) link_error();` with `x` a parameter LLVM does not fold that far
 ieee/fp-cmp-cond-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-ieee/pr50310                          [not-planned]    compile error: inline assembly is not supported
 ieee/pr72824-2                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
