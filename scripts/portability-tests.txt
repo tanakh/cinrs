@@ -21,7 +21,10 @@
 # "x86_64")]`, so on an Arm macOS runner it compiles to nothing and passes, and
 # every instruction set above the x86-64 baseline is guarded by
 # `is_x86_feature_detected!` so that a runner without AVX2 skips those
-# assertions rather than faulting.
+# assertions rather than faulting. `inline_asm` is gated the same way: the
+# `asm!` it generates is AT&T x86 assembly, which LLVM assembles identically
+# behind the two x86-64 ABIs, and its 64-bit operands are `long long` because
+# Windows's `long` is 32 bits.
 #
 # What is left out, and why:
 #
@@ -71,6 +74,7 @@ gnu_preprocessor
 headers
 identifiers
 include_c
+inline_asm
 int128
 knr
 limits

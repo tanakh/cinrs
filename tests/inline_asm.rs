@@ -184,17 +184,18 @@ fn explicit_register_pairs_and_sse() {
 }
 
 // ---------------------------------------------------------------------------
-// x86-64 only: 64-bit operands
+// x86-64 only: 64-bit operands. `long long` rather than `long`, because a
+// `q`-suffixed instruction needs a 64-bit operand and Windows's `long` is 32.
 // ---------------------------------------------------------------------------
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64_only {
     cinrs::gnu99! {
-        long swap_long(long a, long b) { asm("xchgq %0, %1" : "+r"(a), "+r"(b)); return a * 10 + b; }
-        unsigned long k_on_64(unsigned long v) { asm("notl %k0" : "+r"(v)); return v; }
-        unsigned long shl_q(unsigned long x) { asm("shlq %1, %q0" : "+r"(x) : "i"(40)); return x; }
-        unsigned long mul_wide64(unsigned long a, unsigned long b, unsigned long *hi) {
-            unsigned long lo, h;
+        long long swap_long(long long a, long long b) { asm("xchgq %0, %1" : "+r"(a), "+r"(b)); return a * 10 + b; }
+        unsigned long long k_on_64(unsigned long long v) { asm("notl %k0" : "+r"(v)); return v; }
+        unsigned long long shl_q(unsigned long long x) { asm("shlq %1, %q0" : "+r"(x) : "i"(40)); return x; }
+        unsigned long long mul_wide64(unsigned long long a, unsigned long long b, unsigned long long *hi) {
+            unsigned long long lo, h;
             asm("mulq %3" : "=a"(lo), "=d"(h) : "0"(a), "r"(b) : "cc");
             *hi = h;
             return lo;
