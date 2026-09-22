@@ -362,3 +362,64 @@ fn the_later_revisions_parse_into_the_same_tree() {
         "#
     ));
 }
+
+// ---------------------------------------------------------------------------
+// inline assembly
+// ---------------------------------------------------------------------------
+
+/// The AST dump of `src` under `options`, asserting that no error was
+/// reported.
+fn parse_dump_with(options: &Options, src: &str) -> String {
+    let literal = format!("r####\"{src}\"####");
+    let stream = TokenStream::from_str(&literal).expect("the wrapper literal must lex");
+    let analysis = analyze(stream, options);
+    let errors: Vec<&str> = analysis
+        .diagnostics
+        .items()
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    dump_translation_unit(&analysis.unit)
+}
+
+#[test]
+fn inline_assembly_statements_parse() {
+    insta::assert_snapshot!(parse_dump_with(
+        &Options::gnu(Standard::C99),
+        r#"
+        int f(int a, int b, int *p) {
+            int sum, hi;
+            asm("mfence");
+            __asm__ __volatile__("pause" "\n\t" "nop");
+            asm volatile ("" ::: "memory");
+            __asm inline ("add %[y], %0"
+                : "=r"(sum), [hi] "=&d"(hi)
+                : [y] "rm"(a), "0"(b), "i"(3)
+                : "cc", "memory", "rcx");
+            asm ("incl (%0)" : : "r"(p));
+            asm ("" :);
+            asm goto ("jmp %l0" : : : : out, again);
+        again:
+        out:
+            return sum + hi;
+        }
+        "#,
+    ));
+}
+
+#[test]
+fn the_reserved_asm_spellings_work_in_strict_iso() {
+    let dump = parse_dump_with(
+        &Options::new(Standard::C99),
+        r#"
+        void f(void) {
+            __asm__ __volatile__("nop");
+            __asm("pause");
+        }
+        "#,
+    );
+    assert!(dump.contains("asm basic volatile"), "{dump}");
+    assert!(dump.contains("template \"pause\""), "{dump}");
+}

@@ -860,8 +860,54 @@ pub enum StmtKind {
     Break,
     /// `return expr;`
     Return(Option<Expr>),
+    /// GNU's inline assembly statement, basic or extended; see [`AsmStmt`].
+    Asm(Box<AsmStmt>),
     /// Produced by error recovery.
     Error,
+}
+
+/// `asm [volatile] [inline] [goto] ( template [: outputs [: inputs [:
+/// clobbers [: labels]]]] ) ;` — GNU inline assembly.
+///
+/// The parser records what was written and nothing more: the template and
+/// the constraints are opaque strings here (adjacent string literals already
+/// concatenated), and deciding what they mean — and what of it `asm!` can
+/// express — is sema's business.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmStmt {
+    /// `volatile` or `__volatile__` was written.
+    pub volatile: bool,
+    /// `inline` or `__inline__` was written.
+    pub inline: bool,
+    /// `goto` was written: the statement may jump to one of [`labels`].
+    ///
+    /// [`labels`]: AsmStmt::labels
+    pub goto: bool,
+    /// The assembler template.
+    pub template: Spanned<String>,
+    /// Whether any colon section was written, which is what makes this
+    /// *extended* asm: GCC treats `%` in a basic asm template literally, and
+    /// `asm("" :)` as extended asm with no operands.
+    pub extended: bool,
+    /// The output operands, in order.
+    pub outputs: Vec<AsmOperand>,
+    /// The input operands, in order; GCC numbers them after the outputs.
+    pub inputs: Vec<AsmOperand>,
+    /// The clobber list: register names, `"memory"`, `"cc"`.
+    pub clobbers: Vec<Spanned<String>>,
+    /// The labels of an `asm goto`.
+    pub labels: Vec<Ident>,
+}
+
+/// One operand of an extended [`AsmStmt`]: `[name] "constraint" (expr)`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsmOperand {
+    /// The symbolic name `%[name]` refers to it by, if any.
+    pub name: Option<Ident>,
+    /// The constraint string, modifiers (`=`, `+`, `&`) included.
+    pub constraint: Spanned<String>,
+    /// The operand: an lvalue for an output, any expression for an input.
+    pub expr: Expr,
 }
 
 /// The init clause of a `for` statement.

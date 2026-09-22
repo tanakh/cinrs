@@ -3190,8 +3190,7 @@ impl Parser<'_> {
     /// `start` is where the statement began, attributes included, which is
     /// where its range starts.
     fn parse_unlabeled_stmt(&mut self, start: SourceRange) -> PResult<Stmt> {
-        // Inline assembly, which has no honest translation. Recognising the
-        // whole statement is what turns it into one clear diagnostic.
+        // Inline assembly: parsed here, judged in sema.
         if self.at_keyword(Keyword::Asm) {
             return self.parse_asm_stmt();
         }
@@ -3369,39 +3368,120 @@ impl Parser<'_> {
         Ok(stmt)
     }
 
-    /// `asm [qualifiers] ( … ) ;` — an inline assembly statement.
+    /// `asm [qualifiers] ( template [: outputs [: inputs [: clobbers [:
+    /// labels]]]] ) ;` — GNU inline assembly, basic or extended.
     ///
-    /// Rust has `core::arch::asm!`, but its operand constraints are a language
-    /// of their own and mapping GCC's onto them is a project rather than a
-    /// feature; half a translation of assembly would be worse than none. The
-    /// whole statement is consumed so that the diagnostic is about the `asm`
-    /// rather than about the tokens inside it.
+    /// The keyword is only [`Keyword::Asm`] where the dialect allows the
+    /// spelling — `__asm__` and `__asm` everywhere, `asm` in a GNU dialect —
+    /// which is the rule the `asm` label on a declarator follows too. What is
+    /// parsed is recorded as written; the template and the constraints stay
+    /// opaque strings until sema decides what of them `asm!` can express.
     fn parse_asm_stmt(&mut self) -> PResult<Stmt> {
         let start = self.cur_range();
         self.advance();
-        // `volatile`, `inline` and `goto` may qualify it.
-        while matches!(
-            self.peek().keyword(),
-            Some(
-                Keyword::Volatile
-                    | Keyword::Const
-                    | Keyword::Inline
-                    | Keyword::InlineGnu
-                    | Keyword::Goto
-            )
-        ) {
+        let (mut volatile, mut inline, mut goto) = (false, false, false);
+        loop {
+            match self.peek().keyword() {
+                Some(Keyword::Volatile) => volatile = true,
+                Some(Keyword::Inline | Keyword::InlineGnu) => inline = true,
+                Some(Keyword::Goto) => goto = true,
+                // GCC accepts and ignores `const`, with a warning.
+                Some(Keyword::Const) => {}
+                _ => break,
+            }
             self.advance();
         }
-        if self.at_punct(Punct::LParen) {
-            self.skip_attribute_args()?;
+        self.expect_punct(Punct::LParen, " after 'asm'")?;
+        let template = self.parse_asm_string("the assembler template")?;
+        let mut asm = AsmStmt {
+            volatile,
+            inline,
+            goto,
+            template,
+            extended: false,
+            outputs: Vec::new(),
+            inputs: Vec::new(),
+            clobbers: Vec::new(),
+            labels: Vec::new(),
+        };
+        // Up to four sections, each introduced by a colon and each allowed
+        // to be empty: `asm("" ::: "memory")` skips two.
+        let mut section = 0;
+        while section < 4 && self.eat_punct(Punct::Colon).is_some() {
+            asm.extended = true;
+            section += 1;
+            if self.at_punct(Punct::Colon) || self.at_punct(Punct::RParen) {
+                continue;
+            }
+            loop {
+                match section {
+                    1 => asm.outputs.push(self.parse_asm_operand()?),
+                    2 => asm.inputs.push(self.parse_asm_operand()?),
+                    3 => asm.clobbers.push(self.parse_asm_string("a clobber")?),
+                    _ => asm
+                        .labels
+                        .push(self.expect_ident(" as an 'asm goto' label")?),
+                }
+                if self.eat_punct(Punct::Comma).is_none() {
+                    break;
+                }
+            }
         }
-        self.eat_punct(Punct::Semi);
-        let range = self.span_to_here(start);
-        self.error(range, "inline assembly is not supported");
+        self.expect_punct(Punct::RParen, " after the 'asm' operands")?;
+        self.expect_punct(Punct::Semi, " after the 'asm' statement")?;
         Ok(Stmt {
-            kind: StmtKind::Error,
-            range,
+            kind: StmtKind::Asm(Box::new(asm)),
+            range: self.span_to_here(start),
         })
+    }
+
+    /// `[name] "constraint" (expr)` — one operand of an extended `asm`.
+    fn parse_asm_operand(&mut self) -> PResult<AsmOperand> {
+        let name = if self.eat_punct(Punct::LBracket).is_some() {
+            let name = self.expect_ident(" as the operand's symbolic name")?;
+            self.expect_punct(Punct::RBracket, " after the operand's symbolic name")?;
+            Some(name)
+        } else {
+            None
+        };
+        let constraint = self.parse_asm_string("the operand's constraint")?;
+        self.expect_punct(Punct::LParen, " before the operand")?;
+        let expr = self.parse_expr()?;
+        self.expect_punct(Punct::RParen, " after the operand")?;
+        Ok(AsmOperand {
+            name,
+            constraint,
+            expr,
+        })
+    }
+
+    /// A string literal of an `asm` statement — the template, a constraint
+    /// or a clobber — with adjacent literals concatenated, as text.
+    fn parse_asm_string(&mut self, what: &str) -> PResult<Spanned<String>> {
+        let range = self.cur_range();
+        let TokenKind::Str(lit) = self.peek().kind.clone() else {
+            let found = self.describe_cur();
+            return Err(self.error_bail(
+                range,
+                format!("expected {what} as a string literal, found {found}"),
+            ));
+        };
+        let literal = self.parse_string_literal(lit, range);
+        let ExprKind::Str(lit) = literal.kind else {
+            unreachable!("parse_string_literal always yields a string literal");
+        };
+        if lit.kind != StrKind::Narrow {
+            self.error(
+                literal.range,
+                format!(
+                    "{what} must be an ordinary string literal, not a '{}' one",
+                    lit.kind.prefix()
+                ),
+            );
+        }
+        let bytes: Vec<u8> = lit.values.iter().map(|v| *v as u8).collect();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(Spanned::new(text, literal.range))
     }
 
     fn parse_if_stmt(&mut self) -> PResult<Stmt> {

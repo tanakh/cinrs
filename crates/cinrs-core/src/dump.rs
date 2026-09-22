@@ -451,8 +451,41 @@ impl<'a> Dumper<'a> {
             StmtKind::Break => self.line("break"),
             StmtKind::Return(None) => self.line("return"),
             StmtKind::Return(Some(e)) => self.under("return", |d| d.expr(e)),
+            StmtKind::Asm(asm) => self.asm(asm),
             StmtKind::Error => self.line("<error-stmt>"),
         }
+    }
+
+    fn asm(&mut self, asm: &AsmStmt) {
+        let mut head = String::from(if asm.extended { "asm" } else { "asm basic" });
+        for (flag, name) in [
+            (asm.volatile, "volatile"),
+            (asm.inline, "inline"),
+            (asm.goto, "goto"),
+        ] {
+            if flag {
+                head.push(' ');
+                head.push_str(name);
+            }
+        }
+        self.under(&head, |d| {
+            d.line(format!("template {:?}", asm.template.node));
+            for (what, operands) in [("output", &asm.outputs), ("input", &asm.inputs)] {
+                for operand in operands {
+                    let mut line = format!("{what} {:?}", operand.constraint.node);
+                    if let Some(name) = &operand.name {
+                        line.push_str(&format!(" [{}]", name.name));
+                    }
+                    d.under(&line, |dd| dd.expr(&operand.expr));
+                }
+            }
+            for clobber in &asm.clobbers {
+                d.line(format!("clobber {:?}", clobber.node));
+            }
+            for label in &asm.labels {
+                d.line(format!("label '{}'", label.name));
+            }
+        });
     }
 
     // -- expressions --------------------------------------------------------

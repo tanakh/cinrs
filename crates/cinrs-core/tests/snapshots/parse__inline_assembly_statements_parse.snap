@@ -1,0 +1,49 @@
+---
+source: crates/cinrs-core/tests/parse.rs
+expression: "parse_dump_with(&Options::gnu(Standard::C99),\nr#\"\n        int f(int a, int b, int *p) {\n            int sum, hi;\n            asm(\"mfence\");\n            __asm__ __volatile__(\"pause\" \"\\n\\t\" \"nop\");\n            asm volatile (\"\" ::: \"memory\");\n            __asm inline (\"add %[y], %0\"\n                : \"=r\"(sum), [hi] \"=&d\"(hi)\n                : [y] \"rm\"(a), \"0\"(b), \"i\"(3)\n                : \"cc\", \"memory\", \"rcx\");\n            asm (\"incl (%0)\" : : \"r\"(p));\n            asm (\"\" :);\n            asm goto (\"jmp %l0\" : : : : out, again);\n        again:\n        out:\n            return sum + hi;\n        }\n        \"#,)"
+---
+translation-unit
+  function 'f' : fn(a: int, b: int, p: ptr<int>) -> int
+    body
+      declaration
+        specifiers: int
+        declarator 'sum' : int
+        declarator 'hi' : int
+      asm basic
+        template "mfence"
+      asm basic volatile
+        template "pause\n\tnop"
+      asm volatile
+        template ""
+        clobber "memory"
+      asm inline
+        template "add %[y], %0"
+        output "=r"
+          ident 'sum'
+        output "=&d" [hi]
+          ident 'hi'
+        input "rm" [y]
+          ident 'a'
+        input "0"
+          ident 'b'
+        input "i"
+          int 3
+        clobber "cc"
+        clobber "memory"
+        clobber "rcx"
+      asm
+        template "incl (%0)"
+        input "r"
+          ident 'p'
+      asm
+        template ""
+      asm goto
+        template "jmp %l0"
+        label 'out'
+        label 'again'
+      label 'again'
+        label 'out'
+          return
+            binary '+'
+              ident 'sum'
+              ident 'hi'
