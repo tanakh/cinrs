@@ -54,8 +54,9 @@ The lint exemptions are an *inner* attribute on the module and therefore
 written once, however many items the unit has: lint levels are inherited, so
 one list covers everything inside — `rustc`'s lints and clippy's alike — and a
 crate that denies warnings at its root sees nothing from the generated code.
-(Once per item is what this replaced: for `#include <zlib.h>`, which generates
-419 items, the repeated list was 83% of the expansion.)
+Written once rather than on each item, it costs nothing to speak of: for
+`#include <zlib.h>`, which generates 419 items, the list on every item would be
+83% of the expansion.
 
 ## Functions
 

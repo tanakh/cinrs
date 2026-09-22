@@ -31,8 +31,8 @@
 //! single `#![allow(…)]` — an inner attribute, so every item under it
 //! inherits it — for everything a naive translation provokes: unused
 //! bindings, redundant parentheses, non-Rust naming, code a human can see is
-//! unreachable, and so on. [`crate::expand`] is what writes it, and says why
-//! it is written once per unit rather than once per item.
+//! unreachable, and so on. The list, and the reasons for each entry, are with
+//! the code in `lib.rs` that wraps a unit in its module.
 //!
 //! A function the unit marked [safe](crate::sema::check_safe) —
 //! `[[cinrs::safe]]`, `__attribute__((cinrs_safe))` or `#pragma cinrs safe` —
