@@ -107,7 +107,7 @@ impl FileId {
 }
 
 /// A half-open range `[start, end)` in a [`SourceMap`]'s global offset space.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SourceRange {
     /// First byte of the range.
     pub start: Pos,

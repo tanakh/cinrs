@@ -732,6 +732,23 @@ mod glibc {
         }
     }
 
+    /// glibc's own `strtold` and `powl` prototypes, which return an x87 value
+    /// in `st(0)` on x86-64: the call has to reach `strtod` and `pow`. This is
+    /// chibicc's tokenizer, which read every floating literal wrong before.
+    mod platform_long_double {
+        use cinrs::gnu11;
+
+        gnu11! {
+            #pragma cinrs system_include first
+
+            #include <stdlib.h>
+            #include <math.h>
+
+            double parse(void) { return (double) strtold("2.5", NULL); }
+            double raise(void) { return (double) powl(2.0L, 10.0L); }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // the tests
     // -----------------------------------------------------------------------
@@ -843,6 +860,12 @@ mod glibc {
         assert_eq!(unsafe { widen(-7) }, -7);
         assert_eq!(unsafe { as_size(9) }, 9);
         assert_eq!(unsafe { as_signed(11) }, 11);
+    }
+
+    #[test]
+    fn the_platform_long_double_functions_reach_their_double_twins() {
+        assert_eq!(unsafe { platform_long_double::parse() }, 2.5);
+        assert_eq!(unsafe { platform_long_double::raise() }, 1024.0);
     }
 
     #[test]

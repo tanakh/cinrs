@@ -149,6 +149,11 @@ mod __cinrs_unit_48ebecbd {
             nptr: *const ::core::ffi::c_char,
             endptr: *mut *mut ::core::ffi::c_char,
         ) -> ::core::ffi::c_float;
+        #[link_name = "strtod"]
+        pub fn strtold(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+        ) -> ::core::ffi::c_double;
         #[link_name = "rand"]
         pub fn rand() -> ::core::ffi::c_int;
         #[link_name = "srand"]

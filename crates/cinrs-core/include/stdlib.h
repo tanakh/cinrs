@@ -56,7 +56,7 @@ __extension__ unsigned long long strtoull(const char *nptr, char **endptr,
                                           int base);
 double strtod(const char *nptr, char **endptr);
 float strtof(const char *nptr, char **endptr);
-
+long double strtold(const char *nptr, char **endptr);
 int rand(void);
 void srand(unsigned int seed);
 

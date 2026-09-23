@@ -1,0 +1,30 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr#\"\n        long double strtold(const char *nptr, char **endptr);\n        long double powl(long double x, long double y);\n\n        double parse(const char *s) {\n            return strtold(s, 0) * powl(2.0L, 10.0L);\n        }\n        \"#)"
+---
+mod __cinrs_unit_9d46f9da {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "strtod"]
+        pub fn strtold(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+        ) -> ::core::ffi::c_double;
+        #[link_name = "pow"]
+        pub fn powl(
+            x: ::core::ffi::c_double,
+            y: ::core::ffi::c_double,
+        ) -> ::core::ffi::c_double;
+    }
+    pub unsafe extern "C" fn parse(
+        mut s: *const ::core::ffi::c_char,
+    ) -> ::core::ffi::c_double {
+        unsafe {
+            return strtold(s, ::core::ptr::null_mut::<*mut ::core::ffi::c_char>())
+                * powl(2.0, 10.0);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_9d46f9da::*;

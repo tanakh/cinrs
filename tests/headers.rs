@@ -215,6 +215,29 @@ fn maths_functions_link_and_compute() {
     }
 }
 
+/// `long double` is `double` here, and the platform's `strtold` and `powl`
+/// take and return an x87 (or 128-bit) value on most 64-bit targets: the
+/// declarations are linked to `strtod` and `pow`, which is what the type
+/// being `double` means. Before that, `strtold("2.5")` read back the low
+/// half of an x87 image. The bundled `<math.h>` has no `l` functions, so
+/// `powl` is declared here, as a program would.
+#[test]
+fn the_long_double_functions_are_their_double_twins() {
+    c99! {
+        #include <stdlib.h>
+
+        long double powl(long double x, long double y);
+
+        double parse(void) { return (double) strtold("2.5", NULL); }
+        double raise(void) { return (double) powl(2.0L, 10.0L); }
+    }
+
+    unsafe {
+        assert_eq!(parse(), 2.5);
+        assert_eq!(raise(), 1024.0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // <ctype.h> and <stdbool.h>
 // ---------------------------------------------------------------------------

@@ -369,6 +369,26 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`long double` at the platform boundary is redirected or refused, never
+  silently wrong.** `long double` is `double` here, which is self-consistent
+  inside a unit but was silently wrong at a call into the platform's library,
+  whose `long double` is x87's eighty bits on x86-64 System V (a 128-bit quad
+  on AArch64 Linux): chibicc's tokenizer calls glibc's `strtold` under
+  `#pragma cinrs system_include first`, the call was bound with the `double`
+  convention, and every floating literal it read came back as garbage;
+  `printf("%Lf", 2.5L)` printed `-nan`. Now a declared-only ISO C function
+  whose only difference from a `double` sibling is the type — `strtold`,
+  `wcstold`, every `<math.h>` and `<complex.h>` `l` form, and `nexttoward` — is
+  linked to the sibling (`#[link_name = "strtod"]`), which is what "`long
+  double` is `double`" means; any other declared-only function with a
+  `long double` or a `long double *` in its prototype is refused where it is
+  called or its address taken, and so is a `long double` or a pointer to one
+  handed to a declared-only function's `...`, with the rewrite (cast to
+  `double` and use `%f`). A variadic function the unit defines reads back the
+  `double` it was passed and is unaffected. Nothing changes on a target whose
+  `long double` is `double` already (MSVC, 32-bit Arm, Apple arm64). The
+  bundled `<stdlib.h>` declares `strtold`. `tests/ui/long_double_abi.rs`
+
 * **`"x"` and `"v"` asm operands at 256 and 512 bits.** libdeflate's Adler-32
   templates keep their AVX2 and AVX-512 accumulators live with an empty barrier,
   `__asm__("" : "+x"(v))` or `"+v"(v)` on a `__m256i` or `__m512i`, which was

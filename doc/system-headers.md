@@ -438,6 +438,21 @@ nothing to refuse, so `_Float32` and its relatives are ordinary identifiers a
 `__GNUC_PREREQ (4, 3)` on x86-64, which 4.2.1 does not meet. That is also the
 `<tgmath.h>` gap above.
 
+### `long double` at the boundary
+
+The platform's headers declare its `long double` functions with the platform's
+`long double` — x87's eighty bits on x86-64 — and `cinrs`'s `long double` is
+`double`. Declaring them is harmless; *calling* one with the `double`
+convention is not, which is how chibicc's tokenizer read every floating literal
+wrong through glibc's `strtold`. So: `strtold`, `wcstold`, the `<math.h>` and
+`<complex.h>` `l` forms, and `nexttoward` are linked to their `double` twin
+(`strtod`, `sin`, …), which is exactly what the type being `double` means; any
+other declared-only function with a `long double` or a `long double *` in its
+prototype — `sinf64x` through glibc's `typedef long double _Float64x`, a GNU
+`sincosl` — is refused where it is called or its address taken, and so is a
+`long double` or a pointer to one passed through `printf`'s or `sscanf`'s `...`.
+Write `printf("%f", (double) x)`. See [the limitation](limitations.md).
+
 ## What the headers forced
 
 The sweep did not pass on the first try. What the platform's headers needed,

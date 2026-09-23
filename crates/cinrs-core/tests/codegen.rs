@@ -375,6 +375,25 @@ fn structs_unions_and_enums() {
 }
 
 #[test]
+fn the_long_double_iso_functions_link_to_their_double_twins() {
+    // `long double` is `double` here, and the platform's `strtold` returns an
+    // x87 value; the declaration is linked to `strtod`, which is the same
+    // function at the width this crate gives the type.
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        long double strtold(const char *nptr, char **endptr);
+        long double powl(long double x, long double y);
+
+        double parse(const char *s) {
+            return strtold(s, 0) * powl(2.0L, 10.0L);
+        }
+        "#
+    ));
+}
+
+#[test]
 fn strings_and_extern_declarations() {
     insta::assert_snapshot!(generate(
         r#"

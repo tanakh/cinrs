@@ -1310,6 +1310,10 @@ impl Sema<'_> {
         let mut anonymous = 0u32;
         let last = fields.len().saturating_sub(1);
         for (position, field) in fields.iter().enumerate() {
+            // A member's range is its name's; see `sema::long_double`.
+            if let Some(name) = &field.name {
+                self.note_long_double(name.range, &field.ty);
+            }
             // A flexible array member — `int data[];` as the last member —
             // is a `[T; 0]` tail the object is expected to be over-allocated
             // for. `int data[0];` is GNU's older spelling of the same thing

@@ -41,3 +41,13 @@ error: c/geometry.c:12:5: use of undeclared identifier 'wrong'
 nor `rust-analyzer` will jump into the `.c` file: they show the location in the
 message rather than under the caret. A call written in *Rust* is unaffected —
 the caret is on the call, where it always was.
+
+## A whole program
+
+A C program's files, one unit each under `#pragma cinrs export`, link to one
+another by their C names exactly as their object files would. In a *binary*
+crate the exported `int main(int argc, char **argv)` is a real `main` symbol
+and collides with the one `rustc` emits for the Rust `fn main` ("entry symbol
+`main` declared multiple times"): either write `#![no_main]` and drop the Rust
+`fn main`, making the C `main` the program's entry, or leave the unit that
+defines `main` without the pragma and call it from Rust's `fn main`.

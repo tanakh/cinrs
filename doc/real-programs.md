@@ -302,3 +302,59 @@ per pass:
 | encode JPEG q90 | 200.3 | 144.1 | 162.7 | 0.81× | 1.13× |
 
 **What it took.** Nothing.
+
+## chibicc (not in the repository)
+
+Rui Ueyama's small C11 compiler (MIT; the `main` branch's head, 2020-12-07),
+about 10,000 lines in nine files, one unit each under `#pragma cinrs export`
+and `system_include first`: `noreturn`, variadic `error(...)` definitions
+with `va_list`, `format` attributes, `open_memstream`, `fork`/`execvp`/`wait`,
+`mkstemp`, `glob`, huge `switch`es, `goto`, unions and static tables. A
+program rather than a library, so the fixture is a binary crate with
+`#![no_main]`, the exported C `main` being the entry point (rustc otherwise
+says the entry symbol is declared twice; see [Pragmas](pragmas.md#export)).
+Compiled unedited with no diagnostic and no warning; needs Rust 1.99.
+
+**Correctness.** chibicc's own test suite, run exactly as its Makefile runs
+it (each `test/*.c` compiled by the chibicc under test, linked with gcc,
+executed; then `test/driver.sh`), for a gcc-built chibicc and the
+`cinrs`-built one; then **stage 2**: the `cinrs`-built chibicc compiles
+chibicc's own nine sources, and that compiler is put through the suite too.
+
+| compiler | `test/*.c` | `driver.sh` |
+| --- | ---: | --- |
+| chibicc built by gcc | 41/41 | ok |
+| chibicc built by `cinrs`, as first found | 33/41 | ok |
+| chibicc built by `cinrs`, after the fix below | 41/41 | ok |
+| stage 2: chibicc compiled by the `cinrs`-built chibicc | 41/41 | ok |
+
+The assembly the `cinrs`-built and gcc-built compilers emit for chibicc's
+own sources is byte-identical.
+
+**What it took.** One silent wrong result, of the kind this campaign is for.
+`cinrs` maps `long double` to `double`, a documented limitation that is
+self-consistent inside a unit — but chibicc's tokenizer calls the
+platform's `strtold`, which glibc returns on the x87 stack, and the call was
+bound with the `double` convention, so every floating literal the compiler
+read was garbage (and `printf("%Lf", 2.5L)` printed `-nan`). The boundary
+is now handled instead of trusted: a declared-only ISO C function whose only
+difference from a `double` sibling is the type (`strtold`, `sinl`, `powl`, …)
+is linked to the sibling, which is what "`long double` is `double`" means
+here; any other external function with a `long double` in its signature, and
+a `long double` handed to an external variadic function, is refused by name
+with the rewrite. One thing stays as it is, by nature: chibicc itself
+assumes the host's `long double` is x87 when it builds an 80-bit image
+through a `union`, so a program it compiles that *uses* `long double` gets
+`double`'s bits — the same documented limitation, one level down.
+
+**Speed.** Compiling chibicc's preprocessed `parse.c` (4,332 lines) to
+assembly, and all 41 test files, ms:
+
+| compiler build | `parse.c` to `.s` | `cc1` only | 41 tests to `.s` |
+| --- | ---: | ---: | ---: |
+| gcc -O2 | 16.9 | 16.6 | 109 |
+| clang -O2 | 17.4 | 16.5 | 112 |
+| cinrs | 15.0 | 14.4 | 110 |
+
+All four compilers (upstream's `-O0 -g` build included) emit byte-identical
+assembly for the inputs; the test loop is process start-up.

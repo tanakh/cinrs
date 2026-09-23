@@ -2198,3 +2198,232 @@ fn what_an_aligned_typedef_cannot_do_is_refused() {
         ],
     );
 }
+
+// ---------------------------------------------------------------------------
+// `long double` at the platform boundary
+// ---------------------------------------------------------------------------
+
+/// Options for `triple`, with the switches [`errors`] forces on.
+fn options_for(triple: &str) -> Options {
+    let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+    let mut options = Options::new(Standard::C99).for_target(target);
+    options.c_variadic = true;
+    options.complex = true;
+    options
+}
+
+/// The errors `source` gets on `triple`.
+fn errors_on(triple: &str, source: &str) -> Vec<String> {
+    errors_with(source, &options_for(triple))
+}
+
+/// The symbol each declared function of `source` links by on `triple`, as
+/// `name=symbol`, for the ones that have one of their own.
+fn link_names_on(triple: &str, source: &str) -> Vec<String> {
+    let options = options_for(triple);
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, &options);
+    let (program, diagnostics) = sema::analyze(&analysis.unit, &options, analysis.source.unit_id());
+    assert!(!diagnostics.has_errors(), "{:#?}", diagnostics.items());
+    program
+        .functions
+        .iter()
+        .filter_map(|f| Some(format!("{}={}", f.name, f.asm_label.as_ref()?)))
+        .collect()
+}
+
+const X86_64_LINUX: &str = "x86_64-unknown-linux-gnu";
+
+/// A declared-only ISO C function whose only difference from a `double`
+/// sibling is the type is linked to the sibling, which is what "`long double`
+/// is `double`" means; a definition in the unit, and an `__asm__` label, are
+/// the program's own and are left alone.
+#[test]
+fn the_long_double_iso_functions_link_to_their_double_twins() {
+    let source = "#include <stdlib.h>\n\
+         long double powl(long double, long double);\n\
+         long double sinl(long double);\n\
+         long double _Complex csinl(long double _Complex);\n\
+         double nexttoward(double, long double);\n\
+         long double fabsl(long double x) { return x < 0 ? -x : x; }\n\
+         long double cosl(long double) __asm__(\"my_cos\");\n\
+         double f(void) { return strtold(\"2.5\", 0) + powl(2.0L, 10.0L) + sinl(0) \
+         + fabsl(-1.0L) + nexttoward(1.0, 2.0L); }";
+    assert_eq!(
+        link_names_on(X86_64_LINUX, source),
+        [
+            "strtold=strtod",
+            "powl=pow",
+            "sinl=sin",
+            "csinl=csin",
+            "nexttoward=nextafter",
+            "cosl=my_cos",
+        ]
+    );
+    for triple in ["aarch64-unknown-linux-gnu", "i686-unknown-linux-gnu"] {
+        assert!(
+            link_names_on(triple, source).contains(&"strtold=strtod".to_owned()),
+            "for {triple}"
+        );
+    }
+    // Where the platform's `long double` *is* `double`, `strtold` takes and
+    // returns one, and nothing needs redirecting — or refusing.
+    for triple in [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "armv7-unknown-linux-gnueabihf",
+    ] {
+        assert_eq!(
+            link_names_on(triple, source),
+            ["cosl=my_cos"],
+            "for {triple}"
+        );
+        assert!(
+            errors_on(
+                triple,
+                "long double f(long double); int printf(const char *, ...);\n\
+                 int g(long double x) { printf(\"%Lf\", x); return f(x) > 0; }"
+            )
+            .is_empty(),
+            "for {triple}"
+        );
+    }
+}
+
+/// Everything else with a `long double` in its prototype is refused where it
+/// is used — not where it is declared, since the platform's headers declare
+/// dozens.
+#[test]
+fn a_platform_function_with_a_long_double_in_its_prototype_is_refused_where_used() {
+    const VALUE: &str = "(which is 'double' here), and the platform passes a 'long double' \
+                         on the x87 stack, so the call would read the wrong register; use the \
+                         'double' function or wrap it in C compiled by a C compiler";
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            "long double f(long double);\n\
+             void g(double, long double);\n\
+             void h(long double *);\n\
+             long double unused(long double);\n\
+             double k(void) { long double x = 1; g(1, 2); h(&x); \
+             long double (*p)(long double) = f; return f(x) + p(x); }"
+        ),
+        [
+            format!("'g' takes a 'long double' {VALUE}"),
+            "'h' takes a 'long double *' ('long double' is 'double' here, eight bytes), and the \
+             platform's function reads or writes sixteen x87 bytes through it; use the 'double' \
+             function or wrap it in C compiled by a C compiler"
+                .to_owned(),
+            format!("'f' returns a 'long double' {VALUE}"),
+            format!("'f' returns a 'long double' {VALUE}"),
+        ]
+    );
+    // AArch64 Linux's is a 128-bit quad rather than an x87 value.
+    assert_eq!(
+        errors_on(
+            "aarch64-unknown-linux-gnu",
+            "long double f(long double); double k(void) { return f(1); }"
+        ),
+        [
+            "'f' returns a 'long double' (which is 'double' here), and the platform passes a \
+             'long double' as a 128-bit quad, so the call would read the wrong register; use \
+             the 'double' function or wrap it in C compiled by a C compiler"
+        ]
+    );
+    // Defined further down the unit, it is this unit's own function and takes
+    // the `double` its callers pass.
+    assert!(
+        errors_on(
+            X86_64_LINUX,
+            "long double f(long double);\n\
+             double k(void) { return f(1.0L); }\n\
+             long double f(long double x) { return x * 2; }"
+        )
+        .is_empty()
+    );
+}
+
+/// A `long double` handed to the variable part of a platform function is read
+/// as sixteen x87 bytes, and a pointer to one is written through as sixteen.
+#[test]
+fn a_long_double_through_the_platforms_ellipsis_is_refused() {
+    const PRINTF: &str = "a 'long double' cannot be passed to the platform's 'printf': it is \
+                          'double' here and would be read as sixteen x87 bytes; cast it to \
+                          'double' and use '%f'";
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            "int printf(const char *, ...);\n\
+             int sscanf(const char *, const char *, ...);\n\
+             typedef long double ld;\n\
+             struct S { long double m; ld a[2]; };\n\
+             long double get(void);\n\
+             void f(double d, struct S *s) {\n\
+               long double x = d, arr[3];\n\
+               printf(\"%Lf\", x);\n\
+               printf(\"%Lf\", 2.5L);\n\
+               printf(\"%Lf\", -2.5L);\n\
+               printf(\"%Lf\", (long double)d);\n\
+               printf(\"%Lf\", x * d);\n\
+               printf(\"%Lf\", s->m);\n\
+               printf(\"%Lf\", s->a[1]);\n\
+               printf(\"%Lf\", arr[0]);\n\
+               sscanf(\"1\", \"%Lf\", &x);\n\
+               sscanf(\"1\", \"%Lf\", arr);\n\
+             }"
+        ),
+        [
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            PRINTF,
+            "a 'long double *' cannot be passed to the platform's 'sscanf': 'long double' is \
+             'double' here, eight bytes, and 'sscanf' would read or write sixteen x87 bytes \
+             through it; pass a 'double *' and use '%lf'",
+            "a 'long double *' cannot be passed to the platform's 'sscanf': 'long double' is \
+             'double' here, eight bytes, and 'sscanf' would read or write sixteen x87 bytes \
+             through it; pass a 'double *' and use '%lf'",
+        ]
+    );
+    // The redirect makes `strtold` a `double` function, but what it returns is
+    // still a `long double` to the C program, and to `printf`.
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            "#include <stdlib.h>\nint printf(const char *, ...);\n\
+             void f(void) { printf(\"%Lf\", strtold(\"1\", 0)); }"
+        ),
+        [PRINTF]
+    );
+}
+
+/// What stays inside the unit is self-consistent, and a cast to `double` is
+/// the rewrite the refusal asks for.
+#[test]
+fn a_long_double_that_stays_in_the_unit_is_accepted() {
+    assert!(
+        errors_on(
+            X86_64_LINUX,
+            "#include <stdarg.h>\n\
+             int printf(const char *, ...);\n\
+             long double sum(int n, ...) {\n\
+               va_list ap; va_start(ap, n); long double s = 0;\n\
+               for (int i = 0; i < n; i++) s += va_arg(ap, long double);\n\
+               va_end(ap); return s;\n\
+             }\n\
+             void scale(long double *p) { *p *= 2; }\n\
+             double f(void) {\n\
+               long double x = 1.5L, y = x * x + 2;\n\
+               scale(&x);\n\
+               printf(\"%f %f %d %p\\n\", (double)x, (double)(x + y), (int)x, (void *)&x);\n\
+               return sum(2, x, y);\n\
+             }"
+        )
+        .is_empty()
+    );
+}

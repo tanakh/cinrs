@@ -49,7 +49,21 @@
   nothing to take the address of. Only the arithmetic types are accepted.
   `nullptr` has type `void *` rather than a `nullptr_t` of its own.
 * `long double` is `double`: the extended precision, and the ABI that goes with
-  it, are not there.
+  it, are not there. That is self-consistent for everything a unit defines, and
+  the boundary with the platform's library — whose `long double` is x87's
+  eighty bits on x86-64 System V and i386, and a 128-bit quad on AArch64 Linux
+  and most other 64-bit targets — is handled rather than trusted. A
+  declared-only ISO C function whose only difference from a `double` sibling is
+  the type (`strtold`, `wcstold`, the `<math.h>` and `<complex.h>` `l` forms,
+  and `nexttoward`) is linked to the sibling, `#[link_name = "strtod"]`; any
+  other declared-only function with a `long double` or a `long double *` in its
+  prototype is refused where it is called or its address taken, and so is a
+  `long double` or a `long double *` handed to a declared-only function's `...`
+  (`printf("%Lf", x)`, `sscanf("%Lf", &x)`): cast to `double` and use `%f`.
+  Where the platform's `long double` is `double` too (MSVC, 32-bit Arm, Apple
+  arm64) nothing needs either. A `long double` function defined in *another*
+  `cinrs` unit is refused the same way, since a unit cannot tell it from the
+  platform's.
 * The [SIMD intrinsics](features.md#simd-intrinsics) are x86's and x86-64's, and
   what `core::arch` has on this crate's minimum supported Rust version — SSE
   through AVX-512, with the AVX-512 intrinsics Rust still keeps unstable

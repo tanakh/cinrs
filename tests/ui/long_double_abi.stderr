@@ -1,0 +1,26 @@
+error: a 'long double' cannot be passed to the platform's 'printf': it is 'double' here and would be read as sixteen x87 bytes; cast it to 'double' and use '%f'
+  --> tests/ui/long_double_abi.rs:29:25
+   |
+29 |         printf("%Lf\n", x);
+   |                         ^
+
+error: a 'long double *' cannot be passed to the platform's 'sscanf': 'long double' is 'double' here, eight bytes, and 'sscanf' would read or write sixteen x87 bytes through it; pass a 'double *' and use '%lf'
+  --> tests/ui/long_double_abi.rs:31:26
+   |
+31 |         sscanf(s, "%Lf", &x);
+   |                          ^
+
+error: 'my_fill' takes a 'long double *' ('long double' is 'double' here, eight bytes), and the platform's function reads or writes sixteen x87 bytes through it; use the 'double' function or wrap it in C compiled by a C compiler
+  --> tests/ui/long_double_abi.rs:33:9
+   |
+33 |         my_fill(&x);
+   |         ^^^^^^^
+
+error: 'my_scale' returns a 'long double' (which is 'double' here), and the platform passes a 'long double' on the x87 stack, so the call would read the wrong register; use the 'double' function or wrap it in C compiled by a C compiler
+  --> tests/ui/long_double_abi.rs:36:25
+   |
+36 |         return (double) my_scale(x);
+   |                         ^^^^^^^^
+
+error: aborting due to 4 previous errors
+

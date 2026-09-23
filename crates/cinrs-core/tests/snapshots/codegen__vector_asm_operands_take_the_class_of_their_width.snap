@@ -1,6 +1,5 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-assertion_line: 1946
 expression: "generate_asm(r#\"\n        #include <immintrin.h>\n        __attribute__((target(\"avx2\")))\n        __m256i barrier(__m256i v) {\n            __asm__(\"\" : \"+x\"(v));\n            __asm__(\"vpaddd %2, %1, %0\" : \"=x\"(v) : \"x\"(v), \"x\"(v));\n            return v;\n        }\n        __attribute__((target(\"avx512f\")))\n        __m512i wide(__m512i v) {\n            __asm__(\"vpaddd %g1, %0, %0\" : \"=v\"(v) : \"v\"(v), \"0\"(v));\n            return v;\n        }\n        \"#)"
 ---
 mod __cinrs_unit_d16a1f7f {
@@ -150,6 +149,11 @@ mod __cinrs_unit_d16a1f7f {
             nptr: *const ::core::ffi::c_char,
             endptr: *mut *mut ::core::ffi::c_char,
         ) -> ::core::ffi::c_float;
+        #[link_name = "strtod"]
+        pub fn strtold(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+        ) -> ::core::ffi::c_double;
         #[link_name = "rand"]
         pub fn rand() -> ::core::ffi::c_int;
         #[link_name = "srand"]

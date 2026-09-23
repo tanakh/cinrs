@@ -845,6 +845,35 @@ impl TargetModel {
         self.os == Os::Windows && self.env == Env::Msvc
     }
 
+    /// Whether the **platform's** `long double` is the IEEE double, eight
+    /// bytes, passed exactly as a `double` is.
+    ///
+    /// cinrs makes `long double` a `double` on every target, which is
+    /// self-consistent for the C a unit defines; this is the question the
+    /// *boundary* with the platform's C library asks. Where it is `true` a
+    /// declared-only function with a `long double` in its prototype takes the
+    /// `double` cinrs passes it. Where it is `false` — the x87 eighty-bit type
+    /// on x86-64 System V and on i386, the 128-bit quad of AArch64 Linux,
+    /// RISC-V, LoongArch, s390x and wasm, IBM's double-double on PowerPC glibc
+    /// — such a call reads the wrong register or the wrong number of bytes,
+    /// and `Sema` redirects or refuses it (see `sema::long_double`).
+    ///
+    /// The `true` rows are the ABIs whose documents say so: Microsoft's (every
+    /// architecture), AAPCS for 32-bit Arm, Apple's arm64, MIPS o32, AArch64
+    /// Windows under either runtime, 32-bit x86 Android, and PowerPC under
+    /// musl. Anything not listed counts as wide, which is the side a mistake
+    /// is loud on: a refusal rather than a wrong value.
+    pub fn platform_long_double_is_double(&self) -> bool {
+        match self.arch {
+            _ if self.is_msvc() => true,
+            Arch::Arm | Arch::Mips => true,
+            Arch::Aarch64 => matches!(self.os, Os::Darwin | Os::Windows),
+            Arch::X86 => self.env == Env::Bionic,
+            Arch::PowerPc | Arch::PowerPc64 => self.env == Env::Musl,
+            _ => false,
+        }
+    }
+
     /// The name of the data model this is: `LP64`, `LLP64` or `ILP32`.
     pub fn data_model(&self) -> &'static str {
         match (self.int_bits, self.long_bits, self.ptr_bits) {

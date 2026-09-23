@@ -169,6 +169,9 @@ impl Sema<'_> {
             let _ = self.ty_of(&decl.specifiers.base);
             return Vec::new();
         };
+        // Whether it is a `long double`, which the resolved type no longer
+        // says; see `sema::long_double`.
+        self.note_long_double(name.range, &declarator.ty);
 
         if decl.specifiers.is_typedef() {
             let mut attrs = declarator.attrs.clone();
@@ -221,7 +224,7 @@ impl Sema<'_> {
                 }
                 _ => FuncScope::File,
             };
-            self.declare_function(
+            if let Some(id) = self.declare_function(
                 decl,
                 name,
                 func,
@@ -230,7 +233,9 @@ impl Sema<'_> {
                 declarator.asm_label.as_ref(),
                 None,
                 scope,
-            );
+            ) {
+                self.note_long_double_function(id, func);
+            }
             return Vec::new();
         }
 
@@ -2612,6 +2617,7 @@ impl Sema<'_> {
         ) else {
             return;
         };
+        self.note_long_double_function(id, func);
         // The enclosing function's state goes aside for the length of a nested
         // definition, and the nesting gains a level.
         let saved = (scope == FuncScope::Nested).then(|| self.save_function_state());
@@ -2689,6 +2695,7 @@ impl Sema<'_> {
                 params.push(object);
                 continue;
             };
+            self.note_long_double(name.range, &param.ty);
             if func.old_style {
                 // `resolve_param_ty` already succeeded for this parameter in
                 // `declare_function`, or there would be no `id` to be here

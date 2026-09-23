@@ -132,6 +132,11 @@ impl Sema<'_> {
             ast::ExprKind::Float(lit) => {
                 let (value, ty) = float_literal(lit);
                 if !lit.imaginary {
+                    // `2.5L` is a `long double`, which `ty` no longer says;
+                    // see `sema::long_double`.
+                    if lit.suffix == FloatSuffix::LongDouble {
+                        self.long_double_exprs.insert(range, Some(0));
+                    }
                     return Some(Expr::new(ExprKind::Float(value), ty, range));
                 }
                 // `2.0i` is the pure imaginary `(0, 2)`, whose type is the
@@ -573,6 +578,7 @@ impl Sema<'_> {
         if self.program.function(id).is_nested() {
             self.nested_addresses.push((id, range));
         }
+        self.note_long_double_function_use(id, range);
         // An [x86 intrinsic](crate::x86) whose operand has to be an integer
         // constant expression has no address to take: code generation writes
         // the constant into a turbofish, and a function pointer has nowhere to
@@ -1290,6 +1296,13 @@ impl Sema<'_> {
                 let promoted = self.promoted(&value);
                 let bits = self.narrow_bits(&value);
                 let value = self.convert(value, promoted);
+                // A folded `-2.5L` is a new literal, which has to stay the
+                // `long double` its operand was; see `sema::long_double`.
+                if matches!(value.kind, ExprKind::Float(_))
+                    && self.long_double_depth_of(&value) == Some(0)
+                {
+                    self.long_double_exprs.insert(range, Some(0));
+                }
                 if op == ast::UnaryOp::Plus {
                     return Some(Expr::new(value.kind, promoted, range).narrowed(bits));
                 }
@@ -2171,6 +2184,9 @@ impl Sema<'_> {
 
         let mut values = Vec::with_capacity(args.len());
         let mut failed = false;
+        // Which of the arguments in the variable part are a `long double` or
+        // a pointer to one, for `Sema::check_long_double_boundary`.
+        let mut variadic_depths = Vec::new();
         for (index, arg) in args.iter().enumerate() {
             let Some(value) = self.expr(arg) else {
                 failed = true;
@@ -2207,12 +2223,14 @@ impl Sema<'_> {
                     // call through a type with no prototype (C99 6.5.2.2p6):
                     // `float` widens to `double` and the small integer types
                     // to `int`.
+                    variadic_depths.push((arg.range, self.long_double_depth_of(&value)));
                     let promoted = self.promoted_argument(&value);
                     let value = self.convert(value, promoted);
                     values.push(value);
                 }
             }
         }
+        self.note_long_double_call(&target, callee.range, &variadic_depths);
 
         let too_few = args.len() < sig.params.len();
         // A function type with no prototype says nothing about how many
@@ -2616,6 +2634,21 @@ impl Sema<'_> {
     // -- casts --------------------------------------------------------------
 
     fn cast_expr(
+        &mut self,
+        type_name: &ast::TypeName,
+        operand: &ast::Expr,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let result = self.cast_expr_inner(type_name, operand, range)?;
+        // A cast to `long double` makes one and a cast to anything else
+        // unmakes it, neither of which the resolved type says: the two are
+        // both `double`. See `sema::long_double`.
+        let depth = self.long_double_depth(&type_name.ty);
+        self.note_long_double_expr(&result, depth);
+        Some(result)
+    }
+
+    fn cast_expr_inner(
         &mut self,
         type_name: &ast::TypeName,
         operand: &ast::Expr,

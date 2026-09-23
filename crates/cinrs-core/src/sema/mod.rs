@@ -104,12 +104,14 @@ mod builtins;
 mod decl;
 mod expr;
 mod init;
+mod long_double;
 mod stmt;
 mod types;
 mod va;
 mod vector;
 
 pub use atomics::is_atomic_builtin;
+pub use long_double::long_double_twin;
 
 use std::collections::{HashMap, HashSet};
 
@@ -683,6 +685,18 @@ struct Sema<'a> {
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
+    /// The declarations whose type involves `long double`, by the range of the
+    /// declared name, with the [depth](Sema::long_double_depth) it is at. See
+    /// [`long_double`] for why this is kept on the side.
+    long_double_decls: HashMap<SourceRange, u8>,
+    /// What a cast or a literal made, by the range of the expression it
+    /// produced: `Some(depth)` for a `long double`, `None` for a cast that
+    /// turned one into something else.
+    long_double_exprs: HashMap<SourceRange, Option<u8>>,
+    /// What each function's prototype says about `long double`.
+    long_double_funcs: HashMap<FuncId, long_double::LongDoubleSig>,
+    /// The uses of the platform boundary, checked at the end of the unit.
+    long_double_uses: Vec<long_double::LongDoubleUse>,
     /// Every Rust item name handed out so far, so that mangled names stay
     /// unique.
     item_names: HashSet<String>,
@@ -916,6 +930,10 @@ impl<'a> Sema<'a> {
             enum_incomplete: vec![None; unit.enums.len()],
             enum_lists: Vec::new(),
             defined_functions: HashSet::new(),
+            long_double_decls: HashMap::new(),
+            long_double_exprs: HashMap::new(),
+            long_double_funcs: HashMap::new(),
+            long_double_uses: Vec::new(),
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
@@ -1029,6 +1047,9 @@ impl<'a> Sema<'a> {
         self.propagate_nested_env();
         self.check_nested_addresses();
         self.check_nested_definitions();
+        // Which functions are the platform's is only known once every
+        // definition has been seen.
+        self.check_long_double_boundary();
     }
 
     /// C99 6.9.2p5: a tentative definition whose type is still an incomplete
