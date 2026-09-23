@@ -359,6 +359,47 @@ assembly, and all 41 test files, ms:
 All four compilers (upstream's `-O0 -g` build included) emit byte-identical
 assembly for the inputs; the test loop is process start-up.
 
+## Kissat 4.0.4 (not in the repository)
+
+Armin Biere's SAT solver (MIT): 38,944 lines of C99 in 93 `src/*.c` files,
+one unit each under `#pragma cinrs export` and `system_include first`,
+with the `NDEBUG` its `configure` chooses and a hand-written `build.h`.
+Macros that generate whole families of functions (`stack.h`, `vector.h`,
+`heap.h`), `__builtin_clz`/`prefetch`, `popen`, `getrusage`, `sysconf`, and
+variadic message functions, which is why it needs Rust 1.99.
+
+**What it took.** Two refusals of valid C, both fixed with ui tests
+(`tests/ui/incomplete_prototypes.rs`, `tests/ui/typedef_shadowed_by_declarator.rs`):
+a prototype whose return type is a never-completed `struct` (`changes
+kissat_changes(struct kissat *)`, 80 sites) was refused where C requires
+completeness only at a definition or a call; and `links *links =
+solver->links, *l = links + idx;` — the typedef name reused as the first
+declarator's own name, the shape its `all_stack(watch, watch, …)` macro
+produces too, 44 sites — lost the second declarator's type, because the
+specifiers' typedef was looked up again after the declarator had hidden it.
+With those, all 93 files compile unedited with no diagnostic.
+
+**Correctness.** 22 generated CNFs (random 3-SAT at ratio 4.26 with 100 to
+350 variables, pigeonhole 7 and 8, 16- and 30-queens, planted and random
+3-XOR systems): the `cinrs` build gives the same exit codes as the gcc and
+clang builds (11 satisfiable, 11 not), the same models to the hash, and
+every model satisfies every clause under an independent checker. Kissat is
+deterministic for a seed, and the search statistics match to the last
+conflict: 433,976 conflicts, 656,686 decisions, 20,305,786 propagations on
+one instance in all three builds. Its own test program `tissat`, built from
+`test/*.c` the same way, passes 1,004 of its 1,017 jobs; the 13 it cannot
+run are the allocation-failure tests, which recover through
+`setjmp`/`longjmp`, the documented limitation.
+
+**Speed.** `gcc -O3` and `clang -O3` (upstream's flags), ms:
+
+| workload | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| random 3-SAT, 200 variables (unsat) | 455 | 437 | 445 | 0.98× | 1.02× |
+| random 3-SAT, 300 variables (sat) | 786 | 759 | 784 | 1.00× | 1.03× |
+| random 3-SAT, 250 variables (unsat) | 3,798 | 3,655 | 3,784 | 1.00× | 1.04× |
+| `tissat`, the whole suite | 7,675 | 7,714 | 7,738 | 1.01× | 1.00× |
+
 ## Wren 0.4.0 (not in the repository)
 
 The scripting language's VM, `src/vm/*.c` and the two optional modules (MIT;
