@@ -85,8 +85,9 @@ about.
   `SOURCES.md`. The version chosen for each is the simplest single-threaded C
   one: no pthreads, no `vector_size`, no intrinsics. k-nucleotide and
   regex-redux are absent, and `SOURCES.md` says why. Next to them are the
-  Intel-intrinsics versions of fannkuch-redux (SSSE3) and n-body (SSE2 and
-  AVX), at the same sizes, built for the instruction set in the row's
+  Intel-intrinsics versions of fannkuch-redux (SSSE3), n-body (SSE2 and
+  AVX), spectral-norm (SSE2, SSE4.1, AVX and AVX2) and mandelbrot (SSE2
+  vector types), at the same sizes, built for the instruction set in the row's
   `features`.
 * **`programs/classic/`** — Dhrystone 2.1 and Whetstone, both vendored from
   netlib with their notices intact, and a LINPACK-style LU solve written for

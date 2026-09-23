@@ -352,6 +352,63 @@ static PROGRAMS: &[Program] = &[
             Group::BenchmarksGame,
         )
     },
+    // The four spectral-norm versions and mandelbrot's carry `#pragma omp`,
+    // which `cinrs` ignores and the native builds are not given `-fopenmp`
+    // for, so all three columns are serial. `<malloc.h>` (`memalign`) and
+    // `<unistd.h>` (`write`) are the platform's, hence `system_include`.
+    Program {
+        args: &["5500"],
+        system_include: SystemInclude::Yes,
+        note: "spectral-norm two columns at a time, `_mm_set_pd`/`_mm_div_pd` (SSE2)",
+        ..program(
+            "spectral-norm-sse2",
+            "benchmarksgame/spectralnorm_sse2.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["5500"],
+        features: &["sse4.1"],
+        system_include: SystemInclude::Yes,
+        note: "spectral-norm with A's entries computed in `__m128i`, `_mm_mullo_epi32` (SSE4.1)",
+        ..program(
+            "spectral-norm-sse41",
+            "benchmarksgame/spectralnorm_sse41.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["5500"],
+        features: &["avx2"],
+        system_include: SystemInclude::Yes,
+        note: "the SSE4.1 row at twice the width, `_mm256_mullo_epi32` (AVX2)",
+        ..program(
+            "spectral-norm-avx2",
+            "benchmarksgame/spectralnorm_avx2.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["5500"],
+        features: &["avx"],
+        note: "spectral-norm over 4x4 blocks of A, `_mm_rcp_ps` and a Goldschmidt step (AVX)",
+        ..program(
+            "spectral-norm-avx",
+            "benchmarksgame/spectralnorm_avx.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["4000"],
+        features: &["sse3"],
+        system_include: SystemInclude::Yes,
+        note: "mandelbrot eight pixels in four `__m128d`, GNU vector operators and subscripts (SSE2)",
+        ..program(
+            "mandelbrot-sse2",
+            "benchmarksgame/mandelbrot_sse2.c",
+            Group::BenchmarksGame,
+        )
+    },
     // --- the classics ----------------------------------------------------
     Program {
         dialect: Dialect::Gnu89,
