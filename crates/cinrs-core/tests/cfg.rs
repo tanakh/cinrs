@@ -910,16 +910,40 @@ fn only_a_table_that_is_only_read_is_folded() {
             goto *table[i];
         a: return 1;
         b: return 2;
+        }
+        /* An automatic array, as `interp_goto.c` keeps its table. */
+        int automatic(int i) {
+            void *table[] = { &&b, &&a };
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }
+        int automatic_written(int i) {
+            void *table[] = { &&a, &&b };
+            if (i > 1) table[0] = &&b;
+            goto *table[i & 1];
+        a: return 1;
+        b: return 2;
         }";
     let folded = lowered(source, "folded");
     assert!(folded.contains("wrapping_add(1)"), "{folded}");
+    let automatic = lowered(source, "automatic");
+    assert!(automatic.contains("wrapping_add(1)"), "{automatic}");
+    insta::assert_snapshot!("automatic", automatic);
     assert!(!folded.contains("folded_table)"), "{folded}");
     // The table's order, not the labels' order in the source: `b` is 1.
     let cfg = cfg_of(source, "folded");
     let mut numbers: Vec<u32> = cfg.labels.values().copied().collect();
     numbers.sort_unstable();
     assert_eq!(numbers, [1, 2]);
-    for name in ["written", "addressed", "passed", "not_a_label", "repeated"] {
+    for name in [
+        "written",
+        "addressed",
+        "passed",
+        "not_a_label",
+        "repeated",
+        "automatic_written",
+    ] {
         let out = lowered(source, name);
         assert!(
             !out.contains("wrapping_add(1)"),

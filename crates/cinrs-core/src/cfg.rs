@@ -73,15 +73,19 @@
 //! when sema finds a table whose contents are known for good, it numbers that
 //! table's labels first and in its order, which makes element `e` label
 //! number `e + 1`, and `goto *table[e]` stores `e + 1` without reading the
-//! table at all. The conditions, checked in `sema`: an object with static
-//! storage duration defined in the function's body (a block-scope `static`),
-//! whose initialiser is nothing but the addresses of *distinct* labels of the
+//! table at all. The conditions, checked in `sema`: an array the function's
+//! body defines — a block-scope `static`, or an automatic one with a single
+//! definition — whose initialiser is nothing but the addresses of *distinct* labels of the
 //! function, one per element; whose every use in the body is a read
 //! `table[e]` — never written, never addressed, never passed on, never in a
 //! statement expression; that no other static's initialiser names; and in a
 //! function that defines no nested function, which could name it too. When
 //! more than one table qualifies, the first one does. Any other use keeps the
-//! plain lowering, which is correct for every table.
+//! plain lowering, which is correct for every table. An automatic table is
+//! filled where it is declared, and a `goto` from before the declaration may
+//! reach a read of it first; the fold is right there too, because the number
+//! it stores never depended on what the array holds. The array itself is then
+//! written and never read, which LLVM drops.
 //!
 //! # Hoisting and renaming
 //!

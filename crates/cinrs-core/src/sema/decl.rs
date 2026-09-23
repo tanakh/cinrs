@@ -3363,9 +3363,10 @@ impl Sema<'_> {
     /// The dispatch table of label addresses whose contents are known for
     /// good, and its labels in order; see `crate::cfg`'s table fold.
     ///
-    /// A `static` the body defined (an object from `first_object` on) whose
-    /// initialiser is the addresses of distinct labels of `taken` and nothing
-    /// else, which the body only ever reads as `table[e]` and no other
+    /// A `static` the body defined (an object from `first_object` on), or an
+    /// automatic array it defines exactly once, whose initialiser is the
+    /// addresses of distinct labels of `taken` and nothing else, which the
+    /// body only ever reads as `table[e]` and no other
     /// static's initialiser names — in a function that defines no function of
     /// its own (one from `first_function` on), which could name it too.
     fn foldable_table(
@@ -3382,16 +3383,33 @@ impl Sema<'_> {
         {
             return None;
         }
-        'candidates: for var in &self.program.statics {
-            if var.object.0 < first_object
-                || !matches!(
-                    self.program.object(var.object).storage,
-                    Storage::Static { .. }
-                )
-            {
-                continue;
-            }
-            let ExprKind::ArrayLit(items) = &var.init.kind else {
+        // A `static` the body defined, with the initialiser its item gets, and
+        // then an automatic array with the one its only definition gives it.
+        // The automatic's initialiser runs where it is declared, so a `goto`
+        // from before the declaration could reach a read of it before then;
+        // the fold is right all the same, because the folded value is the
+        // label's number whatever the array holds — it is never read.
+        let statics = self
+            .program
+            .statics
+            .iter()
+            .filter(|var| {
+                var.object.0 >= first_object
+                    && matches!(
+                        self.program.object(var.object).storage,
+                        Storage::Static { .. }
+                    )
+            })
+            .map(|var| (var.object, &var.init));
+        let automatics = (first_object..self.program.objects.len() as u32)
+            .map(ObjectId)
+            .filter(|id| self.program.object(*id).storage == Storage::Automatic)
+            .filter_map(|id| match ir::lets_of(body, id).as_slice() {
+                [init] => Some((id, *init)),
+                _ => None,
+            });
+        'candidates: for (object, init) in statics.chain(automatics) {
+            let ExprKind::ArrayLit(items) = &init.kind else {
                 continue;
             };
             let mut order: Vec<ir::LabelId> = Vec::with_capacity(items.len());
@@ -3409,14 +3427,16 @@ impl Sema<'_> {
                 order.push(id);
             }
             if order.is_empty()
-                || ir::stmts_use_object_beyond_reads(body, var.object)
-                || self.program.statics.iter().any(|other| {
-                    other.object != var.object && ir::mentions_object(&other.init, var.object)
-                })
+                || ir::stmts_use_object_beyond_reads(body, object)
+                || self
+                    .program
+                    .statics
+                    .iter()
+                    .any(|other| other.object != object && ir::mentions_object(&other.init, object))
             {
                 continue;
             }
-            return Some((var.object, order));
+            return Some((object, order));
         }
         None
     }

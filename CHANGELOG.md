@@ -274,8 +274,9 @@ follows [Semantic Versioning][semver].
   `e` and goes to one shared `match` on it, whose `default` is
   `unreachable!()`. The graph then holds only ordinary jumps, so the relooper
   reads it like any other, and the whole-function state machine is left only
-  for a graph nested deeper than `rustc` parses. A `static` dispatch table
-  that is only ever read is folded away: its labels are numbered in its
+  for a graph nested deeper than `rustc` parses. A dispatch table — a
+  `static` or an automatic array of distinct label addresses — that is only
+  ever read is folded away: its labels are numbered in its
   order, so `goto *table[op]` is a `match` on `op`. An invalid target panics
   in a build with debug assertions and is `unreachable_unchecked` otherwise,
   as in GCC. Wren's interpreter, whose `DISPATCH()` is

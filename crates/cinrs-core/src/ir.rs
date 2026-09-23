@@ -3945,6 +3945,42 @@ pub fn stmts_use_object_beyond_reads(stmts: &[Stmt], object: ObjectId) -> bool {
     stmts.iter().any(|stmt| stmt_uses_object(stmt, object))
 }
 
+/// The initialisers of every [`Stmt::Let`] that defines `object` in `stmts`,
+/// however deeply nested.
+pub fn lets_of(stmts: &[Stmt], object: ObjectId) -> Vec<&Expr> {
+    fn walk<'a>(stmt: &'a Stmt, object: ObjectId, out: &mut Vec<&'a Expr>) {
+        match stmt {
+            Stmt::Let {
+                object: id, init, ..
+            } if *id == object => out.push(init),
+            Stmt::Block(items) => items.iter().for_each(|s| walk(s, object, out)),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                walk(then_branch, object, out);
+                if let Some(branch) = else_branch {
+                    walk(branch, object, out);
+                }
+            }
+            Stmt::For { init, body, .. } => {
+                init.iter().for_each(|s| walk(s, object, out));
+                walk(body, object, out);
+            }
+            Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::Case { body, .. }
+            | Stmt::Label { body, .. } => walk(body, object, out),
+            Stmt::SwitchTree(switch) => walk(&switch.body, object, out),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    stmts.iter().for_each(|s| walk(s, object, &mut out));
+    out
+}
+
 fn stmt_uses_object(stmt: &Stmt, object: ObjectId) -> bool {
     let expr = |e: &Expr| mentions_object_in(e, object, true);
     let sub = |s: &Stmt| stmt_uses_object(s, object);

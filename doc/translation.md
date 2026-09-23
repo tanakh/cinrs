@@ -906,9 +906,11 @@ Two things make that `match` the one a `switch` would have given. The table is
 **folded**: `dispatch` is only ever read, so its labels are numbered in its
 own order, element `e` is label `e + 1`, and `goto *dispatch[e]` stores
 `e + 1` without loading anything — the `match` is then on the opcode itself.
-The conditions are that the table is a `static` the function defines, that its
-initialiser is nothing but the addresses of distinct labels of the function,
-and that the body only ever reads it as `table[e]`: a table that is written,
+The conditions are that the table is a `static` or an automatic array the
+function defines (an automatic one only once), that its initialiser is
+nothing but the addresses of distinct labels of the function, and that the
+body only ever reads it as `table[e]` — an automatic table is then filled and
+never read, and the compiler drops it: a table that is written,
 has its address taken, is passed on, holds anything but a label or could be
 named by a nested function is read on every jump, which is always correct. And
 the `default` — a target that is no label — panics in a build with debug
