@@ -701,6 +701,9 @@ struct Sema<'a> {
     /// The stand-ins for `_Float128` and `_Complex _Float128`, once named; see
     /// [`float128`].
     float128: [Option<ir::RecordId>; 2],
+    /// The stand-ins for `float _Complex` and `double _Complex` when the
+    /// `complex` feature is off; see [`float128`].
+    no_complex: [Option<ir::RecordId>; 2],
     /// How many arms that cannot run enclose what is being analysed: the
     /// excluded operand of a `?:`, `&&` or `||`, or the excluded branch of an
     /// `if`, whose condition is an integer constant expression. Nonzero means
@@ -944,6 +947,7 @@ impl<'a> Sema<'a> {
             long_double_funcs: HashMap::new(),
             long_double_uses: Vec::new(),
             float128: [None; 2],
+            no_complex: [None; 2],
             dead_code: 0,
             item_names: HashSet::new(),
             initialized: HashSet::new(),

@@ -2664,11 +2664,20 @@ impl Sema<'_> {
         operand: &ast::Expr,
         range: SourceRange,
     ) -> Option<Expr> {
-        if let ast::TypeKind::Float(ast::FloatSize::Float128)
-        | ast::TypeKind::Complex(ast::FloatSize::Float128) = type_name.ty.kind
-        {
-            let complex = matches!(type_name.ty.kind, ast::TypeKind::Complex(_));
-            self.refuse_float128_cast(complex, range);
+        // A cast to a type that may be named but holds no value; see
+        // `sema::float128`.
+        let spelled = match type_name.ty.kind {
+            ast::TypeKind::Float(ast::FloatSize::Float128) => Some("_Float128".to_owned()),
+            ast::TypeKind::Complex(ast::FloatSize::Float128) => {
+                Some("_Complex _Float128".to_owned())
+            }
+            ast::TypeKind::Complex(size) if !self.complex => {
+                Some(format!("{} _Complex", size.as_str()))
+            }
+            _ => None,
+        };
+        if let Some(spelled) = spelled {
+            self.refuse_float128_cast(&spelled, range);
             return None;
         }
         let result = self.cast_expr_inner(type_name, operand, range)?;

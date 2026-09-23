@@ -227,6 +227,52 @@ fn without_the_feature_the_complex_types_are_refused() {
     );
 }
 
+/// Without the feature a complex type may still be *named* — a platform
+/// `<complex.h>` declares forty functions with them, and `<tgmath.h>` includes
+/// it — so a declared-only prototype, a `typedef`, a pointer, `sizeof` and a
+/// `_Generic` association are fine. Where a value would exist, the refusal is
+/// the same hint, by name for a call.
+#[test]
+fn without_the_feature_the_complex_types_may_still_be_named() {
+    let mut options = Options::new(Standard::C11);
+    options.complex = false;
+    let hint = "complex types are not supported here: '_Complex' needs the 'complex' feature \
+                of the cinrs crate, which is on by default and supplies the runtime the \
+                generated code links against";
+    let declarations = "double _Complex csin(double _Complex);\n\
+                        float _Complex csinf(float _Complex);\n\
+                        long double _Complex csinl(long double _Complex);\n\
+                        typedef double _Complex cplx;\n\
+                        _Complex double *p;\n\
+                        void keep(cplx *q);\n\
+                        typedef char size[sizeof(double _Complex) == 16 \
+                        && _Alignof(float _Complex) == 4 ? 1 : -1];\n\
+                        typedef char pick[_Generic(1.0, double _Complex: -1, default: 1)];\n";
+    assert_eq!(errors_with(declarations, &options), Vec::<String>::new());
+    assert_eq!(
+        errors_with(
+            &format!("{declarations}void f(cplx *z) {{ csin(*z); }}"),
+            &options
+        ),
+        [format!(
+            "'csin' returns 'double _Complex', which cannot be called: {hint}"
+        )]
+    );
+    assert_eq!(
+        errors_with(&format!("{declarations}double _Complex z;"), &options),
+        [hint]
+    );
+    assert_eq!(
+        errors_with(
+            &format!("{declarations}void f(void) {{ (void)(double _Complex) 1; }}"),
+            &options
+        ),
+        [format!(
+            "a cast to 'double _Complex' is not supported: {hint}"
+        )]
+    );
+}
+
 #[test]
 fn bit_fields_are_checked_against_their_type() {
     accepted("struct S { unsigned int flag : 1; int level : 3; unsigned : 0; char tag; };");

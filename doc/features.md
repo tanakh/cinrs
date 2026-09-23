@@ -1201,6 +1201,10 @@ implemented, the rest of the annex is not claimed.
 This is the one thing `cinrs` generates that names a crate rather than `core`,
 so it lives behind the **`complex` feature**, which is on by default.
 `default-features = false` drops the `cinrs-rt` dependency, predefines
-`__STDC_NO_COMPLEX__` and makes `_Complex` a diagnostic naming the feature.
-`cinrs-rt` is itself `#![no_std]`, so having it on costs a `#![no_std]` crate
+`__STDC_NO_COMPLEX__` and makes a complex *value* a diagnostic naming the
+feature. A complex type may still be named — a declared-only prototype, a
+`typedef`, a pointer, `sizeof`, a `_Generic` association — so a platform
+`<complex.h>` or `<tgmath.h>` goes through; an object of the type, a cast to
+it, an imaginary literal and a call of a function whose prototype mentions it
+are the diagnostic. `cinrs-rt` is itself `#![no_std]`, so having it on costs a `#![no_std]` crate
 nothing.

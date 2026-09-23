@@ -327,7 +327,17 @@ impl Sema<'_> {
             // the same documented loss of precision and the same ABI caveat.
             ast::TypeKind::Complex(size) => {
                 if !self.complex {
-                    return Err(TypeError::at(range, COMPLEX_UNSUPPORTED.to_owned()));
+                    // No runtime for the values, but the type may still be
+                    // named — in a prototype, a `typedef`, a pointer — which
+                    // is all a platform `<complex.h>` does; see
+                    // `sema::float128`.
+                    return Ok(match size {
+                        ast::FloatSize::Float128 => self.float128_ty(true, range),
+                        ast::FloatSize::Float | ast::FloatSize::Float32 => {
+                            self.uncomputable_complex_ty(true, range)
+                        }
+                        _ => self.uncomputable_complex_ty(false, range),
+                    });
                 }
                 Ok(match size {
                     ast::FloatSize::Float | ast::FloatSize::Float32 => Ty::ComplexFloat,

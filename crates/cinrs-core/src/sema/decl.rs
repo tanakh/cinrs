@@ -2672,6 +2672,11 @@ impl Sema<'_> {
             frame.labels = self.labels.keys().cloned().collect();
         }
 
+        // A definition returning a type that holds no value here; see
+        // `sema::float128`.
+        let ret = self.program.function(id).sig.ret;
+        let fname = self.program.function(id).name.clone();
+        self.refuse_float128_object(&fname, ret, func.ret.range);
         let mut params = Vec::with_capacity(func.params.len());
         // The old-style parameters whose declared type is not what the ABI
         // hands over: the item takes the promoted one under a hidden name, and

@@ -314,13 +314,10 @@ fn every_bundled_header_coexists_with_every_platform_header() {
 
 /// The reason `header` is expected to fail, if it is.
 ///
-/// `<complex.h>` and `<tgmath.h>` are both built on `_Complex`, which a build
-/// with the `complex` feature off diagnoses on purpose; that is a property of
-/// the build rather than of the header, so it is not in [`KNOWN_GAPS`].
+/// `<complex.h>` and `<tgmath.h>` go through with the `complex` feature off
+/// too: they only *declare* functions with `_Complex`, and a complex type may
+/// be named without the feature — it is a complex *value* that needs it.
 fn expected_gap(header: &str) -> Option<&'static str> {
-    if !cinrs_core::COMPLEX_SUPPORTED && matches!(header, "complex.h" | "tgmath.h") {
-        return Some("the crate was built with the 'complex' feature off");
-    }
     KNOWN_GAPS
         .iter()
         .find(|(name, _)| *name == header)

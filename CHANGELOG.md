@@ -404,6 +404,12 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **Without the `complex` feature a complex type may still be named.** A
+  declared-only prototype, a `typedef`, a pointer, `sizeof` and `_Generic`
+  accept `double _Complex` and its relatives, so glibc's `<complex.h>` and
+  `<tgmath.h>` go through with the feature off; the diagnostic naming the
+  feature moved to where a complex value would exist — an object, a cast, a
+  call of such a function (by name).
 * **The bundled `<math.h>` has C99's classification and comparison macros.**
   `isnan`, `isinf`, `isfinite`, `isnormal`, `signbit` and `fpclassify` (with
   `FP_NAN` … `FP_NORMAL`), and `isgreater`, `isgreaterequal`, `isless`,
