@@ -19,8 +19,21 @@
 //! * A declared-only function in `LONG_DOUBLE_TWINS` — an ISO C function
 //!   whose only difference from a `double` sibling is the type — is linked to
 //!   the sibling, through the `#[link_name]` its `asm_label` becomes. That is
-//!   exactly what "`long double` is `double`" means for this crate.
-//! * Every other declared-only function whose return type or a parameter is
+//!   exactly what "`long double` is `double`" means for this crate, and it is
+//!   done on **every** target, including those whose platform `long double`
+//!   is `double` too. Microsoft's is, and that is why its C runtime has no
+//!   `powl`, `sinl`, `fabsl`, `hypotl` or the other C89 `l` forms to link to:
+//!   the UCRT's `<corecrt_math.h>` defines those twenty-three as `__inline`
+//!   wrappers that call `pow`, `sin`, `fabs`, which is what the redirect
+//!   writes out, and a declaration linked by its own name was `lld-link:
+//!   error: undefined symbol: powl` on every MSVC architecture. Every `double`
+//!   sibling in the table is a real export of `ucrt.lib` (10.0.26100.0, read
+//!   with `nm`); the C99 `l` forms the UCRT does export (`strtold`, `cbrtl`,
+//!   `csinl`, `nexttowardl` …) are redirected all the same, which on such a
+//!   target is the same function. Where the `l` forms all exist — glibc on
+//!   32-bit Arm, Apple's arm64 — they are the siblings under another name.
+//! * Where the platform's `long double` is wider than `double`, every other
+//!   declared-only function whose return type or a parameter is
 //!   `long double`, `long double _Complex`, or a pointer to one of them, is
 //!   refused where it is **called or its address taken** — not where it is
 //!   declared, since the platform's headers declare dozens. A pointer is the
@@ -45,7 +58,8 @@ use crate::target::Arch;
 
 /// The ISO C functions whose only difference from a `double` sibling is the
 /// `long double` type, each with the sibling a declaration of it links to on
-/// a target whose platform `long double` is wider than `double`.
+/// every target (Microsoft's C runtime exports no `powl` at all; see the module
+/// documentation).
 ///
 /// With `long double` being `double` here, the sibling *is* the function:
 /// `strtold` parses to the precision the result has, `powl` computes it.
@@ -394,11 +408,12 @@ impl Sema<'_> {
 
     /// Redirects the [twins](LONG_DOUBLE_TWINS) and refuses the rest, once the
     /// unit is done and it is known which functions it defines.
+    ///
+    /// The redirect is made on every target, the refusals only where the
+    /// platform's `long double` is wider than `double`; see the module
+    /// documentation for why the two differ.
     pub(super) fn check_long_double_boundary(&mut self) {
         let uses = std::mem::take(&mut self.long_double_uses);
-        if self.target.platform_long_double_is_double() {
-            return;
-        }
         let mut redirected = std::collections::HashSet::new();
         for index in 0..self.program.functions.len() {
             let id = FuncId(index as u32);
@@ -415,6 +430,9 @@ impl Sema<'_> {
                 func.asm_label = Some(twin.to_owned());
                 redirected.insert(id);
             }
+        }
+        if self.target.platform_long_double_is_double() {
+            return;
         }
         let (how, bytes) = match self.target.arch {
             Arch::X86_64 => ("on the x87 stack", "sixteen x87 bytes"),

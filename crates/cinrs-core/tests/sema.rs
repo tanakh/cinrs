@@ -2390,16 +2390,26 @@ fn the_long_double_iso_functions_link_to_their_double_twins() {
             "for {triple}"
         );
     }
-    // Where the platform's `long double` *is* `double`, `strtold` takes and
-    // returns one, and nothing needs redirecting — or refusing.
+    // Where the platform's `long double` *is* `double`, the twins are still
+    // redirected — Microsoft's C runtime has no `powl` or `sinl` symbol at
+    // all, only inline wrappers over `pow` and `sin` — but nothing is refused.
     for triple in [
         "x86_64-pc-windows-msvc",
+        "i686-pc-windows-msvc",
+        "aarch64-pc-windows-msvc",
         "aarch64-apple-darwin",
         "armv7-unknown-linux-gnueabihf",
     ] {
         assert_eq!(
             link_names_on(triple, source),
-            ["cosl=my_cos"],
+            [
+                "strtold=strtod",
+                "powl=pow",
+                "sinl=sin",
+                "csinl=csin",
+                "nexttoward=nextafter",
+                "cosl=my_cos",
+            ],
             "for {triple}"
         );
         assert!(

@@ -495,8 +495,12 @@ follows [Semantic Versioning][semver].
   called or its address taken, and so is a `long double` or a pointer to one
   handed to a declared-only function's `...`, with the rewrite (cast to
   `double` and use `%f`). A variadic function the unit defines reads back the
-  `double` it was passed and is unaffected. Nothing changes on a target whose
-  `long double` is `double` already (MSVC, 32-bit Arm, Apple arm64). The
+  `double` it was passed and is unaffected. On a target whose `long double` is
+  `double` already (MSVC, 32-bit Arm, Apple arm64) nothing is refused, and the
+  twins are linked to the sibling all the same: the UCRT has no `powl`, `sinl`,
+  `fabsl` … symbol at all, only `<corecrt_math.h>`'s inline wrappers over
+  `pow`, `sin`, `fabs`, so a declaration linked by its own name failed with
+  `lld-link: error: undefined symbol: powl`. The
   bundled `<stdlib.h>` declares `strtold`. `tests/ui/long_double_abi.rs`
 
 * **`"x"` and `"v"` asm operands at 256 and 512 bits.** libdeflate's Adler-32

@@ -61,7 +61,9 @@
   `long double` or a `long double *` handed to a declared-only function's `...`
   (`printf("%Lf", x)`, `sscanf("%Lf", &x)`): cast to `double` and use `%f`.
   Where the platform's `long double` is `double` too (MSVC, 32-bit Arm, Apple
-  arm64) nothing needs either. A `long double` function defined in *another*
+  arm64) nothing is refused, but the twins are still linked to the sibling:
+  Microsoft's C runtime has no `powl`, `sinl` or `fabsl` symbol, only
+  `<corecrt_math.h>`'s inline wrappers over `pow`, `sin` and `fabs`. A `long double` function defined in *another*
   `cinrs` unit is refused the same way, since a unit cannot tell it from the
   platform's.
 * The [SIMD intrinsics](features.md#simd-intrinsics) are x86's and x86-64's, and

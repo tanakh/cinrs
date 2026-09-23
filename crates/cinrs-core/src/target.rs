@@ -856,7 +856,9 @@ impl TargetModel {
     /// on x86-64 System V and on i386, the 128-bit quad of AArch64 Linux,
     /// RISC-V, LoongArch, s390x and wasm, IBM's double-double on PowerPC glibc
     /// — such a call reads the wrong register or the wrong number of bytes,
-    /// and `Sema` redirects or refuses it (see `sema::long_double`).
+    /// and `Sema` refuses it (see `sema::long_double`). The ISO C functions
+    /// with a `double` twin, `powl` and the rest, are linked to the twin on
+    /// every target and do not ask.
     ///
     /// The `true` rows are the ABIs whose documents say so: Microsoft's (every
     /// architecture), AAPCS for 32-bit Arm, Apple's arm64, MIPS o32, AArch64

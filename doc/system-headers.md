@@ -433,12 +433,22 @@ The platform's headers declare its `long double` functions with the platform's
 convention is not, which is how chibicc's tokenizer read every floating literal
 wrong through glibc's `strtold`. So: `strtold`, `wcstold`, the `<math.h>` and
 `<complex.h>` `l` forms, and `nexttoward` are linked to their `double` twin
-(`strtod`, `sin`, …), which is exactly what the type being `double` means; any
+(`strtod`, `sin`, …), which is exactly what the type being `double` means —
+and so are glibc's `_Float64x` names for them, `strtof64x` and `sinf64x`; any
 other declared-only function with a `long double` or a `long double *` in its
-prototype — `sinf64x` through glibc's `typedef long double _Float64x`, a GNU
-`sincosl` — is refused where it is called or its address taken, and so is a
-`long double` or a pointer to one passed through `printf`'s or `sscanf`'s `...`.
-Write `printf("%f", (double) x)`. See [the limitation](limitations.md).
+prototype — a GNU `sincosl` or `exp10l` — is refused where it is called or its
+address taken, and so is a `long double` or a pointer to one passed through
+`printf`'s or `sscanf`'s `...`. Write `printf("%f", (double) x)`. See
+[the limitation](limitations.md).
+
+The link to the twin is made on every target, including those whose
+`long double` is `double` and where nothing is refused. On MSVC it is what makes
+the call link at all: the UCRT exports no `powl`, `sinl`, `fabsl` or the other
+C89 `l` forms (nor `hypotl`) — `<corecrt_math.h>` defines them as `__inline`
+wrappers over `pow`, `sin`, `fabs` — and a declaration linked by its own name
+was `lld-link: error: undefined symbol: powl`. The C99 `l` forms it does export
+(`strtold`, `cbrtl`, `csinl`, …) are linked to the twin as well, which there is
+the same function.
 
 ## What the headers forced
 
