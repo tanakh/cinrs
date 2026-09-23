@@ -2024,7 +2024,7 @@ pub struct Signature {
 pub enum Body {
     /// Rust control flow mirrors C's.
     Structured(Vec<Stmt>),
-    /// A state machine over basic blocks; see [`crate::cfg`].
+    /// A graph of basic blocks; see [`crate::cfg`].
     Cfg(crate::cfg::Cfg),
 }
 
@@ -3112,9 +3112,9 @@ pub enum ExprKind {
     /// type `void *`.
     ///
     /// A function that takes one is lowered through a [control-flow
-    /// graph](crate::cfg), and the value is the *state number* the label's
-    /// block was given, cast to a pointer — which is what makes
-    /// `goto *e` a store to the state variable. It is an *address constant*,
+    /// graph](crate::cfg), and the value is the label's *number* among the
+    /// function's labels whose address is taken, from 1, cast to a pointer —
+    /// which is what `goto *e`'s `switch` matches on. It is an *address constant*,
     /// so a `static void *table[] = { &&a, &&b };` holds a table of them.
     LabelAddr(LabelId),
     /// `place = value`, whose value is the value stored.
@@ -3906,6 +3906,94 @@ fn place_calls_a_function(place: &Place) -> bool {
 /// static storage duration needs nothing: the generated item takes its own
 /// address with `&raw mut`, which reads nothing and is a constant.
 pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
+    mentions_object_in(expr, object, false)
+}
+
+/// The index of `table[index]` read as a value — the whole of `expr` being
+/// that read, the array decayed to a pointer to its first element and only
+/// conversions around the decay.
+///
+/// This is the one use of a dispatch table of label addresses that leaves the
+/// table's contents known; see [`crate::cfg`]'s table fold.
+pub fn table_read(expr: &Expr, table: ObjectId) -> Option<&Expr> {
+    let ExprKind::Load(place) = &expr.kind else {
+        return None;
+    };
+    let PlaceKind::Index { base, index } = &place.kind else {
+        return None;
+    };
+    let mut base: &Expr = base;
+    while let ExprKind::Cast(inner) = &base.kind {
+        base = inner;
+    }
+    match &base.kind {
+        ExprKind::AddrOf(Place {
+            kind: PlaceKind::Object(id),
+            ..
+        }) if *id == table => Some(index),
+        _ => None,
+    }
+}
+
+/// Whether any of `stmts` names `object` other than in a [`table_read`] of
+/// it — which is what says a table is never written, never has its address
+/// taken and never goes anywhere, so its contents are its initialiser's.
+///
+/// Conservative: a statement expression, a variable length array's size and
+/// an inline assembly statement all count as naming it.
+pub fn stmts_use_object_beyond_reads(stmts: &[Stmt], object: ObjectId) -> bool {
+    stmts.iter().any(|stmt| stmt_uses_object(stmt, object))
+}
+
+fn stmt_uses_object(stmt: &Stmt, object: ObjectId) -> bool {
+    let expr = |e: &Expr| mentions_object_in(e, object, true);
+    let sub = |s: &Stmt| stmt_uses_object(s, object);
+    match stmt {
+        Stmt::Nop
+        | Stmt::Goto { .. }
+        | Stmt::Break { .. }
+        | Stmt::Continue { .. }
+        | Stmt::Return { value: None, .. } => false,
+        Stmt::Expr(e) | Stmt::GotoPtr { target: e, .. } => expr(e),
+        Stmt::Return { value: Some(e), .. } => expr(e),
+        Stmt::Let { init, .. } => expr(init),
+        Stmt::Cleanup(def) => expr(&def.call),
+        Stmt::Block(items) => items.iter().any(sub),
+        Stmt::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => expr(cond) || sub(then_branch) || else_branch.as_deref().is_some_and(sub),
+        Stmt::While { cond, body, .. } | Stmt::DoWhile { cond, body, .. } => {
+            expr(cond) || sub(body)
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            init.iter().any(sub)
+                || cond.as_ref().is_some_and(expr)
+                || step.as_ref().is_some_and(expr)
+                || sub(body)
+        }
+        Stmt::SwitchTree(switch) => expr(&switch.scrutinee) || sub(&switch.body),
+        Stmt::Case { body, .. } | Stmt::Label { body, .. } => sub(body),
+        Stmt::Vla(_) | Stmt::Asm(_) | Stmt::Switch(_) | Stmt::Region(_) => true,
+    }
+}
+
+/// [`mentions_object`], or — with `reads_ok` — the same with every
+/// [`table_read`] of the object counted as not naming it.
+fn mentions_object_in(expr: &Expr, object: ObjectId, reads_ok: bool) -> bool {
+    if reads_ok && let Some(index) = table_read(expr, object) {
+        return mentions_object_in(index, object, reads_ok);
+    }
+    let mentions_object = |e: &Expr, object: ObjectId| mentions_object_in(e, object, reads_ok);
+    let place_mentions_object =
+        |p: &Place, object: ObjectId| place_mentions_in(p, object, reads_ok);
     let any = |list: &[Expr]| list.iter().any(|e| mentions_object(e, object));
     match &expr.kind {
         ExprKind::Int(_)
@@ -3970,8 +4058,11 @@ pub fn mentions_object(expr: &Expr, object: ObjectId) -> bool {
     }
 }
 
-/// [`mentions_object`], for the expressions inside a place.
-fn place_mentions_object(place: &Place, object: ObjectId) -> bool {
+/// [`mentions_object_in`], for the expressions inside a place.
+fn place_mentions_in(place: &Place, object: ObjectId, reads_ok: bool) -> bool {
+    let mentions_object = |e: &Expr, object: ObjectId| mentions_object_in(e, object, reads_ok);
+    let place_mentions_object =
+        |p: &Place, object: ObjectId| place_mentions_in(p, object, reads_ok);
     match &place.kind {
         PlaceKind::Object(id) => *id == object,
         PlaceKind::Str(_) => false,

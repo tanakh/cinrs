@@ -11,37 +11,29 @@ mod __cinrs_unit_33d25611 {
     ];
     pub unsafe extern "C" fn interp(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
+            let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
             let mut total: ::core::ffi::c_int = 0;
             let mut i: ::core::ffi::c_int = 0;
-            let mut __cinrs_state: ::core::primitive::u32 = 0;
-            'cfg: loop {
-                match __cinrs_state {
-                    0 => {
-                        total = 0;
-                        i = 0;
-                        __cinrs_state = ({
-                            let __cinrs_tmp0 = (&raw mut __cinrs_static_33d25611_interp_table)
-                                .cast::<*mut ::core::ffi::c_void>()
-                                .offset(i as ::core::primitive::isize);
-                            (*__cinrs_tmp0)
-                        }) as ::core::primitive::usize as ::core::primitive::u32;
-                        continue 'cfg;
-                    }
+            total = 0;
+            i = 0;
+            __cinrs_goto = (i as ::core::ffi::c_ulong).wrapping_add(1);
+            'dispatch: loop {
+                match __cinrs_goto {
                     1 => {
                         total = total.wrapping_add(n);
                         i = 1;
-                        __cinrs_state = ({
-                            let __cinrs_tmp1 = (&raw mut __cinrs_static_33d25611_interp_table)
-                                .cast::<*mut ::core::ffi::c_void>()
-                                .offset(i as ::core::primitive::isize);
-                            (*__cinrs_tmp1)
-                        }) as ::core::primitive::usize as ::core::primitive::u32;
-                        continue 'cfg;
+                        __cinrs_goto = (i as ::core::ffi::c_ulong).wrapping_add(1);
                     }
                     2 => {
                         return total;
                     }
-                    _ => ::core::unreachable!(),
+                    _ => {
+                        if ::core::cfg!(debug_assertions) {
+                            ::core::unreachable!()
+                        } else {
+                            unsafe { ::core::hint::unreachable_unchecked() }
+                        }
+                    }
                 }
             }
         }

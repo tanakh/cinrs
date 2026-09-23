@@ -1,0 +1,39 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int pick(int n) {\n            void *p = n ? &&yes : &&no;\n            goto *p;\n        yes:\n            return 1;\n        no:\n            return 0;\n        }\n        \")"
+---
+mod __cinrs_unit_844cc589 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn pick(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
+            let mut p: *mut ::core::ffi::c_void = ::core::ptr::null_mut::<
+                ::core::ffi::c_void,
+            >();
+            p = if n != 0 {
+                1usize as *mut ::core::ffi::c_void
+            } else {
+                2usize as *mut ::core::ffi::c_void
+            };
+            __cinrs_goto = p as ::core::primitive::usize as ::core::ffi::c_ulong;
+            match __cinrs_goto {
+                1 => {
+                    return 1;
+                }
+                2 => {
+                    return 0;
+                }
+                _ => {
+                    if ::core::cfg!(debug_assertions) {
+                        ::core::unreachable!()
+                    } else {
+                        unsafe { ::core::hint::unreachable_unchecked() }
+                    }
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_844cc589::*;

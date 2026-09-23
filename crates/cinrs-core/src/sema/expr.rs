@@ -285,7 +285,7 @@ impl Sema<'_> {
                 Some(Expr::new(ExprKind::Zeroed, ty, range))
             }
             // GNU's `&&label`: an address constant of type `void *`, whose
-            // value is the state number the label's block was given. It is
+            // value is the label's number among its function's taken ones. It is
             // what `goto *` jumps through and what a dispatch table holds.
             ast::ExprKind::LabelAddr(label) => self.label_address(label, range),
             // A compound literal is an object, so reading one goes through its

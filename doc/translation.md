@@ -827,8 +827,10 @@ back to.
 
 ### Tier 4: the whole-function machine
 
-One thing still needs it — a function that takes a label's address; see [Labels
-as values](#labels-as-values). Its body is one `match` over block numbers:
+The relooper checks what it builds, and a graph whose shapes would nest deeper
+than `rustc`'s own parser goes — a `switch` with more `case` groups falling one
+into the next than it will nest — falls back to one `match` over block numbers,
+which is flat however many arms it has:
 
 ```rust
 let mut __cinrs_state: u32 = 0;
@@ -841,8 +843,7 @@ let mut __cinrs_state: u32 = 0;
 }
 ```
 
-A `switch` with more `case` groups than `rustc`'s parser will nest also falls
-back to it, because that `match` is flat however many arms it has.
+A [computed `goto`](#labels-as-values) does not need it.
 
 All four compute exactly what the C did, and `cinrs` picks the first that can
 express the function. Over SQLite's 2,610 defined functions the split is 2,597
@@ -855,25 +856,73 @@ refused: there is no Rust loop left to leave.
 
 ## Labels as values
 
-GNU C's computed `goto` is why the whole-function machine is still there.
-`&&label` is an rvalue of type `void *` whose value is the **state number** the
-label's block was given, and `goto *e` is
-`__cinrs_state = e as usize as u32; continue 'cfg;` — the number has to mean
-something, so a function that takes a label's address is lowered through the
-machine, whole, and skips the relooper.
+GNU C's computed `goto` is lowered the way GCC lowers it: as a `switch` over
+the labels whose address the function takes. Those labels are numbered from 1,
+and `&&label` is an rvalue of type `void *` whose value is that **number** —
+`2usize as *mut c_void` — so it is never a null pointer. Every `goto *e` of the
+function stores `e` in one hidden integer local and goes to one shared
+dispatch, a `match` on it with an arm per label and a `default` for a value
+that is no label's — the undefined behaviour C had. A function that takes
+a label's address goes through the graph, and the graph then holds nothing but
+ordinary jumps, so [the relooper](#tier-2-the-graph-relooped) reads it like any
+other. An interpreter's dispatch table becomes the loop its `switch`-based twin
+would have been:
 
 ```c
-static void *table[] = { &&push, &&add, &&halt };
-goto *table[code[pc]];
+static void *dispatch[] = { &&op_push, &&op_add, &&op_halt };
+#define DISPATCH() goto *dispatch[*ip++]
+    DISPATCH();
+op_push: stack[sp++] = *ip++; DISPATCH();
+op_add:  sp--; stack[sp - 1] += stack[sp]; DISPATCH();
+op_halt: return stack[sp - 1];
 ```
+
+```rust
+static mut dispatch: [*mut c_void; 3] =
+    [1usize as *mut c_void, 2usize as *mut c_void, 3usize as *mut c_void];
+
+__cinrs_goto = (*ip++ as c_ulong).wrapping_add(1);
+'dispatch: loop {
+    match __cinrs_goto {
+        1 => { /* op_push */ __cinrs_goto = (*ip++ as c_ulong).wrapping_add(1); }
+        2 => { /* op_add */  __cinrs_goto = (*ip++ as c_ulong).wrapping_add(1); }
+        3 => { return stack[sp - 1]; }
+        _ => {
+            if ::core::cfg!(debug_assertions) {
+                ::core::unreachable!()
+            } else {
+                unsafe { ::core::hint::unreachable_unchecked() }
+            }
+        }
+    }
+}
+```
+
+The dispatch is shared rather than copied to every `goto *` (GCC calls this
+*factoring* the computed gotos), which keeps an interpreter with a hundred
+handlers one `match` rather than a hundred.
+
+Two things make that `match` the one a `switch` would have given. The table is
+**folded**: `dispatch` is only ever read, so its labels are numbered in its
+own order, element `e` is label `e + 1`, and `goto *dispatch[e]` stores
+`e + 1` without loading anything — the `match` is then on the opcode itself.
+The conditions are that the table is a `static` the function defines, that its
+initialiser is nothing but the addresses of distinct labels of the function,
+and that the body only ever reads it as `table[e]`: a table that is written,
+has its address taken, is passed on, holds anything but a label or could be
+named by a nested function is read on every jump, which is always correct. And
+the `default` — a target that is no label — panics in a build with debug
+assertions and is `unreachable_unchecked` otherwise, which is what GCC assumes
+and what lets the `match` be a bare jump table. Wren's interpreter runs its
+benchmarks at 0.93–1.09× of its own `switch` build this way; see
+[`doc/real-programs.md`](real-programs.md#wren-040-not-in-the-repository).
 
 A label address is an *address constant*, so the dispatch table may be a
 block-scope `static` as above; it goes into a `void *` variable, a `?:`, or
-straight into `goto *`, and a label whose address is taken keeps a block — and
-therefore a number — of its own. GCC's label difference `&&a - &&b` is a
-constant here too. What such a value is *not* is a real address: nothing may be
-read through it, and arithmetic on one only means anything inside its own
-function. The full row, with the limits, is in
+straight into `goto *`. GCC's label difference `&&a - &&b` is a constant here
+too, the difference of the two numbers. What such a value is *not* is a real
+address: nothing may be read through it, and arithmetic on one only means
+anything inside its own function. The full row, with the limits, is in
 [`doc/gnu-extensions.md`](gnu-extensions.md#language-extensions).
 
 ## One block, one module

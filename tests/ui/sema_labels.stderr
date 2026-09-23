@@ -35,7 +35,7 @@ error: a label cannot appear inside a statement expression; nothing outside the 
 47 |         return ({ if (n) { skip: n++; } n; });
    |                            ^^^^
 
-error: a 'break' inside a statement expression is not supported in a function whose jumps Rust cannot express: the function is lowered into a state machine, and there is no enclosing loop left to leave
+error: a 'break' inside a statement expression is not supported in a function whose jumps Rust cannot express: the function is lowered through a control-flow graph, and a jump out of the middle of an expression is not an edge of it
   --> tests/ui/sema_labels.rs:57:32
    |
 57 |             n -= ({ if (n > 5) break;

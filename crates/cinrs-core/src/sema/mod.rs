@@ -891,9 +891,9 @@ struct Sema<'a> {
     flexible_init: init::FlexibleInit,
     /// Every label of the unit whose address a `&&label` has taken.
     ///
-    /// Such a label keeps a block — and therefore a state number — of its own
-    /// through the [CFG](crate::cfg) lowering's clean-up passes, and is a
-    /// possible target of every computed `goto` in its function. The set is
+    /// Such a label is given a number of its own — the value of its address —
+    /// and is a `case` of the [CFG](crate::cfg) lowering's dispatch for every
+    /// computed `goto` in its function. The set is
     /// unit-wide, since a [`ir::LabelId`] is; the labels of *one* function are
     /// what [`Sema::labels`] holds at the moment its body is lowered.
     label_addrs: HashSet<ir::LabelId>,
@@ -909,7 +909,7 @@ struct Sema<'a> {
     /// A [`ir::LabelId`] is unique across the translation unit rather than
     /// within a function, which is what lets code generation look one up
     /// without knowing whose it is — a block-scope `static void *t[] = {
-    /// &&a };` becomes an item at module level, and the state number its
+    /// &&a };` becomes an item at module level, and the label number its
     /// initialiser holds belongs to a function the item says nothing about.
     next_label: u32,
     next_anon: u32,

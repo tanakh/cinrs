@@ -8,8 +8,8 @@
 //! `break` or the `continue` that leaves or restarts it. Anything else — a
 //! jump *into* a block, a computed `goto`, a `case` label inside a loop the
 //! `switch` wraps — is lowered through a control-flow graph, where every local
-//! of the function is hoisted to the top and renamed and the body becomes a
-//! state machine. These tests are what says both still compute what the C did.
+//! of the function is hoisted to the top and renamed and the graph is read
+//! back into loops and `match`es. These tests are what says both still compute what the C did.
 
 use cinrs::{c99, gnu99};
 
@@ -809,7 +809,7 @@ fn a_label_address_is_an_ordinary_value() {
     }
 }
 
-/// A label whose address is taken keeps a state of its own, and ordinary
+/// A label whose address is taken is a `case` of the computed `goto`, and ordinary
 /// `goto`, `switch` and loops still reach it in the same function.
 #[test]
 fn label_addresses_mix_with_the_ordinary_jumps() {
@@ -896,6 +896,169 @@ fn a_table_of_label_differences() {
         assert_eq!(offsets(0), 3);
         assert_eq!(offsets(1), 1);
     }
+}
+
+/// An interpreter as Wren and CPython write theirs: a block-scope `static`
+/// dispatch table and a `DISPATCH()` macro at the end of every handler, with
+/// the handlers themselves looping and branching. Every `goto *` goes to one
+/// `match` on the handler's number.
+#[test]
+fn an_interpreter_with_a_dispatch_macro() {
+    c99! {
+        enum { OP_SET, OP_ACC, OP_DEC, OP_JNZ, OP_SQUARE, OP_HALT };
+
+        long run(const int *code) {
+            static void *const dispatch[] = {
+                &&op_set, &&op_acc, &&op_dec, &&op_jnz, &&op_square, &&op_halt
+            };
+            long acc = 0;
+            long n = 0;
+            const int *ip = code;
+            int op;
+        #define DISPATCH() goto *dispatch[op = *ip++]
+            DISPATCH();
+        op_set:
+            n = *ip++;
+            DISPATCH();
+        op_acc:
+            acc += n;
+            DISPATCH();
+        op_dec:
+            n--;
+            DISPATCH();
+        op_jnz: {
+            int target = *ip++;
+            if (n != 0) ip = code + target;
+            DISPATCH();
+        }
+        op_square: {
+            /* A loop and a switch inside a handler. */
+            long square = 0;
+            for (long i = 0; i < acc; i++) {
+                switch (i & 1) {
+                case 0: square += acc; break;
+                default: square += acc; continue;
+                }
+            }
+            acc = square;
+            DISPATCH();
+        }
+        op_halt:
+            (void) op;
+            return acc;
+        }
+    }
+
+    // n = 5; loop: acc += n; n--; if n != 0 goto loop; halt  =>  15
+    let sum = [0, 5, 1, 2, 3, 2, 5];
+    assert_eq!(unsafe { run(sum.as_ptr()) }, 15);
+    // The same, squared: 225.
+    let squared = [0, 5, 1, 2, 3, 2, 4, 5];
+    assert_eq!(unsafe { run(squared.as_ptr()) }, 225);
+}
+
+/// A label address kept in a block-scope `static` survives from one call to
+/// the next: the "resume where I left off" idiom of a coroutine.
+#[test]
+fn a_label_address_in_a_static_survives_the_call() {
+    c99! {
+        int resume(int reset) {
+            static void *where = &&start;
+            static int count = 0;
+            if (reset) {
+                where = &&start;
+                count = 0;
+            }
+            goto *where;
+        start:
+            count += 1;
+            where = &&middle;
+            return count;
+        middle:
+            count += 10;
+            where = &&end;
+            return count;
+        end:
+            return -count;
+        }
+    }
+
+    unsafe {
+        assert_eq!(resume(0), 1);
+        assert_eq!(resume(0), 11);
+        assert_eq!(resume(0), -11);
+        assert_eq!(resume(0), -11);
+        assert_eq!(resume(1), 1);
+        assert_eq!(resume(0), 11);
+    }
+}
+
+/// Two label addresses compare equal exactly when they name the same label,
+/// and none of them is a null pointer.
+#[test]
+fn label_addresses_compare_by_label() {
+    c99! {
+        int same(int x, int y) {
+            static void *const table[] = { &&a, &&b, &&a };
+            if (table[x] == 0) return -1;
+            return table[x] == table[y];
+        a:
+            return -2;
+        b:
+            return -3;
+        }
+    }
+
+    unsafe {
+        assert_eq!(same(0, 2), 1);
+        assert_eq!(same(0, 1), 0);
+        assert_eq!(same(1, 1), 1);
+    }
+}
+
+/// A computed `goto` to a value that is no label's address is undefined
+/// behaviour in C. In a build with debug assertions — which this test is — it
+/// is the `unreachable!()` of the dispatch's `default` arm, and the process
+/// stops rather than jumping somewhere; a release build assumes it away.
+#[test]
+fn a_computed_goto_to_no_label_stops() {
+    const CHILD: &str = "CINRS_GOTO_INVALID_CHILD";
+    c99! {
+        int invalid(long which) {
+            static void *const table[] = { &&one, &&two };
+            void *target = which < 2 ? table[which] : (void *) which;
+            goto *target;
+        one:
+            return 1;
+        two:
+            return 2;
+        }
+    }
+
+    unsafe {
+        assert_eq!(invalid(0), 1);
+        assert_eq!(invalid(1), 2);
+    }
+    if std::env::var_os(CHILD).is_some() {
+        // A panic cannot unwind out of an `extern "C"` function, so this
+        // aborts the child.
+        unsafe { invalid(1000) };
+        return;
+    }
+    let exe = std::env::current_exe().expect("a test binary has a path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "a_computed_goto_to_no_label_stops",
+            "--nocapture",
+        ])
+        .args(["--test-threads", "1"])
+        .env(CHILD, "1")
+        .output()
+        .expect("the test binary must be runnable");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("entered unreachable code"), "{stderr}");
 }
 
 // ---------------------------------------------------------------------------

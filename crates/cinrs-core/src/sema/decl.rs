@@ -2765,6 +2765,9 @@ impl Sema<'_> {
         // would find — is the function's, so the range of ids the body used is
         // what code generation names its locals from.
         let first_object = self.program.objects.len() as u32;
+        // A function the body defines — a nested one — could name a table of
+        // label addresses this function's own body does not show.
+        let first_function = self.program.functions.len();
         // `let a: c_char = __cinrs_kr_a as c_char;` — C99 6.9.1p10 gives an
         // old-style parameter the type its own declaration gave it, while the
         // caller passed the promoted one, which is what the item takes.
@@ -2850,15 +2853,37 @@ impl Sema<'_> {
             // The labels of *this* function whose address a `&&label` took.
             // `Sema::label_addrs` is unit-wide, so it is `Sema::labels` — which
             // holds only this function's — that picks them out; sorting is
-            // what keeps the numbering of a graph that has such a block
-            // reachable through nothing else from depending on a hash order.
-            let mut pinned: Vec<ir::LabelId> = self
+            // what keeps the number each one's address is from depending on a
+            // hash order.
+            let mut taken: Vec<ir::LabelId> = self
                 .labels
                 .values()
                 .map(|label| label.id)
                 .filter(|id| self.label_addrs.contains(id))
                 .collect();
-            pinned.sort_unstable();
+            taken.sort_unstable();
+            // A dispatch table whose contents are known for good has its
+            // labels numbered first, in its order, so that `table[e]` is
+            // `e + 1` without reading it; see `crate::cfg`'s table fold.
+            let table = self.foldable_table(&body, &taken, first_object, first_function);
+            if let Some((_, order)) = &table {
+                taken.retain(|id| !order.contains(id));
+                let mut ordered = order.clone();
+                ordered.append(&mut taken);
+                taken = ordered;
+            }
+            let table = table.map(|(object, _)| object);
+            // Where a computed `goto` puts its target on the way to the
+            // dispatch; see `crate::cfg`. Any integer type holds `1..=n`.
+            let goto_value = (!taken.is_empty()).then(|| {
+                self.new_object(
+                    "__cinrs_goto",
+                    Ty::ULong,
+                    Storage::Automatic,
+                    false,
+                    def.body.range,
+                )
+            });
             // What each label was called, so that a loop the relooper recovers
             // can carry the C name of the label it heads.
             let names: HashMap<ir::LabelId, String> = self
@@ -2870,7 +2895,9 @@ impl Sema<'_> {
                 body,
                 &params,
                 &self.program.objects,
-                &pinned,
+                &taken,
+                goto_value,
+                table,
                 &names,
             ))
         } else {
@@ -2962,8 +2989,8 @@ impl Sema<'_> {
     /// something the generated `static mut` item can hold.
     pub(super) fn static_init(&mut self, expr: Expr, what: &str) -> Option<Expr> {
         // GNU's *label difference*, `&&a - &&b`: an integer constant in GCC,
-        // and the difference of two state numbers here. Neither is known until
-        // the [control-flow graph](crate::cfg) has been numbered, so it goes
+        // and the difference of two label numbers here. Neither is known until
+        // the function's taken labels have all been seen, so it goes
         // through unevaluated and code generation folds it — which Rust does
         // in a `const` too, the two operands being literals by then.
         if is_label_difference(&expr) {
@@ -3321,14 +3348,77 @@ impl Sema<'_> {
 ///
 /// `&&a - &&b` is an integer constant expression in GCC — the whole point of
 /// the idiom being a `static` table of offsets — and here it is the difference
-/// of two state numbers, which nothing knows until the graph has been
-/// numbered. A conversion around it changes nothing: the array the table goes
+/// of two label numbers, which nothing knows until the function's labels have
+/// all been seen. A conversion around it changes nothing: the array the table goes
 /// into is usually narrower than `ptrdiff_t`.
 fn is_label_difference(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Cast(inner) => is_label_difference(inner),
         ExprKind::PtrDiff { lhs, rhs } => is_label_address(lhs) && is_label_address(rhs),
         _ => false,
+    }
+}
+
+impl Sema<'_> {
+    /// The dispatch table of label addresses whose contents are known for
+    /// good, and its labels in order; see `crate::cfg`'s table fold.
+    ///
+    /// A `static` the body defined (an object from `first_object` on) whose
+    /// initialiser is the addresses of distinct labels of `taken` and nothing
+    /// else, which the body only ever reads as `table[e]` and no other
+    /// static's initialiser names — in a function that defines no function of
+    /// its own (one from `first_function` on), which could name it too.
+    fn foldable_table(
+        &self,
+        body: &[Stmt],
+        taken: &[ir::LabelId],
+        first_object: u32,
+        first_function: usize,
+    ) -> Option<(ObjectId, Vec<ir::LabelId>)> {
+        if taken.is_empty()
+            || self.program.functions[first_function..]
+                .iter()
+                .any(|func| func.body.is_some())
+        {
+            return None;
+        }
+        'candidates: for var in &self.program.statics {
+            if var.object.0 < first_object
+                || !matches!(
+                    self.program.object(var.object).storage,
+                    Storage::Static { .. }
+                )
+            {
+                continue;
+            }
+            let ExprKind::ArrayLit(items) = &var.init.kind else {
+                continue;
+            };
+            let mut order: Vec<ir::LabelId> = Vec::with_capacity(items.len());
+            for item in items {
+                let mut item = item;
+                while let ExprKind::Cast(inner) = &item.kind {
+                    item = inner;
+                }
+                let ExprKind::LabelAddr(id) = item.kind else {
+                    continue 'candidates;
+                };
+                if !taken.contains(&id) || order.contains(&id) {
+                    continue 'candidates;
+                }
+                order.push(id);
+            }
+            if order.is_empty()
+                || ir::stmts_use_object_beyond_reads(body, var.object)
+                || self.program.statics.iter().any(|other| {
+                    other.object != var.object && ir::mentions_object(&other.init, var.object)
+                })
+            {
+                continue;
+            }
+            return Some((var.object, order));
+        }
+        None
     }
 }
 

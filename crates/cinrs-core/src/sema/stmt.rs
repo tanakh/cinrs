@@ -159,8 +159,8 @@ impl Sema<'_> {
                 ),
                 Escape::Leaves(what) if cfg_mode => format!(
                     "{what} inside a statement expression is not supported in a function whose \
-                     jumps Rust cannot express: the function is lowered into a state machine, \
-                     and there is no enclosing loop left to leave"
+                     jumps Rust cannot express: the function is lowered through a control-flow \
+                     graph, and a jump out of the middle of an expression is not an edge of it"
                 ),
                 Escape::Leaves(_) => continue,
             };
@@ -523,11 +523,11 @@ impl Sema<'_> {
         }
     }
 
-    /// GNU's `&&label`, whose value is the state number the label stands for.
+    /// GNU's `&&label`, whose value is the label's number among the labels of
+    /// its function whose address is taken.
     ///
-    /// Taking the address is what *pins* the label: its block keeps a number
-    /// of its own, and is a possible target of every computed `goto` in the
-    /// function. See [`crate::cfg`].
+    /// Taking the address is what makes the label a `case` of every computed
+    /// `goto`'s dispatch in the function. See [`crate::cfg`].
     pub(super) fn label_address(&mut self, label: &ast::Ident, range: SourceRange) -> Option<Expr> {
         let Some(entry) = self.labels.get(&label.name) else {
             self.report_missing_label(label, true);
@@ -1010,8 +1010,8 @@ impl Sema<'_> {
     ///
     /// Three things force the graph: a `goto` that is not an outward jump —
     /// [`regions`](crate::regions) is what decides which are — and GNU's
-    /// computed `goto`, which jumps to a value; `&&label`, whose *value* is
-    /// the state number the label stands for; and a `case` or `default` label
+    /// computed `goto`, which jumps to a value; `&&label`, whose *value* only
+    /// that `goto`'s dispatch gives a meaning; and a `case` or `default` label
     /// that is not a direct child of its `switch` body, which the
     /// fallthrough-group lowering cannot express. Everything else keeps the
     /// structured form, whose output reads like the C it came from.
@@ -1203,7 +1203,8 @@ fn block_needs_cfg(block: &ast::Block, switch_depth: u32, at_top: bool) -> bool 
 fn stmt_needs_cfg(stmt: &ast::Stmt, switch_depth: u32, at_top: bool) -> bool {
     match &stmt.kind {
         // An ordinary `goto` is [`crate::regions`]'s to answer for; a computed
-        // one jumps to a state number, which only the graph has.
+        // one is a `switch` over labels anywhere in the function, which only
+        // the graph can reach.
         ast::StmtKind::GotoPtr(_) => true,
         // A chain of labels on one statement is as much a direct child of the
         // `switch` as the statement itself.

@@ -31,7 +31,7 @@ cinrs::gnu99! {
     }
 
     /* The same thing in a function that jumps, where every local — the hidden
-       storage included — is bound at the top of the state machine. */
+       storage included — is bound at the top of the function. */
     long jumpy(int n) {
         long total = 0;
         char buf[n];

@@ -1690,8 +1690,10 @@ fn an_over_aligned_object_lives_inside_a_wrapper() {
     ));
 }
 
+/// GCC's lowering: `&&label` is the label's number among those whose address
+/// is taken, and every `goto *e` stores `e` and goes to one `match` on it.
 #[test]
-fn a_computed_goto_is_a_store_to_the_state() {
+fn a_computed_goto_is_a_match_on_the_label_number() {
     insta::assert_snapshot!(generate(
         r"
         int interp(int n) {
@@ -1705,6 +1707,51 @@ fn a_computed_goto_is_a_store_to_the_state() {
             goto *table[i];
         done:
             return total;
+        }
+        "
+    ));
+}
+
+/// The dispatch-table idiom of a bytecode interpreter: a `goto *` at the end
+/// of every handler. It comes out as the loop its `switch`-based twin would
+/// be — one `match` on the handler's number, inside one loop.
+#[test]
+fn an_interpreter_with_a_dispatch_table_is_a_match_in_a_loop() {
+    insta::assert_snapshot!(generate(
+        r"
+        int run(const unsigned char *code) {
+            static void *dispatch[] = { &&op_push, &&op_add, &&op_halt };
+            int stack[16];
+            int sp = 0;
+            const unsigned char *ip = code;
+        #define DISPATCH() goto *dispatch[*ip++]
+            DISPATCH();
+        op_push:
+            stack[sp++] = *ip++;
+            DISPATCH();
+        op_add:
+            sp--;
+            stack[sp - 1] += stack[sp];
+            DISPATCH();
+        op_halt:
+            return stack[sp - 1];
+        }
+        "
+    ));
+}
+
+/// `goto *p` through a pointer that holds one of two label addresses.
+#[test]
+fn a_goto_through_a_pointer_is_a_match_on_it() {
+    insta::assert_snapshot!(generate(
+        r"
+        int pick(int n) {
+            void *p = n ? &&yes : &&no;
+            goto *p;
+        yes:
+            return 1;
+        no:
+            return 0;
         }
         "
     ));

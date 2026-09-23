@@ -260,8 +260,8 @@ struct Parser<'a> {
     /// How many `&&label` operands have been parsed.
     ///
     /// A function that takes a label's address has to be lowered through a
-    /// [control-flow graph](crate::cfg), because the value of `&&label` *is*
-    /// the state number the label stands for. That decision is made from the
+    /// [control-flow graph](crate::cfg), where the `goto *` that jumps through
+    /// the value is a `switch` over those labels. That decision is made from the
     /// statements of the body ([`crate::sema::Sema::needs_cfg`]), and
     /// `&&label` is an expression — it can sit in an initialiser, a call
     /// argument or a `static` table — so the one place that sees all of them

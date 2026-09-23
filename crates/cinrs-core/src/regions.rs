@@ -426,7 +426,7 @@ impl<'a> Scan<'a> {
             // A label the walk has not entered the list of is a jump into a
             // block, which nothing here can express.
             ast::StmtKind::Goto(label) => self.knows(&label.name).then_some(()),
-            // Its target is a state number; see [`crate::cfg`].
+            // Its target is a run-time value; see [`crate::cfg`].
             ast::StmtKind::GotoPtr(_) => None,
             ast::StmtKind::Compound(block) => self.list(&entries(&block.items)),
             // A label chain, a `case` and a `default` all stand on a statement

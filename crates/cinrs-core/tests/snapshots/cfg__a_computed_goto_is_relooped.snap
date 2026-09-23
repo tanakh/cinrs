@@ -1,0 +1,25 @@
+---
+source: crates/cinrs-core/tests/cfg.rs
+expression: out
+---
+pub unsafe extern "C" fn f(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+    unsafe {
+        let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
+        __cinrs_goto = ((n & 1) as ::core::ffi::c_ulong).wrapping_add(1);
+        match __cinrs_goto {
+            1 => {
+                return 1;
+            }
+            2 => {
+                return 2;
+            }
+            _ => {
+                if ::core::cfg!(debug_assertions) {
+                    ::core::unreachable!()
+                } else {
+                    unsafe { ::core::hint::unreachable_unchecked() }
+                }
+            }
+        }
+    }
+}

@@ -6,8 +6,8 @@
 //! The two exceptions are the variable length array and the `alloca`
 //! emulations, which allocate; `no_std_alloc.rs` is those two with
 //! `#pragma cinrs no_std` and an `alloc` crate to take them from. Everything
-//! else is here: records and bit-fields, raw pointers, `goto` (a state machine
-//! over basic blocks), a `switch` with fallthrough, string literals, a
+//! else is here: records and bit-fields, raw pointers, `goto` (a graph of
+//! basic blocks), a `switch` with fallthrough, string literals, a
 //! compound literal, a statement expression, `__builtin_*` forms,
 //! `__attribute__((constructor))` and calls into the C library through the
 //! bundled headers — the library is linked, but no Rust `std` is.

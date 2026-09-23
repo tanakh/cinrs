@@ -95,8 +95,8 @@ becomes a labelled block or a labelled loop named after the C label, so
 cannot make that way (into a block, or two labels whose regions would overlap)
 goes through a control-flow graph, which a relooper reads back into Rust's own
 loops and `match`es — a state variable is left only where the C really is
-irreducible, a cycle with two heads, and a computed `goto` is the one thing
-still lowered as a state machine over block numbers.
+irreducible, a cycle with two heads, and a computed `goto` is a `switch` over
+the labels whose address is taken, relooped like any other.
 
 ## Character sets, extended identifiers and Unicode literals
 
@@ -348,9 +348,9 @@ Statement expressions (`({ … })`), `typeof`, `__attribute__((packed))` and
 and glib's `g_autofree` are made of — `#pragma pack`, `case 1 ... 5:`, range
 designators, flexible array members (initialised ones included, for an object
 with static storage duration), **labels as values** — `&&label` and the computed
-`goto *e`, whose value is the state number the label stands for in the state
-machine such a function is lowered into, which is the one lowering that still
-needs one — `asm` labels, `constructor`/`destructor`,
+`goto *e`, lowered as GCC lowers it: `&&label` is the label's number among
+those whose address is taken, and `goto *e` a `switch` on it, so an
+interpreter's dispatch table becomes a `match` in a loop — `asm` labels, `constructor`/`destructor`,
 `__func__`, casts to a union type, **nested functions** — lambda-lifted to a
 private file-scope item that takes a pointer to each enclosing local it uses, so
 a store inside one is visible outside it, and no trampoline is written onto the

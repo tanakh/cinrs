@@ -1305,8 +1305,8 @@ pub struct FunctionDef {
     /// Whether the body takes the address of a label — GNU's `&&label`.
     ///
     /// Such a function is lowered through a [control-flow
-    /// graph](crate::cfg), because the value of `&&label` is the state number
-    /// its block was given. The parser records it because `&&label` is an
+    /// graph](crate::cfg), where a computed `goto` is a `switch` over the
+    /// labels whose address is taken. The parser records it because `&&label` is an
     /// *expression* and may sit anywhere one may — an initialiser, an
     /// argument, a block-scope `static`'s table — while the rest of the
     /// decision is read off the statements; see

@@ -1,0 +1,109 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        int run(const unsigned char *code) {\n            static void *dispatch[] = { &&op_push, &&op_add, &&op_halt };\n            int stack[16];\n            int sp = 0;\n            const unsigned char *ip = code;\n        #define DISPATCH() goto *dispatch[*ip++]\n            DISPATCH();\n        op_push:\n            stack[sp++] = *ip++;\n            DISPATCH();\n        op_add:\n            sp--;\n            stack[sp - 1] += stack[sp];\n            DISPATCH();\n        op_halt:\n            return stack[sp - 1];\n        }\n        \")"
+---
+mod __cinrs_unit_d6c7bdfa {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    static mut __cinrs_static_d6c7bdfa_run_dispatch: [*mut ::core::ffi::c_void; 3] = [
+        1usize as *mut ::core::ffi::c_void,
+        2usize as *mut ::core::ffi::c_void,
+        3usize as *mut ::core::ffi::c_void,
+    ];
+    pub unsafe extern "C" fn run(
+        mut code: *const ::core::ffi::c_uchar,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
+            let mut stack: [::core::ffi::c_int; 16] = ::core::mem::zeroed::<
+                [::core::ffi::c_int; 16],
+            >();
+            let mut sp: ::core::ffi::c_int = 0;
+            let mut ip: *const ::core::ffi::c_uchar = ::core::ptr::null::<
+                ::core::ffi::c_uchar,
+            >();
+            sp = 0;
+            ip = code;
+            __cinrs_goto = (({
+                let __cinrs_tmp1 = ({
+                    let __cinrs_tmp0 = ip;
+                    ip = ip.offset(1);
+                    __cinrs_tmp0
+                });
+                (*__cinrs_tmp1)
+            }) as ::core::ffi::c_ulong)
+                .wrapping_add(1);
+            'dispatch: loop {
+                match __cinrs_goto {
+                    1 => {
+                        let __cinrs_tmp3 = (&raw mut stack)
+                            .cast::<::core::ffi::c_int>()
+                            .offset(
+                                ({
+                                    let __cinrs_tmp2 = sp;
+                                    sp = sp.wrapping_add(1);
+                                    __cinrs_tmp2
+                                }) as ::core::primitive::isize,
+                            );
+                        (*__cinrs_tmp3) = ({
+                            let __cinrs_tmp5 = ({
+                                let __cinrs_tmp4 = ip;
+                                ip = ip.offset(1);
+                                __cinrs_tmp4
+                            });
+                            (*__cinrs_tmp5)
+                        }) as ::core::ffi::c_int;
+                        __cinrs_goto = (({
+                            let __cinrs_tmp7 = ({
+                                let __cinrs_tmp6 = ip;
+                                ip = ip.offset(1);
+                                __cinrs_tmp6
+                            });
+                            (*__cinrs_tmp7)
+                        }) as ::core::ffi::c_ulong)
+                            .wrapping_add(1);
+                    }
+                    2 => {
+                        sp = sp.wrapping_sub(1);
+                        let __cinrs_tmp8 = (&raw mut stack)
+                            .cast::<::core::ffi::c_int>()
+                            .offset(sp.wrapping_sub(1) as ::core::primitive::isize);
+                        (*__cinrs_tmp8) = (*__cinrs_tmp8)
+                            .wrapping_add({
+                                let __cinrs_tmp9 = (&raw mut stack)
+                                    .cast::<::core::ffi::c_int>()
+                                    .offset(sp as ::core::primitive::isize);
+                                (*__cinrs_tmp9)
+                            });
+                        __cinrs_goto = (({
+                            let __cinrs_tmp11 = ({
+                                let __cinrs_tmp10 = ip;
+                                ip = ip.offset(1);
+                                __cinrs_tmp10
+                            });
+                            (*__cinrs_tmp11)
+                        }) as ::core::ffi::c_ulong)
+                            .wrapping_add(1);
+                    }
+                    3 => {
+                        return {
+                            let __cinrs_tmp12 = (&raw mut stack)
+                                .cast::<::core::ffi::c_int>()
+                                .offset(sp.wrapping_sub(1) as ::core::primitive::isize);
+                            (*__cinrs_tmp12)
+                        };
+                    }
+                    _ => {
+                        if ::core::cfg!(debug_assertions) {
+                            ::core::unreachable!()
+                        } else {
+                            unsafe { ::core::hint::unreachable_unchecked() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_d6c7bdfa::*;

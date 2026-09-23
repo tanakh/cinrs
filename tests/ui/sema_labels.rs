@@ -49,7 +49,7 @@ cinrs::gnu99! {
 
     /* Leaving an enclosing loop from inside a statement expression is fine —
        it is a Rust block, and `break` in one means what C says — until the
-       function is lowered into a state machine, where there is no loop left. */
+       function is lowered through a control-flow graph, which it cannot leave. */
     int leaving_a_loop(int n) {
         void *entry = &&spin;
         (void)entry;

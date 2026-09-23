@@ -1105,8 +1105,8 @@ struct Codegen<'a> {
     /// therefore takeable. One is generated per intrinsic, private to the
     /// unit's module, and the same `FuncId` used twice shares it.
     address_taken: RefCell<Vec<ir::FuncId>>,
-    /// The state number of every label a `&&label` took the address of, over
-    /// the whole unit.
+    /// The number of every label a `&&label` took the address of — the value
+    /// of its address — over the whole unit.
     ///
     /// A [`ir::LabelId`] is unique across the translation unit, which is what
     /// makes one map enough: a block-scope `static void *table[] = { &&a };`
@@ -1170,9 +1170,7 @@ impl<'a> Codegen<'a> {
         let mut label_states = HashMap::new();
         for func in &program.functions {
             if let Some(ir::Body::Cfg(cfg)) = &func.body {
-                for (id, block) in &cfg.labels {
-                    label_states.insert(*id, block.0);
-                }
+                label_states.extend(cfg.labels.iter().map(|(id, number)| (*id, *number)));
             }
         }
         Self {
@@ -2988,8 +2986,9 @@ impl<'a> Codegen<'a> {
         Value::new(quote_spanned! {span=> { #setup #tokens } }, prec::BLOCK)
     }
 
-    /// GNU's `&&label`: the state number the label's block was given, cast to
-    /// the pointer type the expression has.
+    /// GNU's `&&label`: the number the label was given among those of its
+    /// function whose address is taken — from 1, so never a null pointer —
+    /// cast to the pointer type the expression has. See [`crate::cfg`].
     ///
     /// Out of line — like [`Codegen::label_difference`] — because
     /// [`Codegen::expr_value`] recurses once per operator and every arm's
@@ -3004,7 +3003,7 @@ impl<'a> Codegen<'a> {
         Value::new(quote_spanned! {span=> #literal as #target }, prec::CAST).type_end(true)
     }
 
-    /// GNU's `&&a - &&b`, folded on the two state numbers.
+    /// GNU's `&&a - &&b`, folded on the two labels' numbers.
     #[inline(never)]
     fn label_difference(&self, lhs: &Expr, rhs: &Expr, ty: Ty, span: Span) -> Value {
         let left = self.label_state_literal(lhs, span);
@@ -3017,8 +3016,8 @@ impl<'a> Codegen<'a> {
         .type_end(true)
     }
 
-    /// The state number a [label address](ir::ExprKind::LabelAddr) stands for,
-    /// as an `isize` literal.
+    /// The number a [label address](ir::ExprKind::LabelAddr) stands for, as an
+    /// `isize` literal.
     fn label_state_literal(&self, expr: &Expr, span: Span) -> TokenStream {
         let id = label_state(expr).expect("a label address");
         let state = self.label_states.get(&id).copied().unwrap_or(0);
@@ -3050,8 +3049,7 @@ impl<'a> Codegen<'a> {
     ///
     /// Every local is bound at the top — Rust has no way to jump over a `let`
     /// — and then either the structured shapes [the relooper](crate::reloop)
-    /// recovered, or, for a function whose labels have addresses, the state
-    /// machine.
+    /// recovered, or, for a graph it gave up on, the state machine.
     fn cfg_body(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
         let mut out = self.cfg_locals(cfg);
         match &cfg.shape {
@@ -3094,9 +3092,8 @@ impl<'a> Codegen<'a> {
         out
     }
 
-    /// The graph as a state machine, for a function whose labels have
-    /// addresses: `&&label` *is* a block's number, so there is nothing else it
-    /// can be.
+    /// The graph as a state machine, for one [the relooper](crate::reloop) gave
+    /// up on: shapes nested deeper than `rustc` parses.
     ///
     /// Every arm of the `match` ends in `continue 'cfg` or in a `return`, so
     /// the loop never finishes and the function needs no value after it.
@@ -3138,10 +3135,9 @@ impl<'a> Codegen<'a> {
         match &block.term {
             Terminator::Jump { range, .. }
             | Terminator::Switch { range, .. }
-            | Terminator::IndirectJump { range, .. }
             | Terminator::Return { range, .. } => self.sp(*range),
             Terminator::Branch { cond, .. } => self.sp(cond.range),
-            Terminator::Unreachable => fallback,
+            Terminator::Unreachable | Terminator::InvalidTarget => fallback,
         }
     }
 
@@ -3152,21 +3148,6 @@ impl<'a> Codegen<'a> {
             Terminator::Jump { target, range } => {
                 let jump = self.enter_block(*target, self.sp(*range));
                 out.extend(quote_spanned! {span=> #jump continue #label; });
-            }
-            // GNU's computed `goto *e`: the pointer *is* the state number the
-            // label's block was given, so the jump is a store and another turn
-            // round the dispatch. A value that names no block lands on the
-            // `unreachable!()` arm, which is the undefined behaviour C had.
-            Terminator::IndirectJump { target, range, .. } => {
-                let gspan = self.sp(*range);
-                let state = self.state_ident();
-                let pointer = self.expr(target).at(prec::CAST, gspan);
-                let usize_ty = primitive_ty("usize", gspan);
-                let u32_ty = primitive_ty("u32", gspan);
-                out.extend(quote_spanned! {gspan=>
-                    #state = #pointer as #usize_ty as #u32_ty;
-                    continue #label;
-                });
             }
             Terminator::Branch {
                 cond,
@@ -3223,6 +3204,7 @@ impl<'a> Codegen<'a> {
             Terminator::Unreachable => {
                 out.extend(quote_spanned! {span=> ::core::unreachable!(); });
             }
+            Terminator::InvalidTarget => out.extend(invalid_target(span)),
         }
         out
     }
@@ -3465,10 +3447,10 @@ impl<'a> Codegen<'a> {
                     None => out.extend(quote_spanned! {rspan=> return; }),
                 }
             }
-            // A computed `goto` keeps the state machine; see [`crate::reloop`].
-            Terminator::IndirectJump { .. } | Terminator::Unreachable => {
+            Terminator::Unreachable => {
                 out.extend(quote_spanned! {span=> ::core::unreachable!(); });
             }
+            Terminator::InvalidTarget => out.extend(invalid_target(span)),
         }
         out
     }
@@ -4548,10 +4530,10 @@ impl<'a> Codegen<'a> {
             }
             ExprKind::AddrOf(place) => self.address_of(place, expr.ty, span),
             ExprKind::FuncAddr(id) => self.func_addr(*id, span),
-            // GNU's `&&label`. The value is the state number the label's block
-            // was given, cast to the pointer type the expression has — which
-            // is what makes `goto *` a store to the state variable, and what
-            // lets a dispatch table be an ordinary array of `void *`.
+            // GNU's `&&label`. The value is the label's number, cast to the
+            // pointer type the expression has — which is what `goto *`'s
+            // dispatch matches on, and what lets a dispatch table be an
+            // ordinary array of `void *`.
             ExprKind::LabelAddr(id) => self.label_address(*id, expr.ty, span),
             ExprKind::Assign { .. } => self.assign_chain(expr),
             ExprKind::CompoundAssign {
@@ -8037,6 +8019,22 @@ fn entry_assignment(exit: &reloop::Exit, index: usize, span: Span) -> TokenStrea
 }
 
 /// A state number, which is a `u32` because the state variable is.
+/// The `default` of a computed `goto`'s dispatch: a value that is no label's
+/// number, which is undefined behaviour in C.
+///
+/// A build with debug assertions — the user's, since `cfg!` is expanded in
+/// their crate — panics, which catches the bug; any other build assumes it
+/// away, as GCC does, which is what lets the `match` be a bare jump table.
+fn invalid_target(span: Span) -> TokenStream {
+    quote_spanned! {span=>
+        if ::core::cfg!(debug_assertions) {
+            ::core::unreachable!()
+        } else {
+            unsafe { ::core::hint::unreachable_unchecked() }
+        }
+    }
+}
+
 fn state_literal(value: usize, span: Span) -> TokenStream {
     let mut literal = Literal::u32_unsuffixed(value as u32);
     literal.set_span(span);

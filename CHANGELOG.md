@@ -268,6 +268,23 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **A computed goto is a switch over the labels whose address is taken.**
+  That is GCC's own lowering: `&&label` is the label's number among them,
+  from 1 (so never a null pointer), and every `goto *e` of a function stores
+  `e` and goes to one shared `match` on it, whose `default` is
+  `unreachable!()`. The graph then holds only ordinary jumps, so the relooper
+  reads it like any other, and the whole-function state machine is left only
+  for a graph nested deeper than `rustc` parses. A `static` dispatch table
+  that is only ever read is folded away: its labels are numbered in its
+  order, so `goto *table[op]` is a `match` on `op`. An invalid target panics
+  in a build with debug assertions and is `unreachable_unchecked` otherwise,
+  as in GCC. Wren's interpreter, whose `DISPATCH()` is
+  `goto *dispatchTable[*ip++]` at the end of every handler, went through the
+  central `match` twice per opcode on the machine and ran its benchmarks at
+  1.3–5.6× of gcc (8.6 G instructions on `fib`); it now runs at 0.89–1.28×
+  of gcc and 0.93–1.09× of its own `switch` build (2.37 G instructions,
+  against 2.34 G and gcc's 2.08 G).
+
 * **cinrs presents itself as GCC 14.2, and as `__CINRS__`.** `__GNUC__`,
   `__GNUC_MINOR__` and `__GNUC_PATCHLEVEL__` are 14, 2 and 0, up from Clang's
   4.2.1, because that is the version real programs gate on: libdeflate

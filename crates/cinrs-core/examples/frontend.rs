@@ -165,7 +165,10 @@ fn main() {
 /// into labelled blocks and loops. Tier 2 is the graph read back into loops,
 /// `if`s and `match`es by `cinrs_core::reloop`, and tier 3 the same with a
 /// state variable for an irreducible region. Tier 4 is the whole-function state
-/// machine, which only a `&&label` still needs.
+/// machine, which only a graph nested deeper than `rustc` parses still needs.
+/// A function that takes a label's address (`&&label`) goes through the graph,
+/// its computed `goto`s a `switch` over those labels; how many of the tier 2
+/// and 3 functions do is printed too.
 fn report_tiers(program: &cinrs_core::Program) {
     use cinrs_core::ir::Body;
 
@@ -173,7 +176,13 @@ fn report_tiers(program: &cinrs_core::Program) {
     let mut relooped = 0usize;
     let mut irreducible: Vec<(&str, u32)> = Vec::new();
     let mut machines: Vec<&str> = Vec::new();
+    let mut label_values: Vec<&str> = Vec::new();
     for func in &program.functions {
+        if let Some(Body::Cfg(cfg)) = &func.body
+            && !cfg.labels.is_empty()
+        {
+            label_values.push(func.name.as_str());
+        }
         match &func.body {
             None => {}
             Some(Body::Structured(_)) => structured += 1,
@@ -192,6 +201,13 @@ fn report_tiers(program: &cinrs_core::Program) {
     println!("  tier 2  relooped:                  {relooped}");
     println!("  tier 3  relooped, state variable:  {}", irreducible.len());
     println!("  tier 4  whole-function machine:    {}", machines.len());
+    println!(
+        "  taking a label's address:          {}",
+        label_values.len()
+    );
+    for name in &label_values {
+        println!("    &&label: {name}");
+    }
     for (name, states) in &irreducible {
         println!("    tier 3: {name} ({states} irreducible region(s))");
     }

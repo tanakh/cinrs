@@ -396,29 +396,33 @@ constant condition excludes is not reported any more. And the large one is
 speed, below.
 
 **Speed.** Upstream's `test/benchmark/*.wren`, one whole run of the VM per
-script, ms:
+script, ms, the median of five runs interleaved across the VMs (identical
+output from all four):
 
 | script | gcc | clang | cinrs, computed `goto` | cinrs, `switch` |
 | --- | ---: | ---: | ---: | ---: |
-| api_call | 27.5 | 27.4 | 112.8 | 27.5 |
-| api_foreign_method | 146.4 | 150.5 | 603.6 | 150.6 |
-| binary_trees | 138.3 | 119.2 | 410.7 | 146.4 |
-| binary_trees_gc | 357.0 | 294.3 | 591.9 | 308.9 |
-| delta_blue | 58.8 | 65.1 | 299.0 | 73.4 |
-| fib | 121.4 | 123.4 | 572.1 | 113.1 |
-| fibers | 37.9 | 33.7 | 50.3 | 31.8 |
-| for | 38.0 | 35.8 | 210.8 | 40.0 |
-| map_numeric | 812.5 | 761.5 | 1350.0 | 782.2 |
-| map_string | 102.6 | 86.0 | 171.3 | 100.4 |
-| method_call | 58.9 | 52.7 | 283.5 | 65.0 |
-| string_equals | 77.6 | 83.8 | 435.6 | 85.8 |
+| api_call | 27.5 | 25.4 | 25.5 | 27.5 |
+| api_foreign_method | 146.4 | 150.7 | 150.6 | 144.1 |
+| binary_trees | 120.9 | 121.2 | 127.7 | 125.4 |
+| binary_trees_gc | 346.1 | 294.5 | 307.4 | 319.6 |
+| delta_blue | 58.8 | 64.9 | 75.4 | 71.2 |
+| fib | 121.5 | 123.1 | 119.3 | 113.1 |
+| fibers | 33.8 | 33.7 | 33.7 | 33.8 |
+| for | 37.9 | 35.9 | 40.0 | 39.9 |
+| map_numeric | 768.7 | 746.4 | 750.7 | 746.9 |
+| map_string | 88.0 | 94.2 | 92.3 | 92.2 |
+| method_call | 58.8 | 52.6 | 73.2 | 67.1 |
+| string_equals | 77.7 | 84.0 | 81.7 | 81.6 |
 
-With `switch` dispatch the `cinrs` VM runs at the C compilers' speed
-(0.84–1.25× of gcc). With computed `goto` — upstream's default — it runs at
-1.3–5.6×, and `perf` says why: a function that takes a label's address is
-lowered to a whole-function state machine (the one tier the relooper does
-not take), so every opcode goes through the central `match` twice, 8.6 G
-instructions against gcc's 2.1 G on `fib`, with no more branch misses. The
-right lowering is GCC's own: `goto *p` is a `switch` over the labels whose
-address is taken, after which the function has only ordinary `goto`s for
-the relooper — on the list.
+Both `cinrs` builds run at the C compilers' speed: computed `goto` —
+upstream's default — at 0.89–1.28× of gcc, and 0.93–1.09× of the `switch`
+build. It did not start out that way. A function that took a label's address
+used to be lowered to a whole-function state machine, where every opcode went
+through the central `match` twice: 1.3–5.6× of gcc, 8.6 G instructions against
+gcc's 2.1 G on `fib`, with no more branch misses. It now gets GCC's own
+lowering — `goto *p` is a `switch` over the labels whose address is taken,
+after which the function has only ordinary jumps for the relooper — and, since
+`dispatchTable` is only ever read, its `goto *dispatchTable[op]` is a `match`
+on `op` itself, [the table fold](translation.md#labels-as-values): 2.37 G
+instructions on `fib`, against 2.34 G for the `switch` build and 2.08 G for
+gcc's.

@@ -65,14 +65,18 @@
 //!
 //! # Giving up
 //!
-//! Three things keep the [state machine](crate::cfg) alive. GNU's `&&label` is a
-//! *state number*, so a function that takes a label's address is lowered the
-//! old way, whole. A `switch` whose `case`s fall through one into the next gives
-//! each of them a labelled block, and past two hundred of those `rustc`'s own
-//! parser runs out of stack, where the machine's flat `match` does not. And
-//! the shapes are checked before they are handed over: if every block is not in
-//! the tree exactly once, or if some jump has nothing to break to, [`plan`]
-//! answers `None` and the state machine runs instead of something subtly wrong.
+//! Two things keep the [state machine](crate::cfg) alive. A `switch` whose
+//! `case`s fall through one into the next gives each of them a labelled block,
+//! and past two hundred of those `rustc`'s own parser runs out of stack, where
+//! the machine's flat `match` does not. And the shapes are checked before they
+//! are handed over: if every block is not in the tree exactly once, or if some
+//! jump has nothing to break to, [`plan`] answers `None` and the state machine
+//! runs instead of something subtly wrong.
+//!
+//! GNU's computed `goto` is not one of them: [`cfg`](crate::cfg) has already
+//! made it a `switch` over the labels whose address is taken, so an
+//! interpreter's dispatch loop is a Loop around a Simple whose `match` holds
+//! the handlers — the shape the same interpreter written with a `switch` has.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -198,20 +202,12 @@ pub struct Plan {
 ///
 /// `names` is the C label each block stands at, where it stands at one, which
 /// is what the loops are named after. `None` means the [state
-/// machine](crate::cfg) has to be used: a function whose labels have addresses,
-/// or — which has not been observed, and is checked for rather than trusted —
-/// one whose shapes would not account for every block or would leave a jump
-/// with nothing to break to.
+/// machine](crate::cfg) has to be used: a function whose shapes would nest
+/// deeper than `rustc` parses, or — which has not been observed, and is checked
+/// for rather than trusted — one whose shapes would not account for every block
+/// or would leave a jump with nothing to break to.
 pub fn plan(blocks: &[BasicBlock], names: &HashMap<BlockId, String>) -> Option<Plan> {
     if blocks.is_empty() {
-        return None;
-    }
-    // A computed `goto` jumps to a number, and the number is the state a block
-    // was given; there is no structured form of that.
-    if blocks
-        .iter()
-        .any(|block| matches!(block.term, Terminator::IndirectJump { .. }))
-    {
         return None;
     }
     let mut relooper = Relooper::new(blocks, names);

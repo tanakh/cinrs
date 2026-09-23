@@ -6,8 +6,8 @@
 //! CFG path **at all** — most `goto`s do not, and
 //! [`cinrs_core::regions`] is where that line is drawn — that the
 //! cleanups leave a graph with no block that only forwards to another and none
-//! that cannot be reached, and that a label whose address GNU's `&&label` took
-//! keeps a block — and therefore a number — of its own through all three.
+//! that cannot be reached, and that a computed `goto` is one `switch` over the
+//! labels whose address GNU's `&&label` took.
 //!
 //! It also holds [the table](every_shape_is_lowered_by_the_tier_it_needs) of
 //! which of the four lowerings each shape of jump needs, and a snapshot of what
@@ -77,7 +77,7 @@ enum Tier {
     /// with two heads, which no arrangement of Rust's blocks can enter twice.
     StateVariable,
     /// The whole function as one `match` over block numbers, which only a
-    /// `&&label` still needs.
+    /// graph whose shapes nest deeper than `rustc` parses still needs.
     Machine,
 }
 
@@ -141,30 +141,28 @@ fn check_invariants(cfg: &Cfg) {
     let mut reachable = vec![false; count];
     reachable[0] = true;
     let mut stack = vec![0usize];
-    // A label whose address was taken keeps a block of its own, which a
-    // computed `goto` may be the only way into — and a function may take an
-    // address without ever jumping through it. Such a block is a root of the
-    // walk, exactly as it is in the lowering.
-    let pinned: Vec<usize> = cfg.labels.values().map(|block| block.0 as usize).collect();
-    for index in &pinned {
-        reachable[*index] = true;
-        stack.push(*index);
-    }
+    // The one block that may be entered and never left is the `default` of a
+    // computed `goto`'s dispatch: a value that is no label's.
+    let invalid: Vec<usize> = cfg
+        .blocks
+        .iter()
+        .filter_map(|block| match &block.term {
+            Terminator::Switch { default, .. } if !cfg.labels.is_empty() => {
+                Some(default.0 as usize)
+            }
+            _ => None,
+        })
+        .collect();
     while let Some(index) = stack.pop() {
         let block = &cfg.blocks[index];
         let successors: Vec<usize> = match &block.term {
             Terminator::Jump { target, .. } => {
                 assert!(
-                    !block.stmts.is_empty()
-                        || target.0 as usize == index
-                        || pinned.contains(&index),
+                    !block.stmts.is_empty() || target.0 as usize == index,
                     "block {index} only forwards to {}; jump threading missed it",
                     target.0
                 );
                 vec![target.0 as usize]
-            }
-            Terminator::IndirectJump { blocks, .. } => {
-                blocks.iter().map(|blk| blk.0 as usize).collect()
             }
             Terminator::Branch {
                 then_blk, else_blk, ..
@@ -175,6 +173,8 @@ fn check_invariants(cfg: &Cfg) {
                 .chain([default.0 as usize])
                 .collect(),
             Terminator::Return { .. } => Vec::new(),
+            Terminator::InvalidTarget if invalid.contains(&index) => Vec::new(),
+            Terminator::InvalidTarget => panic!("block {index} is no dispatch's default"),
             Terminator::Unreachable => panic!("block {index} has no terminator"),
         };
         for successor in successors {
@@ -242,7 +242,7 @@ fn only_a_jump_rust_cannot_make_takes_the_cfg_path() {
         "int f(int n) { if (n) goto done; int x = n + 1; n = x; done: return n; }",
         "f"
     ));
-    // GNU's `&&label`, whose value is the state number the label stands for.
+    // GNU's `&&label`, and the computed `goto` that is a `switch` over them.
     assert!(!is_structured(
         "int f(int n) { void *p = &&here; goto *p; here: return n; }",
         "f"
@@ -434,10 +434,11 @@ fn a_switch_with_more_groups_than_rustc_can_nest_takes_the_graph() {
 }
 
 #[test]
-fn a_label_whose_address_is_taken_keeps_a_block_of_its_own() {
-    // `&&label` is a *state number*, so the label's block may not be threaded
-    // past, merged into its predecessor or dropped for being unreachable —
-    // and the function is lowered through the graph even without a `goto`.
+fn a_computed_goto_is_a_switch_over_the_labels_whose_address_is_taken() {
+    // `&&label` is the label's number among them, from 1, and every `goto *`
+    // jumps to one dispatch block that switches on it — so the function is
+    // lowered through the graph even without a `goto`, and nothing else about
+    // the graph is special.
     let source = "
         int f(int n) {
             void *table[2];
@@ -452,19 +453,21 @@ fn a_label_whose_address_is_taken_keeps_a_block_of_its_own() {
     assert!(!is_structured(source, "f"));
     let cfg = cfg_of(source, "f");
     check_invariants(&cfg);
-    assert_eq!(cfg.labels.len(), 2, "both labels are pinned");
-    let mut states: Vec<u32> = cfg.labels.values().map(|block| block.0).collect();
-    states.sort_unstable();
-    states.dedup();
-    assert_eq!(states.len(), 2, "two labels, two distinct states");
-    assert!(
-        cfg.blocks
-            .iter()
-            .any(|b| matches!(b.term, Terminator::IndirectJump { .. }))
-    );
+    let mut numbers: Vec<u32> = cfg.labels.values().copied().collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [1, 2], "two labels, numbered from 1");
+    let dispatches: Vec<&Terminator> = cfg
+        .blocks
+        .iter()
+        .map(|b| &b.term)
+        .filter(|term| matches!(term, Terminator::Switch { cases, default, .. }
+            if cases.len() == 2 && matches!(cfg.blocks[default.0 as usize].term, Terminator::InvalidTarget)))
+        .collect();
+    assert_eq!(dispatches.len(), 1, "one dispatch: {cfg:#?}");
+    assert!(cfg.shape.is_some(), "the relooper handles it");
 
-    // Taking an address without ever jumping through it is enough on its own:
-    // the label's block is nothing else's successor, and must survive anyway.
+    // Taking an address without ever jumping through it is enough on its own
+    // to take the graph path, and the label's number is still its own.
     let unjumped = "
         int g(void) {
             void *p = &&here;
@@ -723,8 +726,8 @@ const SAFE_GOTO: &str = "
         return t;
     }";
 
-/// GNU's `&&label`, whose value is a block's number: the one thing the state
-/// machine is still for.
+/// GNU's `&&label` and a computed `goto` through a table of them: a `switch`
+/// over the two labels, which the relooper reads like any other.
 const COMPUTED_GOTO: &str = "
     int f(int n) {
         static void *const table[] = { &&one, &&two };
@@ -787,7 +790,7 @@ fn every_shape_is_lowered_by_the_tier_it_needs() {
             VLA_IN_A_LOOP,
         ),
         ("a safe function that jumps", Tier::StateVariable, SAFE_GOTO),
-        ("a computed goto", Tier::Machine, COMPUTED_GOTO),
+        ("a computed goto", Tier::Relooped, COMPUTED_GOTO),
         (
             "a switch inside a do/while",
             Tier::StateVariable,
@@ -860,11 +863,79 @@ fn a_safe_function_that_jumps_has_no_unsafe_block() {
     insta::assert_snapshot!(out);
 }
 
-/// A computed `goto` keeps the whole-function machine, because `&&label` is
-/// the block's number.
+/// The table fold: a `static` table of distinct label addresses that is only
+/// ever read has its labels numbered in its order, so `goto *table[e]` stores
+/// `e + 1` and never reads the table. Any other use of the table — written,
+/// addressed, passed on, or holding something that is not a label — keeps the
+/// plain lowering, which reads it.
 #[test]
-fn a_computed_goto_keeps_the_state_machine() {
+fn only_a_table_that_is_only_read_is_folded() {
+    let source = "
+        void use(void **t);
+        int folded(int i) {
+            static void *table[] = { &&b, &&a };
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }
+        int written(int i) {
+            static void *table[] = { &&a, &&b };
+            table[1] = &&a;
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }
+        int addressed(int i) {
+            static void *table[] = { &&a, &&b };
+            void **p = table;
+            goto *p[i];
+        a: return 1;
+        b: return 2;
+        }
+        int passed(int i) {
+            static void *table[] = { &&a, &&b };
+            use(table);
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }
+        int not_a_label(int i) {
+            static void *table[] = { &&a, 0 };
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }
+        int repeated(int i) {
+            static void *table[] = { &&a, &&a, &&b };
+            goto *table[i];
+        a: return 1;
+        b: return 2;
+        }";
+    let folded = lowered(source, "folded");
+    assert!(folded.contains("wrapping_add(1)"), "{folded}");
+    assert!(!folded.contains("folded_table)"), "{folded}");
+    // The table's order, not the labels' order in the source: `b` is 1.
+    let cfg = cfg_of(source, "folded");
+    let mut numbers: Vec<u32> = cfg.labels.values().copied().collect();
+    numbers.sort_unstable();
+    assert_eq!(numbers, [1, 2]);
+    for name in ["written", "addressed", "passed", "not_a_label", "repeated"] {
+        let out = lowered(source, name);
+        assert!(
+            !out.contains("wrapping_add(1)"),
+            "{name} was folded:\n{out}"
+        );
+        assert!(out.contains("as ::core::ffi::c_ulong;"), "{name}:\n{out}");
+    }
+    insta::assert_snapshot!(folded);
+}
+
+/// A computed `goto` is a `match` on the label's number, relooped like any
+/// other `switch`: no state machine.
+#[test]
+fn a_computed_goto_is_relooped() {
     let out = lowered(COMPUTED_GOTO, "f");
-    assert!(out.contains("__cinrs_state"), "{out}");
+    assert!(!out.contains("__cinrs_state"), "{out}");
+    assert!(out.contains("match __cinrs_goto"), "{out}");
     insta::assert_snapshot!(out);
 }

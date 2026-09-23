@@ -2153,9 +2153,9 @@ fn write_interpretation(
            input, one written with a dozen labels that jump into one another every which way \
            and one with `while` and `switch`: all three compilers take the same time over \
            both, where `cinrs` was 2.16× on the `goto` version and 1.02× on the other before \
-           the graph was relooped. What is still lowered as a state machine is a computed \
-           `goto`, whose `&&label` *is* a block's number — `interp-goto` is that row, and it \
-           is level with `clang`.\n\
+           the graph was relooped. A computed `goto` is lowered as GCC lowers it, a `switch` \
+           over the labels whose address is taken, and relooped like any other — \
+           `interp-goto` is that row.\n\
          * **`switch` becomes `match`.** `interp-switch` is a bytecode dispatch loop with a \
            fallthrough case; the fallthrough has to run the next arm's body without \
            re-dispatching, which is what the labelled-block chain the expansion builds is for. \
