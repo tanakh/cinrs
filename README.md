@@ -266,7 +266,7 @@ or needing a newer toolchain — **not one is tagged as a bug**.
 of the Benchmarks Game, including the eight written with SIMD intrinsics,
 Dhrystone, Whetstone and two dozen kernels that isolate one construct each —
 built as `gcc -O2`, `clang -O2` and a `cinrs` block under
-`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.02×**, 39 of the
+`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.02×**, 36 of the
 48 are within 10 % of `gcc` or faster, and every output is identical across the
 three builds. A `goto` costs nothing: an outward one is a labelled `break` or
 `continue`, and anything else is read back into loops and branches by a
