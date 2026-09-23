@@ -1956,3 +1956,71 @@ fn vector_operators_without_an_intrinsic_are_refused() {
         );
     }
 }
+
+/// `v[i]` is a lane of the lane type, an lvalue when `v` is one; `{a, b}`
+/// initialises a vector lane by lane, wherever the vector stands.
+#[test]
+fn vector_subscripts_and_braces_are_accepted() {
+    let found = vector_errors(
+        "__m128d g(void);\n\
+         void f(__m128d a, __m128i q, __m128 x, int n) {\n\
+             double d = a[0] + a[n];\n\
+             long long l = q[1];\n\
+             float y = x[3];\n\
+             double *p = &a[1];\n\
+             a[1] = d; a[0] += 1.0; q[0] ^= l; x[n] = y;\n\
+             d = (a * a)[1] + g()[0];\n\
+             __m128d v = {1.0, 2}, w = {3.0}, z = {0};\n\
+             __m128i i = {1, 2};\n\
+             __m128 four = {1, 2, 3, 4};\n\
+             struct { int t; __m128d v; } s = {1, {2.0, 3.0}};\n\
+             __m128d arr[2] = {{1.0, 2.0}, {3.0, 4.0}};\n\
+             __m128d lit = _mm_add_pd((__m128d){1.0, 2.0}, v);\n\
+             (void)p; (void)w; (void)z; (void)i; (void)four; (void)s; (void)arr; (void)lit;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:#?}");
+}
+
+#[test]
+fn vector_subscripts_and_braces_are_checked() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "double f(__m128d a) { return a[2]; }",
+            "index 2 is out of range for '__m128d', which has 2 lanes",
+        ),
+        (
+            "float f(__m128 a) { return a[-1]; }",
+            "index -1 is out of range",
+        ),
+        ("double f(__m128d a) { return a[0.5]; }", "not an integer"),
+        ("double f(__m128d a) { return 0[a]; }", "reversed 'i[v]'"),
+        (
+            "__m128d f(void) { __m128d v = {1.0, 2.0, 3.0}; return v; }",
+            "excess elements",
+        ),
+        (
+            "__m128d f(void) { __m128d v = {[1] = 2.0}; return v; }",
+            "designator",
+        ),
+    ];
+    for (source, expected) in cases {
+        let found = vector_errors(source);
+        assert!(
+            found.iter().any(|m| m.contains(expected)),
+            "{source}: expected a message containing {expected:?}, got {found:#?}"
+        );
+    }
+    // A file-scope vector is initialised by a call, which a static cannot be.
+    // A static vector is zero-filled, but not given lanes: that is a call to
+    // `core::arch`, which a Rust `static` cannot make.
+    let found = vector_errors("static __m128d k = {1.0, 2.0};\n");
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].contains("assign the lanes in a function"),
+        "{found:#?}"
+    );
+    assert!(
+        vector_errors("static __m128d zeroed; __m128d *p(void) { return &zeroed; }\n").is_empty()
+    );
+}

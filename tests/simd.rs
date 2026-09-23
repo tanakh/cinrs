@@ -1445,6 +1445,77 @@ gnu11! {
     }
 }
 
+// Subscripts and brace initialisers, GCC's other two vector operations: a
+// lane is `v[i]`, readable and writable, and `{a, b}` lists the lanes in
+// memory order.
+gnu11! {
+    #include <immintrin.h>
+    #include <stdint.h>
+
+    struct holder { int tag; __m128d v; };
+
+    static __m128d twice(__m128d v) { return v + v; }
+
+    int vector_lanes_and_braces(void) {
+        __m128d d = {1.5, -2.0};
+        __m128 f = {1.0f, 2.0f, 3.0f};          /* the fourth lane is zero */
+        __m128i q = {7, -9};
+        __m128d z = {};
+        __m128d arr[2] = {{1.0, 2.0}, {3.0, 4.0}};
+        struct holder h = {5, {0.25, 0.5}};
+        double out[2];
+        long long qo[2];
+        int i;
+
+        if (d[0] != 1.5 || d[1] != -2.0) return 0;
+        if (f[0] != 1.0f || f[2] != 3.0f || f[3] != 0.0f) return 0;
+        if (q[0] != 7 || q[1] != -9) return 0;
+        _mm_storeu_si128((__m128i *)qo, q);          /* memory order */
+        if (qo[0] != 7 || qo[1] != -9) return 0;
+        if (z[0] != 0.0 || z[1] != 0.0) return 0;
+        if (arr[1][0] != 3.0 || arr[0][1] != 2.0) return 0;
+        if (h.tag != 5 || h.v[1] != 0.5) return 0;
+
+        /* writes, a compound assignment, and a variable index */
+        d[1] = 10.0;
+        d[0] += 1.0;
+        f[3] = 4.0f;
+        q[1] ^= 1;
+        h.v[0] *= 4.0;
+        for (i = 0; i < 2; i++) arr[0][i] = arr[1][i] - 1.0;
+        _mm_storeu_pd(out, d);
+        if (out[0] != 2.5 || out[1] != 10.0) return 0;
+        if (f[3] != 4.0f || q[1] != -10 || h.v[0] != 1.0) return 0;
+        if (arr[0][0] != 2.0 || arr[0][1] != 3.0) return 0;
+
+        /* rvalue vectors: an operator's and a call's result */
+        if ((d * d)[1] != 100.0 || twice(d)[0] != 5.0) return 0;
+        /* a compound literal fed to an intrinsic */
+        _mm_storeu_pd(out, _mm_add_pd((__m128d){1.0, 2.0}, (__m128d){10.0, 20.0}));
+        if (out[0] != 11.0 || out[1] != 22.0) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx"))) int vector_lanes_256(void) {
+        __m256d v = {1.0, 2.0, 3.0, 4.0};
+        __m256i w = {1, 2, 3};
+        double out[4];
+        v[3] = v[0] + v[2];
+        _mm256_storeu_pd(out, v);
+        return out[3] == 4.0 && out[1] == 2.0 && w[2] == 3 && w[3] == 0;
+    }
+}
+
+#[test]
+fn gcc_vector_subscripts_and_braces() {
+    unsafe {
+        assert_eq!(vector_lanes_and_braces(), 1);
+        if is_x86_feature_detected!("avx") {
+            assert_eq!(vector_lanes_256(), 1);
+        }
+    }
+}
+
 #[test]
 fn gcc_vector_operators_on_the_intel_types() {
     unsafe {

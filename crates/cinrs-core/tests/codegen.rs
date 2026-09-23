@@ -1766,6 +1766,29 @@ fn a_vector_operator_becomes_an_intrinsic_call() {
     ));
 }
 
+/// `v[i]` is `*((double *)&v + i)` — a lane of the object itself, so it can be
+/// stored to — and `(a * b)[1]` reads a lane of a temporary; `{a, b}` is
+/// `_mm_setr_pd(a, b)`, lanes in memory order, and `{7, 9}` on `__m128i` is
+/// `_mm_set_epi64x(9, 7)`, high lane first.
+#[test]
+fn a_vector_subscript_and_brace_initializer() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        #include <immintrin.h>
+
+        double lanes(__m128d a, int i) {
+            __m128d v = {1.0, 2.0};
+            __m128i q = {7, 9};
+            v[1] = a[i];
+            v[0] += (a * v)[1];
+            return v[0] + (double)q[1];
+        }
+        "#
+    ));
+}
+
 /// `#pragma GCC target` reaches the functions *defined* after it, successive
 /// pragmas accumulate, `pop_options` puts the set back, and an attribute
 /// written on a function wins over the region outright — on either side of the

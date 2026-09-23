@@ -1030,6 +1030,18 @@ impl Sema<'_> {
         if lhs.ty.is_error() || rhs.ty.is_error() {
             return None;
         }
+        // GCC's `v[i]` on a vector: one lane, as an lvalue when `v` is one.
+        if lhs.ty.is_vector() {
+            return self.vector_index_place(lhs, rhs, range);
+        }
+        if rhs.ty.is_vector() {
+            self.error(
+                range,
+                "a vector is subscripted as 'v[i]'; the reversed 'i[v]' GCC also takes is not \
+                 supported here",
+            );
+            return None;
+        }
         // `a[i]` and `i[a]` are the same thing, which falls straight out of
         // C's definition of subscripting as `*(a + i)`.
         let (ptr, subscript) = if lhs.ty.is_pointer() {

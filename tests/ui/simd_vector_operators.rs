@@ -5,8 +5,8 @@
 //! lanes, `& | ^ ~`, and the floating ones — are lowered to it (see
 //! `tests/simd.rs`). The rest are refused with the intrinsic to write: integer
 //! `*` and the comparisons have no single SSE2 instruction for GCC's 64-bit
-//! lanes, and `v[0]` and a cast between a vector and an integer are not here;
-//! a union or `_mm_extract_epi32` is how to reach a lane.
+//! lanes; `v[i]` is a lane, but `v[2]` is past the last one and the reversed
+//! `i[v]` is not taken; a cast between a vector and an integer is not here.
 
 cinrs::c11! {
     #include <immintrin.h>
@@ -20,7 +20,7 @@ cinrs::c11! {
     }
 
     int subscripted(__m128i v) {
-        return v[0]; //~ ERROR: subscripted value is not an array or pointer
+        return v[2] + 0[v]; //~ ERROR: index 2 is out of range for '__m128i', which has 2 lanes
     }
 
     __m128i from_an_integer(long long x) {

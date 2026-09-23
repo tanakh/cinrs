@@ -2969,6 +2969,23 @@ impl Sema<'_> {
                 );
                 None
             }
+            // `static __m128d k = {1, 2};` — the lanes are built by a call to
+            // `core::arch`, which a Rust `static` cannot make, and the vector
+            // types have no constant constructor.
+            _ if ty.is_vector() => {
+                let name = self.tyname(ty);
+                self.error(
+                    range,
+                    format!(
+                        "{what} is not a compile-time constant expression: a '{name}' with \
+                         static storage duration cannot be given lanes here, because building a \
+                         vector is a call to core::arch, which Rust cannot run in a 'static'. \
+                         Leave it zero and assign the lanes in a function, or keep the constants \
+                         in a 'static const double[]' and load them with _mm_loadu_pd"
+                    ),
+                );
+                None
+            }
             _ => {
                 self.error(
                     range,

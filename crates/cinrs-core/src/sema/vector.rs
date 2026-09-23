@@ -463,6 +463,155 @@ impl Sema<'_> {
         ))
     }
 
+    /// The lane type of `vec` and how many lanes it has, or `None` (with the
+    /// refusal reported) for the bfloat16 and half-precision vectors.
+    pub(super) fn vector_lanes(&mut self, vec: VecTy, range: SourceRange) -> Option<(Ty, usize)> {
+        let shape = self.vector_shape(vec, "{ }", range)?;
+        Some(match shape.lane {
+            Lane::F32 => (Ty::Float, shape.bits as usize / 32),
+            Lane::F64 => (Ty::Double, shape.bits as usize / 64),
+            Lane::I64 => (Ty::LongLong, shape.bits as usize / 64),
+        })
+    }
+
+    /// The vector whose lanes are `values`, in memory order, each already of
+    /// the lane type; missing lanes are zero, as they are in GCC. `{ }` is
+    /// `setzero`, and anything else `setr` — or `_mm_set_epi64x` high lane
+    /// first, the one 128-bit integer form SSE2 has.
+    pub(super) fn vector_from_lanes(
+        &mut self,
+        vec: VecTy,
+        mut values: Vec<Expr>,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let shape = self.vector_shape(vec, "{ }", range)?;
+        let (lane, lanes) = self.vector_lanes(vec, range)?;
+        if values.is_empty() {
+            let suffix = match shape.lane {
+                Lane::I64 => shape.isuffix(),
+                _ => shape.fsuffix(),
+            };
+            return self.vector_call(&shape.name("setzero", suffix), vec![], range);
+        }
+        while values.len() < lanes {
+            let zero = if lane.is_integer() {
+                Expr::int(0, lane, range)
+            } else {
+                Expr::new(ExprKind::Float(0.0), lane, range)
+            };
+            values.push(zero);
+        }
+        let name = match (shape.lane, shape.bits) {
+            (Lane::I64, 128) => {
+                values.reverse();
+                "_mm_set_epi64x".to_owned()
+            }
+            (Lane::I64, 256) => "_mm256_setr_epi64x".to_owned(),
+            (Lane::I64, _) => "_mm512_setr_epi64".to_owned(),
+            _ => shape.name("setr", shape.fsuffix()),
+        };
+        self.vector_call(&name, values, range)
+    }
+
+    /// `v[i]`: one lane of a vector, as GCC's vector extension reads it.
+    ///
+    /// It is `*((lane *)&v + i)`, which is what code wrote for itself before
+    /// the extension had subscripts — an lvalue when `v` is one, so `v[1] = x`
+    /// and `v[0] += y` store into the vector's own memory. A vector that is
+    /// not an object (`(a * b)[0]`, a call's result) is held in a temporary
+    /// first, the way `f().x` is. There is no bounds check, as GCC has none;
+    /// a constant index outside the lanes is an error, as it is in GCC.
+    pub(super) fn vector_index_place(
+        &mut self,
+        vector: Expr,
+        index: Expr,
+        range: SourceRange,
+    ) -> Option<Place> {
+        let Ty::Vector(vec) = vector.ty else {
+            unreachable!("vector_index_place is only called with a vector")
+        };
+        let shape = self.vector_shape(vec, "[]", range)?;
+        if !index.ty.is_integer() {
+            self.error(
+                index.range,
+                format!(
+                    "array subscript is not an integer ('{}' invalid)",
+                    self.tyname(index.ty)
+                ),
+            );
+            return None;
+        }
+        let (lane, lane_bits) = match shape.lane {
+            Lane::F32 => (Ty::Float, 32),
+            Lane::F64 => (Ty::Double, 64),
+            Lane::I64 => (Ty::LongLong, 64),
+        };
+        let lanes = i128::from(shape.bits / lane_bits);
+        if let Some(ir::ConstValue::Int(at)) = self.const_eval(&index)
+            && !(0..lanes).contains(&at)
+        {
+            self.error(
+                index.range,
+                format!(
+                    "index {at} is out of range for '{}', which has {lanes} lanes of '{}'",
+                    vec.name(),
+                    self.tyname(lane)
+                ),
+            );
+            return None;
+        }
+        let ty = vector.ty;
+        let vector_range = vector.range;
+        let place = match vector.kind {
+            ExprKind::Load(place) => place,
+            // A vector that is not an object gets one, the way a compound
+            // literal does: a hidden local at the head of the block,
+            // initialised where the expression stands. A pointer to its lanes
+            // then stays valid for as long as the lane is read — which a
+            // temporary scoped to the expression would not.
+            kind if !self.at_file_scope() => {
+                let name = self.anonymous_name("lanes");
+                let id = self.new_object(&name, ty, ir::Storage::Automatic, false, vector_range);
+                self.compound_literals.push(id);
+                super::place_of(
+                    PlaceKind::CompoundLiteral {
+                        object: id,
+                        init: Box::new(Expr::new(kind, ty, vector_range)),
+                    },
+                    ty,
+                    false,
+                    vector_range,
+                )
+            }
+            kind => super::place_of(
+                PlaceKind::Temporary(Box::new(Expr::new(kind, ty, vector_range))),
+                ty,
+                false,
+                vector_range,
+            ),
+        };
+        let konst = place.is_const;
+        let address = Expr::new(
+            ExprKind::AddrOf(place),
+            self.ptr_to(ty, konst),
+            vector_range,
+        );
+        let lanes_ptr = Expr::new(
+            ExprKind::Cast(Box::new(address)),
+            self.ptr_to(lane, konst),
+            vector_range,
+        );
+        Some(super::place_of(
+            PlaceKind::Index {
+                base: Box::new(lanes_ptr),
+                index: Box::new(index),
+            },
+            lane,
+            konst,
+            range,
+        ))
+    }
+
     /// The shape of `vec`, or the refusal for the bfloat16 and half-precision
     /// vectors, which GCC gives operators and this crate does not.
     fn vector_shape(&mut self, vec: VecTy, op: &str, range: SourceRange) -> Option<Shape> {

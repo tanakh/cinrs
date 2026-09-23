@@ -380,6 +380,31 @@ impl Sema<'_> {
                 Some(self.assemble_array(values, array.elem, len, range))
             }
             Ty::Record(id) => self.fill_record(id, cursor, name, range, elided, flexible_ok),
+            // GCC's `__m128d v = { a, b }`: the lanes in memory order, each
+            // converted as an initialiser is, the rest zero. See
+            // [`Sema::vector_from_lanes`].
+            Ty::Vector(vec) if !elided => {
+                let (lane, lanes) = self.vector_lanes(vec, range)?;
+                let mut values = Vec::with_capacity(lanes);
+                while values.len() < lanes {
+                    let Some(item) = cursor.peek() else { break };
+                    if !item.designators.is_empty() {
+                        self.error(
+                            item.range,
+                            format!(
+                                "a designator in the initializer of the vector type '{}' is not \
+                                 supported; list the lanes in order",
+                                vec.name()
+                            ),
+                        );
+                        return None;
+                    }
+                    let value = self.checked_initializer(cursor, &item.init, lane, name);
+                    cursor.advance();
+                    values.push(value?);
+                }
+                self.vector_from_lanes(vec, values, range)
+            }
             _ => {
                 let Some(item) = cursor.peek() else {
                     return Some(self.zero(ty, range));

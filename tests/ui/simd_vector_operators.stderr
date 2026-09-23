@@ -10,11 +10,11 @@ error: comparing '__m128i' vectors is not supported: GCC compares them as 64-bit
 19 |         return a == b;
    |                ^
 
-error: subscripted value is not an array or pointer ('__m128i' invalid)
-  --> tests/ui/simd_vector_operators.rs:23:16
+error: index 2 is out of range for '__m128i', which has 2 lanes of 'long long'
+  --> tests/ui/simd_vector_operators.rs:23:18
    |
-23 |         return v[0];
-   |                ^
+23 |         return v[2] + 0[v];
+   |                  ^
 
 error: a cast to '__m128i' is not allowed; only scalar types can be cast to
   --> tests/ui/simd_vector_operators.rs:27:17
