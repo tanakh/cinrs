@@ -56,7 +56,10 @@
   there and nothing above them, because a procedural macro cannot see rustc's
   `-C target-feature`, so `#ifdef __AVX2__` and `#ifdef __AVX512F__` take the
   other branch whatever the machine and `__builtin_cpu_supports("avx2")` is the
-  question to ask instead.
+  question to ask instead. `#pragma GCC target("avx2")` does define them, and
+  what they imply, for the rest of the file, as GCC's does — which is how a
+  header that selects its SIMD path with `#ifdef __AVX2__` sees it under the
+  pragma.
   **A function that passes or returns a 256-bit vector by value needs
   `__attribute__((target("avx")))`, and a 512-bit one `target("avx512f")`** —
   that is the ABI's rule rather than this crate's, and rustc refuses the

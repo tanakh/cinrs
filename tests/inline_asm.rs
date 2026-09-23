@@ -25,6 +25,22 @@ gnu99! {
     __attribute__((target("lzcnt")))
     int lzcnt32(unsigned x) { unsigned r; asm("lzcntl %1, %0" : "=r"(r) : "r"(x)); return (int)r; }
     int swap_digits(int a, int b) { asm("xchgl %0, %1" : "+r"(a), "+r"(b)); return a * 10 + b; }
+    /* GCC's dialect alternatives: the first, AT&T, one is taken. The Intel
+       halves here would assemble to something else entirely, so the answer
+       says which was kept. */
+    int dialect_move(int y) {
+        int x;
+        asm("{movl %1, %0|mov %0, %1}" : "=r"(x) : "r"(y));
+        asm("{addl $3, %0|add %0, 7|sub %0, 9}" : "+r"(x));
+        return x;
+    }
+    unsigned dialect_cpuid_max(void) {
+        unsigned a = 0, b, c = 0, d;
+        asm volatile("{cpuid|cpuid}" : "=b"(b), "+a"(a), "+c"(c), "=d"(d));
+        return a;
+    }
+    /* No operands, but extended (it has a ':'), so the braces are a choice. */
+    int dialect_no_operands(void) { asm volatile("{pause|pause}" ::: "memory"); return 1; }
     int add_ri(int a, int b) {
         asm("addl %1, %0" : "+r"(a) : "ri"(b));
         asm("addl %1, %0" : "+r"(a) : "ri"(100));
@@ -100,6 +116,15 @@ fn rdtsc_counts_up() {
     let (t0, t1) = unsafe { (rdtsc_read(), rdtsc_read()) };
     assert!(t0 != 0);
     assert!(t1 >= t0);
+}
+
+#[test]
+fn dialect_alternatives_take_the_att_form() {
+    unsafe {
+        assert_eq!(dialect_move(39), 42);
+        assert!(dialect_cpuid_max() >= 1);
+        assert_eq!(dialect_no_operands(), 1);
+    }
 }
 
 #[test]

@@ -29,7 +29,7 @@ cinrs::gnu99! {
         asm("" : "=r"(s->b)); //~ ERROR: a bit-field cannot be an 'asm' output
         asm("cpuid" : : : "rbx"); //~ ERROR: the clobber "rbx" is not supported: rustc reserves rbx
         asm("" : : : "rsp"); //~ ERROR: the clobber "rsp" is not supported
-        asm("{movl|mov} %eax, %ebx"); //~ ERROR: '{' and '}' in an 'asm' template are GCC's assembler dialect alternatives
+        asm("{movl|mov %%eax, %%ebx" : :); //~ ERROR: a '{' with no '}' after it in an 'asm' template
         asm(".intel_syntax noprefix\n mov eax, ebx"); //~ ERROR: a template that switches to Intel syntax
         asm("" : : "r"(p)); //~ ERROR: an 'asm' operand has to have integer, floating or pointer type
         asm("incl %k0" : "+r"(c)); //~ ERROR: the operand modifier '%k' cannot apply to an 8-bit operand

@@ -268,6 +268,154 @@ pub fn describe_features(feature: &str) -> String {
     }
 }
 
+/// The macros `#pragma GCC target("…")` defines, per GCC name: the name's own
+/// macros, and the names it implies, whose macros it defines too.
+///
+/// Read off GCC 15.2 once, as `gcc -m<name> -dM -E -x c /dev/null` against the
+/// same command without the switch, for every name in [`TARGET_FEATURES`] (and
+/// `crc32`, which `sse4.2` implies). What that prints besides the feature
+/// macros is left out: `__BIGGEST_ALIGNMENT__` (a value, which the pragma does
+/// not change in GCC either), `__FP_FAST_FMA*` and `__FLT_EVAL_METHOD*` (which
+/// describe code generation cinrs does not do), and `cx16`'s
+/// `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16` (an atomics claim). The implications
+/// are GCC's, which are not always the obvious ones: `sse4.2` brings
+/// `__POPCNT__` and `__CRC32__`, `avx` brings `__XSAVE__`, `avx512fp16` needs
+/// only `avx512bw`, and `avx512vp2intersect` brings `avx512dq`.
+pub const TARGET_MACROS: &[(&str, &[&str], &[&str])] = &[
+    ("abm", &["__ABM__"], &["lzcnt", "popcnt"]),
+    ("adx", &["__ADX__"], &[]),
+    ("aes", &["__AES__"], &["sse2"]),
+    ("avx", &["__AVX__"], &["sse4.2", "xsave"]),
+    ("avx2", &["__AVX2__"], &["avx"]),
+    ("avx512bf16", &["__AVX512BF16__"], &["avx512bw"]),
+    ("avx512bitalg", &["__AVX512BITALG__"], &["avx512bw"]),
+    ("avx512bw", &["__AVX512BW__"], &["avx512f"]),
+    ("avx512cd", &["__AVX512CD__"], &["avx512f"]),
+    ("avx512dq", &["__AVX512DQ__"], &["avx512f"]),
+    ("avx512f", &["__AVX512F__", "__EVEX512__"], &["avx2"]),
+    ("avx512fp16", &["__AVX512FP16__"], &["avx512bw"]),
+    ("avx512ifma", &["__AVX512IFMA__"], &["avx512f"]),
+    ("avx512vbmi", &["__AVX512VBMI__"], &["avx512bw"]),
+    ("avx512vbmi2", &["__AVX512VBMI2__"], &["avx512bw"]),
+    ("avx512vl", &["__AVX512VL__", "__EVEX256__"], &["avx512f"]),
+    ("avx512vnni", &["__AVX512VNNI__"], &["avx512f"]),
+    (
+        "avx512vp2intersect",
+        &["__AVX512VP2INTERSECT__"],
+        &["avx512dq"],
+    ),
+    ("avx512vpopcntdq", &["__AVX512VPOPCNTDQ__"], &["avx512f"]),
+    ("avxifma", &["__AVXIFMA__"], &["avx2"]),
+    ("avxneconvert", &["__AVXNECONVERT__"], &["avx2"]),
+    ("avxvnni", &["__AVXVNNI__"], &["avx2"]),
+    ("avxvnniint16", &["__AVXVNNIINT16__"], &["avx2"]),
+    ("avxvnniint8", &["__AVXVNNIINT8__"], &["avx2"]),
+    ("bmi", &["__BMI__"], &[]),
+    ("bmi2", &["__BMI2__"], &[]),
+    ("crc32", &["__CRC32__"], &[]),
+    ("cx16", &[], &[]),
+    ("f16c", &["__F16C__"], &["avx"]),
+    ("fma", &["__FMA__"], &["avx"]),
+    ("fxsr", &["__FXSR__"], &[]),
+    ("gfni", &["__GFNI__"], &["sse2"]),
+    ("kl", &["__KL__"], &[]),
+    ("lzcnt", &["__LZCNT__"], &[]),
+    ("movbe", &["__MOVBE__"], &[]),
+    ("pclmul", &["__PCLMUL__"], &["sse2"]),
+    ("popcnt", &["__POPCNT__"], &[]),
+    ("rdrnd", &["__RDRND__"], &[]),
+    ("rdseed", &["__RDSEED__"], &[]),
+    ("sha", &["__SHA__"], &["sse2"]),
+    ("sha512", &["__SHA512__"], &["avx"]),
+    ("sm3", &["__SM3__"], &["avx"]),
+    ("sm4", &["__SM4__"], &["avx"]),
+    ("sse", &["__SSE__"], &[]),
+    ("sse2", &["__SSE2__"], &["sse"]),
+    ("sse3", &["__SSE3__"], &["sse2"]),
+    ("sse4", &[], &["sse4.2"]),
+    ("sse4.1", &["__SSE4_1__"], &["ssse3"]),
+    ("sse4.2", &["__SSE4_2__"], &["sse4.1", "popcnt", "crc32"]),
+    ("ssse3", &["__SSSE3__"], &["sse3"]),
+    ("vaes", &["__VAES__"], &["avx"]),
+    ("vpclmulqdq", &["__VPCLMULQDQ__"], &["avx", "pclmul"]),
+    ("widekl", &["__WIDEKL__"], &["kl"]),
+    ("xsave", &["__XSAVE__"], &[]),
+];
+
+/// The row of [`TARGET_MACROS`] for a GCC name, `sse4_1` spelled either way.
+fn macro_row(
+    gcc: &str,
+) -> Option<&'static (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+)> {
+    let name = gcc.trim();
+    TARGET_MACROS
+        .iter()
+        .find(|(n, _, _)| *n == name || n.replace('.', "_") == name)
+}
+
+/// Every macro `target(gcc)` defines: its own and those of everything it
+/// implies, transitively.
+fn implied_macros(gcc: &str, out: &mut std::collections::BTreeSet<&'static str>) {
+    if let Some((_, own, implies)) = macro_row(gcc) {
+        out.extend(own.iter().copied());
+        for name in *implies {
+            implied_macros(name, out);
+        }
+    }
+}
+
+/// The feature macros in force after `#pragma GCC target` has named `names`,
+/// in order, starting from `baseline` (`__SSE__` and `__SSE2__` on x86-64).
+///
+/// A name adds its macros and everything it implies. `no-X` takes away X's own
+/// macros and those of every name that implies X, as GCC's `-mno-X` does — so
+/// `no-avx2` removes `__AVX2__` and the AVX-512 family and keeps `__AVX__`. A
+/// name this table does not know (`arch=haswell`, a misspelling) defines
+/// nothing; sema is where it is refused.
+pub fn target_macros(
+    baseline: &[&'static str],
+    names: &[&str],
+) -> std::collections::BTreeSet<&'static str> {
+    let mut set: std::collections::BTreeSet<&'static str> = baseline.iter().copied().collect();
+    for name in names {
+        let name = name.trim();
+        if let Some(off) = name.strip_prefix("no-") {
+            let Some((off_name, _, _)) = macro_row(off) else {
+                continue;
+            };
+            for (row, own, _) in TARGET_MACROS {
+                let mut closure = std::collections::BTreeSet::new();
+                implies_name(row, off_name, &mut closure);
+                if !closure.is_empty() {
+                    for m in *own {
+                        set.remove(m);
+                    }
+                }
+            }
+        } else {
+            implied_macros(name, &mut set);
+        }
+    }
+    set
+}
+
+/// Records `target` in `found` if `row` is `target` or implies it.
+fn implies_name(row: &str, target: &str, found: &mut std::collections::BTreeSet<&'static str>) {
+    let Some((name, _, implies)) = macro_row(row) else {
+        return;
+    };
+    if *name == target {
+        found.insert(name);
+        return;
+    }
+    for next in *implies {
+        implies_name(next, target, found);
+    }
+}
+
 /// The instruction sets [`target_features`] knows, for a diagnostic that lists
 /// them.
 pub fn feature_names() -> Vec<&'static str> {

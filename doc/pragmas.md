@@ -414,7 +414,10 @@ void narrow(const int *p) { … }        /* and this one is not */
   Successive `target` pragmas accumulate, as GCC's do, and an attribute written
   on a function wins over the pragma outright. **`#pragma GCC push_options`**
   saves the set in force, **`#pragma GCC pop_options`** puts it back, and
-  **`#pragma GCC reset_options`** goes back to the baseline. The names are
+  **`#pragma GCC reset_options`** goes back to the baseline. Like GCC's, the
+  pragma also defines the feature macros from there on — `__AVX2__` and all it
+  implies, down to `__SSE3__` — and `pop_options`/`reset_options` take them
+  back, so `#ifdef __AVX2__` after it is true. The names are
   checked where a `target` attribute's are, so the two give the same diagnostics
   in the same words; see [SIMD intrinsics](features.md#simd-intrinsics) for the
   GCC-to-LLVM name table and what is refused. `#pragma GCC optimize(…)` and

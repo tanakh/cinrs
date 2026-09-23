@@ -615,6 +615,19 @@ const EMBED_FOUND: u128 = 1;
 /// nothing from it.
 const EMBED_EMPTY: u128 = 2;
 
+/// The `__has_…` operators `Pp::has_operator` answers and GCC 15
+/// also defines, which `#ifdef` and `defined` therefore report as defined.
+const HAS_OPERATORS: &[&str] = &[
+    "__has_include",
+    "__has_include_next",
+    "__has_attribute",
+    "__has_c_attribute",
+    "__has_builtin",
+    "__has_feature",
+    "__has_extension",
+    "__has_embed",
+];
+
 /// How many tokens one translation unit's macro expansion may produce.
 ///
 /// `#define A B B` repeated thirty times is a legal program whose expansion
@@ -2417,7 +2430,7 @@ impl Pp<'_> {
                 let want = name == "ifdef";
                 self.open_cond(range, |pp| {
                     pp.macro_name_operand(rest, range, name)
-                        .is_some_and(|n| pp.macros.contains_key(&n) == want)
+                        .is_some_and(|n| pp.is_defined(&n) == want)
                 });
             }
             "elif" => self.elif(range, "elif", |pp| pp.eval_condition(rest, range)),
@@ -2428,7 +2441,7 @@ impl Pp<'_> {
                 let want = name == "elifdef";
                 self.elif(range, name, |pp| {
                     pp.macro_name_operand(rest, range, name)
-                        .is_some_and(|n| pp.macros.contains_key(&n) == want)
+                        .is_some_and(|n| pp.is_defined(&n) == want)
                 });
             }
             "else" => self.else_(rest, range),
@@ -2751,9 +2764,42 @@ impl Pp<'_> {
 
     /// Records a new set of instruction sets in force from here on.
     fn set_target_features(&mut self, names: Vec<(String, SourceRange)>) {
+        self.sync_target_macros(&names);
         self.target_features = names.clone();
         let at = self.out.len();
         self.target_events.push((at, names));
+    }
+
+    /// Defines and undefines the feature macros — `__AVX2__`, `__AVX__`,
+    /// `__SSE4_2__`, … — so that they say what the instruction sets in force
+    /// are, as GCC's `#pragma GCC target` does for the rest of the file.
+    ///
+    /// The old set is worked out from the names in force until now, the new
+    /// one from `names`, and only the difference is touched, so a
+    /// `pop_options` takes back exactly what the popped `target` added and puts
+    /// back what a `no-…` had taken away. Only x86 has these macros; on any
+    /// other architecture the pragma defines nothing (and sema refuses it).
+    /// `__attribute__((target))` on a function does not come here: GCC does
+    /// not change the macros for one function either.
+    fn sync_target_macros(&mut self, names: &[(String, SourceRange)]) {
+        let baseline: &[&'static str] = match self.target.arch {
+            Arch::X86_64 => &["__SSE__", "__SSE2__"],
+            Arch::X86 => &[],
+            _ => return,
+        };
+        fn spelled(list: &[(String, SourceRange)]) -> Vec<&str> {
+            list.iter().map(|(n, _)| n.as_str()).collect()
+        }
+        let old = crate::x86::target_macros(baseline, &spelled(&self.target_features));
+        let new = crate::x86::target_macros(baseline, &spelled(names));
+        for gone in old.difference(&new) {
+            self.macros.remove(*gone);
+        }
+        for added in new.difference(&old) {
+            if !self.macros.contains_key(*added) {
+                self.define_object(added, "1");
+            }
+        }
     }
 
     /// The text of a pragma that carries a message.
@@ -4273,7 +4319,18 @@ impl Pp<'_> {
     /// `#if` asks a question of, and what `#embed`'s `limit(…)` parameter is.
     fn eval_expression(&mut self, line: &[PTok], range: SourceRange) -> Option<i128> {
         let prepared = self.resolve_defined(line, range)?;
-        let expanded = self.expand_sequence(prepared);
+        let mut expanded = self.expand_sequence(prepared);
+        // A macro may expand to one of the `__has_…` operators — `#define
+        // XXH_HAS_INCLUDE(x) __has_include(x)` is how headers guard their use,
+        // and GCC answers the operator wherever it comes from — so those are
+        // answered again after replacement. (`defined` produced by a macro is
+        // undefined behaviour in 6.10.1p4; GCC evaluates it, and so does this.)
+        if expanded.iter().any(|t| {
+            t.name()
+                .is_some_and(|n| n == "defined" || n.starts_with("__has_"))
+        }) {
+            expanded = self.resolve_defined(&expanded, range)?;
+        }
         for tok in &expanded {
             let tok = tok.clone();
             self.report_errors(&tok);
@@ -4341,7 +4398,7 @@ impl Pp<'_> {
                 );
                 return None;
             };
-            let defined = self.macros.contains_key(name);
+            let defined = self.is_defined(name);
             let mut end = name_at + 1;
             if parenthesised {
                 if !line.get(end).is_some_and(|t| t.is_punct(Punct::RParen)) {
@@ -4365,6 +4422,20 @@ impl Pp<'_> {
             i = end;
         }
         Some(out)
+    }
+
+    /// Whether `name` counts as defined for `#ifdef`, `#ifndef`, `#elifdef`
+    /// and `defined`: a macro, or one of the `__has_…` operators this
+    /// preprocessor answers.
+    ///
+    /// GCC (since 10) defines its operators as special macros, and code that
+    /// cares writes `#ifdef __has_include` before using one — xxHash's
+    /// `XXH_HAS_INCLUDE`, `XXH_HAS_ATTRIBUTE` and `XXH_HAS_BUILTIN` are all
+    /// built that way. An operator that is not answered here
+    /// (`__has_cpp_attribute`, Clang's `__has_declspec_attribute`, which GCC
+    /// does not define either) stays undefined.
+    fn is_defined(&self, name: &str) -> bool {
+        self.macros.contains_key(name) || HAS_OPERATORS.contains(&name)
     }
 
     /// Answers one `__has_…(…)` operator, returning its value and the index

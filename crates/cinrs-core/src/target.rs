@@ -131,7 +131,9 @@ impl Arch {
             // program that tests `#ifdef __AVX2__` takes the baseline branch
             // here — the run-time question is `__builtin_cpu_supports("avx2")`
             // and the way to ask for the instructions is
-            // `__attribute__((target("avx2")))`. `__SSE_MATH__` says what a
+            // `__attribute__((target("avx2")))` (a `#pragma GCC target`
+            // defines the macros from there on, as GCC's does; see
+            // `Pp::sync_target_macros`). `__SSE_MATH__` says what a
             // program really wants to know from the pair: floating-point
             // arithmetic goes through SSE rather than through x87, so a
             // `double` is a `double` and not an 80-bit temporary.

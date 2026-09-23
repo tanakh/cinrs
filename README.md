@@ -237,7 +237,8 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 * `long double` is `double`.
 * The SIMD intrinsics are x86's, and only the baseline instruction set is
   predefined: a procedural macro cannot see `-C target-feature`, so `#ifdef
-  __AVX2__` and `#ifdef __AVX512F__` are false and
+  __AVX2__` and `#ifdef __AVX512F__` are false (until a `#pragma GCC
+  target("avx2")` defines them, as GCC's does) and
   `__builtin_cpu_supports("avx2")` is the question to ask. No MMX.
 * Variable length arrays and `alloca` live on the heap (Rust cannot move the
   stack pointer); what the C can observe is unchanged.

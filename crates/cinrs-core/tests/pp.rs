@@ -1717,6 +1717,131 @@ fn has_include_answers_from_the_search_path() {
     assert_eq!(tokens.join(" "), "");
 }
 
+/// GCC defines its `__has_…` operators as special macros, so `#ifdef
+/// __has_include` is how code asks whether it may use one (xxHash's
+/// `XXH_HAS_INCLUDE` and friends). The ones this preprocessor answers count as
+/// defined; one it does not answer stays undefined.
+#[test]
+fn the_has_operators_count_as_defined() {
+    assert_eq!(pp("#ifdef __has_include\nyes\n#endif"), "yes");
+    assert_eq!(pp("#if defined(__has_attribute)\nyes\n#endif"), "yes");
+    assert_eq!(pp("#if defined __has_builtin\nyes\n#endif"), "yes");
+    assert_eq!(pp("#ifndef __has_c_attribute\nno\n#endif\nend"), "end");
+    for op in [
+        "__has_include_next",
+        "__has_feature",
+        "__has_extension",
+        "__has_embed",
+    ] {
+        assert!(cond(&format!("defined({op})")), "{op}");
+    }
+    // Not answered here (C++ only), so not defined — and the usual fallback
+    // a header writes for it is taken.
+    assert_eq!(pp("#ifdef __has_cpp_attribute\nyes\n#endif\nno"), "no");
+    assert_eq!(
+        pp(
+            "#ifndef __has_cpp_attribute\n#define __has_cpp_attribute(x) 0\n#endif\n__has_cpp_attribute(y)"
+        ),
+        "0"
+    );
+    // The idiom xxHash is written with, end to end.
+    assert_eq!(
+        pp(
+            "#ifdef __has_include\n#define HAS_INC(x) __has_include(x)\n#else\n#define HAS_INC(x) 0\n#endif\n#if HAS_INC(<stddef.h>)\nyes\n#endif"
+        ),
+        "yes"
+    );
+}
+
+/// The feature macros `#pragma GCC target` defines on x86-64, and GCC's rules
+/// for them: the implied instruction sets come too, `push_options` and
+/// `pop_options` save and restore them, `reset_options` goes back to the
+/// baseline, and `no-…` takes a name and everything that implies it away.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn pragma_gcc_target_defines_the_feature_macros() {
+    let defined = |src: &str, names: &str| -> String {
+        let probes: String = names
+            .split(' ')
+            .map(|n| format!("#ifdef {n}\n{}\n#endif\n", n.trim_matches('_')))
+            .collect();
+        pp(&format!("{src}\n{probes}"))
+    };
+    // The baseline, with nothing asked for.
+    assert_eq!(defined("", "__SSE2__ __SSE3__ __AVX2__"), "SSE2");
+    // avx2 brings the whole chain below it, and nothing above.
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"avx2\")",
+            "__AVX2__ __AVX__ __SSE4_2__ __SSE4_1__ __SSSE3__ __SSE3__ __SSE2__ __SSE__ __POPCNT__ __AVX512F__ __FMA__"
+        ),
+        "AVX2 AVX SSE4_2 SSE4_1 SSSE3 SSE3 SSE2 SSE POPCNT"
+    );
+    // avx512f implies avx2; each AVX-512 name has its own macro.
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"avx512f,avx512vl\")",
+            "__AVX512F__ __AVX512VL__ __AVX2__ __AVX__ __AVX512BW__"
+        ),
+        "AVX512F AVX512VL AVX2 AVX"
+    );
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"avx512fp16\")",
+            "__AVX512FP16__ __AVX512BW__ __AVX512F__ __AVX512VL__"
+        ),
+        "AVX512FP16 AVX512BW AVX512F"
+    );
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"fma\")\n#pragma GCC target(\"bmi,pclmul\")",
+            "__FMA__ __AVX__ __BMI__ __PCLMUL__ __AVX2__"
+        ),
+        "FMA AVX BMI PCLMUL"
+    );
+    // push_options / pop_options, and reset_options.
+    assert_eq!(
+        defined(
+            "#pragma GCC push_options\n#pragma GCC target(\"avx2\")\n#pragma GCC pop_options",
+            "__AVX2__ __AVX__ __SSE2__"
+        ),
+        "SSE2"
+    );
+    assert_eq!(
+        pp(
+            "#pragma GCC target(\"sse4.1\")\n#pragma GCC push_options\n#pragma GCC target(\"avx2\")\n\
+            #ifdef __AVX2__\na\n#endif\n#pragma GCC pop_options\n#ifdef __AVX2__\nb\n#endif\n\
+            #ifdef __SSE4_1__\nc\n#endif\n#pragma GCC reset_options\n#ifdef __SSE4_1__\nd\n#endif\n\
+            #ifdef __SSE2__\ne\n#endif"
+        ),
+        "a c e"
+    );
+    // no-: the name and every name that implies it go; what it implies stays.
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"avx512f\")\n#pragma GCC target(\"no-avx2\")",
+            "__AVX512F__ __AVX2__ __AVX__ __SSE4_2__"
+        ),
+        "AVX SSE4_2"
+    );
+    // A pop puts back what a no- took away.
+    assert_eq!(
+        defined(
+            "#pragma GCC target(\"avx\")\n#pragma GCC push_options\n#pragma GCC target(\"no-avx\")\n#pragma GCC pop_options",
+            "__AVX__"
+        ),
+        "AVX"
+    );
+    // A function attribute is not the pragma: no macro changes.
+    assert_eq!(
+        defined(
+            "__attribute__((target(\"avx2\"))) void f(void) {}",
+            "__AVX2__"
+        ),
+        "__attribute__ ( ( target ( \"avx2\" ) ) ) void f ( void ) { }"
+    );
+}
+
 #[test]
 fn the_has_family_answers_from_this_implementations_tables() {
     // `packed` and `cleanup` are honoured, `vector_size` is refused, and the

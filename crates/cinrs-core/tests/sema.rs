@@ -1805,9 +1805,28 @@ fn what_asm_cannot_express_is_refused_by_name() {
         ),
         (
             r#"void f(void) { asm("{movl|mov} %eax, %ebx"); }"#,
-            "'{' and '}' in an 'asm' template are GCC's assembler dialect alternatives \
-             ('{att|intel}'), which are not supported: write the AT&T form alone, or '%{' and \
-             '%}' for a literal brace",
+            "'{' or '}' in a basic 'asm' template: GCC passes a basic template to the \
+             assembler as it is, so its dialect alternatives '{att|intel}' are only chosen \
+             in an extended 'asm' (one with a ':'), and the assembler rejects the braces. \
+             Write the AT&T form alone, or add ':' to make it extended",
+        ),
+        (
+            r#"void f(void) { asm("{movl|mov %%eax, %%ebx" : :); }"#,
+            "a '{' with no '}' after it in an 'asm' template: braces there are GCC's \
+             assembler dialect alternatives, '{att|intel}', which cannot nest and must be \
+             closed; write '%{' and '%}' for a literal brace",
+        ),
+        (
+            r#"void f(void) { asm("{a|{b}}" : :); }"#,
+            "a '{' inside another in an 'asm' template: braces there are GCC's \
+             assembler dialect alternatives, '{att|intel}', which cannot nest and must be \
+             closed; write '%{' and '%}' for a literal brace",
+        ),
+        (
+            r#"void f(void) { asm("nop}" : :); }"#,
+            "a '}' with no '{' before it in an 'asm' template: braces there are GCC's \
+             assembler dialect alternatives, '{att|intel}', which cannot nest and must be \
+             closed; write '%{' and '%}' for a literal brace",
         ),
         (
             r#"void f(void) { asm(".intel_syntax noprefix\n mov eax, ebx"); }"#,

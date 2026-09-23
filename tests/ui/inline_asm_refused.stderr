@@ -100,11 +100,11 @@ error: the clobber "rsp" is not supported: the stack pointer cannot be an 'asm!'
 31 |         asm("" : : : "rsp");
    |                      ^^^^^
 
-error: '{' and '}' in an 'asm' template are GCC's assembler dialect alternatives ('{att|intel}'), which are not supported: write the AT&T form alone, or '%{' and '%}' for a literal brace
+error: a '{' with no '}' after it in an 'asm' template: braces there are GCC's assembler dialect alternatives, '{att|intel}', which cannot nest and must be closed; write '%{' and '%}' for a literal brace
   --> tests/ui/inline_asm_refused.rs:32:13
    |
-32 |         asm("{movl|mov} %eax, %ebx");
-   |             ^^^^^^^^^^^^^^^^^^^^^^^
+32 |         asm("{movl|mov %%eax, %%ebx" : :);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: a template that switches to Intel syntax with '.intel_syntax' is not supported: GCC's x86 templates are AT&T, and cinrs gives 'asm!' options(att_syntax) to match. Write the instructions in AT&T syntax
   --> tests/ui/inline_asm_refused.rs:33:13

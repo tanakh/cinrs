@@ -24,6 +24,7 @@
 //! | an operand the template never names | `{oN}` in a trailing `/* … */` comment |
 //! | `%kN` `%wN` `%bN` `%hN` `%qN`      | `{oN:e}` `:x` `:l` `:h` (`reg_abcd`) `:r` |
 //! | `%%`, `%{`, `%}`, `%\|`            | `%`, `{{`, `}}`, `\|`                   |
+//! | `{att\|intel}` (dialect alternatives, extended asm) | the first, AT&T, alternative; the rest dropped |
 //! | clobber `"rax"`, `"xmm0"`          | `out("rax") _`                          |
 //! | clobber `"memory"`, `"cc"`         | nothing: `asm!` assumes both            |
 //!
@@ -276,29 +277,99 @@ impl Sema<'_> {
             .map_or(Stmt::Nop, |stmt| Stmt::Asm(Box::new(stmt)))
     }
 
-    /// A basic asm template: `%` is literal, and only the braces `asm!` would
-    /// read as operands need escaping — which GCC's dialect alternatives
-    /// make a refusal instead.
+    /// A basic asm template: `%` is literal, and so are the braces — GCC
+    /// hands a basic template to the assembler as it is, dialect
+    /// alternatives unresolved (checked with GCC 15.2: `asm("{nop|nop}")`
+    /// reaches `as` verbatim and fails there). A brace would be read by
+    /// `asm!` as an operand, and GNU as would reject it anyway, so it is
+    /// refused, saying so.
     fn basic_template(&mut self, template: &ast::Spanned<String>) -> Option<String> {
         if template.node.contains(['{', '}']) {
-            self.dialect_alternatives(template.range);
+            self.error(
+                template.range,
+                "'{' or '}' in a basic 'asm' template: GCC passes a basic template to the \
+                 assembler as it is, so its dialect alternatives '{att|intel}' are only chosen \
+                 in an extended 'asm' (one with a ':'), and the assembler rejects the braces. \
+                 Write the AT&T form alone, or add ':' to make it extended",
+            );
             return None;
         }
         Some(template.node.clone())
     }
 
-    fn dialect_alternatives(&mut self, range: SourceRange) {
+    /// Resolves an extended template's assembler dialect alternatives,
+    /// `{att|intel}`, to the
+    /// first one: cinrs always gives `asm!` `options(att_syntax)`, and GCC's
+    /// first alternative is the AT&T one (dialect 0), so `"{cpuid|cpuid}"` is
+    /// `"cpuid"` and `"{movl|mov} %1, %0"` is `"movl %1, %0"`. There may be
+    /// any number of alternatives after the first, and all of them are
+    /// dropped. `%{`, `%|`, `%}` (and every other `%x`) are left as they are
+    /// for [`Self::parse_template`], so the escapes keep meaning the literal
+    /// characters. A nested `{`, a `{` with no `}` and a `}` with no `{` are
+    /// errors. `|` outside braces is text.
+    fn select_dialect(&mut self, template: &ast::Spanned<String>) -> Option<String> {
+        #[derive(PartialEq)]
+        enum State {
+            Outside,
+            First,
+            Rest,
+        }
+        let mut out = String::with_capacity(template.node.len());
+        let mut state = State::Outside;
+        let mut chars = template.node.chars();
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                let next = chars.next();
+                if state != State::Rest {
+                    out.push('%');
+                    if let Some(next) = next {
+                        out.push(next);
+                    }
+                }
+                continue;
+            }
+            match (c, &state) {
+                ('{', State::Outside) => state = State::First,
+                ('{', _) => {
+                    self.dialect_error(template.range, "a '{' inside another");
+                    return None;
+                }
+                ('}', State::Outside) => {
+                    self.dialect_error(template.range, "a '}' with no '{' before it");
+                    return None;
+                }
+                ('}', _) => state = State::Outside,
+                ('|', State::First) => state = State::Rest,
+                (_, State::Rest) => {}
+                (c, _) => out.push(c),
+            }
+        }
+        if state != State::Outside {
+            self.dialect_error(template.range, "a '{' with no '}' after it");
+            return None;
+        }
+        Some(out)
+    }
+
+    fn dialect_error(&mut self, range: SourceRange, what: &str) {
         self.error(
             range,
-            "'{' and '}' in an 'asm' template are GCC's assembler dialect alternatives \
-             ('{att|intel}'), which are not supported: write the AT&T form alone, or '%{' and \
-             '%}' for a literal brace",
+            format!(
+                "{what} in an 'asm' template: braces there are GCC's assembler dialect \
+                 alternatives, '{{att|intel}}', which cannot nest and must be closed; write '%{{' \
+                 and '%}}' for a literal brace"
+            ),
         );
     }
 
     fn extended_asm(&mut self, asm: &ast::AsmStmt, range: SourceRange) -> Option<ir::AsmStmt> {
         let x86_64 = self.target.arch == Arch::X86_64;
-        let pieces = self.parse_template(&asm.template);
+        let pieces = self.select_dialect(&asm.template).and_then(|node| {
+            self.parse_template(&ast::Spanned {
+                node,
+                range: asm.template.range,
+            })
+        });
         let mut failed = pieces.is_none();
         let mut operands: Vec<ir::AsmOperand> = Vec::new();
         let mut slots: Vec<Slot> = Vec::new();
@@ -952,8 +1023,9 @@ impl Sema<'_> {
         let mut ok = true;
         while let Some(c) = chars.next() {
             match c {
+                // `select_dialect` has already taken every unescaped brace.
                 '{' | '}' => {
-                    self.dialect_alternatives(at);
+                    self.dialect_error(at, "a brace");
                     return None;
                 }
                 '%' => {}

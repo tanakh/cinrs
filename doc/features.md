@@ -587,9 +587,23 @@ reset_options`, with `#pragma GCC push_options` saving the set in force.
 Successive `target` pragmas accumulate, as GCC's do, and an attribute written
 on a function wins over the pragma.
 
-**Asking the processor.** Since only the baseline is predefined, `#ifdef
-__AVX2__` and `#ifdef __AVX512F__` take the other branch here, whatever the
-machine — the right question
+**The pragma also defines the feature macros**, for the rest of the file, as
+GCC's does: after `#pragma GCC target("avx2")`, `__AVX2__` is defined, and so is
+every instruction set it implies — `__AVX__`, `__SSE4_2__`, `__SSE4_1__`,
+`__SSSE3__`, `__SSE3__`, `__POPCNT__` and the rest, GCC 15.2's implications
+exactly (`crates/cinrs-core/src/x86.rs`, `TARGET_MACROS`). `avx512f` brings the
+AVX2 chain and `__AVX512F__`, each `avx512*` name its own macro
+(`__AVX512VL__`, `__AVX512BW__`, `__AVX512FP16__`, …), `fma` `__FMA__`,
+`pclmul` `__PCLMUL__`, and so on. `pop_options` takes back what the popped
+`target` added, `reset_options` returns to the baseline, and a `no-avx2`
+removes `__AVX2__` and everything that implies it. That is how a header that
+picks its SIMD path with `#ifdef __AVX2__` — xxHash's does — sees the
+instruction set a `#pragma GCC target` before its `#include` asked for. The
+*attribute* on one function changes no macro, in GCC or here.
+
+**Asking the processor.** Without the pragma, only the baseline is predefined,
+so `#ifdef __AVX2__` and `#ifdef __AVX512F__` take the other branch, whatever
+the machine — the right question
 is the run-time one, and `__builtin_cpu_supports` is it:
 
 ```c
@@ -804,9 +818,15 @@ target is a located error.
 * **The range-checked immediates** `"I"` … `"O"`, `"e"`, `"Z"`: write `"i"`.
 * **`%c0`, `%P0`, `%a0`**, which print a constant or an address bare: write the
   operand with `"i"` and `%0`, or pass the address in a register.
-* **Intel syntax**: a template that opens with `.intel_syntax`, and GCC's
-  dialect alternatives `{att|intel}`. Write the AT&T form; `%{` and `%}` are a
-  literal brace.
+* **Intel syntax**: a template that opens with `.intel_syntax`. Write the
+  AT&T form. GCC's dialect alternatives `{att|intel}` *are* taken — cinrs
+  always gives `asm!` `options(att_syntax)`, so the first, AT&T, alternative is
+  kept and the rest dropped: `"{cpuid|cpuid}"` is `cpuid` and
+  `"{movl|mov} %1, %0"` is `movl %1, %0` (GCC's result too, checked with
+  15.2). That is in an extended `asm` — one with a `:`, operands or not. GCC
+  passes a *basic* template to the assembler verbatim, where the braces are an
+  assembler error, so a brace there is refused. `%{`, `%}` and `%|` are the
+  literal characters; a nested `{`, or one that is never closed, is an error.
 * **`register int x asm("eax")`**, a register variable: write the register as a
   constraint of the `asm` that uses it, `"a"(x)`.
 
