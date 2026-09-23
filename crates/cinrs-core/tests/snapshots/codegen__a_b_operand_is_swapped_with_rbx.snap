@@ -1,0 +1,54 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_asm(r#\"\n        void cpuid(unsigned id, unsigned out[4]) {\n            __asm__ __volatile__(\"cpuid\\n\" : \"=a\"(out[0]), \"=b\"(out[1]), \"=c\"(out[2]),\n                                 \"=d\"(out[3]) : \"a\"(id));\n        }\n        unsigned moves(unsigned v, unsigned long p) {\n            unsigned out;\n            asm(\"movl %%ebx, %0\" : \"=r\"(out) : \"b\"(v));\n            asm(\"addl $1, %1; movb %h1, %b1\" : \"=r\"(out) : \"b\"(v));\n            asm(\"addq $1, %q0\" : \"+b\"(p));\n            asm(\"incl %0\" : \"=b\"(v) : \"0\"(v));\n            return out + v + (unsigned)p;\n        }\n        \"#)"
+---
+mod __cinrs_unit_074152e2 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn cpuid(
+        mut id: ::core::ffi::c_uint,
+        mut out: *mut ::core::ffi::c_uint,
+    ) {
+        unsafe {
+            {
+                let __cinrs_tmp0 = out.offset(0);
+                let __cinrs_tmp1 = out.offset(1);
+                let __cinrs_tmp2 = out.offset(2);
+                let __cinrs_tmp3 = out.offset(3);
+                ::core::arch::asm!(
+                    "xchgq %rbx, {o1:r}\ncpuid\n\nxchgq %rbx, {o1:r}", lateout("eax") (*
+                    __cinrs_tmp0), o1 = out(reg) (* __cinrs_tmp1), lateout("ecx") (*
+                    __cinrs_tmp2), lateout("edx") (* __cinrs_tmp3), in ("eax") id,
+                    options(att_syntax)
+                );
+            }
+        }
+    }
+    pub unsafe extern "C" fn moves(
+        mut v: ::core::ffi::c_uint,
+        mut p: ::core::ffi::c_ulong,
+    ) -> ::core::ffi::c_uint {
+        unsafe {
+            let mut out: ::core::ffi::c_uint = 0;
+            ::core::arch::asm!(
+                "xchgq %rbx, {o1:r}\nmovl %ebx, {o0:e}\nxchgq %rbx, {o1:r}", o0 =
+                lateout(reg) out, o1 = inout(reg) v => _, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "xchgq %rbx, {o1:r}\naddl $1, %ebx; movb %bh, %bl /* {o0:e} */\nxchgq %rbx, {o1:r}",
+                o0 = lateout(reg) out, o1 = inout(reg) v => _, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "xchgq %rbx, {o0:r}\naddq $1, %rbx\nxchgq %rbx, {o0:r}", o0 = inout(reg)
+                p, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "xchgq %rbx, {o0:r}\nincl %ebx\nxchgq %rbx, {o0:r}", o0 = inout(reg) v =>
+                v, options(att_syntax)
+            );
+            return out.wrapping_add(v).wrapping_add(p as ::core::ffi::c_uint);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_074152e2::*;

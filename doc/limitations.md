@@ -77,10 +77,9 @@
 * [Inline assembly](features.md#inline-assembly) is x86's and x86-64's, and
   only what Rust's `asm!` can say; the rest is refused by name, with the
   rewrite. **No memory operands** (`"m"`, `"+m"`, `"o"`, …): pass the address
-  in a register, `"r"(&x)`, and write `(%0)` in the template. **No `rbx`**,
-  which rustc keeps for LLVM, as an operand (`"b"`) or a clobber: save and
-  restore it around the instruction with `xchg`, as the bundled `<cpuid.h>`
-  does. **No flag outputs** (`"=@ccz"`): `setz %b0` with `"=q"`. **No `%=`**:
+  in a register, `"r"(&x)`, and write `(%0)` in the template. **No `rbx`
+  clobber**, since rustc keeps rbx for LLVM: give the value a `"=b"` operand,
+  which cinrs carries in and out of rbx with an `xchg` around the template. **No flag outputs** (`"=@ccz"`): `setz %b0` with `"=q"`. **No `%=`**:
   a GNU as local label, `1:` … `1b`. **No `asm goto`** in this release: branch
   in C on a value the `asm` sets. **No x87 or MMX operands**, no `"A"` pair
   (use `"=a"` and `"=d"`), no range-checked immediates (`"I"`: write `"i"`),

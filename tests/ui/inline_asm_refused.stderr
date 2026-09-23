@@ -52,11 +52,11 @@ error: the constraint "Yz" is not supported: 'asm!' has no class for it. Use "x"
 23 |         asm("" : : "Yz"(x));
    |                    ^^^^
 
-error: the constraint "b" is not supported: rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' operand. Use "r", and save and restore rbx in the template if the instruction writes it
-  --> tests/ui/inline_asm_refused.rs:24:23
+error: the clobber "rbx" is also operand 0 ("b") of this 'asm' statement: drop the clobber, as cinrs restores rbx after the template anyway
+  --> tests/ui/inline_asm_refused.rs:24:35
    |
-24 |         asm("cpuid" : "=b"(x));
-   |                       ^^^^
+24 |         asm("cpuid" : "=b"(x) : : "rbx");
+   |                                   ^^^^^
 
 error: the flag output "=@ccz" is not supported: 'asm!' has no flag outputs. Set a byte register from the flag in the template ('setz %b0') and use "=q"
   --> tests/ui/inline_asm_refused.rs:25:25
@@ -88,7 +88,7 @@ error: a bit-field cannot be an 'asm' output: it has no register-sized storage o
 29 |         asm("" : "=r"(s->b));
    |                       ^
 
-error: the clobber "rbx" is not supported: rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' operand or clobber; save and restore it in the template instead, as GCC's <cpuid.h> does with 'xchgq %%rbx, %q1' around the instruction and a "=&r" operand
+error: the clobber "rbx" is not supported: rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' clobber; give the value the instruction leaves in rbx a "=b" operand instead, which cinrs carries in and out of rbx with an 'xchg' around the template
   --> tests/ui/inline_asm_refused.rs:30:27
    |
 30 |         asm("cpuid" : : : "rbx");

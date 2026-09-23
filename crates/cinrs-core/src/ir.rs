@@ -3498,7 +3498,7 @@ impl AsmOperand {
             AsmOperandKind::In(_) => "in",
             AsmOperandKind::Out { late: true, .. } => "lateout",
             AsmOperandKind::Out { late: false, .. } => "out",
-            AsmOperandKind::InOut { .. } => "inout",
+            AsmOperandKind::InOut { .. } | AsmOperandKind::Scratch(_) => "inout",
             AsmOperandKind::Const(_) => "const",
         };
         let reg = match (&self.kind, self.reg) {
@@ -3546,6 +3546,11 @@ pub enum AsmOperandKind {
         /// Where the value goes.
         output: Place,
     },
+    /// An input whose register the statement overwrites, so the value it
+    /// leaves there is thrown away: `inout(reg) value => _`. This is an
+    /// input with the constraint `"b"`, carried through a scratch register
+    /// that the `xchg` around the template swaps with rbx (see `sema/asm.rs`).
+    Scratch(Expr),
     /// An immediate, folded: `"i"(3)` is `const 3`.
     Const(i128),
 }

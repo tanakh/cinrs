@@ -2538,8 +2538,21 @@ impl<'a> Codegen<'a> {
         };
         // `#[inline]` is ignored on an exported function, and saying so is
         // `rustc`'s job rather than the user's to read: leave it out.
+        //
+        // `always_inline` on a function with a target feature — from
+        // `__attribute__((target))` or `#pragma GCC target`, both of which
+        // are in `target_features` — is `#[inline]`: rustc refuses
+        // `#[inline(always)]` together with `#[target_feature]` ("cannot use
+        // `#[inline(always)]` with `#[target_feature]`", rust-lang/rust#145574),
+        // and BLAKE3's SIMD files are exactly that pairing, an `INLINE` macro
+        // of `static inline __attribute__((always_inline))` under `#pragma GCC
+        // target("sse4.1")`. The hint is then only a hint; a caller with the
+        // same features still inlines it in practice.
         let inline = match func.inline_hint {
             Some(_) if exported => TokenStream::new(),
+            Some(ir::InlineHint::Always) if !func.target_features.is_empty() => {
+                quote_spanned! {span=> #[inline] }
+            }
             Some(ir::InlineHint::Always) => quote_spanned! {span=> #[inline(always)] },
             Some(ir::InlineHint::Never) => quote_spanned! {span=> #[inline(never)] },
             None if func.is_inline && !exported => quote_spanned! {span=> #[inline] },
@@ -4065,6 +4078,10 @@ impl<'a> Codegen<'a> {
             let head = asm_operand_head(operand, op_span);
             let value = match &operand.kind {
                 ir::AsmOperandKind::In(expr) => self.expr(expr).at(prec::LOWEST, op_span),
+                ir::AsmOperandKind::Scratch(expr) => {
+                    let value = self.expr(expr).at(prec::LOWEST, op_span);
+                    quote_spanned! {op_span=> #value => _ }
+                }
                 ir::AsmOperandKind::Const(value) => asm_const_literal(*value, op_span),
                 ir::AsmOperandKind::Out { place, .. } => {
                     self.asm_output(place, None, index, &mut setup, &mut store_back)
@@ -8266,7 +8283,7 @@ fn asm_operand_head(operand: &ir::AsmOperand, span: Span) -> TokenStream {
         ir::AsmOperandKind::In(_) => "in",
         ir::AsmOperandKind::Out { late: true, .. } => "lateout",
         ir::AsmOperandKind::Out { late: false, .. } => "out",
-        ir::AsmOperandKind::InOut { .. } => "inout",
+        ir::AsmOperandKind::InOut { .. } | ir::AsmOperandKind::Scratch(_) => "inout",
         ir::AsmOperandKind::Const(_) => "const",
     };
     let dir = Ident::new(dir, span);

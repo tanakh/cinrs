@@ -747,6 +747,36 @@ fn a_region_pragma_reaches_the_functions_after_it() {
     assert_eq!(unsafe { after_the_region(values.as_ptr()) }, 1);
 }
 
+// `always_inline` under a target feature, BLAKE3's `INLINE` helpers in its
+// SIMD files: rustc refuses `#[inline(always)]` beside `#[target_feature]`,
+// so the helper is `#[inline]`.
+gnu11! {
+    #include <immintrin.h>
+    #include <stdint.h>
+
+    #pragma GCC push_options
+    #pragma GCC target("avx2")
+
+    static inline __attribute__((always_inline)) __m256i doubled(__m256i v) {
+        return _mm256_add_epi32(v, v);
+    }
+
+    __attribute__((target("avx2"))) int always_inline_helper(const int32_t *p) {
+        __m256i v = _mm256_loadu_si256((const __m256i *)p);
+        return _mm256_extract_epi32(doubled(doubled(v)), 6);
+    }
+
+    #pragma GCC pop_options
+}
+
+#[test]
+fn an_always_inline_helper_under_a_target_feature() {
+    let values: [i32; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    if is_x86_feature_detected!("avx2") {
+        assert_eq!(unsafe { always_inline_helper(values.as_ptr()) }, 28);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the address of an intrinsic
 // ---------------------------------------------------------------------------

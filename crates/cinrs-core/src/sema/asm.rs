@@ -16,6 +16,7 @@
 //! | `"=r"` / `"=&r"` / `"+r"`          | `lateout` / `out` / `inout`             |
 //! | `"q"`, `"Q"`                       | as `"r"` (`reg_abcd` on 32-bit x86)     |
 //! | `"a" "c" "d" "S" "D"`              | `in("eax")` etc., at the operand's width |
+//! | `"b"` / `"=b"` / `"+b"`            | a scratch `inout(reg) v => _` / `out(reg)` / `inout(reg)`, swapped with rbx by an `xchg` either side of the template (below) |
 //! | `"x"`                              | `xmm_reg`                               |
 //! | `"i"`, `"n"`                       | `const`, folded; written `${oN}`        |
 //! | `"0"` … (tied to an output)        | `inout(…) input => output`              |
@@ -39,13 +40,40 @@
 //! memory (`"rm"`, `"g"`), the register is chosen: the instruction GCC would
 //! pick may differ, the meaning does not.
 //!
+//! # The `"b"` constraint
+//!
+//! `rustc` refuses rbx as an operand, so a `"b"` operand is carried in a
+//! scratch register the compiler chooses, named like any other (`oN`), and
+//! swapped with rbx by an `xchg` on either side of the template — on x86-64
+//! `xchgq %rbx, {oN:r}`, on 32-bit x86 `xchgl %ebx, {oN:e}`. This is GCC's
+//! own `<cpuid.h>` idiom done for the user:
+//!
+//! * the first `xchg` puts the scratch's value in rbx and keeps rbx's in the
+//!   scratch, so an input (`"b"`, `"+b"`, or a `"0"` tied to a `"=b"`) is in
+//!   rbx while the template runs;
+//! * the second puts back what rbx held and leaves in the scratch what the
+//!   template left in rbx, which is the output of `"=b"` and `"+b"`;
+//! * for an input alone the scratch's final value is thrown away:
+//!   `inout(reg) v => _`.
+//!
+//! The first `xchg` writes the scratch after every input has been loaded and
+//! before the template reads any, so the scratch must not share a register
+//! with an input: an output-only `"=b"` is `out(reg)` (early clobber), never
+//! `lateout`, and the other forms are `inout`, which never share. A `%0` that
+//! names the operand is written as rbx at the width asked for (`%ebx`, `%bx`,
+//! `%bl`, `%bh` for `%h0`, `%rbx`), exactly as an explicit register is. One
+//! `"b"` operand per statement, as in GCC, and not together with an `rbx`
+//! clobber; a template that writes `%rbx` itself as well is its own business.
+//! A one-byte `"b"` operand is refused: `reg_byte` takes no `:r` modifier,
+//! and an `xchgb` would leave the rest of rbx unrestored.
+//!
 //! # What `rustc` says (probed on x86-64 with 1.88+)
 //!
 //! * `rbx`, `ebx`, `bx`, `bl` cannot be operands *or* clobbers — "rbx is used
-//!   internally by LLVM" — so `"b"` and an `rbx` clobber are refused here with
-//!   that reason. The template may still *mention* `%rbx` when it restores
-//!   it: GCC's own `<cpuid.h>` idiom `xchgq %rbx, %q1; cpuid; xchgq %rbx,
-//!   %q1` with `"=&r"` works unchanged.
+//!   internally by LLVM" — so `"b"` is the scratch-and-`xchg` above and an
+//!   `rbx` clobber is refused here, pointing at `"b"`. The template may still
+//!   *mention* `%rbx` when it restores it: GCC's own `<cpuid.h>` idiom
+//!   `xchgq %rbx, %q1; cpuid; xchgq %rbx, %q1` with `"=&r"` works unchanged.
 //! * A positional operand cannot follow a named or an explicit-register one
 //!   (hence the names).
 //! * An explicit register has to be spelled at the value's width: `al` for a
@@ -86,6 +114,8 @@ enum Choice {
     Xmm,
     /// `a`, `c`, `d`, `S`, `D`: that register.
     Explicit(char),
+    /// `b`: rbx, through a scratch register and an `xchg` either side.
+    Rbx,
     /// `i`, `n`: an integer constant.
     Imm,
     /// A digit: the same location as that output operand.
@@ -157,6 +187,10 @@ const fn fam(names: [&'static str; 4], high: Option<&'static str>, x86_64_only: 
     }
 }
 
+/// rbx, which is not in [`FAMILIES`] because it is never an `asm!` operand:
+/// only a `"b"` operand's references in the template are written with it.
+const RBX: Family = fam(["bl", "bx", "ebx", "rbx"], Some("bh"), false);
+
 const XMM: [&str; 16] = [
     "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10",
     "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
@@ -166,9 +200,9 @@ const XMM: [&str; 16] = [
 fn reserved_register(name: &str) -> Option<&'static str> {
     match name {
         "rbx" | "ebx" | "bx" | "bl" | "bh" => Some(
-            "rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' operand or \
-             clobber; save and restore it in the template instead, as GCC's <cpuid.h> does with \
-             'xchgq %%rbx, %q1' around the instruction and a \"=&r\" operand",
+            "rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' clobber; \
+             give the value the instruction leaves in rbx a \"=b\" operand instead, which cinrs \
+             carries in and out of rbx with an 'xchg' around the template",
         ),
         "rsp" | "esp" | "sp" | "spl" => Some("the stack pointer cannot be an 'asm!' operand"),
         "rbp" | "ebp" | "bp" | "bpl" => Some("the frame pointer cannot be an 'asm!' operand"),
@@ -271,9 +305,11 @@ impl Sema<'_> {
         // An input tied to an output: which output, so that a second tie is
         // caught.
         let mut tied: Vec<bool> = Vec::new();
+        // The GCC number of the operand with the constraint `"b"`.
+        let mut rbx: Option<usize> = None;
 
         for (index, operand) in asm.outputs.iter().enumerate() {
-            match self.asm_output(operand, index, x86_64) {
+            match self.asm_output(operand, index, x86_64, &mut rbx) {
                 Some(op) => {
                     slots.push(Slot::Operand(operands.len()));
                     operands.push(op);
@@ -287,7 +323,7 @@ impl Sema<'_> {
         }
         for (offset, operand) in asm.inputs.iter().enumerate() {
             let index = asm.outputs.len() + offset;
-            match self.asm_input(operand, index, x86_64, &slots, &mut operands, &mut tied) {
+            match self.asm_input(operand, index, &slots, &mut operands, &mut tied, &mut rbx) {
                 Some(slot) => slots.push(slot),
                 None => {
                     failed = true;
@@ -298,7 +334,7 @@ impl Sema<'_> {
 
         let mut clobbers: Vec<&'static str> = Vec::new();
         for clobber in &asm.clobbers {
-            match self.asm_clobber(clobber, x86_64, &operands) {
+            match self.asm_clobber(clobber, x86_64, &operands, rbx) {
                 Some(Some(reg)) if !clobbers.contains(&reg) => clobbers.push(reg),
                 Some(_) => {}
                 None => failed = true,
@@ -311,6 +347,12 @@ impl Sema<'_> {
             .chain(&asm.inputs)
             .map(|operand| operand.name.as_ref().map(|name| name.name.as_str()))
             .collect();
+        // `claim_rbx` runs only once the operand is built, so its slot is
+        // an operand.
+        let rbx_op = rbx.and_then(|index| match slots.get(index) {
+            Some(Slot::Operand(op)) => Some(*op),
+            _ => None,
+        });
         let template = match pieces {
             Some(pieces) => self.render_template(
                 &pieces,
@@ -318,13 +360,27 @@ impl Sema<'_> {
                 &names,
                 &slots,
                 &mut operands,
-                x86_64,
+                rbx_op,
             ),
             None => None,
         };
         if failed {
             return None;
         }
+        // The `"b"` operand's scratch, swapped with rbx either side of the
+        // template; see the module documentation.
+        let template = match (template, rbx_op) {
+            (Some(template), Some(op)) => {
+                let name = operands[op].name.as_deref().unwrap_or_default();
+                let xchg = if x86_64 {
+                    format!("xchgq %rbx, {{{name}:r}}")
+                } else {
+                    format!("xchgl %ebx, {{{name}:e}}")
+                };
+                Some(format!("{xchg}\n{template}\n{xchg}"))
+            }
+            (template, _) => template,
+        };
         Some(ir::AsmStmt {
             template: template?,
             operands,
@@ -338,6 +394,7 @@ impl Sema<'_> {
         operand: &ast::AsmOperand,
         index: usize,
         x86_64: bool,
+        rbx: &mut Option<usize>,
     ) -> Option<ir::AsmOperand> {
         let constraint = self.parse_constraint(&operand.constraint, true)?;
         let place = self.lvalue_assignable(&operand.expr)?;
@@ -351,15 +408,21 @@ impl Sema<'_> {
         }
         let ty = place.ty;
         let reg = self.asm_register(constraint.choice, ty, operand, x86_64)?;
+        let in_rbx = constraint.choice == Choice::Rbx;
+        if in_rbx {
+            self.claim_rbx(rbx, index, operand)?;
+        }
         let kind = if constraint.plus {
             AsmOperandKind::InOut {
                 input: None,
                 output: place,
             }
         } else {
+            // The first `xchg` writes a `"b"` operand's scratch before the
+            // template reads its inputs: an early clobber whatever the `&`.
             AsmOperandKind::Out {
                 place,
-                late: !constraint.early,
+                late: !constraint.early && !in_rbx,
             }
         };
         Some(ir::AsmOperand {
@@ -375,11 +438,12 @@ impl Sema<'_> {
         &mut self,
         operand: &ast::AsmOperand,
         index: usize,
-        x86_64: bool,
         slots: &[Slot],
         operands: &mut Vec<ir::AsmOperand>,
         tied: &mut [bool],
+        rbx: &mut Option<usize>,
     ) -> Option<Slot> {
+        let x86_64 = self.target.arch == Arch::X86_64;
         let constraint = self.parse_constraint(&operand.constraint, false)?;
         let value = self.expr(&operand.expr)?;
         if value.ty.is_error() {
@@ -459,16 +523,46 @@ impl Sema<'_> {
             choice => {
                 let ty = value.ty;
                 let reg = self.asm_register(choice, ty, operand, x86_64)?;
+                // A `"b"` input is loaded into the scratch, which the `xchg`s
+                // then overwrite: what is left there afterwards is not wanted.
+                let kind = if choice == Choice::Rbx {
+                    self.claim_rbx(rbx, index, operand)?;
+                    AsmOperandKind::Scratch(value)
+                } else {
+                    AsmOperandKind::In(value)
+                };
                 operands.push(ir::AsmOperand {
                     name: operand_name(reg, index),
                     reg,
-                    kind: AsmOperandKind::In(value),
+                    kind,
                     ty,
                     range: operand.expr.range,
                 });
                 Some(Slot::Operand(operands.len() - 1))
             }
         }
+    }
+
+    /// Records operand `index` as the statement's `"b"` operand, or reports
+    /// that another one is there already.
+    fn claim_rbx(
+        &mut self,
+        rbx: &mut Option<usize>,
+        index: usize,
+        operand: &ast::AsmOperand,
+    ) -> Option<()> {
+        if let Some(first) = *rbx {
+            self.error(
+                operand.constraint.range,
+                format!(
+                    "operand {index} cannot be in \"b\" too: operand {first} is in rbx already, \
+                     and one register holds one operand"
+                ),
+            );
+            return None;
+        }
+        *rbx = Some(index);
+        Some(())
     }
 
     /// Parses a constraint string, choosing among its alternatives, and
@@ -530,6 +624,7 @@ impl Sema<'_> {
                     'q' | 'Q' => Some(Choice::Byte),
                     'x' => Some(Choice::Xmm),
                     'a' | 'c' | 'd' | 'S' | 'D' => Some(Choice::Explicit(c)),
+                    'b' => Some(Choice::Rbx),
                     'i' | 'n' => {
                         imm = true;
                         None
@@ -708,6 +803,36 @@ impl Sema<'_> {
                 }
                 Some(AsmReg::Explicit(family.names[width]))
             }
+            // The scratch register the `xchg` swaps with rbx: a `reg`, whose
+            // `:r` (`:e` on 32-bit x86) is the whole register whatever the
+            // value's width.
+            Choice::Rbx => {
+                if ty.is_vector() {
+                    return fail(
+                        self,
+                        "a vector operand cannot live in \"b\": write \"x\"".to_owned(),
+                    );
+                }
+                if size == 1 {
+                    return fail(
+                        self,
+                        "a one-byte operand in \"b\" is not supported: cinrs carries a \"b\" \
+                         operand in a scratch register swapped with rbx by an 'xchg', and a byte \
+                         register would restore only bl. Widen the operand to 'unsigned int'"
+                            .to_owned(),
+                    );
+                }
+                if size > word {
+                    return fail(
+                        self,
+                        format!(
+                            "this {size}-byte operand does not fit the register \"b\" names on \
+                             this target"
+                        ),
+                    );
+                }
+                Some(AsmReg::Class("reg"))
+            }
             Choice::Imm | Choice::Tie(_) => unreachable!("handled by the caller"),
         }
     }
@@ -744,12 +869,26 @@ impl Sema<'_> {
         clobber: &ast::Spanned<String>,
         x86_64: bool,
         operands: &[ir::AsmOperand],
+        rbx: Option<usize>,
     ) -> Option<Option<&'static str>> {
         let at = clobber.range;
         let name = clobber.node.trim().trim_start_matches('%');
         match name {
             "memory" | "cc" | "flags" | "dirflag" => return Some(None),
             _ => {}
+        }
+        if let Some(first) = rbx
+            && (RBX.names.contains(&name) || RBX.high == Some(name))
+        {
+            self.error(
+                at,
+                format!(
+                    "the clobber \"{name}\" is also operand {first} (\"b\") of this 'asm' \
+                     statement: drop the clobber, as cinrs restores rbx after the template \
+                     anyway"
+                ),
+            );
+            return None;
         }
         if let Some(reason) = reserved_register(name) {
             self.error(
@@ -948,8 +1087,9 @@ impl Sema<'_> {
         names: &[Option<&str>],
         slots: &[Slot],
         operands: &mut [ir::AsmOperand],
-        x86_64: bool,
+        rbx_op: Option<usize>,
     ) -> Option<String> {
+        let x86_64 = self.target.arch == Arch::X86_64;
         let at = template.range;
         // `%h` needs a register with a high byte, which is `reg_abcd`.
         for piece in pieces {
@@ -958,6 +1098,7 @@ impl Sema<'_> {
                 target,
             } = piece
                 && let Some(Slot::Operand(op)) = resolve(target, names, slots)
+                && Some(op) != rbx_op
                 && operands[op].reg == AsmReg::Class("reg")
             {
                 operands[op].reg = AsmReg::Class("reg_abcd");
@@ -966,6 +1107,11 @@ impl Sema<'_> {
         let mut out = String::new();
         let mut ok = true;
         let mut used = vec![false; operands.len()];
+        // The `"b"` operand's scratch is named by the `xchg`s around the
+        // template.
+        if let Some(op) = rbx_op {
+            used[op] = true;
+        }
         for piece in pieces {
             let (modifier, target) = match piece {
                 Piece::Text(text) => {
@@ -999,7 +1145,18 @@ impl Sema<'_> {
             used[op] = true;
             let operand = &operands[op];
             let size = self.size_of(operand.ty).unwrap_or(0);
-            match render_reference(operand, size, modifier, x86_64) {
+            let rendered = if Some(op) == rbx_op {
+                // The template runs with the value in rbx itself.
+                let width = match size {
+                    2 => 1,
+                    4 => 2,
+                    _ => 3,
+                };
+                render_family(&RBX, RBX.names[width], modifier, x86_64)
+            } else {
+                render_reference(operand, size, modifier, x86_64)
+            };
+            match rendered {
                 Ok(text) => out.push_str(&text),
                 Err(message) => {
                     self.error(at, message);
@@ -1065,22 +1222,7 @@ fn render_reference(
                 .iter()
                 .find(|f| f.names.contains(&reg))
                 .expect("explicit operands are spelled from the table");
-            let text = match modifier {
-                None => Some(reg),
-                Some('b') => Some(family.names[0]),
-                Some('w') => Some(family.names[1]),
-                Some('k') => Some(family.names[2]),
-                Some('q') if x86_64 => Some(family.names[3]),
-                Some('h') => family.high,
-                Some(_) => None,
-            };
-            match text {
-                Some(text) => Ok(format!("%{text}")),
-                None => Err(format!(
-                    "the operand modifier '%{}' has no form for the register {reg}",
-                    modifier.unwrap_or(' ')
-                )),
-            }
+            render_family(family, reg, modifier, x86_64)
         }
         AsmReg::Class("reg_byte") => match modifier {
             None | Some('b') => Ok(format!("{{{name}}}")),
@@ -1117,6 +1259,33 @@ fn render_reference(
             };
             Ok(format!("{{{name}{suffix}}}"))
         }
+    }
+}
+
+/// A reference to an operand that lives in one register of `family`, `reg`
+/// being its name at the operand's width: the register itself, at the width
+/// the modifier asks for.
+fn render_family(
+    family: &Family,
+    reg: &str,
+    modifier: Option<char>,
+    x86_64: bool,
+) -> Result<String, String> {
+    let text = match modifier {
+        None => Some(reg),
+        Some('b') => Some(family.names[0]),
+        Some('w') => Some(family.names[1]),
+        Some('k') => Some(family.names[2]),
+        Some('q') if x86_64 => Some(family.names[3]),
+        Some('h') => family.high,
+        Some(_) => None,
+    };
+    match text {
+        Some(text) => Ok(format!("%{text}")),
+        None => Err(format!(
+            "the operand modifier '%{}' has no form for the register {reg}",
+            modifier.unwrap_or(' ')
+        )),
     }
 }
 
@@ -1157,10 +1326,6 @@ fn letter_refusal(letter: char) -> String {
         'A' => "the constraint \"A\" (the edx:eax pair) is not supported: 'asm!' has no operand \
                 that spans two registers. Use \"=a\" and \"=d\" with two variables and combine \
                 them"
-            .to_owned(),
-        'b' => "the constraint \"b\" is not supported: rustc reserves rbx (LLVM uses it \
-                internally) and refuses it as an 'asm!' operand. Use \"r\", and save and restore \
-                rbx in the template if the instruction writes it"
             .to_owned(),
         'f' | 't' | 'u' => format!(
             "the constraint \"{letter}\" (an x87 stack register) is not supported: 'asm!' has \

@@ -1817,6 +1817,35 @@ fn a_region_pragma_becomes_target_feature_attributes() {
     ));
 }
 
+/// `always_inline` together with a target feature is `#[inline]`, not
+/// `#[inline(always)]`, which rustc refuses beside `#[target_feature]` —
+/// whether the feature comes from the function's own attribute or from a
+/// `#pragma GCC target` region, as in BLAKE3's SIMD files. Without a feature
+/// it stays `#[inline(always)]`.
+#[test]
+fn always_inline_with_a_target_feature_is_plain_inline() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        __attribute__((always_inline, target("avx2"))) static inline int own(int n) {
+            return n + 1;
+        }
+
+        __attribute__((always_inline)) static inline int plain(int n) { return n + 2; }
+
+        #pragma GCC push_options
+        #pragma GCC target("avx2")
+        static inline __attribute__((always_inline)) int region(int n) { return n + 3; }
+
+        int call(int n) { return own(n) + region(n); }
+        #pragma GCC pop_options
+
+        int call_plain(int n) { return plain(n); }
+        "#
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // inline assembly
 // ---------------------------------------------------------------------------
@@ -1839,6 +1868,30 @@ fn basic_asm_becomes_asm_with_att_syntax() {
             __asm__ __volatile__("pause\n\tnop");
             asm volatile ("" ::: "memory", "cc");
             asm("movl %eax, %eax");
+        }
+        "#
+    ));
+}
+
+/// A `"b"` operand is a scratch register swapped with rbx by an `xchgq` on
+/// either side of the template: `out(reg)` (early clobber) for `"=b"`,
+/// `inout(reg) v => _` for an input, `inout(reg)` for `"+b"` and for a `"0"`
+/// tied to a `"=b"`; `%N` naming it is rbx at the width asked for.
+#[test]
+fn a_b_operand_is_swapped_with_rbx() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        void cpuid(unsigned id, unsigned out[4]) {
+            __asm__ __volatile__("cpuid\n" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]),
+                                 "=d"(out[3]) : "a"(id));
+        }
+        unsigned moves(unsigned v, unsigned long p) {
+            unsigned out;
+            asm("movl %%ebx, %0" : "=r"(out) : "b"(v));
+            asm("addl $1, %1; movb %h1, %b1" : "=r"(out) : "b"(v));
+            asm("addq $1, %q0" : "+b"(p));
+            asm("incl %0" : "=b"(v) : "0"(v));
+            return out + v + (unsigned)p;
         }
         "#
     ));

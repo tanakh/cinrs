@@ -1750,10 +1750,20 @@ fn what_asm_cannot_express_is_refused_by_name() {
              an SSE register",
         ),
         (
-            r#"void f(int x) { asm("cpuid" : "=b"(x)); }"#,
-            "the constraint \"b\" is not supported: rustc reserves rbx (LLVM uses it \
-             internally) and refuses it as an 'asm!' operand. Use \"r\", and save and restore \
-             rbx in the template if the instruction writes it",
+            r#"void f(int x, int y) { asm("cpuid" : "=b"(x) : "b"(y)); }"#,
+            "operand 1 cannot be in \"b\" too: operand 0 is in rbx already, and one register \
+             holds one operand",
+        ),
+        (
+            r#"void f(int x) { asm("cpuid" : "=b"(x) : : "ebx"); }"#,
+            "the clobber \"ebx\" is also operand 0 (\"b\") of this 'asm' statement: drop the \
+             clobber, as cinrs restores rbx after the template anyway",
+        ),
+        (
+            r#"void f(unsigned char x) { asm("" : "+b"(x)); }"#,
+            "a one-byte operand in \"b\" is not supported: cinrs carries a \"b\" operand in a \
+             scratch register swapped with rbx by an 'xchg', and a byte register would restore \
+             only bl. Widen the operand to 'unsigned int'",
         ),
         (
             r#"int f(int a, int b) { char z; asm("cmpl %1, %2" : "=@ccz"(z) : "r"(a), "r"(b)); return z; }"#,
@@ -1785,9 +1795,9 @@ fn what_asm_cannot_express_is_refused_by_name() {
         (
             r#"void f(void) { asm("cpuid" : : : "rbx"); }"#,
             "the clobber \"rbx\" is not supported: rustc reserves rbx (LLVM uses it \
-             internally) and refuses it as an 'asm!' operand or clobber; save and restore it in \
-             the template instead, as GCC's <cpuid.h> does with 'xchgq %%rbx, %q1' around the \
-             instruction and a \"=&r\" operand",
+             internally) and refuses it as an 'asm!' clobber; give the value the instruction \
+             leaves in rbx a \"=b\" operand instead, which cinrs carries in and out of rbx with \
+             an 'xchg' around the template",
         ),
         (
             r#"void f(void) { asm("" : : : "rsp"); }"#,

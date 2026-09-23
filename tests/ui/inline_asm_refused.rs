@@ -3,8 +3,8 @@
 //!
 //! Each refusal names the constraint or the feature and, where there is one,
 //! the rewrite: `asm!` has no memory operand, no x87 or MMX registers, no
-//! register pair, no flag outputs and no `%=`; rustc keeps rbx, rsp and rbp for
-//! itself. Everything else about extended asm maps (see `sema/asm.rs`).
+//! register pair, no flag outputs and no `%=`; rustc keeps rsp and rbp, and rbx
+//! outside a "b" operand. Everything else about extended asm maps (`sema/asm.rs`).
 
 cinrs::gnu99! {
     #pragma cinrs target "x86_64-unknown-linux-gnu"
@@ -21,7 +21,7 @@ cinrs::gnu99! {
         asm("" : : "I"(x)); //~ ERROR: the constraint "I" (a range-checked immediate) is not supported
         asm("" : : "R"(x)); //~ ERROR: the constraint "R" (a legacy register) is not supported
         asm("" : : "Yz"(x)); //~ ERROR: the constraint "Yz" is not supported
-        asm("cpuid" : "=b"(x)); //~ ERROR: the constraint "b" is not supported: rustc reserves rbx
+        asm("cpuid" : "=b"(x) : : "rbx"); //~ ERROR: the clobber "rbx" is also operand 0 ("b") of this 'asm' statement
         asm("sete %0" : "=@ccz"(c)); //~ ERROR: the flag output "=@ccz" is not supported
         asm("1: jmp 1b%=" : :); //~ ERROR: '%=' is not supported
         asm(".byte %c0" : : "i"(1)); //~ ERROR: the operand modifier '%c' is not supported

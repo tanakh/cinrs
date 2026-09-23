@@ -778,12 +778,19 @@ target is a located error.
   none. Pass the address in a register and write the memory reference in the
   template: `asm("incl (%0)" : : "r"(&x) : "memory")`. The template is not
   rewritten for you.
-* **`rbx`** — the `"b"` constraint, and `rbx`, `ebx`, `bx` or `bl` as a clobber.
-  rustc keeps rbx for LLVM and refuses it as an operand or a clobber. Save and
-  restore it in the template around the instruction, with an early-clobbered
-  register for the value: `"xchgq %%rbx, %q1\n\tcpuid\n\txchgq %%rbx, %q1"` and
-  `"=&r"(b)`. That is what GCC's own `<cpuid.h>` does for 32-bit PIC code, and
-  what the bundled one does — see below. `rsp` and `rbp` are refused too.
+* **`rbx` as a clobber** — `rbx`, `ebx`, `bx` or `bl`. rustc keeps rbx for LLVM
+  and refuses it as an `asm!` operand or clobber. The `"b"` constraint (`"b"`,
+  `"=b"`, `"+b"`, `"=&b"`, and a `"0"` tied to one) *is* accepted: the value is
+  carried in a scratch register that an `xchg` swaps with rbx on either side
+  of the template (`xchgq %rbx, {oN:r}` on x86-64, `xchgl %ebx, {oN:e}` on
+  32-bit x86) — what GCC's own `<cpuid.h>` does by hand for 32-bit PIC code —
+  so the template runs with the input in rbx, the output is what it left
+  there, and rbx is restored afterwards. `%0` naming the operand is written as
+  `%ebx`, `%rbx`, `%bx`, `%bl` or `%bh` as the width and modifier ask. So
+  `"=b"(x)` is the way to read a register an instruction writes to rbx; an
+  `rbx` clobber stays refused (and one beside a `"b"` operand is an error, as
+  in GCC), as does a second `"b"` operand in one statement and a one-byte
+  one. `rsp` and `rbp` are refused too.
 * **`%=`**, the number unique to each instance of a statement. `asm!` has no
   such number; a GNU as local label is the same thing: `1:` … `jnz 1b`.
 * **`asm goto`**, and `%l0`. Not in this release: the jump to a C label has to
@@ -803,7 +810,7 @@ target is a located error.
 * **`register int x asm("eax")`**, a register variable: write the register as a
   constraint of the `asm` that uses it, `"a"(x)`.
 
-**`<cpuid.h>`** is bundled, because GCC's names rbx as an operand. The same
+**`<cpuid.h>`** is bundled, with the `xchg` written out by hand. The same
 names mean the same things: `__cpuid(leaf, a, b, c, d)` and
 `__cpuid_count(leaf, subleaf, a, b, c, d)` store the four registers into four
 lvalues, `__get_cpuid_max(ext, &sig)` returns the highest leaf of a range,

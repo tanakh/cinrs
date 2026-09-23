@@ -8,7 +8,7 @@
 //! expected it to. None of that needs gcc at test time.
 //!
 //! What must *not* compile — memory operands, the x87 and MMX constraints,
-//! rbx, `%=`, `asm goto`, asm in a safe function or on another architecture —
+//! an rbx clobber, `%=`, `asm goto`, asm in a safe function or on another architecture —
 //! is in `tests/ui/inline_asm_refused.rs`.
 #![cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 
@@ -278,5 +278,59 @@ fn cpuid_h_reads_the_processor() {
             assert_eq!(has_sse2(), 1);
         }
         assert_eq!(avx2_agrees(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The "b" constraint: a scratch register swapped with rbx by an `xchg` on
+// either side of the template, since rustc refuses rbx as an operand.
+// ---------------------------------------------------------------------------
+
+gnu99! {
+    /* BLAKE3's blake3_dispatch.c, verbatim but for the names. */
+    void cpuid_b(unsigned out[4], unsigned id) {
+        __asm__ __volatile__("cpuid\n" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3])
+                             : "a"(id));
+    }
+    void cpuidex_b(unsigned out[4], unsigned id, unsigned sid) {
+        __asm__ __volatile__("cpuid\n" : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3])
+                             : "a"(id), "c"(sid));
+    }
+    unsigned b_input(unsigned v) { unsigned out; asm("movl %%ebx, %0" : "=r"(out) : "b"(v)); return out; }
+    unsigned b_plus(unsigned v) { asm("addl $1, %%ebx" : "+b"(v)); return v; }
+    /* %0 names rbx itself, at the operand's width and at the modifier's. */
+    unsigned b_named(unsigned v) { asm("shll $4, %0; incb %b0" : "+b"(v)); return v; }
+    unsigned b_high(unsigned v) { unsigned out; asm("movzbl %h1, %0" : "=r"(out) : "b"(v)); return out; }
+    unsigned b_tied(unsigned v) { unsigned r; asm("negl %0" : "=b"(r) : "0"(v)); return r; }
+    /* Everything else the statement names survives the swap. */
+    unsigned b_with_others(unsigned a, unsigned b, unsigned c) {
+        unsigned out;
+        asm("movl %1, %0; addl %%ebx, %0; addl %3, %0" : "=&r"(out) : "r"(a), "b"(b), "r"(c));
+        return out;
+    }
+}
+
+#[test]
+fn the_b_constraint_goes_through_rbx() {
+    unsafe {
+        let leaf0 = rust_cpuid(0);
+        let mut out = [0u32; 4];
+        cpuid_b(out.as_mut_ptr(), 0);
+        assert_eq!(out, [leaf0.eax, leaf0.ebx, leaf0.ecx, leaf0.edx]);
+        assert_eq!(out[1], rust_cpuid(0).ebx);
+        #[cfg(target_arch = "x86")]
+        let leaf7 = core::arch::x86::__cpuid_count(7, 0);
+        #[cfg(target_arch = "x86_64")]
+        let leaf7 = core::arch::x86_64::__cpuid_count(7, 0);
+        cpuidex_b(out.as_mut_ptr(), 7, 0);
+        assert_eq!(out, [leaf7.eax, leaf7.ebx, leaf7.ecx, leaf7.edx]);
+
+        assert_eq!(b_input(0x1234_5678), 0x1234_5678);
+        assert_eq!(b_plus(41), 42);
+        assert_eq!(b_plus(u32::MAX), 0);
+        assert_eq!(b_named(0x12), 0x121);
+        assert_eq!(b_high(0xabcd), 0xab);
+        assert_eq!(b_tied(5), 5u32.wrapping_neg());
+        assert_eq!(b_with_others(1, 20, 300), 321);
     }
 }
