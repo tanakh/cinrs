@@ -190,6 +190,30 @@ impl Sema<'_> {
             "nan" | "nanl" | "nanf" | "nans" | "nansl" | "nansf" => {
                 self.nan_builtin(name, rest, args, range)
             }
+            // TS 18661-3's spellings, which glibc's `<math.h>` writes
+            // `HUGE_VAL_F32`, `INFINITY`'s relatives and `SNANF64` with for a
+            // compiler claiming GCC 7 or later: `_Float32` is `float`, the
+            // other three are `double` (see `parse::floatn_type`). The
+            // `_Float128` ones stay unknown, since no value of it can exist.
+            "huge_valf32" | "inff32" => {
+                self.builtin_arity(name, args, 0, range)?;
+                Some(Expr::new(ExprKind::Float(f64::INFINITY), Ty::Float, range))
+            }
+            "huge_valf64" | "huge_valf32x" | "huge_valf64x" | "inff64" | "inff32x" | "inff64x" => {
+                self.builtin_arity(name, args, 0, range)?;
+                Some(Expr::new(ExprKind::Float(f64::INFINITY), Ty::Double, range))
+            }
+            "nanf32" | "nanf64" | "nanf32x" | "nanf64x" | "nansf32" | "nansf64" | "nansf32x"
+            | "nansf64x" => {
+                let signalling = rest.starts_with("nans");
+                let base = match (signalling, rest.ends_with("f32")) {
+                    (false, true) => "nanf",
+                    (false, false) => "nan",
+                    (true, true) => "nansf",
+                    (true, false) => "nans",
+                };
+                self.nan_builtin(name, base, args, range)
+            }
             "fabs" | "fabsl" | "fabsf" => {
                 let ty = if rest == "fabsf" {
                     Ty::Float

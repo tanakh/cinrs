@@ -1487,6 +1487,10 @@ struct SpecCounts {
     complex: u32,
     imaginary: u32,
     int128: u32,
+    /// `_Float32`, `_Float64`, `_Float32x`, `_Float64x`, `_Float128` or
+    /// `__float128`, and which of them the last one was.
+    floatn: u32,
+    floatn_size: Option<FloatSize>,
 }
 
 impl SpecCounts {
@@ -1504,6 +1508,7 @@ impl SpecCounts {
             + self.complex
             + self.imaginary
             + self.int128
+            + self.floatn
             > 0
     }
 }
@@ -1579,6 +1584,7 @@ impl Parser<'_> {
         }
         match tok.ident() {
             Some(NORETURN_BUILTIN) => true,
+            Some(name) if floatn_type(name).is_some() && !self.is_typedef_name(name) => true,
             // A label such as `done:` must not look like a declaration even
             // when it happens to share a name with a `typedef`.
             Some(name) => self.is_typedef_name(name) && !self.nth(n + 1).is_punct(Punct::Colon),
@@ -1951,22 +1957,36 @@ impl Parser<'_> {
                 continue;
             }
 
-            // An extended floating type: `__float128`, `_Float128`, the rest
-            // of TS 18661-3's set. None of them is a type specifier here, and
-            // without this they would look like an identifier and turn one
-            // refusal into "type specifier missing" plus whatever follows.
-            //
-            // A name a `typedef` has *defined* is not this case, and is let
-            // through to the typedef path below. TS 18661-3 says a
-            // conforming implementation may spell `_Float32` as a keyword or
-            // leave it to the library, and glibc does the second: with
-            // `_GNU_SOURCE` its `bits/floatn-common.h` writes
-            // `typedef float _Float32;` for a compiler that has no such
-            // keyword — which this one is, claiming `__GNUC__` 4.2.1 — and
-            // `<math.h>` then declares four hundred functions in terms of it.
-            // Those are ordinary `float`s and there is nothing to refuse; what
-            // is refused is the *keyword* case, a program writing `_Float32`
-            // with nothing having defined it.
+            // TS 18661-3's interchange and extended types, which GCC has as
+            // keywords from 7 on and glibc's `<bits/floatn.h>` uses as such
+            // for a compiler claiming that — as this one does. They are
+            // spelled as identifiers rather than lexed as keywords because a
+            // program (or an older glibc) may still `typedef float _Float32;`,
+            // and a name a `typedef` has defined is let through to the typedef
+            // path below. Sema says which type each one is; see
+            // [`FloatSize`]. `_Complex` may come first: `<complex.h>` writes
+            // `_Complex _Float32`.
+            if tag.is_none()
+                && typedef_name.is_none()
+                && !counts.any_besides(&["_Complex"])
+                && let Some(name) = self.peek().ident()
+                && !self.is_typedef_name(name)
+                && let Some(size) = floatn_type(name)
+            {
+                self.advance();
+                counts.floatn += 1;
+                counts.floatn_size = Some(size);
+                consumed_any = true;
+                continue;
+            }
+
+            // The extended floating types that have no type to become at all:
+            // `_Float16`, `__fp16`, `__bf16` and `_Float128x`. None of them is
+            // a type specifier here, and without this they would look like an
+            // identifier and turn one refusal into "type specifier missing"
+            // plus whatever follows. glibc declares none of them on the
+            // targets modelled (`__HAVE_FLOAT16` and `__HAVE_FLOAT128X` are
+            // `0`), so this is a program writing one.
             if !has_type
                 && let Some(name) = self.peek().ident()
                 && !self.is_typedef_name(name)
@@ -2214,6 +2234,22 @@ impl Parser<'_> {
                 self.error(range, "cannot combine 'char' with other type specifiers");
             }
             TypeKind::Char(sign)
+        } else if counts.floatn > 0 {
+            let size = counts.floatn_size.expect("set with the count");
+            if counts.floatn > 1 || counts.any_besides(&["_FloatN", "_Complex"]) {
+                self.error(
+                    range,
+                    format!(
+                        "cannot combine '{}' with other type specifiers",
+                        size.as_str()
+                    ),
+                );
+            }
+            if counts.complex > 0 {
+                TypeKind::Complex(size)
+            } else {
+                TypeKind::Float(size)
+            }
         } else if counts.float > 0 || counts.double > 0 {
             let size = if counts.float > 0 {
                 if counts.double > 0 {
@@ -2293,8 +2329,9 @@ impl Parser<'_> {
 impl SpecCounts {
     /// Whether any counter outside `allowed` is non-zero.
     fn any_besides(&self, allowed: &[&str]) -> bool {
-        let all: [(&str, u32); 13] = [
+        let all: [(&str, u32); 14] = [
             ("__int128", self.int128),
+            ("_FloatN", self.floatn),
             ("void", self.void),
             ("char", self.char),
             ("short", self.short),
@@ -2826,7 +2863,7 @@ impl Parser<'_> {
         }
         // An old-style identifier list: `int f(a, b)`.
         let kr = match self.peek().ident() {
-            Some(name) => !self.is_typedef_name(name),
+            Some(name) => !self.is_typedef_name(name) && floatn_type(name).is_none(),
             None => false,
         };
         if kr {
@@ -4387,33 +4424,43 @@ impl Parser<'_> {
     }
 }
 
-/// Whether a name is one of the extended floating types, and how to describe
-/// it.
+/// Whether a name is one of TS 18661-3's floating types (C23 Annex H) that
+/// this front end has a type for, and which.
 ///
-/// GCC's `__float128` and `__fp16`, and TS 18661-3's `_FloatN` / `_FloatNx`
-/// set, which C23 made optional in Annex H. None of them is here: `f32` and
-/// `f64` are Rust's only two floating types on a stable compiler, `f16` and
-/// `f128` are unstable, and the 80-bit `long double` an x86 `_Float64x` really
-/// is has no Rust type at all. They are recognised so that a *declaration* of
-/// one — which is all a header ever writes, and only behind a
-/// `__GNUC_PREREQ` that this crate's `__GNUC__` does not meet — is one clear
-/// refusal rather than an "implicit int" cascade.
+/// `_Float32` is `float`, `_Float64` and `_Float32x` are `double`, and
+/// `_Float64x` is whatever `long double` is — `double` here, with the platform
+/// boundary of `sema::long_double` applied to it. `_Float128`, and GCC's
+/// `__float128`, which is the same type, can be *named* — glibc declares
+/// `strtof128` and a few hundred more with it — but no value of it can exist;
+/// sema refuses each use.
 ///
-/// The names are only refused where nothing has *defined* them: a
-/// `typedef float _Float32;`, which is what glibc writes for a compiler with no
-/// such keyword, makes `_Float32` an ordinary `typedef` name and the caller
-/// lets it through. See [`Parser::declaration_specifiers`].
+/// The names are only types where nothing has *defined* them: a
+/// `typedef float _Float32;`, which is what glibc writes for a compiler older
+/// than GCC 7, makes `_Float32` an ordinary `typedef` name and the caller lets
+/// it through. See [`Parser::declaration_specifiers`].
+fn floatn_type(name: &str) -> Option<FloatSize> {
+    Some(match name {
+        "_Float32" => FloatSize::Float32,
+        "_Float64" => FloatSize::Float64,
+        "_Float32x" => FloatSize::Float32x,
+        "_Float64x" => FloatSize::Float64x,
+        "_Float128" | "__float128" => FloatSize::Float128,
+        _ => return None,
+    })
+}
+
+/// Whether a name is one of the extended floating types that have no type to
+/// become, and how to describe it.
+///
+/// `f16` is unstable in Rust, bfloat16 has no Rust type at all, and
+/// `_Float128x` is a format GCC does not implement on any target either. They
+/// are recognised so that a declaration of one is one clear refusal rather than
+/// an "implicit int" cascade.
 fn extended_float_type(name: &str) -> Option<&'static str> {
     match name {
-        "__float128" | "_Float128" | "_Float128x" => Some("binary128"),
-        "_Float64x" => Some("the extended-precision type behind 'long double'"),
+        "_Float128x" => Some("an extended binary128 format (GCC has none either)"),
         "__fp16" | "_Float16" => Some("binary16"),
         "__bf16" | "__bfloat16" => Some("bfloat16"),
-        // `_Float32` and `_Float64` are `float` and `double` in every format
-        // this crate models, but they are still distinct *types* to C, and a
-        // `_Generic` over them would answer differently.
-        "_Float32" | "_Float32x" => Some("the TS 18661-3 spelling of a binary32 type"),
-        "_Float64" => Some("the TS 18661-3 spelling of a binary64 type"),
         _ => None,
     }
 }

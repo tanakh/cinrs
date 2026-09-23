@@ -281,16 +281,17 @@ copy is used even where cinrs bundles one — under `gnu11!` and `c11!`, and
 taken through lexing, preprocessing, parsing and sema, **and again with
 `#define _GNU_SOURCE 1` ahead of the `#include`**, which is what a real program
 writes and what changes which *types* glibc declares. The result is the same in
-all four runs: sixty-six of the sixty-seven, with `<tgmath.h>` the one gap.
+all four runs: all sixty-seven.
 Measured against **glibc 2.43** on `x86_64-linux-gnu`; `tests/system_headers.rs`
 is the test — `every_platform_header_goes_through_the_front_end` and
-`…_with_gnu_source` — and it fails both when one of these regresses and when the
-one gap closes.
+`…_with_gnu_source` — and it fails when one of these regresses.
 
-`__GNUC__` is 4.2.1 here (see [Strict and GNU entry
+`__GNUC__` is 14.2 here (see [Strict and GNU entry
 points](gnu-extensions.md#strict-and-gnu-entry-points)), so glibc takes the
-same branches it would take for that compiler: no `_Float128`, no
-`__builtin_tgmath`, no fortify.
+branches it takes for that compiler: the `_FloatN` types as keywords (see
+[below](#extended-floating-types)), `__builtin_isnan` and its relatives for
+the classification macros, and no fortify, since `__OPTIMIZE__` is not
+defined.
 
 ### Feature test macros
 
@@ -339,7 +340,7 @@ strict unit that wants POSIX.
 | `<stdlib.h>` | ✓ | ✓ | |
 | `<stdnoreturn.h>` | ✓ | ✓ | |
 | `<string.h>` | ✓ | ✓ | |
-| `<tgmath.h>` | ✗ | ✗ | **The one gap.** glibc's own `#error "Unsupported combination of types for <tgmath.h>."`: on x86-64 it makes `__HAVE_FLOAT64X` unconditional but ties `__HAVE_FLOAT128` to `__GNUC_PREREQ (4, 3)`, and refuses the combination. See below. |
+| `<tgmath.h>` | ✓ | ✓ | Goes through; its macros are written over `__builtin_tgmath` (GCC ≥ 8), which cinrs does not have, so *using* one is an error. Until cinrs claimed GCC 14 this was the one gap; see below. |
 | `<threads.h>` | ✓ | ✓ | |
 | `<time.h>` | ✓ | ✓ | |
 | `<uchar.h>` | ✓ | ✓ | |
@@ -378,7 +379,7 @@ Sixty-six of the sixty-seven, in both entry points and with or without
 the platform's answers; every other POSIX header has only one copy, the
 platform's, whichever mode is in force.
 
-### The gap: `<tgmath.h>`
+### `<tgmath.h>`, the gap that closed
 
 glibc's `<tgmath.h>` opens with
 
@@ -389,54 +390,40 @@ glibc's `<tgmath.h>` opens with
 ```
 
 and on x86-64 `<bits/floatn.h>` sets `__HAVE_FLOAT64X` to 1 unconditionally and
-`__HAVE_FLOAT128` to `__GNUC_PREREQ (4, 3)`. cinrs claims `__GNUC__` 4.2.1 —
-Clang's precedent, and the version every `__attribute__` guard in the wild
-tests against — so the second is 0 and the `#error` fires.
-
-Claiming 4.3 instead was tried, and costs far more than it buys:
-`<bits/floatn.h>` then declares `__float128` and `_Complex __float128`
-unconditionally, which takes `<stdio.h>`, `<stdlib.h>`, `<math.h>` and
-`<complex.h>` down with it — the extended floating types are
-[refused](#extended-floating-types) rather than mapped onto `double`. One
-header lost is the cheaper trade, and it is the one header whose entire content
-is macros that need a compiler builtin (`__builtin_tgmath`, GCC ≥ 8) or a
-`__builtin_classify_type` chain over types this front end does not have. The
-bundled set has no `<tgmath.h>` either.
+`__HAVE_FLOAT128` to `__GNUC_PREREQ (4, 3)`. While cinrs claimed `__GNUC__`
+4.2.1 the second was 0 and the `#error` fired; claiming 4.3 would have made
+glibc declare `__float128` everywhere, which the front end then refused. Now
+that cinrs claims GCC 14.2 and `_Float128` is a type that can be
+[named](#extended-floating-types), both are 1 and the header goes through. Its
+macros are written over `__builtin_tgmath` (GCC ≥ 8), which cinrs does not
+have, so a program that *uses* one still gets an error; the bundled set has no
+`<tgmath.h>` either.
 
 ### Extended floating types
 
-`__float128`, `_Float128`, `_Float128x`, `_Float64x`, `_Float16`, `__fp16`,
-`__bf16`, `_Float32`, `_Float32x` and `_Float64` are **refused with the reason**
-where they are used as a *keyword* — a type specifier nothing has defined —
-rather than mapped onto `double`. Rust has two stable floating types, `f32` and
-`f64`; `f16` and `f128` are unstable, and the 80-bit `_Float64x` an x86
-`long double` really is has no Rust type at all. Mapping any of them onto
-`double` would compute and pass the wrong values. Recognising the names is what
-turns what would be a "type specifier missing" cascade into one clear message.
+glibc's `<bits/floatn.h>` uses TS 18661-3's names as the compiler's keywords
+for GCC 7 and later, which cinrs now claims to be, and under `_GNU_SOURCE`
+`<stdlib.h>`, `<math.h>` and `<complex.h>` declare their function families in
+terms of them. They are the types they are on this model:
 
-**A name a `typedef` has defined is not that case.** TS 18661-3 lets an
-implementation either make `_Float32` a keyword or leave it to the library, and
-glibc does the second: with `_GNU_SOURCE` its `bits/floatn-common.h` writes
+* `_Float32` is `float`, `_Float64` and `_Float32x` are `double`, and
+  `_Float64x` is `long double` — which is `double` here, with the
+  [boundary](#long-double-at-the-boundary) applied: `strtof64x` and the
+  `f64x` twins of the ISO `l` functions link to the `double` ones, and any
+  other declared-only function taking one is refused where it is called.
+  `_Complex` combines with each. A `_Generic` that lists `float` and
+  `_Float32` (glibc's `__MATH_TG` does) keeps the first; they are one type here.
+* `_Float128`, and GCC's `__float128`, can be **named but not used**: a
+  `typedef`, a pointer, a prototype, a `_Generic` association and `sizeof`
+  (16) are fine, so glibc's few hundred `f128` declarations go through, but an
+  object of the type, a cast to it and a call of a function whose prototype
+  mentions it are refused with the reason — binary128 has no stable Rust type,
+  and mapping it onto `double` would compute and pass the wrong values.
+* `_Float16`, `__fp16`, `__bf16` and `_Float128x` are refused where they are
+  written; glibc declares none of them on the targets modelled.
 
-```c
-typedef float _Float32;
-typedef double _Float64;
-typedef float _Float32x;
-typedef long double _Float64x;
-```
-
-for a compiler with no such keyword, which this one is at `__GNUC__` 4.2.1, and
-`<math.h>` then declares the `f32`/`f64`/`f32x` function families in terms of
-them. Those are ordinary `float`s, `double`s and `long double`s and there is
-nothing to refuse, so `_Float32` and its relatives are ordinary identifiers a
-`typedef` may define. Refusing them outright cost 1,671 errors on one
-`#include <math.h>` under `_GNU_SOURCE` — 429 + 206 + 199 refusals and 832
-"expected a declaration" cascades behind them — and was the reason
-`system_include first` could not be used on a program that defines `_GNU_SOURCE`.
-
-`_Float128` is still never declared by glibc here: `__HAVE_FLOAT128` is
-`__GNUC_PREREQ (4, 3)` on x86-64, which 4.2.1 does not meet. That is also the
-`<tgmath.h>` gap above.
+A name a `typedef` has defined is still a `typedef` name: an older glibc, or a
+program, may write `typedef float _Float32;`, and that is what it declares.
 
 ### `long double` at the boundary
 

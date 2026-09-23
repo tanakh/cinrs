@@ -121,16 +121,19 @@
   what keeps a unit self-contained and portable across target models. A program
   that needs `struct stat` or the real `FILE` asks for them with
   `#pragma cinrs system_include`; see [System headers](system-headers.md) for
-  what that costs, and
-  [`doc/system-headers.md`](system-headers.md#the-gap-tgmathh) for the one
-  header of the standard set glibc will not hand over (`<tgmath.h>`).
+  what that costs. glibc's `<tgmath.h>` goes through, but its macros need
+  `__builtin_tgmath`, which cinrs does not have.
 * `setjmp` and `longjmp` are refused where they are *called*, whichever header
   declared them: they resume a saved machine context, and the state a
   `longjmp` would return into is the generated Rust's. Declaring them, and
   declaring a `jmp_buf`, are fine — half of POSIX pulls `<setjmp.h>` in.
-* The extended floating types — `__float128`, `_Float128`, `_Float16` and the
-  rest of TS 18661-3's set — are refused with the reason rather than mapped
-  onto `double`.
+* Of TS 18661-3's floating types, `_Float32`, `_Float64`, `_Float32x` and
+  `_Float64x` are here as the types they are on this model (`float`, `double`,
+  `double`, and `long double`, which is `double`). `_Float128` (and
+  `__float128`) can be declared — in a prototype, a `typedef`, a pointer — but
+  has no value: an object, a cast and a call through a prototype that mentions
+  it are refused with the reason. `_Float16`, `__bf16` and `_Float128x` are
+  refused outright. See [System headers](system-headers.md#extended-floating-types).
 * Sizes and alignments come from a model of the target rather than from the
   target's own C compiler. Cross-compiling needs one line in a build script;
   see [Cross-compilation](cross-compilation.md), and note that without it

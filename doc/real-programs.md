@@ -222,13 +222,13 @@ define a `BITBUF_NBITS` of their own, so they cannot share one).
 
 **What it took.** Two things, neither a bug in the translation of what runs:
 
-* `common_defs.h` is `#error "gcc versions older than 4.9 are no longer
-  supported"`, because `cinrs` says `__GNUC__` is 4.2, as clang does; and the
-  same version gate switches off the VPCLMULQDQ CRC32 (gcc ≥ 10.1) and the
-  AVX-VNNI Adler-32 (≥ 12.1). The fixture took clang's way out — defining
-  `__clang__` and its version before the include, which passes the gate and
-  selects exactly the paths the native clang build selects. What `cinrs`
-  should claim to be is an open question this program sharpened.
+* `common_defs.h` was `#error "gcc versions older than 4.9 are no longer
+  supported"` while `cinrs` said `__GNUC__` was 4.2, as clang does, and the
+  same gate switched off the VPCLMULQDQ CRC32 (gcc ≥ 10.1) and the AVX-VNNI
+  Adler-32 (≥ 12.1). This program is why `cinrs` now presents itself as GCC
+  14.2: the two units compile unedited, with no workaround, and pass the
+  round-trip test. (The fixture first took clang's way out — defining
+  `__clang__` before the include — and still has it as its default.)
 * The AVX2 and AVX-512 Adler-32 templates keep their accumulators alive with
   gcc's empty barrier, `__asm__("" : "+x"(v))` on an `__m256i` and
   `"+v"` on an `__m512i`; `cinrs`'s inline assembly took `"x"` only at 128
@@ -388,7 +388,7 @@ The pass lists are identical, so there is nothing to minimise.
 had none of C99's classification macros — `isnan`, `isinf`, `isfinite`,
 `signbit`, `fpclassify` and the comparison macros — although the builtins
 behind them were there; they are defined now. Under the platform's
-`<math.h>` instead, glibc (seeing `__GNUC__` 4.2) expands `isnan(x)` to
+`<math.h>` instead, glibc (which then saw `__GNUC__` 4.2) expanded `isnan(x)` to
 `sizeof (x) == sizeof (double) ? __isnan (x) : __isnanl (x)`, and the
 [`long double` boundary check](#chibicc-not-in-the-repository) refused the
 `__isnanl` call in the arm a `double` can never take; a use in an arm a

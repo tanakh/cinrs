@@ -103,6 +103,7 @@ mod atomics;
 mod builtins;
 mod decl;
 mod expr;
+mod float128;
 mod init;
 mod long_double;
 mod stmt;
@@ -697,6 +698,9 @@ struct Sema<'a> {
     long_double_funcs: HashMap<FuncId, long_double::LongDoubleSig>,
     /// The uses of the platform boundary, checked at the end of the unit.
     long_double_uses: Vec<long_double::LongDoubleUse>,
+    /// The stand-ins for `_Float128` and `_Complex _Float128`, once named; see
+    /// [`float128`].
+    float128: [Option<ir::RecordId>; 2],
     /// How many arms that cannot run enclose what is being analysed: the
     /// excluded operand of a `?:`, `&&` or `||`, or the excluded branch of an
     /// `if`, whose condition is an integer constant expression. Nonzero means
@@ -939,6 +943,7 @@ impl<'a> Sema<'a> {
             long_double_exprs: HashMap::new(),
             long_double_funcs: HashMap::new(),
             long_double_uses: Vec::new(),
+            float128: [None; 2],
             dead_code: 0,
             item_names: HashSet::new(),
             initialized: HashSet::new(),

@@ -283,9 +283,10 @@ gnu99! {
 
 #[test]
 fn the_predefined_macros_say_what_this_implementation_is() {
-    assert_eq!(unsafe { gnuc_major() }, 4);
+    // cinrs presents itself as GCC 14.2.0; see `doc/features.md`.
+    assert_eq!(unsafe { gnuc_major() }, 14);
     assert_eq!(unsafe { gnuc_minor() }, 2);
-    assert_eq!(unsafe { gnuc_patch() }, 1);
+    assert_eq!(unsafe { gnuc_patch() }, 0);
     // Only a strict entry point is `-std=c99`.
     assert_eq!(unsafe { strict() }, 1);
     assert_eq!(unsafe { gnu_strict() }, 0);
@@ -307,7 +308,12 @@ fn the_predefined_macros_say_what_this_implementation_is() {
     assert_eq!(unsafe { has_atomics() }, 1);
 
     let text = |p| unsafe { core::ffi::CStr::from_ptr(p) }.to_bytes().to_vec();
-    assert!(text(unsafe { version() }).starts_with(b"cinrs "));
+    // GCC's number first, which is what a program parsing it reads, and then
+    // who really compiled it.
+    assert_eq!(
+        text(unsafe { version() }),
+        format!("14.2.0 (cinrs {})", env!("CARGO_PKG_VERSION")).into_bytes()
+    );
     // `__BASE_FILE__` names the outermost file and `__FILE_NAME__` drops the
     // directory; both are the `.rs` file the block is written in.
     assert!(text(unsafe { base_file() }).ends_with(b"gnu_preprocessor.rs"));

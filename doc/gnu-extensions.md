@@ -92,12 +92,14 @@ exactly the same place.
 
 5. **The predefined macros say which entry point it is.** `__STRICT_ANSI__` is
    defined in the strict entry points only, and `__STDC_VERSION__` is not
-   defined at all in `c89!` and `gnu89!` — C89 as published had no such macro. `__GNUC__` is `4`,
-   `__GNUC_MINOR__` `2` and `__GNUC_PATCHLEVEL__` `1` in *all* of them —
-   Clang's own precedent, and for the same reason: a program guards
-   `__attribute__` and `__builtin_expect` with
-   `#if defined(__GNUC__) && __GNUC__ >= 4`, and those work here. `__VERSION__`
-   names cinrs and its version, and nothing claims to be Clang.
+   defined at all in `c89!` and `gnu89!` — C89 as published had no such macro. `__GNUC__` is `14`,
+   `__GNUC_MINOR__` `2` and `__GNUC_PATCHLEVEL__` `0` in *all* of them: the
+   version gates in real programs are written against a modern GCC, and at
+   Clang's 4.2.1 libdeflate refused to build, xxHash left AVX2 off and glibc's
+   `<math.h>` took its slow paths. `__VERSION__` is `"14.2.0 (cinrs …)"`,
+   `__CINRS__` says who really compiled the program, and nothing claims to be
+   Clang. See [Predefined macros](features.md) for the rest of what GCC 14
+   predefines and which of it is deliberately left out.
 
 Two of C11 6.10.8.3's subsetting macros are defined as `1` where the part they
 name is really absent, which turns each gap into the conforming omission the

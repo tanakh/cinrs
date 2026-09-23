@@ -517,6 +517,7 @@ impl Sema<'_> {
             );
         }
         self.check_redefinition(name);
+        self.refuse_float128_object(&name.name, ty, name.range);
         let id = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
         // C11 6.7.1p6: the address of a `register` object cannot be computed,
         // explicitly or by an array decaying to a pointer. See
@@ -882,6 +883,7 @@ impl Sema<'_> {
 
         let is_const = declarator.ty.qualifiers.is_const;
         self.check_redefinition(name);
+        self.refuse_float128_object(&name.name, ty, name.range);
         let object = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
         self.insert(&name.name, Entry::Object(object));
         // The `Vec` is not an object of the C program; its type is what is
@@ -1372,6 +1374,7 @@ impl Sema<'_> {
                 exported,
             }
         };
+        self.refuse_float128_object(&name.name, ty, name.range);
         let id = self.new_object(&name.name, ty, storage, is_const, name.range);
         self.insert(&name.name, Entry::Object(id));
         if file_scope {
@@ -2696,6 +2699,9 @@ impl Sema<'_> {
                 continue;
             };
             self.note_long_double(name.range, &param.ty);
+            // A parameter of a *definition* is an object; one of a prototype
+            // is not, and is fine.
+            self.refuse_float128_object(&name.name, ty, name.range);
             if func.old_style {
                 // `resolve_param_ty` already succeeded for this parameter in
                 // `declare_function`, or there would be no `id` to be here

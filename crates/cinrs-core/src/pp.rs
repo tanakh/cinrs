@@ -131,7 +131,10 @@
 //! | `__STDC__` | `1` |
 //! | `__STDC_HOSTED__` | `1` |
 //! | `__STDC_VERSION__` | the revision: `199901L`, `201112L`, `201710L` or `202311L`; undefined in `c89!` and `gnu89!` |
-//! | `__cinrs__` | `1` |
+//! | `__cinrs__`, `__CINRS__` | `1` |
+//! | `__CINRS_MAJOR__`, `__CINRS_MINOR__`, `__CINRS_PATCH__` | the version of `cinrs-core` |
+//! | `__GNUC__`, `__GNUC_MINOR__`, `__GNUC_PATCHLEVEL__` | `14`, `2`, `0` |
+//! | `__VERSION__` | `"14.2.0 (cinrs <version>)"` |
 //! | `__FILE__` | the invoking `.rs` file's path, or `"<c99!>"` |
 //! | `__LINE__` | the line of the invoking `.rs` file |
 //! | `__DATE__` | `"??? ?? ????"` |
@@ -178,9 +181,18 @@
 //! (`__x86_64__`, `__aarch64__`, …), the operating system (`__linux__`,
 //! `__unix__`, `_WIN32`, `__APPLE__`, …), the data model (`__LP64__`,
 //! `__ILP32__`, `__CHAR_UNSIGNED__`, `__SIZEOF_INT__` and friends,
-//! `__CHAR_BIT__`) and the byte order (`__BYTE_ORDER__`). Nothing about the
-//! *language* is described that way — there is no `__GNUC__` — because
-//! claiming a compiler's identity would invite headers to use its extensions.
+//! `__CHAR_BIT__`) and the byte order (`__BYTE_ORDER__`).
+//!
+//! As a compiler, cinrs says it is GCC 14.2 — `__GNUC__` is what the world's
+//! version gates test, and 4.2.1 turned real programs away or onto their slow
+//! paths — and says who it really is with `__CINRS__`. The GNU macros a header
+//! tests for are defined where cinrs does what they promise
+//! (`__GNUC_STDC_INLINE__`, `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_n`, the
+//! `__GCC_ATOMIC_*` family, `__BIGGEST_ALIGNMENT__`), `__GCC_IEC_559` and
+//! `__GCC_IEC_559_COMPLEX` are `0` because Annexes F and G are not claimed, and
+//! the rest are left out on purpose: `__OPTIMIZE__` and `__NO_INLINE__`,
+//! `__GCC_ASM_FLAG_OUTPUTS__` (flag outputs are refused),
+//! `__SIZEOF_FLOAT128__`, `__PRAGMA_REDEFINE_EXTNAME` and `__clang__`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -4964,7 +4976,6 @@ impl Pp<'_> {
         if let Some(version) = options.standard.stdc_version() {
             self.define_object("__STDC_VERSION__", version);
         }
-        self.define_object("__cinrs__", "1");
         // C11 6.10.8.3 makes four parts of the language optional and gives an
         // implementation a macro to say it left each one out. Two of them
         // depend on how this expansion was configured rather than on the
@@ -5007,17 +5018,50 @@ impl Pp<'_> {
         if !options.dialect.is_gnu() {
             self.define_object("__STRICT_ANSI__", "1");
         }
-        // The GNU extensions this crate implements are the ones a program
-        // guards with `#if defined(__GNUC__) && __GNUC__ >= 4`, so claiming
-        // 4.2.1 is what makes those guards take the branch that uses them.
-        // Clang set the same precedent for the same reason.
-        self.define_object("__GNUC__", "4");
+        // cinrs presents itself as GCC 14.2, because that is the version the
+        // world's `__GNUC__` gates are written against: 4.2.1 (Clang's
+        // habit) made libdeflate `#error` out ("gcc versions older than 4.9
+        // are no longer supported") and switch its VPCLMULQDQ and AVX-VNNI
+        // paths off, took xxHash's dispatcher off AVX2 and AVX-512
+        // (`__GNUC__ > 4`), and sent glibc's `<math.h>` to its slow `_Generic`
+        // fallback instead of `__builtin_isnan`. `__VERSION__` says both
+        // things, GCC's number first because that is what a program parsing
+        // it looks for, and `__CINRS__` below is the identity a program asks
+        // for when it wants to know who really compiled it.
+        self.define_object("__GNUC__", "14");
         self.define_object("__GNUC_MINOR__", "2");
-        self.define_object("__GNUC_PATCHLEVEL__", "1");
+        self.define_object("__GNUC_PATCHLEVEL__", "0");
         self.define_string(
             "__VERSION__",
-            &format!("cinrs {}", env!("CARGO_PKG_VERSION")),
+            &format!("14.2.0 (cinrs {})", env!("CARGO_PKG_VERSION")),
         );
+        self.define_object("__cinrs__", "1");
+        self.define_object("__CINRS__", "1");
+        self.define_object("__CINRS_MAJOR__", env!("CARGO_PKG_VERSION_MAJOR"));
+        self.define_object("__CINRS_MINOR__", env!("CARGO_PKG_VERSION_MINOR"));
+        self.define_object("__CINRS_PATCH__", env!("CARGO_PKG_VERSION_PATCH"));
+        // What `inline` means, in GCC's words: C99's rules in every revision
+        // that has them, GNU89's in `c89!` and `gnu89!`. cinrs models neither
+        // set of external-definition rules — every definition becomes one
+        // Rust function — and the two agree on the only thing a header asks
+        // the macro for, which is how to spell an inline-only definition
+        // (glibc's `__extern_inline`); `gnu_inline` is accepted either way.
+        if matches!(options.standard, Standard::C89) {
+            self.define_object("__GNUC_GNU_INLINE__", "1");
+        } else {
+            self.define_object("__GNUC_STDC_INLINE__", "1");
+        }
+        // GCC's intent for Annex F and Annex G, which glibc's
+        // `<stdc-predef.h>` turns into `__STDC_IEC_559__` and
+        // `__STDC_IEC_559_COMPLEX__` — and, read the other way, *claims* both
+        // when these are undefined, as for a compiler older than 4.9. cinrs
+        // claims neither (there is no `<fenv.h>`, and only G.5.1's arithmetic
+        // of the complex annex), so the honest answer is `0`, which is what
+        // GCC says under `-ffast-math`.
+        self.define_object("__GCC_IEC_559", "0");
+        self.define_object("__GCC_IEC_559_COMPLEX", "0");
+        // What bare `__attribute__((aligned))` gives; see the parser.
+        self.define_object("__BIGGEST_ALIGNMENT__", "16");
         // Fixed placeholders: a build has to give the same output twice.
         self.define_string("__DATE__", "??? ?? ????");
         self.define_string("__TIME__", "??:??:??");
@@ -5257,14 +5301,11 @@ fn target_macros(target: &TargetModel) -> Vec<(&'static str, String)> {
     // Byte order, spelled the way GCC spells it.
     out.push(("__ORDER_LITTLE_ENDIAN__", "1234".to_owned()));
     out.push(("__ORDER_BIG_ENDIAN__", "4321".to_owned()));
-    out.push((
-        "__BYTE_ORDER__",
-        if target.big_endian {
-            "4321".to_owned()
-        } else {
-            "1234".to_owned()
-        },
-    ));
+    out.push(("__ORDER_PDP_ENDIAN__", "3412".to_owned()));
+    let order = if target.big_endian { "4321" } else { "1234" };
+    out.push(("__BYTE_ORDER__", order.to_owned()));
+    // A `double`'s words are in the integers' order on every target modelled.
+    out.push(("__FLOAT_WORD_ORDER__", order.to_owned()));
     limit_macros(target, &mut out);
     out
 }
@@ -5458,6 +5499,7 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     // `execute/ieee/pr30704` is exactly that.
     push("__FLT_RADIX__", "2".to_owned());
     push("__FLT_EVAL_METHOD__", "0".to_owned());
+    push("__FLT_EVAL_METHOD_TS_18661_3__", "0".to_owned());
     push("__FLT_MANT_DIG__", "24".to_owned());
     push("__FLT_DIG__", "6".to_owned());
     push("__FLT_MIN_EXP__", "(-125)".to_owned());

@@ -150,11 +150,25 @@ pub(super) const LONG_DOUBLE_TWINS: &[(&str, &str)] = &[
 
 /// The `double` sibling of the ISO C function `name`, if it is one of
 /// `LONG_DOUBLE_TWINS`.
+///
+/// glibc's `_Float64x` functions are its `long double` ones under TS
+/// 18661-3's names — `strtof64x` is `strtold`, `sinf64x` is `sinl` — and are
+/// twinned the same way.
 pub fn long_double_twin(name: &str) -> Option<&'static str> {
-    LONG_DOUBLE_TWINS
-        .iter()
-        .find(|(ld, _)| *ld == name)
-        .map(|(_, twin)| *twin)
+    let lookup = |name: &str| {
+        LONG_DOUBLE_TWINS
+            .iter()
+            .find(|(ld, _)| *ld == name)
+            .map(|(_, twin)| *twin)
+    };
+    if let Some(twin) = lookup(name) {
+        return Some(twin);
+    }
+    match name {
+        "strtof64x" => Some("strtod"),
+        "wcstof64x" => Some("wcstod"),
+        _ => lookup(&format!("{}l", name.strip_suffix("f64x")?)),
+    }
 }
 
 /// What a function's prototype says about `long double`, over every
@@ -191,8 +205,10 @@ impl Sema<'_> {
     /// none. A `typedef` answers what its declaration did.
     pub(super) fn long_double_depth(&self, ty: &ast::Type) -> Option<u8> {
         match &ty.kind {
-            ast::TypeKind::Float(ast::FloatSize::LongDouble)
-            | ast::TypeKind::Complex(ast::FloatSize::LongDouble) => Some(0),
+            ast::TypeKind::Float(ast::FloatSize::LongDouble | ast::FloatSize::Float64x)
+            | ast::TypeKind::Complex(ast::FloatSize::LongDouble | ast::FloatSize::Float64x) => {
+                Some(0)
+            }
             ast::TypeKind::Pointer(inner) => self.long_double_depth(inner)?.checked_add(1),
             ast::TypeKind::Array { elem, .. } => self.long_double_depth(elem)?.checked_add(1),
             ast::TypeKind::Typedef(name) => match self.lookup(&name.name) {

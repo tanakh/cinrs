@@ -2495,3 +2495,129 @@ fn a_long_double_that_stays_in_the_unit_is_accepted() {
         .is_empty()
     );
 }
+
+// ---------------------------------------------------------------------------
+// TS 18661-3's `_FloatN` types
+// ---------------------------------------------------------------------------
+
+/// The errors `source` gets as C11 on x86-64 Linux, where `_Generic` exists
+/// and the platform's `long double` is the x87 one.
+fn c11_errors(source: &str) -> Vec<String> {
+    let mut options = options_for(X86_64_LINUX);
+    options.standard = Standard::C11;
+    errors_with(source, &options)
+}
+
+/// `_Float32` is `float`, `_Float64` and `_Float32x` are `double`, and
+/// `_Float64x` is `long double`, which is `double` here — `_Generic` answers
+/// the type, and `sizeof` the format.
+#[test]
+fn the_floatn_types_are_the_types_of_their_format() {
+    let found = c11_errors(
+        "typedef char f32[_Generic((_Float32)0, float: 1, default: -1)];\n\
+         typedef char f64[_Generic((_Float64)0, double: 1, default: -1)];\n\
+         typedef char f32x[_Generic((_Float32x)0, double: 1, default: -1)];\n\
+         typedef char f64x[_Generic((_Float64x)0, double: 1, default: -1)];\n\
+         typedef char c64[_Generic((_Complex _Float64)0, double _Complex: 1, default: -1)];\n\
+         typedef char c32[sizeof(_Complex _Float32) == 8 ? 1 : -1];\n\
+         _Float32 half(_Float32 x) { return x / 2; }\n\
+         _Float64 twice(_Float64 x) { return x * 2; }\n\
+         _Float32x add(_Float32x a, _Float32x b) { return a + b; }",
+    );
+    assert!(found.is_empty(), "{found:#?}");
+}
+
+/// glibc's `_Float64x` functions are its `long double` ones, and are twinned
+/// the same way; any other declared-only function taking one is refused at
+/// its call, as a `long double` one is.
+#[test]
+fn float64x_crosses_the_platform_boundary_as_long_double() {
+    assert_eq!(
+        link_names_on(
+            X86_64_LINUX,
+            "_Float64x strtof64x(const char *, char **);\n\
+             _Float64x sinf64x(_Float64x);\n\
+             double f(void) { return strtof64x(\"2.5\", 0) + sinf64x(0); }"
+        ),
+        ["strtof64x=strtod", "sinf64x=sin"]
+    );
+    let found = c11_errors(
+        "void take(_Float64x);\n\
+         void f(void) { take(1.0); }",
+    );
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].starts_with("'take' takes a 'long double' (which is 'double' here)"),
+        "{found:#?}"
+    );
+}
+
+/// `_Float128` can be named — in a `typedef`, a pointer, a prototype, a
+/// `_Generic` association and `sizeof` — which is all glibc's headers do.
+#[test]
+fn float128_may_be_named() {
+    let found = c11_errors(
+        "typedef _Float128 quad;\n\
+         typedef __float128 gnu_quad;\n\
+         _Float128 strtof128(const char *, char **);\n\
+         _Complex _Float128 csqrtf128(_Complex _Float128);\n\
+         void keep(quad *p);\n\
+         typedef char size[sizeof(_Float128) == 16 && _Alignof(_Float128) == 16 ? 1 : -1];\n\
+         typedef char pick[_Generic(1.0, float: -1, default: 1, _Float128: -1)];\n\
+         double f(int n) { return 0 ? strtof128(\"1\", 0), 1.0 : 2.0; }",
+    );
+    assert!(found.is_empty(), "{found:#?}");
+}
+
+/// What would make a `_Float128` value is refused, by name, with the reason.
+#[test]
+fn float128_values_are_refused() {
+    const REASON: &str = "binary128 has no Rust type to become (Rust's 'f128' is unstable), \
+                          and mapping it onto 'double' would compute and pass the wrong values";
+    assert_eq!(
+        c11_errors("_Float128 q;"),
+        [format!(
+            "'q' cannot be an object of type '_Float128': {REASON}"
+        )]
+    );
+    assert_eq!(
+        c11_errors("double f(double x) { return (double)(_Float128)x; }"),
+        [format!("a cast to '_Float128' is not supported: {REASON}")]
+    );
+    assert_eq!(
+        c11_errors(
+            "_Float128 strtof128(const char *, char **);\n\
+             void f(void) { strtof128(\"1\", 0); }"
+        ),
+        [format!(
+            "'strtof128' returns '_Float128', which cannot be called: {REASON}"
+        )]
+    );
+    assert_eq!(
+        c11_errors(
+            "int strfromf128(char *, unsigned long, const char *, _Float128);\n\
+             void f(char *s) { strfromf128(s, 8, \"%g\", 0); }"
+        ),
+        [format!(
+            "'strfromf128' takes '_Float128', which cannot be called: {REASON}"
+        )]
+    );
+}
+
+/// GCC makes `_Float32` a type distinct from `float`, and glibc's `<math.h>`
+/// lists both in one `_Generic`; here they are one type, so the second is
+/// dropped. Two associations for one type spelled the standard way are still
+/// an error.
+#[test]
+fn a_floatn_association_may_repeat_its_standard_twin() {
+    let found = c11_errors(
+        "typedef char a[_Generic(1.0f, float: 1, _Float32: -1, default: -1)];\n\
+         typedef char b[_Generic(1.0f, _Float32: 1, float: -1, default: -1)];\n\
+         typedef char c[_Generic(1.0L, long double: 1, _Float64x: -1, default: -1)];",
+    );
+    assert!(found.is_empty(), "{found:#?}");
+    assert_eq!(
+        c11_errors("int x = _Generic(1.0, double: 1, long double: 2);"),
+        ["'_Generic' has two associations for the compatible type 'double'"]
+    );
+}

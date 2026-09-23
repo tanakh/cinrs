@@ -177,11 +177,7 @@ pub fn type_to_string(unit: &TranslationUnit, ty: &Type) -> String {
 }
 
 fn float_size(size: FloatSize) -> &'static str {
-    match size {
-        FloatSize::Float => "float",
-        FloatSize::Double => "double",
-        FloatSize::LongDouble => "long double",
-    }
+    size.as_str()
 }
 
 fn array_size(size: &ArraySize) -> String {

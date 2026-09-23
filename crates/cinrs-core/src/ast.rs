@@ -127,6 +127,44 @@ pub enum FloatSize {
     Double,
     /// `long double`
     LongDouble,
+    /// TS 18661-3's `_Float32`, which is `float`.
+    Float32,
+    /// `_Float64`, which is `double`.
+    Float64,
+    /// `_Float32x`, which is `double`.
+    Float32x,
+    /// `_Float64x`, which is whatever `long double` is.
+    Float64x,
+    /// `_Float128` (and GCC's `__float128`): binary128, which has no Rust type.
+    /// It may be named — in a prototype, a `typedef`, a pointer — but sema
+    /// refuses every value of it.
+    Float128,
+}
+
+impl FloatSize {
+    /// The type as C spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FloatSize::Float => "float",
+            FloatSize::Double => "double",
+            FloatSize::LongDouble => "long double",
+            FloatSize::Float32 => "_Float32",
+            FloatSize::Float64 => "_Float64",
+            FloatSize::Float32x => "_Float32x",
+            FloatSize::Float64x => "_Float64x",
+            FloatSize::Float128 => "_Float128",
+        }
+    }
+
+    /// Whether this is one of the `_FloatN` spellings, which GCC makes types
+    /// distinct from `float`, `double` and `long double` even where they have
+    /// the same format; see `_Generic` in sema.
+    pub fn is_floatn(self) -> bool {
+        !matches!(
+            self,
+            FloatSize::Float | FloatSize::Double | FloatSize::LongDouble
+        )
+    }
 }
 
 /// `struct` or `union`.

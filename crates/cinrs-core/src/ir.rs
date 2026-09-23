@@ -618,6 +618,10 @@ pub struct RecordDef {
     pub flexible: bool,
     /// Whether an item should be generated for this tag.
     pub emit: bool,
+    /// The C type this record stands in for, when it is not a record in C at
+    /// all: `_Float128`, which may be named but never computed with, is a
+    /// struct of sixteen bytes here. Diagnostics name the C type.
+    pub stands_for: Option<&'static str>,
     /// Where the tag was defined (or first mentioned).
     pub range: SourceRange,
 }
@@ -1286,6 +1290,9 @@ impl Types {
             Ty::Func(id) => self.func_name(id, ""),
             Ty::Record(id) => {
                 let record = self.record(id);
+                if let Some(c_type) = record.stands_for {
+                    return c_type.to_owned();
+                }
                 match &record.tag {
                     Some(tag) => format!("{} {tag}", record.kind.as_str()),
                     None => format!("{} {}", record.kind.as_str(), record.rust_name),

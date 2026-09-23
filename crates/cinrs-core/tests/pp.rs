@@ -691,15 +691,41 @@ fn the_target_is_described_consistently_with_the_target_model() {
     if cfg!(target_arch = "x86_64") {
         assert!(cond("defined(__x86_64__)"));
     }
-    // `__GNUC__` is 4.2.1, which is what Clang reports too and for the same
-    // reason: it is the version a program's `#if __GNUC__ >= 4` guard is
-    // asking about before it uses `__attribute__` or `__builtin_expect`, and
-    // those work here. Nothing claims to be Clang, which has extensions of its
-    // own this crate does not have.
+    // cinrs presents itself as GCC 14.2, the version the world's `__GNUC__`
+    // gates are written against, and says who it really is with `__CINRS__`.
+    // Nothing claims to be Clang, which has extensions of its own this crate
+    // does not have.
     assert!(cond(
-        "__GNUC__ == 4 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 1"
+        "__GNUC__ == 14 && __GNUC_MINOR__ == 2 && __GNUC_PATCHLEVEL__ == 0"
     ));
     assert!(cond("!defined(__clang__)"));
+    assert!(cond("__CINRS__ == 1 && __cinrs__ == 1"));
+    assert!(cond(&format!(
+        "__CINRS_MAJOR__ == {} && __CINRS_MINOR__ == {} && __CINRS_PATCH__ == {}",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH")
+    )));
+    assert_eq!(
+        pp("__VERSION__"),
+        format!("\"14.2.0 (cinrs {})\"", env!("CARGO_PKG_VERSION"))
+    );
+    // C99's `inline` in every revision that has it; see
+    // [`c89_says_gnu_inline`] for the other one.
+    assert!(cond(
+        "defined(__GNUC_STDC_INLINE__) && !defined(__GNUC_GNU_INLINE__)"
+    ));
+    // Annexes F and G are not claimed, and `0` is what keeps glibc's
+    // `<stdc-predef.h>` from claiming them on cinrs's behalf.
+    assert!(cond("__GCC_IEC_559 == 0 && __GCC_IEC_559_COMPLEX == 0"));
+    // Flag outputs (`=@cc`) are refused, so the macro that promises them is
+    // absent; so are the ones for a binary128 type that cannot hold a value
+    // and for an optimiser.
+    assert!(cond(
+        "!defined(__GCC_ASM_FLAG_OUTPUTS__) && !defined(__SIZEOF_FLOAT128__) \
+         && !defined(__OPTIMIZE__) && !defined(__NO_INLINE__)"
+    ));
+    assert!(cond("__BIGGEST_ALIGNMENT__ == 16"));
     // Atomics and variable length arrays are not left out, so the macros that
     // would say so are deliberately absent. The other two do depend on how the
     // expansion was configured: complex arithmetic on a cargo feature — see
@@ -727,6 +753,21 @@ fn the_target_is_described_consistently_with_the_target_model() {
     ));
     // A strict entry point is `-std=c99`, and says so.
     assert!(cond("defined(__STRICT_ANSI__)"));
+}
+
+/// GCC's `-std=gnu89` and `-std=c89` say `inline` has GNU89's meaning.
+#[test]
+fn c89_says_gnu_inline() {
+    let errors = c89_errors(
+        "#if !defined(__GNUC_GNU_INLINE__) || defined(__GNUC_STDC_INLINE__)\n\
+         #error wrong inline macro\n\
+         #endif\n\
+         #if __GNUC__ != 14 || !defined(__CINRS__)\n\
+         #error wrong identity\n\
+         #endif\n",
+        &[],
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
 }
 
 #[test]

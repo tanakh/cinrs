@@ -12,6 +12,22 @@ follows [Semantic Versioning][semver].
 
 ### Added
 
+* **TS 18661-3's `_FloatN` types, as keywords.** glibc uses them as the
+  compiler's own from GCC 7 on, and declares `strtof32`, `sinf64`,
+  `csqrtf32x` … under `_GNU_SOURCE`. `_Float32` is `float`, `_Float64` and
+  `_Float32x` are `double`, and `_Float64x` is `long double` — `double`
+  here, across the platform boundary as `long double` is: `strtof64x` and the
+  `f64x` twins of the ISO `l` functions link to their `double` siblings, and
+  another declared-only function taking one is refused at its call. Each takes
+  `_Complex`. `_Float128` and `__float128` can be *named* — prototypes,
+  `typedef`s, pointers, `sizeof`, `_Generic` — but no value of them is
+  accepted: an object, a cast and a call of a function whose prototype
+  mentions one are refused with the reason. A `_Generic` that lists both
+  `float` and `_Float32` (glibc's `__MATH_TG`) keeps the first. The
+  builtins glibc's `HUGE_VAL_F32`, `SNANF64` and their relatives expand to
+  (`__builtin_huge_valf32`, `__builtin_inff64x`, `__builtin_nansf32x`, …) are
+  there for the four types that have one.
+
 * **The x86 SIMD intrinsics.** `#include <immintrin.h>` and write Intel's
   intrinsics the way real C does: `__m128`, `__m128i`, `__m128d`, `__m256`,
   `__m256i` and `__m256d` are types, and 881 functions — SSE, SSE2, SSE3, SSSE3,
@@ -252,6 +268,25 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **cinrs presents itself as GCC 14.2, and as `__CINRS__`.** `__GNUC__`,
+  `__GNUC_MINOR__` and `__GNUC_PATCHLEVEL__` are 14, 2 and 0, up from Clang's
+  4.2.1, because that is the version real programs gate on: libdeflate
+  `#error`ed out on 4.2 ("gcc versions older than 4.9 are no longer
+  supported") and switched off its VPCLMULQDQ CRC-32 and AVX-VNNI Adler-32,
+  xxHash's dispatcher left AVX2 and AVX-512 off (`__GNUC__ > 4`), and glibc's
+  `<math.h>` sent `isnan` through its slow `__MATH_TG` fallback instead of
+  `__builtin_isnan`. `__VERSION__` is `"14.2.0 (cinrs <version>)"`, and the
+  identity a program asks for when it wants to know who really compiled it is
+  `__CINRS__` (with `__cinrs__`, both `1`) and `__CINRS_MAJOR__`,
+  `__CINRS_MINOR__`, `__CINRS_PATCH__`. Newly predefined as GCC 14 has them:
+  `__GNUC_STDC_INLINE__` (`__GNUC_GNU_INLINE__` in `c89!`/`gnu89!`),
+  `__GCC_IEC_559` and `__GCC_IEC_559_COMPLEX` as `0` (Annexes F and G are not
+  claimed, and leaving them undefined would make glibc's `<stdc-predef.h>`
+  claim both), `__BIGGEST_ALIGNMENT__`, `__FLT_EVAL_METHOD_TS_18661_3__`,
+  `__FLOAT_WORD_ORDER__` and `__ORDER_PDP_ENDIAN__`. Left out on purpose:
+  `__GCC_ASM_FLAG_OUTPUTS__` (flag outputs are refused), `__SIZEOF_FLOAT128__`,
+  `__OPTIMIZE__`, `__NO_INLINE__` and `__PRAGMA_REDEFINE_EXTNAME`. glibc's
+  `<tgmath.h>`, the one platform header that did not go through, now does.
 * **The minimum supported Rust version is 1.98**, up from 1.88. The bundled
   intrinsics headers are generated from the oldest supported compiler's
   `core::arch`, so that nothing is declared that it lacks, and AVX-512 is

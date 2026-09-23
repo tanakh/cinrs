@@ -151,16 +151,33 @@ the scope of one is a located error, as C requires.
 `#elifndef` are there in a `c23!` block.
 
 **Predefined macros.** `__STDC__`, `__STDC_HOSTED__`, `__STDC_VERSION__`, the
-four `__STDC_NO_*` subsetting macros, `__cinrs__`, and `__FILE__` and `__LINE__`
+four `__STDC_NO_*` subsetting macros, and `__FILE__` and `__LINE__`
 — which name the **`.rs` file** and the line in it, so that they point where the
 user is looking. `__DATE__`, `__TIME__` and `__TIMESTAMP__` are fixed
 placeholders, because a build has to give the same output twice. On top of those
 comes the GCC family and the target description macros (`__GNUC__`,
 `__STRICT_ANSI__`, `__x86_64__`, `__linux__`, `__LP64__`, `__SIZEOF_INT__`,
 `__BYTE_ORDER__`, the limits and the library types), every one of them read off
-the [target model](c-status.md#the-target-model) rather than the host, and
-nothing claims to be Clang; the catalogue is
+the [target model](c-status.md#the-target-model) rather than the host; the
+catalogue is
 [`doc/gnu-extensions.md`](gnu-extensions.md#preprocessor-extensions).
+
+**What cinrs claims to be.** GCC 14.2: `__GNUC__` is `14`, `__GNUC_MINOR__`
+`2`, `__GNUC_PATCHLEVEL__` `0`, because `__GNUC__` is what the world's version
+gates test — at the 4.2.1 Clang reports, libdeflate `#error`ed out ("gcc
+versions older than 4.9 are no longer supported") and switched off its
+VPCLMULQDQ and AVX-VNNI paths, xxHash's dispatcher left AVX2 and AVX-512 off,
+and glibc's `<math.h>` took its slow `_Generic` fallback instead of
+`__builtin_isnan`. The macros GCC 14 predefines alongside are defined where
+cinrs does what they promise (`__GNUC_STDC_INLINE__`, or
+`__GNUC_GNU_INLINE__` in `c89!`/`gnu89!`; `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_n`;
+`__GCC_ATOMIC_*_LOCK_FREE`; `__BIGGEST_ALIGNMENT__`), `__GCC_IEC_559` and
+`__GCC_IEC_559_COMPLEX` are `0` since Annexes F and G are not claimed, and
+`__GCC_ASM_FLAG_OUTPUTS__`, `__SIZEOF_FLOAT128__`, `__OPTIMIZE__` and
+`__NO_INLINE__` are absent on purpose. Nothing claims to be Clang. And cinrs
+says who it really is: `__CINRS__` (and `__cinrs__`) is `1`, and
+`__CINRS_MAJOR__`, `__CINRS_MINOR__` and `__CINRS_PATCH__` are its version,
+while `__VERSION__` says both — `"14.2.0 (cinrs 0.1.0)"` for this version.
 `__has_include`, `__has_include_next`, `__has_attribute`, `__has_c_attribute`,
 `__has_builtin`, `__has_feature` and `__has_extension` are answered from cinrs's
 own tables, so a program that guards a construct with one is told the truth about

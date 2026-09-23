@@ -111,21 +111,11 @@ const POSIX_HEADERS: &[&str] = &[
 
 /// The headers whose platform copy the front end cannot read, with the reason.
 ///
-/// One entry, and it is not really about C at all: glibc ties `_Float128` to
-/// `__GNUC_PREREQ (4, 3)` while making `_Float64x` unconditional on x86-64, and
-/// `<tgmath.h>` refuses that combination with an `#error` of its own. `cinrs`
-/// claims `__GNUC__` 4.2.1 — the version Clang picked, and the one every
-/// `__attribute__` guard in the wild tests against — so the `#error` fires.
-/// Claiming 4.3 instead makes `<bits/floatn.h>` declare `__float128` and
-/// `_Complex __float128` unconditionally, which takes `<stdio.h>`, `<stdlib.h>`,
-/// `<math.h>` and `<complex.h>` down with it: one header lost is the cheaper
-/// trade, and it is the one header of the set whose whole content is macros
-/// that need a compiler builtin anyway.
-const KNOWN_GAPS: &[(&str, &str)] = &[(
-    "tgmath.h",
-    "glibc's own #error for __HAVE_FLOAT64X without __HAVE_FLOAT128, which \
-     follows from __GNUC__ being 4.2.1",
-)];
+/// None. The last one was `<tgmath.h>`, whose `#error` for `_Float64x`
+/// without `_Float128` followed from cinrs claiming GCC 4.2.1: glibc ties
+/// `_Float128` to `__GNUC_PREREQ (4, 3)` on x86-64. Claiming GCC 14.2, with
+/// `_Float128` a type that may be named though never computed with, closed it.
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 /// Why the sweep cannot run here, if it cannot.
 fn skip_reason() -> Option<String> {
@@ -765,6 +755,48 @@ mod glibc {
         }
     }
 
+    /// `_GNU_SOURCE` with cinrs claiming GCC 14: glibc's `<bits/floatn.h>`
+    /// uses `_Float32` … `_Float128` as the compiler's keywords, and
+    /// `<stdlib.h>`, `<math.h>` and `<complex.h>` declare the TS 18661-3
+    /// functions with them — `_Float128` ones included, which may be declared
+    /// and not called. The test is `the_floatn_functions_of_glibc_work`.
+    mod platform_floatn {
+        use cinrs::gnu11;
+
+        gnu11! {
+            #define _GNU_SOURCE 1
+            #pragma cinrs system_include first
+
+            #include <stdlib.h>
+            #include <math.h>
+            #include <complex.h>
+            #include <string.h>
+            #include <stdio.h>
+            #include <unistd.h>
+            #include <pthread.h>
+
+            double floatn_probe(double x) {
+                _Float32 f = strtof32("1.5", NULL);
+                _Float64 s = sinf64(0.0);
+                double d = strtod("2.25", NULL);
+                /* `HUGE_VAL_F32` and `SNANF64` are `__builtin_huge_valf32 ()`
+                 * and `__builtin_nansf64 ("")` for GCC 7 and later. */
+                double special = isinf(HUGE_VAL_F32) && isnan(SNANF64) ? 0.0 : 1000.0;
+                return f + s + d + special + (isnan(x) ? 100.0 : 0.0);
+            }
+
+            /* Attributes GCC 14's glibc writes and cinrs has no use for. */
+            __attribute__((__warn_unused_result__, __nonnull__ (1)))
+            __attribute__((__malloc__ (free, 1), __alloc_size__ (2)))
+            __attribute__((__access__ (__read_only__, 1), __nothrow__, __leaf__))
+            void *floatn_dup(const char *s, size_t n) {
+                void *p = malloc(n);
+                if (p != NULL) memcpy(p, s, n);
+                return p;
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // the tests
     // -----------------------------------------------------------------------
@@ -882,6 +914,12 @@ mod glibc {
     fn the_platform_long_double_functions_reach_their_double_twins() {
         assert_eq!(unsafe { platform_long_double::parse() }, 2.5);
         assert_eq!(unsafe { platform_long_double::raise() }, 1024.0);
+    }
+
+    #[test]
+    fn the_floatn_functions_of_glibc_work() {
+        assert_eq!(unsafe { platform_floatn::floatn_probe(1.0) }, 3.75);
+        assert_eq!(unsafe { platform_floatn::floatn_probe(f64::NAN) }, 103.75);
     }
 
     /// glibc's `isnan` and `isinf` for a compiler that says it is GCC 4.2 are

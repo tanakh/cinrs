@@ -477,7 +477,7 @@ impl Sema<'_> {
         let mut chosen: Option<&ast::GenericAssoc> = None;
         let mut default: Option<&ast::GenericAssoc> = None;
         let mut default_range: Option<SourceRange> = None;
-        let mut seen: Vec<(Ty, ast::TypeQualifiers, SourceRange)> = Vec::new();
+        let mut seen: Vec<(Ty, ast::TypeQualifiers, SourceRange, bool)> = Vec::new();
         for assoc in assocs {
             let Some(name) = &assoc.ty else {
                 match default_range {
@@ -498,9 +498,24 @@ impl Sema<'_> {
                 continue;
             };
             let quals = name.ty.qualifiers;
-            if let Some((_, _, previous)) = seen.iter().find(|(seen, seen_quals, _)| {
-                self.compatible(*seen, assoc_ty) && *seen_quals == quals
-            }) {
+            // GCC makes `_Float32` a type distinct from `float` although the
+            // two have one format, and glibc's `<math.h>` lists both in the
+            // `_Generic` behind `issignaling`; here they are one type. The
+            // association written first is the one a value of it picks, and a
+            // second one that differs only by the `_FloatN` spelling is
+            // dropped rather than reported — both name the same function.
+            let floatn = matches!(
+                name.ty.kind,
+                ast::TypeKind::Float(size) | ast::TypeKind::Complex(size) if size.is_floatn()
+            );
+            if let Some((_, _, previous, seen_floatn)) =
+                seen.iter().find(|(seen, seen_quals, _, _)| {
+                    self.compatible(*seen, assoc_ty) && *seen_quals == quals
+                })
+            {
+                if floatn || *seen_floatn {
+                    continue;
+                }
                 let previous = *previous;
                 let spelled = self.qualified_name(assoc_ty, quals);
                 self.error_note(
@@ -511,7 +526,7 @@ impl Sema<'_> {
                 );
                 continue;
             }
-            seen.push((assoc_ty, quals, name.range));
+            seen.push((assoc_ty, quals, name.range, floatn));
             if self.compatible(assoc_ty, ty) && !quals.any() && chosen.is_none() {
                 chosen = Some(assoc);
             }
@@ -2167,6 +2182,9 @@ impl Sema<'_> {
             );
             return None;
         }
+        if self.refuse_float128_call(&name, &sig, callee.range) {
+            return None;
+        }
         // A call to a nested function has to pass the addresses of whatever it
         // captures, and for an object the caller does not own itself that means
         // the caller has to have been passed it too. What the callee captures
@@ -2646,6 +2664,13 @@ impl Sema<'_> {
         operand: &ast::Expr,
         range: SourceRange,
     ) -> Option<Expr> {
+        if let ast::TypeKind::Float(ast::FloatSize::Float128)
+        | ast::TypeKind::Complex(ast::FloatSize::Float128) = type_name.ty.kind
+        {
+            let complex = matches!(type_name.ty.kind, ast::TypeKind::Complex(_));
+            self.refuse_float128_cast(complex, range);
+            return None;
+        }
         let result = self.cast_expr_inner(type_name, operand, range)?;
         // A cast to `long double` makes one and a cast to anything else
         // unmakes it, neither of which the resolved type says: the two are

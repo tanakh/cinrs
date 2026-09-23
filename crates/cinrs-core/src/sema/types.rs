@@ -317,7 +317,11 @@ impl Sema<'_> {
             }),
             // `long double` has no portable Rust equivalent; it is mapped onto
             // `double`, which is what every other C-to-Rust translator does.
-            ast::TypeKind::Float(ast::FloatSize::Float) => Ok(Ty::Float),
+            // TS 18661-3's names are the types of the same format; see
+            // `parse::floatn_type`, and `sema::float128` for the one that has
+            // none.
+            ast::TypeKind::Float(ast::FloatSize::Float | ast::FloatSize::Float32) => Ok(Ty::Float),
+            ast::TypeKind::Float(ast::FloatSize::Float128) => Ok(self.float128_ty(false, range)),
             ast::TypeKind::Float(_) => Ok(Ty::Double),
             // `long double _Complex` follows `long double` onto `double`, with
             // the same documented loss of precision and the same ABI caveat.
@@ -326,7 +330,8 @@ impl Sema<'_> {
                     return Err(TypeError::at(range, COMPLEX_UNSUPPORTED.to_owned()));
                 }
                 Ok(match size {
-                    ast::FloatSize::Float => Ty::ComplexFloat,
+                    ast::FloatSize::Float | ast::FloatSize::Float32 => Ty::ComplexFloat,
+                    ast::FloatSize::Float128 => self.float128_ty(true, range),
                     _ => Ty::ComplexDouble,
                 })
             }
@@ -1291,6 +1296,7 @@ impl Sema<'_> {
             rust_align: 1,
             flexible: false,
             emit: true,
+            stands_for: None,
             range,
         })
     }
