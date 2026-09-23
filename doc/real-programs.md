@@ -260,3 +260,45 @@ Adler-32 and the BMI2 decompressor.
 Within 5 % of clang throughout; the compressor is 11–14 % behind gcc, which
 is ahead of clang on it too. The checksums run at memory bandwidth in all
 three.
+
+## stb_image 2.30 and stb_image_write 1.16 (not in the repository)
+
+The two single-header libraries (public domain), one unit with both
+`*_IMPLEMENTATION` macros: the SSE2 JPEG IDCT and YCbCr paths (live, because
+`__SSE2__` is predefined), `aligned(16)` tables, `_Thread_local` state, and a
+variadic definition (`stbiw__writef`), which is why it needs Rust 1.99.
+Compiled unedited on the first try, with no diagnostic and no warning.
+
+**Correctness.** 50 generated images (gradients, noise, an alpha
+checkerboard, 1×1 and odd sizes, 1–4 channels, 8- and 16-bit) written to
+memory as PNG (adaptive and each filter 0–4), BMP, TGA and TGA+RLE, JPEG at
+quality 50/90/95 and HDR, and read back through `stbi_load_from_memory`,
+`_load_16_` and `_loadf_`: the lossless formats exact, JPEG within the
+expected error and **byte-identical to the `gcc` build's decode** (the SSE2
+IDCT), HDR exact; `stbi_info`, the vertical flip and six failure reasons for
+truncated and bogus files; and 728 hand-made PNGs covering every colour type
+and bit depth, `tRNS`, every filter fixed and mixed per row, and Adam7
+interlacing, each decoding to exactly the expected pixels. Of the 3,958
+encoded files and decoded buffers, `cinrs`'s are byte-identical to clang's
+throughout, and to gcc's in all but nine.
+
+Those nine are **gcc's**: `gcc -O2` decodes an HDR image narrower than eight
+pixels — stored flat, without run-length encoding — with row 0 right and the
+rows after it left uninitialised (valgrind confirms the read). `gcc -O0`,
+`-O1`, `-O2 -fno-thread-jumps`, clang at every level and `cinrs` all decode
+it correctly, UBSan reports nothing, and the C has no undefined behaviour
+anyone could find; the loop has a label the RLE branch jumps into. A likely
+compiler bug, reproducible with six pixels through `stbi_write_hdr_to_func`
+and `stbi_loadf_from_memory`; not `cinrs`'s.
+
+**Speed.** A 4096×4096 RGB image (42.7 MB as PNG, 2.19 MB as JPEG q90), ms
+per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| decode PNG | 281.7 | 263.1 | 267.0 | 0.95× | 1.01× |
+| decode JPEG | 113.7 | 109.1 | 109.2 | 0.96× | 1.00× |
+| encode PNG | 1901.7 | 1512.4 | 1553.0 | 0.82× | 1.03× |
+| encode JPEG q90 | 200.3 | 144.1 | 162.7 | 0.81× | 1.13× |
+
+**What it took.** Nothing.
