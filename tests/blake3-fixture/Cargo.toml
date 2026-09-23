@@ -1,0 +1,26 @@
+# The crate `scripts/check-blake3.sh` builds and runs.
+#
+# Deliberately outside the workspace — the empty `[workspace]` table below is
+# what detaches it — because it needs C that is not in this repository: the
+# BLAKE3 C implementation, which the script downloads into `target/blake3/`
+# and verifies against a pinned SHA-256. An ordinary `cargo build` of this
+# repository does not touch it, and neither does CI.
+#
+# What it is for: BLAKE3's C implementation is a small program that exercises
+# the SIMD side of cinrs hard — SSE2, SSE4.1, AVX2 and AVX-512 intrinsics in
+# four files compiled with four different instruction sets, a run-time
+# dispatcher that reads `cpuid` and `xgetbv` through inline assembly, and the
+# official test vectors to say whether the result is right.
+[package]
+name = "cinrs-blake3-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cinrs = { path = "../.." }
+
+[lib]
+path = "src/lib.rs"
