@@ -84,7 +84,10 @@ about.
   Revised BSD licence in `LICENSE`, with every file's provenance in
   `SOURCES.md`. The version chosen for each is the simplest single-threaded C
   one: no pthreads, no `vector_size`, no intrinsics. k-nucleotide and
-  regex-redux are absent, and `SOURCES.md` says why.
+  regex-redux are absent, and `SOURCES.md` says why. Next to them are the
+  Intel-intrinsics versions of fannkuch-redux (SSSE3) and n-body (SSE2 and
+  AVX), at the same sizes, built for the instruction set in the row's
+  `features`.
 * **`programs/classic/`** — Dhrystone 2.1 and Whetstone, both vendored from
   netlib with their notices intact, and a LINPACK-style LU solve written for
   this suite because the netlib translation has no licence text and reports a
@@ -129,6 +132,7 @@ about.
    | `args`, `stdin` | what sizes the run; `StdinSource::Fasta` is the 100 MB fasta output, generated once |
    | `defines` | `-DNAME` natively, `#define NAME 1` in front of the C for `cinrs` |
    | `libs` | `-lNAME` natively, `rustc -l NAME` for the `cinrs` build |
+   | `features` | instruction sets above the x86-64 baseline: `-mNAME` natively, `rustc -C target-feature=+NAME,…` for the `cinrs` build (the program's crate only; `__AVX__` and the like stay undefined for the C) |
    | `system_include` | sets `CINRS_SYSTEM_INCLUDE=1`, so the unit may read the platform's own headers |
    | `output_filter` | lines holding these substrings are dropped before the outputs are compared — for a program that prints its own elapsed time or a pointer value, and for nothing else |
 

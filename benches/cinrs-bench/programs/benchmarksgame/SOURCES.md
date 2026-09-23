@@ -40,7 +40,30 @@ keeps the programs themselves. `LICENSE` is `LICENSE.md` at the same commit.
 | `binarytrees.c` | `binarytrees/binarytrees.gcc` | the plain `malloc`/`free` version; `-2` and `-3` need the Apache Portable Runtime, `-5` needs pthreads |
 | `pidigits.c` | `pidigits/pidigits.gcc` | the shorter of the two GMP versions |
 
-None of the eight contains a `#pragma omp`, so no OpenMP is being switched off:
+### The SIMD-intrinsics versions
+
+Three more programs are the Intel-intrinsics versions of two of the same
+benchmarks, vendored on the same terms and run at the same sizes as the plain
+rows, so that the two rows of a benchmark can be read against each other. They
+were fetched on **2026-09-23** from the same archive URL; the repository's
+`master` was still commit **`40296663ed350d5fe4a6ab5e367bab61cb77c219`**
+(authored 2025-03-07, according to the salsa GitLab API that day), so they come
+from the same commit as the eight above.
+
+None of the three headers states the compiler flags it was written for, so the
+instruction set in the last column is read off the intrinsics each one calls;
+it is what the harness row's `features` passes as `-mNAME` to `gcc` and `clang`
+and as `-C target-feature=+NAME` to `rustc`. None of them has an `#ifdef` on
+`__SSE3__`, `__AVX__` or the like, so there is no second code path that the
+`cinrs` build could take instead.
+
+| file here | upstream path in the archive | why this version | intrinsics and instruction set | flags |
+| --- | --- | --- | --- | --- |
+| `fannkuchredux_ssse3.c` | `fannkuchredux/fannkuchredux.gcc-4.gcc` | the one C version that is intrinsics without pthreads, OpenMP or `vector_size` | `_mm_shuffle_epi8` for every flip and rotation (SSSE3, `<tmmintrin.h>`), `_mm_load_si128`/`_mm_loadu_si128`/`_mm_store_si128`/`_mm_storel_epi64` (SSE2); calls `exit` and `atoi` with no `<stdlib.h>`, which GCC's and Clang's `<xmmintrin.h>` bring in through `<mm_malloc.h>` | `-mssse3` |
+| `nbody_sse.c` | `nbody/nbody.gcc-4.gcc` | two interactions at a time in a `__m128d`, single-threaded | `_mm_cvtpd_ps`, `_mm_rsqrt_ps`, `_mm_cvtps_pd` (SSE/SSE2, `<immintrin.h>`), and the GNU vector operators `*`, `+`, `-`, `/` on `__m128d` and between `__m128d` and `double`; calls `atoi` with no `<stdlib.h>` | none — the x86-64 baseline |
+| `nbody_avx.c` | `nbody/nbody.gcc-9.gcc` | one body per `__m256d`, single-threaded; `-5` is the same idea with `vector_size` | `_mm256_hadd_pd`, `_mm256_permute2f128_pd`, `_mm256_blend_pd`, `_mm256_cvtpd_ps`/`_mm256_cvtps_pd`, `_mm_rsqrt_ps` (AVX, `<x86intrin.h>`); defines its own `static inline __m256d _mm256_rsqrt_pd(__m256d)`, a 256-bit vector by value, and uses `*` on `__m256d` once, in it | `-mavx` |
+
+None of these eleven contains a `#pragma omp`, so no OpenMP is being switched off:
 the native builds and the `cinrs` build are serial in exactly the same way. The
 native compilers are invoked **without** `-fopenmp` regardless, so that a
 version which did have one would still be compared serial against serial —

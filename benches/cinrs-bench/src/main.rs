@@ -181,6 +181,16 @@ struct Program {
     defines: &'static [&'static str],
     /// `-lNAME` natively, `rustc -l NAME` for the `cinrs` build.
     libs: &'static [&'static str],
+    /// Instruction sets above the x86-64 baseline the program is written for:
+    /// `-mNAME` for each natively, `-C target-feature=+NAME,…` for the `cinrs`
+    /// build. The names have to be ones GCC, Clang and rustc all spell the same
+    /// way (`sse3`, `ssse3`, `sse4.1`, `avx`, `avx2`, `fma`, …). The rustc flag
+    /// applies to the generated program's crate only — the prebuilt `cinrs`
+    /// rlib is linked as it is — which is all that matters, since the
+    /// intrinsics are expanded into the program's own functions and inlined
+    /// there. It does not predefine `__AVX__` and the like for the C: a
+    /// procedural macro cannot see `-C target-feature`.
+    features: &'static [&'static str],
     /// Whether the unit may read the platform's own headers.
     system_include: SystemInclude,
     /// Output lines holding any of these substrings are dropped before the
@@ -221,6 +231,7 @@ const fn program(name: &'static str, source: &'static str, group: Group) -> Prog
         stdin: StdinSource::Empty,
         defines: &[],
         libs: &[],
+        features: &[],
         system_include: SystemInclude::No,
         output_filter: &[],
         note: "",
@@ -307,6 +318,37 @@ static PROGRAMS: &[Program] = &[
         ..program(
             "pidigits",
             "benchmarksgame/pidigits.c",
+            Group::BenchmarksGame,
+        )
+    },
+    // The SIMD-intrinsics versions, at the same sizes as the plain ones above
+    // so that the two rows of a benchmark can be read against each other.
+    Program {
+        args: &["11"],
+        features: &["ssse3"],
+        note: "fannkuch-redux with each flip one `_mm_shuffle_epi8` (SSSE3)",
+        ..program(
+            "fannkuch-redux-ssse3",
+            "benchmarksgame/fannkuchredux_ssse3.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["20000000"],
+        note: "n-body two pairs at a time in `__m128d`, `_mm_rsqrt_ps` and Newton steps (SSE2)",
+        ..program(
+            "n-body-sse",
+            "benchmarksgame/nbody_sse.c",
+            Group::BenchmarksGame,
+        )
+    },
+    Program {
+        args: &["20000000"],
+        features: &["avx"],
+        note: "n-body one body per `__m256d`, `_mm256_hadd_pd` and `_mm_rsqrt_ps` (AVX)",
+        ..program(
+            "n-body-avx",
+            "benchmarksgame/nbody_avx.c",
             Group::BenchmarksGame,
         )
     },
@@ -948,6 +990,9 @@ fn build_native(
     for define in p.defines {
         args.push(format!("-D{define}").into());
     }
+    for feature in p.features {
+        args.push(format!("-m{feature}").into());
+    }
     args.push("-lm".into());
     for lib in p.libs {
         args.push(format!("-l{lib}").into());
@@ -1028,6 +1073,11 @@ fn build_cinrs(
     for lib in p.libs {
         args.push("-l".into());
         args.push((*lib).into());
+    }
+    if !p.features.is_empty() {
+        let enabled: Vec<String> = p.features.iter().map(|f| format!("+{f}")).collect();
+        args.push("-C".into());
+        args.push(format!("target-feature={}", enabled.join(",")).into());
     }
 
     let (prog, args) = with_time("rustc", &args, &time_file);
