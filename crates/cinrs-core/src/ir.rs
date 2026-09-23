@@ -3589,6 +3589,11 @@ pub struct VlaDef {
     /// read out of the hidden bound objects, in units of the storage's
     /// element type.
     pub count: Expr,
+    /// The alignment `_Alignas(N)` or `__attribute__((aligned(N)))` asked
+    /// for, when it is stricter than the element type's: the storage is then
+    /// over-allocated and the array starts at the first address that is a
+    /// multiple of it.
+    pub align: Option<u64>,
     /// Where the declarator was written.
     pub range: SourceRange,
 }

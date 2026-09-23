@@ -65,12 +65,6 @@ error: '_Alignas' requires C11 or later (this block is c99!)
 47 |         _Alignas(16) int values[len];
    |         ^^^^^^^^
 
-error: an alignment specifier is not supported on a variable length array; its storage is allocated at run time and carries the alignment of the element type
-  --> tests/ui/sema_vla_errors.rs:47:9
-   |
-47 |         _Alignas(16) int values[len];
-   |         ^^^^^^^^
-
 error: use of undeclared identifier 'cols'
   --> tests/ui/sema_vla_errors.rs:54:25
    |
@@ -131,5 +125,5 @@ error: 'case' label is not a compile-time constant expression
 116 |         case sizeof values:
     |              ^^^^^^
 
-error: aborting due to 22 previous errors
+error: aborting due to 21 previous errors
 

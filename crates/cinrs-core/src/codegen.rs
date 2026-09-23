@@ -3810,17 +3810,42 @@ impl<'a> Codegen<'a> {
         let zero = self.zero_tokens(elem, span);
         let elem_ty = self.ty(elem, span);
         let usize_ty = primitive_ty("usize", span);
-        let elements = self.vec_of(zero, quote_spanned! {span=> #count as #usize_ty }, span);
+        // A requested alignment stricter than the element's: enough spare
+        // elements to cover the worst distance to the next multiple of it,
+        // and the array starts there. The offset is in bytes and a multiple of
+        // the element's own alignment, so every element is still aligned; the
+        // storage is plain zeroed memory, and C types need nothing dropped.
+        let (length, first) = match def.align {
+            Some(align) => {
+                let align = Literal::usize_unsuffixed(align as usize);
+                let size = quote_spanned! {span=> ::core::mem::size_of::<#elem_ty>() };
+                let length = quote_spanned! {span=>
+                    #count as #usize_ty + (#align + #size - 1) / #size
+                };
+                let first = quote_spanned! {span=> {
+                    let __cinrs_bytes = #store.as_mut_ptr() as *mut u8;
+                    __cinrs_bytes
+                        .add((__cinrs_bytes as #usize_ty).wrapping_neg() & (#align - 1))
+                        as *mut #elem_ty
+                } };
+                (length, first)
+            }
+            None => (
+                quote_spanned! {span=> #count as #usize_ty },
+                quote_spanned! {span=> #store.as_mut_ptr() },
+            ),
+        };
+        let elements = self.vec_of(zero, length, span);
         if self.in_cfg {
             return quote_spanned! {span=>
                 #store = #elements;
-                #name = #store.as_mut_ptr();
+                #name = #first;
             };
         }
         let vec_ty = self.vec_ty(elem_ty.clone(), span);
         quote_spanned! {span=>
             let mut #store: #vec_ty = #elements;
-            let mut #name: *mut #elem_ty = #store.as_mut_ptr();
+            let mut #name: *mut #elem_ty = #first;
         }
     }
 

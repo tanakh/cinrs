@@ -2003,6 +2003,16 @@ fn vector_subscripts_and_braces_are_checked() {
             "__m128d f(void) { __m128d v = {[1] = 2.0}; return v; }",
             "designator",
         ),
+        // A lane of a vector that is not an object is not an lvalue either.
+        (
+            "void f(__m128d a, __m128d b) { (a * b)[0] = 1.0; }",
+            "expression is not assignable",
+        ),
+        (
+            "void f(__m128d a) { (a + a)[1] += 1.0; }",
+            "expression is not assignable",
+        ),
+        ("void f(__m128d a) { (a + a)[1]++; }", "not assignable"),
     ];
     for (source, expected) in cases {
         let found = vector_errors(source);

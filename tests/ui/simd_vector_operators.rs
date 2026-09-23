@@ -38,4 +38,8 @@ cinrs::c11! {
     int ia32_builtin(void) {
         return __builtin_ia32_pmovmskb128(_mm_setzero_si128()); //~ ERROR: write the Intel intrinsic instead
     }
+
+    void a_lane_of_a_value(__m128i a, __m128i b) {
+        (a + b)[0] = 1; //~ ERROR: expression is not assignable
+    }
 }

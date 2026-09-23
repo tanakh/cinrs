@@ -379,18 +379,33 @@ impl Sema<'_> {
         // plain `let`, and the one C hedges around with rules about where it
         // may be declared at all. It may not have an initialiser at all.
         if self.types().is_vm(ty) {
-            // The object is a pointer into a heap allocation whose alignment
-            // is the element type's, and there is no wrapper that could carry
-            // a stricter one.
+            // The object is a pointer into a heap allocation, whose alignment
+            // is the element type's; a stricter one asked for — spectral-norm
+            // writes `double v[n] __attribute__((aligned(32)))` and reads it
+            // with `_mm256_load_pd` — is had by over-allocating and starting
+            // the array at the first multiple of it. See [`ir::VlaDef::align`].
+            let mut align = None;
             if let Some(request) = &requested {
-                self.error(
-                    request.range,
-                    "an alignment specifier is not supported on a variable length array; \
-                     its storage is allocated at run time and carries the alignment of the \
-                     element type",
-                );
+                let elem = self.types().vm_step_ty(ty);
+                let natural = self.natural_align(elem).unwrap_or(1);
+                if request.want < natural && request.standard {
+                    self.error(
+                        request.range,
+                        format!(
+                            "the requested alignment {} is weaker than the alignment {natural} \
+                             that '{}' already has",
+                            request.want,
+                            self.tyname(elem)
+                        ),
+                    );
+                } else if request.want > natural {
+                    align = Some(request.want);
+                }
             }
             let mut out = self.declare_vla(name, decl, declarator, ty, bounds, file_scope);
+            if let Some(Stmt::Vla(def)) = out.last_mut() {
+                def.align = align;
+            }
             if let Some(Stmt::Vla(def)) = out.last() {
                 let object = def.object;
                 out.extend(self.declare_cleanup(object, attrs.cleanup.as_ref()));
@@ -848,6 +863,7 @@ impl Sema<'_> {
             object,
             storage,
             count,
+            align: None,
             range: declarator.range,
         })));
         out

@@ -8,7 +8,7 @@
 //! address really is a multiple of what the declaration asked for, whatever
 //! storage duration the object has.
 
-use cinrs::{c11, c99};
+use cinrs::{c11, c99, gnu11};
 
 /// The alignment a pointer actually has, as C's `(uintptr_t) p % N` would
 /// compute it.
@@ -294,6 +294,39 @@ fn an_over_aligned_object_can_still_have_a_cleanup() {
     }
 
     assert_eq!(unsafe { with_cleanup() }, 5);
+}
+
+/// A variable length array asked to be aligned is: its storage is allocated
+/// at run time, so it is over-allocated and the array starts at the first
+/// multiple of the alignment. spectral-norm's `double v[n + 3]
+/// __attribute__((aligned(32)))` read with an aligned AVX load is the shape.
+#[test]
+fn a_variable_length_array_is_aligned_where_it_asked_to_be() {
+    gnu11! {
+        #include <stdint.h>
+        #include <stddef.h>
+
+        struct pair { int a, b; };
+
+        int aligned_vlas(int n) {
+            int ok = 1, round, i;
+            for (round = 0; round < 8; round++) {
+                double v[n + round] __attribute__((aligned(32)));
+                _Alignas(64) char bytes[n + round];
+                _Alignas(16) struct pair pairs[n];
+                for (i = 0; i < n + round; i++) { v[i] = i; bytes[i] = (char)i; }
+                for (i = 0; i < n; i++) pairs[i].b = i;
+                ok &= (uintptr_t)v % 32 == 0 && (uintptr_t)bytes % 64 == 0
+                    && (uintptr_t)pairs % 16 == 0;
+                ok &= v[n + round - 1] == n + round - 1 && bytes[n - 1] == (char)(n - 1)
+                    && pairs[n - 1].b == n - 1 && sizeof v == (size_t)(n + round) * sizeof(double);
+            }
+            return ok;
+        }
+    }
+
+    assert_eq!(unsafe { aligned_vlas(5) }, 1);
+    assert_eq!(unsafe { aligned_vlas(1) }, 1);
 }
 
 /// A GNU nested function reaches an enclosing object through a pointer the

@@ -376,13 +376,15 @@ fn alignas_is_honoured_on_an_object() {
         "int f(void) { register _Alignas(16) int x; return x; }",
         &["an alignment specifier is not allowed on an object declared 'register'"],
     );
-    rejected(
+    // A variable length array's storage is over-allocated to honour it.
+    accepted(
         Standard::C11,
         "int f(int n) { _Alignas(16) int a[n]; return a[0]; }",
-        &[
-            "an alignment specifier is not supported on a variable length array; its storage \
-             is allocated at run time and carries the alignment of the element type",
-        ],
+    );
+    rejected(
+        Standard::C11,
+        "int f(int n) { _Alignas(2) int a[n]; return a[0]; }",
+        &["the requested alignment 2 is weaker than the alignment 4 that 'int' already has"],
     );
 }
 

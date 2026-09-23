@@ -923,6 +923,21 @@ impl Sema<'_> {
             self.error(expr.range, "expression is not assignable");
             return None;
         }
+        // A lane of a vector that is not an object — `(a * b)[0]` — is read
+        // through a hidden local, which is no more assignable than `f().x`.
+        if let PlaceKind::Index { base, .. } = &place.kind
+            && let ExprKind::Cast(address) = &base.kind
+            && let ExprKind::AddrOf(inner) = &address.kind
+            && let PlaceKind::CompoundLiteral { object, .. } = &inner.kind
+            && self.rvalue_lanes.contains(object)
+        {
+            self.error(
+                expr.range,
+                "expression is not assignable: the vector is a value, not an object, so its \
+                 lane is one too (GCC: lvalue required as left operand of assignment)",
+            );
+            return None;
+        }
         if place.is_const {
             self.report_const_assignment(&place, expr.range);
             return None;

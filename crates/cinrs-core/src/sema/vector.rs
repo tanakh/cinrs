@@ -573,6 +573,7 @@ impl Sema<'_> {
                 let name = self.anonymous_name("lanes");
                 let id = self.new_object(&name, ty, ir::Storage::Automatic, false, vector_range);
                 self.compound_literals.push(id);
+                self.rvalue_lanes.insert(id);
                 super::place_of(
                     PlaceKind::CompoundLiteral {
                         object: id,

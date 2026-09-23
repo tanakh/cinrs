@@ -694,6 +694,10 @@ struct Sema<'a> {
     /// expression could not offer. [`Sema::block_items`] empties this list into
     /// definitions at the head of the block it belongs to.
     compound_literals: Vec<ObjectId>,
+    /// The hidden locals that hold a vector which is not an object while one
+    /// of its lanes is read — `(a * b)[0]` — which, unlike a compound
+    /// literal's, may not be assigned to: GCC's "lvalue required".
+    rvalue_lanes: HashSet<ObjectId>,
     /// The bounds the array type being resolved was given, in the order they
     /// were resolved (innermost dimension first), for the ones that were not
     /// constant expressions.
@@ -911,6 +915,7 @@ impl<'a> Sema<'a> {
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
+            rvalue_lanes: HashSet::new(),
             vm_bounds: Vec::new(),
             bound_mode: BoundMode::Expression,
             vm_name: String::new(),

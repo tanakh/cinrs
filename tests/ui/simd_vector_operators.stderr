@@ -40,5 +40,11 @@ error: '__builtin_ia32_pmovmskb128' is not a builtin this crate implements, and 
 39 |         return __builtin_ia32_pmovmskb128(_mm_setzero_si128());
    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: aborting due to 7 previous errors
+error: expression is not assignable: the vector is a value, not an object, so its lane is one too (GCC: lvalue required as left operand of assignment)
+  --> tests/ui/simd_vector_operators.rs:43:9
+   |
+43 |         (a + b)[0] = 1;
+   |         ^
+
+error: aborting due to 8 previous errors
 
