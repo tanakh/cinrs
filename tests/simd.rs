@@ -793,8 +793,12 @@ fn the_address_of_an_intrinsic_is_a_shim() {
 // A 512-bit vector passed by value needs "avx512f" on both sides, as a 256-bit
 // one needs "avx"; `tests/ui/simd_abi_512.rs` has the refusal.
 //
-// The memory operands are written the way `core::arch` declares them
-// (`const __m512i *`, `const int *`); Intel's prototypes say `void *`.
+// A memory operand is declared `void *` or `const void *` wherever GCC's
+// header declares it so, and any object pointer goes in without a cast — as
+// real code writes it, and as GCC 14 and later insist, since an incompatible
+// pointer is an error there. `core::arch`'s own parameter types are typed, and
+// the generated call casts to them. Where GCC types the operand too
+// (`_mm512_stream_si512`, `_mm256_storeu_si256`), the cast stays.
 
 gnu11! {
     #include <immintrin.h>
@@ -802,6 +806,32 @@ gnu11! {
 
     __attribute__((target("avx512f"))) __m512i twice512(__m512i v) {
         return _mm512_add_epi32(v, v);
+    }
+
+    /* `int *`, `int32_t *`, `float *`, `char *` and `void *`, none cast. */
+    __attribute__((target("avx512f"))) int untyped_pointers(void) {
+        int a[16], out[16];
+        int32_t b[16];
+        float f[16], fout[16];
+        char bytes[2] = {0x34, 0x12};
+        int16_t lanes[8];
+        void *dst = out;
+        int i;
+        for (i = 0; i < 16; i++) {
+            a[i] = i * i;
+            b[i] = -i;
+            f[i] = (float)i * 0.25f;
+        }
+        _mm_prefetch(bytes, _MM_HINT_T0);
+        _mm512_storeu_si512(dst, _mm512_add_epi32(_mm512_loadu_si512(a),
+                                                  _mm512_maskz_loadu_epi32(0xffff, b)));
+        for (i = 0; i < 16; i++) if (out[i] != i * i - i) return 0;
+        _mm512_storeu_ps(fout, _mm512_loadu_ps(f));
+        for (i = 0; i < 16; i++) if (fout[i] != f[i]) return 0;
+        _mm_storeu_si128((__m128i *)lanes, _mm_loadu_si16(bytes));
+        if (lanes[0] != 0x1234) return 0;
+        for (i = 1; i < 8; i++) if (lanes[i] != 0) return 0;
+        return 1;
     }
 
     __attribute__((target("avx512f"))) int avx512f_ops(void) {
@@ -820,26 +850,26 @@ gnu11! {
             b[i] = 100 - i * i;
             c[i] = i % 3 == 0 ? a[i] : a[i] + 1;
         }
-        va = _mm512_loadu_si512((const __m512i *)a);
-        vb = _mm512_loadu_si512((const __m512i *)b);
-        vc = _mm512_loadu_si512((const __m512i *)c);
+        va = _mm512_loadu_si512(a);
+        vb = _mm512_loadu_si512(b);
+        vc = _mm512_loadu_si512(c);
 
         /* add, and a horizontal sum */
-        _mm512_storeu_si512((__m512i *)got, _mm512_add_epi32(va, vb));
+        _mm512_storeu_si512(got, _mm512_add_epi32(va, vb));
         for (i = 0; i < 16; i++) if (got[i] != a[i] + b[i]) return 0;
         for (i = 0; i < 16; i++) sum += a[i];
         if (_mm512_reduce_add_epi32(va) != sum) return 0;
 
         /* by value, twice over */
-        _mm512_storeu_si512((__m512i *)got, twice512(twice512(va)));
+        _mm512_storeu_si512(got, twice512(twice512(va)));
         for (i = 0; i < 16; i++) if (got[i] != 4 * a[i]) return 0;
 
         /* a merge-masked add and a zero-masked load */
         k = 0x5a5a;
-        _mm512_storeu_si512((__m512i *)got, _mm512_mask_add_epi32(va, k, va, vb));
+        _mm512_storeu_si512(got, _mm512_mask_add_epi32(va, k, va, vb));
         for (i = 0; i < 16; i++) want[i] = (k >> i) & 1 ? a[i] + b[i] : a[i];
         for (i = 0; i < 16; i++) if (got[i] != want[i]) return 0;
-        _mm512_storeu_si512((__m512i *)got, _mm512_maskz_loadu_epi32(0x00ff, a));
+        _mm512_storeu_si512(got, _mm512_maskz_loadu_epi32(0x00ff, a));
         for (i = 0; i < 16; i++) if (got[i] != (i < 8 ? a[i] : 0)) return 0;
 
         /* compares that produce a mask, one through the enum immediate */
@@ -899,8 +929,8 @@ gnu11! {
             y[j] = (uint8_t)(j % 5 == 0 ? j : 255 - j);
             if (j % 5 == 0) want |= 1ull << j;
         }
-        return _mm512_cmpeq_epi8_mask(_mm512_loadu_si512((const __m512i *)x),
-                                      _mm512_loadu_si512((const __m512i *)y)) == want;
+        return _mm512_cmpeq_epi8_mask(_mm512_loadu_si512(x),
+                                      _mm512_loadu_si512(y)) == want;
     }
 
     __attribute__((target("avx512cd"))) int avx512cd_ops(void) {
@@ -908,8 +938,8 @@ gnu11! {
         int32_t got[16];
         int i, n;
         for (i = 0; i < 16; i++) x[i] = i == 15 ? 0 : (uint32_t)1 << (i * 2);
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_lzcnt_epi32(_mm512_loadu_si512((const __m512i *)x)));
+        _mm512_storeu_si512(got,
+                            _mm512_lzcnt_epi32(_mm512_loadu_si512(x)));
         for (i = 0; i < 16; i++) {
             for (n = 0; n < 32 && !((x[i] << n) & 0x80000000u); n++) {}
             if (got[i] != n) return 0;
@@ -923,8 +953,8 @@ gnu11! {
         int i, n;
         uint32_t v;
         for (i = 0; i < 16; i++) x[i] = (uint32_t)i * 0x01010101u ^ ((uint32_t)i << 28);
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_popcnt_epi32(_mm512_loadu_si512((const __m512i *)x)));
+        _mm512_storeu_si512(got,
+                            _mm512_popcnt_epi32(_mm512_loadu_si512(x)));
         for (i = 0; i < 16; i++) {
             for (n = 0, v = x[i]; v; v &= v - 1) n++;
             if (got[i] != n) return 0;
@@ -950,10 +980,10 @@ gnu11! {
             sb[i] = (int8_t)(i * 5 - 100);
         }
         for (i = 0; i < 16; i++) acc[i] = i * 1000;
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_dpbusd_epi32(_mm512_loadu_si512((const __m512i *)acc),
-                                                _mm512_loadu_si512((const __m512i *)ua),
-                                                _mm512_loadu_si512((const __m512i *)sb)));
+        _mm512_storeu_si512(got,
+                            _mm512_dpbusd_epi32(_mm512_loadu_si512(acc),
+                                                _mm512_loadu_si512(ua),
+                                                _mm512_loadu_si512(sb)));
         for (i = 0; i < 16; i++) if (got[i] != dot_us(ua, sb, i, acc[i])) return 0;
         return 1;
     }
@@ -983,9 +1013,9 @@ gnu11! {
             idx[j] = (uint8_t)(j * 13 + 5 + 64 * (j & 1)); /* bits above 6 are ignored */
             x[j] = (uint8_t)(200 - j);
         }
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_permutexvar_epi8(_mm512_loadu_si512((const __m512i *)idx),
-                                                    _mm512_loadu_si512((const __m512i *)x)));
+        _mm512_storeu_si512(got,
+                            _mm512_permutexvar_epi8(_mm512_loadu_si512(idx),
+                                                    _mm512_loadu_si512(x)));
         for (j = 0; j < 64; j++) if (got[j] != x[idx[j] & 63]) return 0;
         return 1;
     }
@@ -998,10 +1028,10 @@ gnu11! {
             b[i] = (uint64_t)i * 1000003u; /* both under 2^26, so the */
             c[i] = (uint64_t)i * 999983u + 7u; /* product fits in 52 bits */
         }
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_madd52lo_epu64(_mm512_loadu_si512((const __m512i *)a),
-                                                  _mm512_loadu_si512((const __m512i *)b),
-                                                  _mm512_loadu_si512((const __m512i *)c)));
+        _mm512_storeu_si512(got,
+                            _mm512_madd52lo_epu64(_mm512_loadu_si512(a),
+                                                  _mm512_loadu_si512(b),
+                                                  _mm512_loadu_si512(c)));
         for (i = 0; i < 8; i++) if (got[i] != a[i] + b[i] * c[i]) return 0;
         return 1;
     }
@@ -1016,8 +1046,8 @@ gnu11! {
         for (i = 0; i < 8; i++)
             for (j = 0; j < 8; j++)
                 if ((b[i] >> (sel[i * 8 + j] & 63)) & 1) want |= 1ull << (i * 8 + j);
-        return _mm512_bitshuffle_epi64_mask(_mm512_loadu_si512((const __m512i *)b),
-                                            _mm512_loadu_si512((const __m512i *)sel)) == want;
+        return _mm512_bitshuffle_epi64_mask(_mm512_loadu_si512(b),
+                                            _mm512_loadu_si512(sel)) == want;
     }
 
     __attribute__((target("avx512bf16,avx512f"))) int avx512bf16_ops(void) {
@@ -1055,9 +1085,9 @@ gnu11! {
             x[j] = (uint8_t)(j * 37 + 1);
             y[j] = (uint8_t)(255 - j * 3);
         }
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_gf2p8mul_epi8(_mm512_loadu_si512((const __m512i *)x),
-                                                 _mm512_loadu_si512((const __m512i *)y)));
+        _mm512_storeu_si512(got,
+                            _mm512_gf2p8mul_epi8(_mm512_loadu_si512(x),
+                                                 _mm512_loadu_si512(y)));
         for (j = 0; j < 64; j++) if (got[j] != gf_mul(x[j], y[j])) return 0;
         return 1;
     }
@@ -1071,9 +1101,9 @@ gnu11! {
             s[i] = 0x0f1e2d3c4b5a6978ull * (uint64_t)(i + 3);
             k[i] = 0x1122334455667788ull ^ (uint64_t)i;
         }
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_aesenc_epi128(_mm512_loadu_si512((const __m512i *)s),
-                                                 _mm512_loadu_si512((const __m512i *)k)));
+        _mm512_storeu_si512(got,
+                            _mm512_aesenc_epi128(_mm512_loadu_si512(s),
+                                                 _mm512_loadu_si512(k)));
         for (i = 0; i < 4; i++) {
             _mm_storeu_si128((__m128i *)one,
                              _mm_aesenc_si128(_mm_loadu_si128((const __m128i *)(s + 2 * i)),
@@ -1090,9 +1120,9 @@ gnu11! {
             a[i] = 0x9e3779b97f4a7c15ull * (uint64_t)(i + 1);
             b[i] = 0xc2b2ae3d27d4eb4full ^ ((uint64_t)i << 32);
         }
-        _mm512_storeu_si512((__m512i *)got,
-                            _mm512_clmulepi64_epi128(_mm512_loadu_si512((const __m512i *)a),
-                                                     _mm512_loadu_si512((const __m512i *)b), 0x01));
+        _mm512_storeu_si512(got,
+                            _mm512_clmulepi64_epi128(_mm512_loadu_si512(a),
+                                                     _mm512_loadu_si512(b), 0x01));
         for (i = 0; i < 4; i++) {
             _mm_storeu_si128((__m128i *)one,
                              _mm_clmulepi64_si128(_mm_loadu_si128((const __m128i *)(a + 2 * i)),
@@ -1138,9 +1168,9 @@ gnu11! {
         uint16_t got[32];
         int i;
         __m512h one = _mm512_castsi512_ph(_mm512_set1_epi16(0x3c00));
-        _mm512_storeu_si512((__m512i *)got, _mm512_castph_si512(_mm512_add_ph(one, one)));
+        _mm512_storeu_si512(got, _mm512_castph_si512(_mm512_add_ph(one, one)));
         for (i = 0; i < 32; i++) if (got[i] != 0x4000) return 0; /* 2.0 */
-        _mm512_storeu_si512((__m512i *)got,
+        _mm512_storeu_si512(got,
                             _mm512_castph_si512(_mm512_fmadd_ph(one, one, one)));
         for (i = 0; i < 32; i++) if (got[i] != 0x4000) return 0;
         return 1;
@@ -1225,6 +1255,7 @@ fn avx512_when_the_processor_has_it() {
     };
     let cases: &[(&[&str], unsafe extern "C" fn() -> i32, &str)] = &[
         (&["avx512f"], avx512f_ops, "avx512f"),
+        (&["avx512f"], untyped_pointers, "untyped pointers"),
         (&["avx512f", "avx512vl"], avx512vl_ops, "avx512vl"),
         (&["avx512bw"], avx512bw_ops, "avx512bw"),
         (&["avx512cd"], avx512cd_ops, "avx512cd"),

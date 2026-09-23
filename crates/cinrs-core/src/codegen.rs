@@ -3956,7 +3956,9 @@ impl<'a> Codegen<'a> {
                 let pname = Ident::new(&format!("__cinrs_arg{index}"), Span::mixed_site());
                 let pty = self.ty(*ty, span);
                 params.extend(quote_spanned! {span=> #pname: #pty });
-                args.extend(quote_spanned! {span=> #pname });
+                // The same cast a direct call's pointer argument gets.
+                let cast = self.intrinsic_pointer_arg(*ty, span).unwrap_or_default();
+                args.extend(quote_spanned! {span=> #pname #cast });
             }
             let ret = if function.sig.ret.is_void() {
                 TokenStream::new()
@@ -6175,7 +6177,7 @@ impl<'a> Codegen<'a> {
         if let Callee::Direct(id) = callee
             && let Some(intr) = self.program.function(*id).intrinsic
         {
-            return self.intrinsic_call(intr, args, span);
+            return self.intrinsic_call(intr, *id, args, span);
         }
         let sig = self.callee_signature(callee);
         // A call through a function type with *no prototype* passes as many
@@ -6295,10 +6297,14 @@ impl<'a> Codegen<'a> {
     ///   [`crate::x86::Intrinsic::imm`]);
     /// * the literal carries the `const` parameter's own type, and is wrapped
     ///   in a block, so that a negative value is still a const argument Rust
-    ///   parses.
+    ///   parses;
+    /// * a pointer argument is cast with `as *const _` or `as *mut _` (see
+    ///   [`Codegen::intrinsic_pointer_arg`]), because the header spells a
+    ///   memory operand `void *` where GCC's does and `core::arch` types it.
     fn intrinsic_call(
         &mut self,
         intr: &'static crate::x86::Intrinsic,
+        id: ir::FuncId,
         args: &[Expr],
         span: Span,
     ) -> Value {
@@ -6335,13 +6341,40 @@ impl<'a> Codegen<'a> {
                 tokens.extend(quote_spanned! {span=> , });
             }
             written += 1;
-            tokens.extend(self.expr_at(arg, arg.ty));
+            let param = self.program.function(id).sig.params.get(index).copied();
+            match param.and_then(|ty| self.intrinsic_pointer_arg(ty, span)) {
+                Some(cast) => {
+                    let value = self.expr(arg).at(prec::CAST, span);
+                    tokens.extend(quote_spanned! {span=> #value #cast });
+                }
+                None => tokens.extend(self.expr_at(arg, arg.ty)),
+            }
         }
         let call = parenthesize(tokens, span);
         Value::new(
             quote_spanned! {span=> ::core::arch::#module::#name #turbofish #call },
             prec::CALL,
         )
+    }
+
+    /// The cast an intrinsic's pointer argument gets: `as *const _` when the
+    /// C parameter points at `const`, `as *mut _` otherwise, and `None` for a
+    /// parameter that is not a pointer.
+    ///
+    /// The header declares a memory operand `void *` wherever GCC's does, so
+    /// that `_mm512_loadu_si512(p)` takes an `int *` as it does in GCC, while
+    /// `core::arch` types it (`*const __m512i`); rustc infers the `_` from
+    /// that. Every pointer parameter gets the cast, typed or not — for a
+    /// typed one it is the identity, and one rule is simpler to state.
+    fn intrinsic_pointer_arg(&self, param: Ty, span: Span) -> Option<TokenStream> {
+        let Ty::Pointer(pointer) = param else {
+            return None;
+        };
+        Some(if self.program.types.pointer_type(pointer).konst {
+            quote_spanned! {span=> as *const _ }
+        } else {
+            quote_spanned! {span=> as *mut _ }
+        })
     }
 
     /// The hidden arguments a call to a lifted nested function opens with.

@@ -19,12 +19,12 @@
 /* @generated avx512vbmi2 — see crates/cinrs-core/tests/x86_intrinsics.rs */
 __m512i _mm512_mask_compress_epi16(__m512i, __mmask32, __m512i);
 __m512i _mm512_mask_compress_epi8(__m512i, __mmask64, __m512i);
-void _mm512_mask_compressstoreu_epi16(short *, __mmask32, __m512i);
-void _mm512_mask_compressstoreu_epi8(char *, __mmask64, __m512i);
+void _mm512_mask_compressstoreu_epi16(void *, __mmask32, __m512i);
+void _mm512_mask_compressstoreu_epi8(void *, __mmask64, __m512i);
 __m512i _mm512_mask_expand_epi16(__m512i, __mmask32, __m512i);
 __m512i _mm512_mask_expand_epi8(__m512i, __mmask64, __m512i);
-__m512i _mm512_mask_expandloadu_epi16(__m512i, __mmask32, const short *);
-__m512i _mm512_mask_expandloadu_epi8(__m512i, __mmask64, const char *);
+__m512i _mm512_mask_expandloadu_epi16(__m512i, __mmask32, const void *);
+__m512i _mm512_mask_expandloadu_epi8(__m512i, __mmask64, const void *);
 __m512i _mm512_mask_shldi_epi16(__m512i, __mmask32, __m512i, __m512i, const int);
 __m512i _mm512_mask_shldi_epi32(__m512i, __mmask16, __m512i, __m512i, const int);
 __m512i _mm512_mask_shldi_epi64(__m512i, __mmask8, __m512i, __m512i, const int);
@@ -41,8 +41,8 @@ __m512i _mm512_maskz_compress_epi16(__mmask32, __m512i);
 __m512i _mm512_maskz_compress_epi8(__mmask64, __m512i);
 __m512i _mm512_maskz_expand_epi16(__mmask32, __m512i);
 __m512i _mm512_maskz_expand_epi8(__mmask64, __m512i);
-__m512i _mm512_maskz_expandloadu_epi16(__mmask32, const short *);
-__m512i _mm512_maskz_expandloadu_epi8(__mmask64, const char *);
+__m512i _mm512_maskz_expandloadu_epi16(__mmask32, const void *);
+__m512i _mm512_maskz_expandloadu_epi8(__mmask64, const void *);
 __m512i _mm512_maskz_shldi_epi16(__mmask32, __m512i, __m512i, const int);
 __m512i _mm512_maskz_shldi_epi32(__mmask16, __m512i, __m512i, const int);
 __m512i _mm512_maskz_shldi_epi64(__mmask8, __m512i, __m512i, const int);

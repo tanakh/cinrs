@@ -33,7 +33,7 @@ mod __cinrs_unit_de41b25e {
     ) -> ::core::ffi::c_int {
         unsafe {
             let mut v: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_loadu_si128(
-                p as *const ::core::arch::x86_64::__m128i,
+                p as *const ::core::arch::x86_64::__m128i as *const _,
             );
             let mut s: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_add_epi32(
                 v,
@@ -51,7 +51,7 @@ mod __cinrs_unit_de41b25e {
     ) -> ::core::ffi::c_float {
         unsafe {
             let mut v: ::core::arch::x86_64::__m256 = ::core::arch::x86_64::_mm256_loadu_ps(
-                p,
+                p as *const _,
             );
             return ::core::arch::x86_64::_mm256_cvtss_f32(
                 ::core::arch::x86_64::_mm256_add_ps(v, v),

@@ -135,7 +135,7 @@ int _mm_movemask_ps(__m128);
 __m128 _mm_mul_ps(__m128, __m128);
 __m128 _mm_mul_ss(__m128, __m128);
 __m128 _mm_or_ps(__m128, __m128);
-void _mm_prefetch(const char *, const int);
+void _mm_prefetch(const void *, const int);
 __m128 _mm_rcp_ps(__m128);
 __m128 _mm_rcp_ss(__m128);
 __m128 _mm_rsqrt_ps(__m128);
