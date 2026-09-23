@@ -158,7 +158,54 @@ impl Sema<'_> {
     ///
     /// Returns the statements the declarator contributes to the enclosing
     /// block (empty at file scope, for `typedef`s and for `static` locals).
+    ///
+    /// The declarators of `decl` are handed in one at a time, in order. When
+    /// its specifiers name a `typedef`, the first one pins what that name
+    /// denotes *before* anything is declared, and the last one lets go: the
+    /// specifiers are the same for every declarator, even after one of them
+    /// has hidden the name (C11 6.2.1p7). See [`Sema::pinned_typedefs`].
     pub(super) fn declarator(
+        &mut self,
+        decl: &ast::Decl,
+        declarator: &ast::InitDeclarator,
+        file_scope: bool,
+    ) -> Vec<Stmt> {
+        let pinned = match &decl.specifiers.base.kind {
+            ast::TypeKind::Typedef(name) if decl.declarators.len() > 1 => Some(name),
+            _ => None,
+        };
+        let first = decl
+            .declarators
+            .first()
+            .is_some_and(|d| std::ptr::eq(d, declarator));
+        let last = decl
+            .declarators
+            .last()
+            .is_some_and(|d| std::ptr::eq(d, declarator));
+        if let Some(name) = pinned
+            && first
+        {
+            let entry = self.lookup_typedef(name).cloned();
+            if let Some(entry) = entry {
+                self.pinned_typedefs
+                    .push((name.range, name.name.clone(), entry));
+            }
+        }
+        let out = self.declare_one(decl, declarator, file_scope);
+        if let Some(name) = pinned
+            && last
+            && self
+                .pinned_typedefs
+                .last()
+                .is_some_and(|(range, _, _)| *range == name.range)
+        {
+            self.pinned_typedefs.pop();
+        }
+        out
+    }
+
+    /// [`Sema::declarator`], once the specifiers' `typedef` is pinned.
+    fn declare_one(
         &mut self,
         decl: &ast::Decl,
         declarator: &ast::InitDeclarator,
@@ -2064,7 +2111,12 @@ impl Sema<'_> {
         if self.reject_va_list(ret, func.ret.range) {
             return None;
         }
-        if !ret.is_void() && !self.types().is_complete(ret) {
+        // Only a *definition* needs the return type complete (C11 6.9.1p3);
+        // a declaration may name a tag nobody ever completes — Kissat's
+        // `kimits.h` declares `changes kissat_changes (struct kissat *);` with
+        // `struct changes` defined nowhere, and glibc's headers do the same.
+        // A call needs it too (6.5.2.2p1), which `Sema::call` checks.
+        if definition.is_some() && !ret.is_void() && !self.types().is_complete(ret) {
             self.error(
                 func.ret.range,
                 format!(

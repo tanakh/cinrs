@@ -363,3 +363,30 @@ fn an_accessor_hands_a_declared_object_to_rust() {
         assert!(write_nothing(out) >= 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// a declaration may name a type nobody completes
+// ---------------------------------------------------------------------------
+
+/// Kissat's `kimits.h`: `struct changes` is defined nowhere, and the two
+/// functions that return and take one are declared and never defined or
+/// called. Only a definition and a call need the type complete (C11 6.9.1p3,
+/// 6.5.2.2p1), so the rest of the unit is ordinary.
+#[test]
+fn a_declaration_may_return_or_take_an_incomplete_type() {
+    mod kimits {
+        cinrs::c99! {
+            struct kissat;
+            typedef struct changes changes;
+            changes kissat_changes (struct kissat *);
+            _Bool kissat_changed (changes before, changes after);
+            void takes (struct changes c);
+
+            int still_compiles (int x) { return x + 1; }
+        }
+    }
+
+    unsafe {
+        assert_eq!(kimits::still_compiles(41), 42);
+    }
+}

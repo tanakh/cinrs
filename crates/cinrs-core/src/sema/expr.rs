@@ -2185,6 +2185,24 @@ impl Sema<'_> {
         if self.refuse_float128_call(&name, &sig, callee.range) {
             return None;
         }
+        // C11 6.5.2.2p1: the called function returns `void` or a *complete*
+        // object type. A declaration may name a tag that is never completed
+        // (see `Sema::declare_function`); a call is where it has to be.
+        if !sig.ret.is_void() && !self.types().is_complete(sig.ret) {
+            let ret = self.tyname(sig.ret);
+            match &target {
+                Callee::Direct(id) => {
+                    let declared = self.program.function(*id).range;
+                    let message = format!("calling '{name}' with incomplete return type '{ret}'");
+                    self.error_note(range, message, declared, format!("'{name}' is declared"));
+                }
+                Callee::Indirect(_) => self.error(
+                    range,
+                    format!("calling a function with incomplete return type '{ret}'"),
+                ),
+            }
+            return None;
+        }
         // A call to a nested function has to pass the addresses of whatever it
         // captures, and for an object the caller does not own itself that means
         // the caller has to have been passed it too. What the callee captures

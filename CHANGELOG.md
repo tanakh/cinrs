@@ -422,6 +422,23 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **A function declaration may name an incomplete return type.** Kissat's
+  `kimits.h` declares `changes kissat_changes (struct kissat *);` with
+  `struct changes` defined nowhere, and every unit including it stopped at
+  "function cannot return an incomplete type". C wants the type complete only
+  at a definition (C11 6.9.1p3) and at a call (6.5.2.2p1), which is where the
+  check now is: a definition keeps the old message, and a call — direct or
+  through a pointer — is refused with "calling 'f' with incomplete return type
+  'struct changes'". An incomplete parameter type in a prototype was already
+  accepted.
+* **A declarator may hide the `typedef` its own declaration is of.** Kissat's
+  `links *links = solver->links, *l = links + idx;` and its
+  `all_stack (watch, watch, S)` macro gave "unknown type name 'links'" at the
+  second declarator: the specifiers' type name was looked up again for each
+  declarator, after the first had hidden it. The specifiers now denote one
+  type for every declarator (C11 6.7p1), while the name is the variable in the
+  initialisers after its declarator (6.2.1p7) — so, as in GCC,
+  `links *links = (links *) p;` is still a syntax error.
 * **Without the `complex` feature a complex type may still be named.** A
   declared-only prototype, a `typedef`, a pointer, `sizeof` and `_Generic`
   accept `double _Complex` and its relatives, so glibc's `<complex.h>` and

@@ -37,7 +37,7 @@
 //! cast — by the range of what they produced. [`Sema::long_double_depth_of`]
 //! reads an expression back through those.
 
-use super::{Entry, Sema};
+use super::Sema;
 use crate::ast;
 use crate::capture::SourceRange;
 use crate::ir::{Callee, Expr, ExprKind, FuncId, Place, PlaceKind, Ty};
@@ -211,10 +211,9 @@ impl Sema<'_> {
             }
             ast::TypeKind::Pointer(inner) => self.long_double_depth(inner)?.checked_add(1),
             ast::TypeKind::Array { elem, .. } => self.long_double_depth(elem)?.checked_add(1),
-            ast::TypeKind::Typedef(name) => match self.lookup(&name.name) {
-                Some(Entry::Typedef(entry)) => self.long_double_decls.get(&entry.range).copied(),
-                _ => None,
-            },
+            ast::TypeKind::Typedef(name) => self
+                .lookup_typedef(name)
+                .and_then(|entry| self.long_double_decls.get(&entry.range).copied()),
             _ => None,
         }
     }

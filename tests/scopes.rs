@@ -217,3 +217,55 @@ fn a_sole_tag_declaration_belongs_to_the_block_it_is_written_in() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 6.2.1p7: a declarator's name is in scope just after that declarator
+// ---------------------------------------------------------------------------
+
+/// Kissat's `links *links = solver->links, *l = links + idx;` and its
+/// `all_stack (watch, watch, S)`: a declarator named after the `typedef` the
+/// specifiers name hides it from the declarators after it, whose type still
+/// comes from those specifiers — while `links` in their initialisers is the
+/// variable.
+#[test]
+fn a_declarator_may_hide_the_typedef_its_declaration_is_of() {
+    c11! {
+        typedef struct links { unsigned prev, next; } links;
+        struct solver { links *links; };
+
+        unsigned inline_queue(struct solver *solver, unsigned idx) {
+            links *links = solver->links, *l = links + idx;
+            return l->prev * 10 + links->next;
+        }
+
+        typedef struct watch { unsigned lit; } watch;
+        #define all_stack(T, E, B, N) T E, *E # # _PTR = (B), *const E # # _END = (B) + (N)
+
+        unsigned sum_watches(void) {
+            watch ws[3] = { { 1 }, { 2 }, { 4 } };
+            unsigned sum = 0;
+            for (all_stack(watch, watch, ws, 3); watch_PTR != watch_END; watch_PTR++) {
+                watch = *watch_PTR;
+                sum += watch.lit;
+            }
+            return sum;
+        }
+
+        /* `T T = 1, U;`: `U` is a `T`, however `T` is spelled after it. */
+        typedef char T;
+        unsigned long later_declarators(void) {
+            T T = 1, U = 2, *V = &U;
+            return sizeof U * 100 + sizeof *V * 10 + (unsigned long) (T + *V);
+        }
+    }
+
+    let mut ls = [links { prev: 7, next: 8 }, links { prev: 5, next: 6 }];
+    let mut solver = solver {
+        links: ls.as_mut_ptr(),
+    };
+    unsafe {
+        assert_eq!(inline_queue(&raw mut solver, 1), 58);
+        assert_eq!(sum_watches(), 7);
+        assert_eq!(later_declarators(), 113);
+    }
+}

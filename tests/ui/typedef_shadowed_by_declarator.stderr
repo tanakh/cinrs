@@ -1,0 +1,8 @@
+error: expected expression, found ')'
+  --> tests/ui/typedef_shadowed_by_declarator.rs:36:32
+   |
+36 |         links *links = (links *) p;
+   |                                ^
+
+error: aborting due to 1 previous error
+

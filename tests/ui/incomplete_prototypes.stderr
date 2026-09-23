@@ -1,0 +1,21 @@
+error: function cannot return an incomplete type 'struct later'
+  --> tests/ui/incomplete_prototypes.rs:25:5
+   |
+25 |     struct later made (void) { for (;;); }
+   |     ^^^^^^
+
+error: parameter has incomplete type 'struct later'
+  --> tests/ui/incomplete_prototypes.rs:26:20
+   |
+26 |     void consumed (struct later value) { }
+   |                    ^^^^^^
+
+error: calling 'made' with incomplete return type 'struct later'
+       note: 'made' is declared at line 22
+  --> tests/ui/incomplete_prototypes.rs:29:9
+   |
+29 |         made ();
+   |         ^^^^
+
+error: aborting due to 3 previous errors
+

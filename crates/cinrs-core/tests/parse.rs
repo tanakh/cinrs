@@ -220,6 +220,25 @@ int sizes(int v) {
 }
 
 #[test]
+fn a_declarator_hides_the_typedef_it_is_named_after_from_its_own_initializer() {
+    // C11 6.2.1p7: the variable's scope begins just after its declarator, so
+    // in the initialiser `links` is the variable and `(links *)` is not a
+    // cast. GCC: "expected expression before ')' token".
+    assert_eq!(
+        parse_diagnostics(
+            "typedef struct links links; void *p;
+             void f(void) { links *links = (links *)p; }"
+        ),
+        "2:52: error: expected expression, found ')'"
+    );
+    // …and in the declarators after it, as a declaration's own name.
+    assert_eq!(
+        parse_diagnostics("typedef int T; int f(void) { T T = 1; T U = 2; return T + U; }"),
+        "1:41: error: expected ';' after expression, found identifier 'U'"
+    );
+}
+
+#[test]
 fn compound_literals_and_casts() {
     insta::assert_snapshot!(parse_dump(
         r#"

@@ -743,6 +743,18 @@ struct Sema<'a> {
     /// The name the hidden bound objects of the declarator being resolved are
     /// derived from; empty for a type name or an abstract declarator.
     vm_name: String,
+    /// The `typedef` names that the declaration specifiers of a declaration
+    /// being declared named, as they stood *before* its first declarator,
+    /// keyed by where the name was written.
+    ///
+    /// The specifiers are resolved once for every declarator (C11 6.7p1), but
+    /// a declarator's own name is in scope from the end of that declarator on
+    /// (6.2.1p7). Kissat's `links *links = solver->links, *l = links + idx;`
+    /// hides the `typedef` behind the first declarator, and `*l` is still a
+    /// `links *`: every declarator's [`ast::Type`] carries a copy of the
+    /// specifiers' name, and this is what that copy resolves to. See
+    /// [`Sema::declarator`].
+    pinned_typedefs: Vec<(SourceRange, String, TypedefEntry)>,
     /// The file-scope tentative definitions whose type was an enumeration that
     /// had no list yet, with the tag they are waiting for.
     ///
@@ -956,6 +968,7 @@ impl<'a> Sema<'a> {
             vm_bounds: Vec::new(),
             bound_mode: BoundMode::Expression,
             vm_name: String::new(),
+            pinned_typedefs: Vec::new(),
             incomplete_enum_objects: Vec::new(),
             standalone_enum: None,
             underspecified: None,
@@ -1261,6 +1274,24 @@ impl<'a> Sema<'a> {
         self.scopes.iter().rev().find_map(|s| s.entries.get(name))
     }
 
+    /// The `typedef` a type name written as `name` denotes: the one
+    /// [pinned](Sema::pinned_typedefs) for that very occurrence, when it is a
+    /// declaration's specifiers, and otherwise whatever is in scope.
+    fn lookup_typedef(&self, name: &ast::Ident) -> Option<&TypedefEntry> {
+        let pinned = self
+            .pinned_typedefs
+            .iter()
+            .rev()
+            .find(|(range, pinned, _)| *range == name.range && *pinned == name.name);
+        match pinned {
+            Some((_, _, entry)) => Some(entry),
+            None => match self.lookup(&name.name) {
+                Some(Entry::Typedef(entry)) => Some(entry),
+                _ => None,
+            },
+        }
+    }
+
     fn declared_here(&self, name: &str) -> Option<&Entry> {
         self.scopes.last().and_then(|s| s.entries.get(name))
     }
@@ -1401,10 +1432,7 @@ impl<'a> Sema<'a> {
     /// takes it as its alignment; `_Alignof` answers it.
     fn typedef_align(&self, ty: &ast::Type) -> Option<u64> {
         match &ty.kind {
-            ast::TypeKind::Typedef(name) => match self.lookup(&name.name) {
-                Some(Entry::Typedef(entry)) => entry.align,
-                _ => None,
-            },
+            ast::TypeKind::Typedef(name) => self.lookup_typedef(name).and_then(|entry| entry.align),
             _ => None,
         }
     }

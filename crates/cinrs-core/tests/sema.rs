@@ -680,6 +680,83 @@ fn a_typedef_name_is_only_a_type_where_the_parser_saw_one() {
     accepted("typedef int handle; int f(handle h) { return (handle) h; }");
 }
 
+#[test]
+fn a_declarator_that_hides_the_specifiers_typedef_leaves_the_later_ones_its_type() {
+    // Kissat's inlinequeue.h:62. The specifiers are one for all the
+    // declarators; the first one's name is the variable from the end of its
+    // declarator on (C11 6.2.1p7), so `links + idx` is pointer arithmetic on it.
+    accepted(
+        "typedef struct links { unsigned prev, next; } links;
+         struct solver { links *links; };
+         unsigned f(struct solver *solver, unsigned idx) {
+             links *links = solver->links, *l = links + idx;
+             return l->prev;
+         }",
+    );
+    // Kissat's stack.h `all_stack (T, E, S)` with `T == E`.
+    accepted(
+        "typedef struct watch { unsigned lit; } watch;
+         #define all_stack(T, E, B, N) T E, *E##_PTR = (B), *const E##_END = (B) + (N)
+         unsigned f(watch *begin, unsigned n) {
+             unsigned sum = 0;
+             for (all_stack (watch, watch, begin, n) ; watch_PTR != watch_END; watch_PTR++)
+                 watch = *watch_PTR, sum += watch.lit;
+             return sum;
+         }",
+    );
+    // At file scope the name cannot be both in one scope (C11 6.7p3), which
+    // is GCC's "redeclared as different kind of symbol" too.
+    rejected(
+        "typedef struct links { int x; } links; links *links, *l;",
+        &["redefinition of 'links' as a type"],
+    );
+    // `T T = 1, U;`: `U` is a `T`, which is `int` here.
+    accepted(
+        "typedef int T;
+         int f(void) { T T = 1, U = 2; int *p = &U; return T + *p; }
+         int g(void) { typedef long T; { T T = 3, U = T; return (int) (T + U); } }",
+    );
+}
+
+#[test]
+fn a_declaration_may_name_an_incomplete_return_or_parameter_type() {
+    // Kissat's kimits.h: `struct changes` is completed nowhere, and neither
+    // function is defined or called.
+    accepted(
+        "struct kissat;
+         typedef struct changes changes;
+         changes kissat_changes (struct kissat *);
+         _Bool kissat_changed (changes before, changes after);
+         struct s;
+         void g(struct s x);
+         struct s (*fp)(void);
+         int main(void) { return fp == 0; }",
+    );
+    // Completed later, and called after that: fine.
+    accepted(
+        "struct s; struct s f(void);
+         struct s { int x; };
+         int g(void) { return f().x; }",
+    );
+    // A definition still needs it complete, and so does a call.
+    rejected(
+        "struct s; struct s f(void) { for (;;); }",
+        &["function cannot return an incomplete type 'struct s'"],
+    );
+    rejected(
+        "struct s; void f(struct s x) { }",
+        &["parameter has incomplete type 'struct s'"],
+    );
+    rejected(
+        "struct s; struct s f(void); void g(void) { f(); }",
+        &["calling 'f' with incomplete return type 'struct s'"],
+    );
+    rejected(
+        "struct s; struct s (*fp)(void); void g(void) { fp(); }",
+        &["calling a function with incomplete return type 'struct s'"],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // declarations
 // ---------------------------------------------------------------------------

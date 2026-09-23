@@ -455,8 +455,8 @@ impl Sema<'_> {
                 range,
                 "'auto' is only allowed on a declaration with an initializer",
             )),
-            ast::TypeKind::Typedef(name) => match self.lookup(&name.name) {
-                Some(Entry::Typedef(entry)) => match &entry.resolved {
+            ast::TypeKind::Typedef(name) => match self.lookup_typedef(name) {
+                Some(entry) => match &entry.resolved {
                     // Naming `va_list` is not what needs `core::ffi::VaList`:
                     // the `typedef` <stdarg.h> writes and the declaration of a
                     // `vprintf` nobody calls both name it, and neither
