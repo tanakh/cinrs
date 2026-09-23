@@ -49,7 +49,7 @@ here and nothing of GCC's own.
 separately, exactly as GCC's own `execute.exp` and `ieee/ieee.exp` do. The
 `ieee` half is the floating-point corner cases, which GCC compiles with
 `-ffloat-store` on x86 to keep excess precision out; nothing here can do that,
-so its rate is expected to be the lower of the two. `execute/builtins` is a
+so its rate was long the lower of the two (it is not, quite, any more). `execute/builtins` is a
 third `.exp` and is not run: every case in it is about a specific GCC builtin
 being expanded a specific way.
 
@@ -162,19 +162,19 @@ broken down into the four categories
 defines.
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1577/1769 correct (89.1%) — 1473 passed, 104 rejected as the standard requires
-  errors: 192 — bug 0, unimplemented 3, not planned 127, toolchain 62
+gcc.c-torture/execute through `gnu11!`: 1581/1769 correct (89.4%) — 1477 passed, 104 rejected as the standard requires
+  errors: 188 — bug 0, unimplemented 3, not planned 123, toolchain 62
   (7 not generated) — 4 m 14 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned | toolchain |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1577/1769** | **89.1 %** | 1473 | 104 | 0 | 3 | 127 | 62 |
-| `gnu89!` | 1570/1769 | 88.8 % | 1570 | — | 0 | 4 | 133 | 62 |
+| **`gnu11!`** | **1581/1769** | **89.4 %** | 1477 | 104 | 0 | 3 | 123 | 62 |
+| `gnu89!` | 1574/1769 | 89.0 % | 1574 | — | 0 | 4 | 129 | 62 |
 
 On **`beta`** (1.99), where a variadic definition compiles, sixty-one of the
-sixty-two `toolchain` entries pass instead: 1638/1769 (92.6 %) under `gnu11!`
-and 1631/1769 (92.2 %) under `gnu89!`. The one that does not is
+sixty-two `toolchain` entries pass instead: 1642/1769 (92.8 %) under `gnu11!`
+and 1635/1769 (92.4 %) under `gnu89!`. The one that does not is
 `execute/pr117432`, which calls `va_start(ap)` with one argument — C23's form —
 and meets the bundled `<stdarg.h>`'s two-argument macro under both entry
 points. That gap is the whole of the difference between the two toolchains,
@@ -185,7 +185,7 @@ by group:
 | group | `gnu11!` | `gnu89!` |
 | --- | ---: | ---: |
 | `execute` | 1511/1691 (89.4 %) | 1504/1691 (88.9 %) |
-| `execute/ieee` | 66/78 (84.6 %) | 66/78 (84.6 %) |
+| `execute/ieee` | 70/78 (89.7 %) | 70/78 (89.7 %) |
 
 **There is no `[bug]` left in this corpus**, under either entry point.
 Everything that does not pass is a feature not implemented yet, a feature
@@ -208,9 +208,9 @@ every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
-1570 cases build and run.
+1574 cases build and run.
 
-**`gnu11!` gets the same 1473 of those, refuses 104 more as the standard
+**`gnu11!` gets the same 1477 of those, refuses 104 more as the standard
 requires it to, and comes out seven ahead.** Those 104 are the cases that lean
 on a rule C99 deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R
 parameter) and an implicit function declaration (3) — and a C99-or-later entry
@@ -225,7 +225,7 @@ rule there and stop at a second gap — four at a nested function that needs the
 enclosing *frame* (two at a nonlocal `goto` out of one, two at the address of a
 label of the enclosing function), one at a nested function that uses the
 enclosing function's variable length array, and two at `<setjmp.h>`. That is
-the whole of the difference: 1570 = 1473 + 97, and 1577 = 1473 + 104.
+the whole of the difference: 1574 = 1477 + 97, and 1581 = 1477 + 104.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string
@@ -234,9 +234,9 @@ because GCC's own runner would not have run them either.
 
 ### The errors, by category and cause
 
-Under `gnu11!` 187 of the 192 errors are refused at compile time, in 31
+Under `gnu11!` 183 of the 188 errors are refused at compile time, in 31
 distinct causes, and 5 are programs that built and then did the wrong thing;
-under `gnu89!`, 194 of 199 in 33. The ones worth a line each, with what the
+under `gnu89!`, 190 of 195 in 33. The ones worth a line each, with what the
 same cause costs under `gnu89!` beside it — the 104 conforming rejections
 above are *not* in this table:
 
@@ -244,7 +244,7 @@ above are *not* in this table:
 | --- | ---: | ---: | --- | --- |
 | toolchain | 52 | 52 | variadic function *definitions*, which need Rust 1.99's `c_variadic` | `execute/20030914-2` |
 | not planned | 45 | 45 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| not planned | 19 | 19 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, `issignaling`, and the `_FloatN` spellings `__builtin_nansf32` and its relatives | `execute/20010122-1` |
+| not planned | 15 | 15 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `frame_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the signalling-NaN spellings of the formats cinrs has no type for, `__builtin_nansf16`, `nansf16b`, `nansf128` and `nansf128x` | `execute/20010122-1` |
 | toolchain | 10 | 10 | `va_list` — a `va_list *` included — in a context that needs Rust 1.99 | `execute/20000519-1` |
 | not planned | 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | not planned | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
@@ -281,7 +281,14 @@ because a diagnostic raised inside an `#include`d corpus file carries the file
 name and is grouped on its own; the `vector_size` and
 address-of-a-nested-function counts are sums of two for the same reason.
 
-The last round of work was **[inline assembly](features.md#inline-assembly)**
+The last round of work was the **`_FloatN` keywords**, and the
+`__builtin_nansf32` family behind glibc's `SNANF32`, and it took both entry
+points up by **four**: `ieee/float32-`, `float32x-`, `float64-` and
+`float64x-builtin-issignaling-1`. The other four instantiations of the same
+file still stop at a `__builtin_nans…` for a format cinrs has no type for —
+`_Float16`, `__bf16`, `_Float128` and `_Float128x`.
+
+The round before that was **[inline assembly](features.md#inline-assembly)**
 — GCC's `asm` mapped onto Rust's `asm!` — and it took both entry points up by
 **61**, with no case going the other way in either. Most of the sixty-one use an
 `asm` only as an optimisation barrier — `asm("" : "+r"(x))`,
@@ -316,7 +323,7 @@ out of `[unimplemented]` — `920625-1`, `920908-1`, the seven `931004-*`,
 at most sixteen bytes read back out of an argument list — and into `?`, because
 what is left in their way is only the Rust 1.99 variadic gate: on `beta` they
 pass, which was then the whole of the 85.7 % → 89.0 % difference between the
-two toolchains (it is 89.1 % → 92.6 % now; see [the baseline](#baseline)). Two
+two toolchains (it is 89.4 % → 92.8 % now; see [the baseline](#baseline)). Two
 more stopped at a second gate rather than moving: `va-arg-22`
 passes records of up to thirty-one bytes, which the ABI puts on the stack, and
 `va-arg-pack-1` reaches `__builtin_va_arg_pack` and is now `[not-planned]` with
@@ -410,7 +417,7 @@ the link fails. Its twin `execute/medce-1` — `if (0) { link_error(); case 1: �
 [relooped](translation.md#control-flow-and-goto) the dead call really is inside
 an `if false`, which LLVM deletes.
 
-**Read the table by its first column.** 64 of `gnu11!`'s 192 errors are the
+**Read the table by its first column.** 60 of `gnu11!`'s 188 errors are the
 two largest `not planned` rows — the vector extensions and the `__builtin_…`
 forms nobody is going to write — another 13 are the complex-integer and
 `va_list`-in-a-record corners Rust has no counterpart for, and 6 are the
@@ -467,7 +474,7 @@ where the current list lives if this one has gone stale.
 ## The expected-failure list
 
 One list per entry point: `tests/gcc-torture/expected-failures.txt` is
-`gnu11!`'s, 296 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 199.
+`gnu11!`'s, 292 entries, and `expected-failures-gnu89.txt` is `gnu89!`'s, 195.
 One id per line, in the same format the other two suites use — a marker, the
 id, a category tag and a note; see
 [`doc/testsuites.md`](testsuites.md#what-correct-means-and-the-four-kinds-of-error)

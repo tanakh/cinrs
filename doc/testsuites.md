@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **89.1 %** (`gnu11!`), 88.8 % (`gnu89!`); 92.6 % / 92.2 % on `beta` | 192: 0 bug, 3 unimplemented, 127 not planned, 62 toolchain |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **89.4 %** (`gnu11!`), 89.0 % (`gnu89!`); 92.8 % / 92.4 % on `beta` | 188: 0 bug, 3 unimplemented, 123 not planned, 62 toolchain |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -39,12 +39,12 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,577 of the 1,769 run are correct (89.1 %)** under
-  `gnu11!` — 1,473 passing and 104 refused as C99 requires — and 1,570
-  (88.8 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,581 of the 1,769 run are correct (89.4 %)** under
+  `gnu11!` — 1,477 passing and 104 refused as C99 requires — and 1,574
+  (89.0 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses none of them; on `beta`, where a variadic definition
-  compiles, the same runs are 1,638 (92.6 %) and 1,631 (92.2 %). **Not one of
-  the 192 errors is a bug**; they are the memory operands and x87 registers of
+  compiles, the same runs are 1,642 (92.8 %) and 1,635 (92.4 %). **Not one of
+  the 188 errors is a bug**; they are the memory operands and x87 registers of
   inline assembly, the vector extensions, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
@@ -65,8 +65,9 @@ as unimplemented or not planned, case by case.
 A fourth corpus needs no fetching, because it is already on the machine: **the
 platform's own headers**. `tests/system_headers.rs` puts each of the C standard
 headers and the POSIX set through the front end alone, in `gnu11!` and `c11!`,
-with the platform's copies preferred over the bundled ones — **66 of the 67 go
-through unchanged** against glibc 2.43, the exception being `<tgmath.h>` — and
+with the platform's copies preferred over the bundled ones — **all 67 go
+through unchanged** against glibc 2.43, `<tgmath.h>` included now that `cinrs`
+presents itself as GCC 14 (its macros still want `__builtin_tgmath`) — and
 then compiles and runs ordinary programs against those declarations, comparing
 `sizeof(struct stat)` and its like against the host's own `cc`.
 [`doc/system-headers.md`](system-headers.md#the-table) is the table.
@@ -227,8 +228,8 @@ report breaks its error count down into them, in this order:
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1577/1769 correct (89.1%) — 1473 passed, 104 rejected as the standard requires
-  errors: 192 — bug 0, unimplemented 3, not planned 127, toolchain 62
+gcc.c-torture/execute through `gnu11!`: 1581/1769 correct (89.4%) — 1477 passed, 104 rejected as the standard requires
+  errors: 188 — bug 0, unimplemented 3, not planned 123, toolchain 62
   (7 not generated) — 4 m 14 s
 ```
 

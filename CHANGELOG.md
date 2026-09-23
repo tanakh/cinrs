@@ -314,10 +314,11 @@ follows [Semantic Versioning][semver].
   a local variable — GCC's register variable — is still refused, and the
   message now says to write the register as a constraint of the `asm` that
   uses it: `"a"(x)`.
-* **GCC's C torture tests: 1,577 of 1,769 correct (89.1 %)** under `gnu11!`,
-  up from 1,516, and 1,570 (88.8 %) under `gnu89!`, up from 1,509; 1,638
-  (92.6 %) and 1,631 (92.2 %) on Rust 1.99. Sixty cases that were refused on
-  their inline assembly now run, and `execute/bitfld-5` with them. See
+* **GCC's C torture tests: 1,581 of 1,769 correct (89.4 %)** under `gnu11!`,
+  up from 1,516, and 1,574 (89.0 %) under `gnu89!`, up from 1,509; 1,642
+  (92.8 %) and 1,635 (92.4 %) on Rust 1.99. Sixty cases that were refused on
+  their inline assembly now run, and `execute/bitfld-5` with them, and the
+  four `_FloatN` `issignaling` cases with the keywords. See
   [`doc/gcc-torture.md`](doc/gcc-torture.md).
 
 * **A `goto` no longer costs the loop it was written in.** The functions whose
