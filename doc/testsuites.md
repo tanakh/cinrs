@@ -273,12 +273,14 @@ would write it, and needs no corpus; it is part of an ordinary `cargo test`.
 `CINRS_EXPECTED_LISTS_BLESS=1 cargo test --test expected_lists` tidies a hand
 edit up without running a suite.
 
-## One real program: SQLite
+## Two real programs: SQLite and BLAKE3
 
 A suite of small programs and one large program answer different questions. The
 three harnesses above ask whether each construct is translated correctly;
 `scripts/check-sqlite.sh` asks whether a quarter of a million lines of somebody
-else's C, written for GCC and never adjusted for this compiler, builds and works.
+else's C, written for GCC and never adjusted for this compiler, builds and works,
+and `scripts/check-blake3.sh` asks the same of a program whose whole point is
+SIMD.
 
 It downloads the **SQLite 3.53.4 amalgamation** — 9.5 MB, 269,649 lines of C in
 one file, public domain — from the pinned URL in the script, verifies it
@@ -308,7 +310,37 @@ It is in `scripts/ci.sh --full` only, because it needs the network, and it skips
 itself with a note — successfully, like a harness without its corpus — on a
 toolchain older than 1.99.
 
-### The numbers, measured once
+### BLAKE3
+
+`scripts/check-blake3.sh` downloads the **BLAKE3 1.8.7** release archive — the
+hash function's reference C implementation, CC0 or Apache-2.0, about 3,000
+lines in seven files — verifies it against the SHA-256 pinned in the script,
+unpacks `c/` and the official test vectors into `target/blake3/`, and builds
+`tests/blake3-fixture/`, a crate outside the workspace with one
+`gnu11!` block per upstream file. The files are not edited: each is
+`#include`d under `#pragma cinrs export`, so the cross-file calls link the way
+object files would, and the four SIMD files sit under the `#pragma GCC target`
+(`sse2`, `sse4.1`, `avx2`, `avx512f,avx512vl`) that stands in for the `-m` flag
+upstream compiles each with.
+
+What it exercises that SQLite does not: four implementations of one kernel in
+SSE2, SSE4.1, AVX2 and AVX-512 intrinsics, `__m512i` passed and returned by
+value, `static inline __attribute__((always_inline))` helpers under a target
+feature, a dispatcher that reads `cpuid` and `xgetbv` through GCC inline
+assembly with `"=b"` and picks an implementation at run time, `_Atomic int`
+through `__has_include(<stdatomic.h>)`, and `visibility("default")`. The test
+hashes the 35 official vectors (inputs from 0 to 102,400 bytes) in `hash`,
+`keyed_hash` and `derive_key` modes, 210 checks, and feeds one byte at a time
+to `blake3_hasher_update` as well; a second test calls each SIMD implementation
+directly and compares it with the portable one, as upstream's own tests do. On
+a processor with AVX-512 the dispatcher chooses it — `blake3_simd_degree()`
+is 16 — so the vectors run through the AVX-512 code there, and through
+whatever the machine has elsewhere.
+
+It is in `scripts/ci.sh --full` only, because it needs the network; it needs
+no particular toolchain.
+
+### SQLite's numbers, measured once
 
 On an x86-64 laptop under WSL2, glibc 2.43, `cargo +beta` 1.99.0-beta.6, SQLite
 3.53.4:

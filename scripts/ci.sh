@@ -145,6 +145,19 @@ if [ "$FULL" -eq 1 ]; then
         FAILED+=("scripts/check-sqlite.sh")
     fi
 
+    # BLAKE3, from its seven upstream C files: the SIMD side in one program —
+    # SSE2, SSE4.1, AVX2 and AVX-512 implementations, a cpuid dispatcher in
+    # inline assembly, official test vectors. Downloaded and verified like
+    # SQLite, so `--full` only; it needs no particular toolchain.
+    say ""
+    say "=== scripts/check-blake3.sh ==="
+    if scripts/check-blake3.sh; then
+        say "ci: ok: scripts/check-blake3.sh"
+    else
+        say "ci: FAILED: scripts/check-blake3.sh"
+        FAILED+=("scripts/check-blake3.sh")
+    fi
+
     # Each harness in its default *guard* mode: every case not in the
     # expected-failure list must pass, and a listed case that has started
     # passing is reported. `…_REQUIRED=1` turns the harness's own skip into a

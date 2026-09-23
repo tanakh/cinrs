@@ -79,7 +79,8 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   `union` like any 16-byte type, GCC's `a * b`, `v[i]` and `{a, b}` on the vector
   types are the intrinsics that do the same, an immediate operand becomes `core::arch`'s
   `const` generic, and `__attribute__((target("avx2")))` becomes
-  `#[target_feature]`.
+  `#[target_feature]`. BLAKE3's C implementation — four SIMD kernels and a
+  `cpuid` dispatcher in inline assembly — builds unedited and picks AVX-512.
 * **Measured, not claimed.** 98 % of [c-testsuite], 89–93 % of [GCC's torture
   tests][gcc-torture] and 82 % of [Clang's C conformance tests][clang-c-tests]
   — about 2,270 cases, every failure listed by name with its reason, and **not

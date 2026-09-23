@@ -179,10 +179,15 @@ follows [Semantic Versioning][semver].
   `"memory"` and `"cc"` are what `asm!` assumes anyway. An output goes straight
   into its place, whose side effects happen once. What `asm!` cannot say is
   refused by name, with the rewrite: memory operands (pass `"r"(&x)` and write
-  `(%0)`), `rbx` (which rustc keeps for LLVM), `%=`, `asm goto`, flag outputs,
-  `"A"`, the x87 and MMX constraints, the range-checked immediates, Intel
-  syntax, and `asm` in a `[[cinrs::safe]]` function or for another
-  architecture. See [Inline assembly](doc/features.md#inline-assembly);
+  `(%0)`), an `rbx` clobber (rustc keeps rbx for LLVM), `%=`, `asm goto`, flag
+  outputs, `"A"`, the x87 and MMX constraints, the range-checked immediates,
+  Intel syntax, and `asm` in a `[[cinrs::safe]]` function or for another
+  architecture. The `"b"` constraint itself — `"=b"(out[1])` in every
+  hand-written `cpuid` — is accepted: the value travels in a scratch register
+  that an `xchg` on either side of the template swaps with rbx, and a `%N`
+  naming it is written as `%ebx` or `%rbx`; a second `"b"` operand, or an
+  `rbx` clobber beside one, is refused. See
+  [Inline assembly](doc/features.md#inline-assembly);
   `tests/inline_asm.rs` checks every operand kind against the values `gcc -O2`
   gives.
 * **`<cpuid.h>`**, bundled: GCC's `__cpuid`, `__cpuid_count`, `__get_cpuid`,
@@ -324,6 +329,20 @@ follows [Semantic Versioning][semver].
   exercises that no small program does — and what it costs — is in
   [`doc/testsuites.md`](doc/testsuites.md).
 
+* **BLAKE3 compiles, and picks AVX-512.** `scripts/check-blake3.sh` downloads
+  the BLAKE3 1.8.7 release, verifies it against a pinned SHA-256, and builds
+  and runs `tests/blake3-fixture/`: the seven upstream C files, unedited, one
+  unit each — `blake3.c`, the dispatcher, the portable code, and the SSE2,
+  SSE4.1, AVX2 and AVX-512 implementations under the `#pragma GCC target`
+  that stands in for the `-m` flag upstream compiles each with. The
+  dispatcher reads `cpuid` and `xgetbv` with inline assembly and, on a
+  processor with AVX-512, chooses it (`blake3_simd_degree()` is 16); the 35
+  official test vectors pass in `hash`, `keyed_hash` and `derive_key` modes,
+  and each SIMD implementation agrees with the portable one. Two things it
+  wrote were refused before this release and are not now: the `"=b"`
+  constraint on its `cpuid`, and `always_inline` under a target feature (see
+  Fixed). It is in `scripts/ci.sh --full` only, since it needs the network.
+
 * **Atomic operations on a function pointer.** Loading, storing, exchanging and
   compare-exchanging an object of function-pointer type — `_Atomic(void (*)
   (void))`, `<stdatomic.h>`'s `atomic_store` on one, and the `__atomic_*`,
@@ -338,6 +357,13 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`always_inline` under a target feature is `#[inline]`.** A
+  `static inline __attribute__((always_inline))` helper in a function set
+  compiled under `#pragma GCC target("avx2")` — BLAKE3's `INLINE` helpers, and
+  the shape of every SIMD kernel written for one `-m` flag — became
+  `#[inline(always)]` beside `#[target_feature]`, which rustc refuses
+  (rust-lang/rust#145574). A function with a target feature now gets
+  `#[inline]`; without one, `#[inline(always)]` as before.
 * **`{0.0, -0.0}` keeps its sign.** An initialiser whose values were all zero
   was emitted as a zero fill, and `-0.0 == 0.0` counted it as one, so
   `double d[2] = {0.0, -0.0}` lost the sign of its second element. A zero fill
