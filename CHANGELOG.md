@@ -197,6 +197,59 @@ follows [Semantic Versioning][semver].
   operand, which rustc refuses. `__get_cpuid` passes subleaf 0, which GCC's
   leaves undefined. An `#error` on a target that is not x86.
 
+* **SQLite compiles.** `scripts/check-sqlite.sh` downloads the SQLite 3.53.4
+  amalgamation — 9.5 MB, 269,649 lines of C in one file — verifies it against
+  the SHA3-256 sqlite.org publishes, and builds and runs
+  `tests/sqlite-fixture/`: one `include_gnu11!`, in both of SQLite's threading
+  configurations, with an in-memory database, a `CREATE TABLE`, three inserts, a
+  `SELECT` through `sqlite3_prepare_v2`/`step`/`column_int` and a Rust
+  `extern "C"` function called from SQL. The 9 MB is not committed and the check
+  is in `scripts/ci.sh --full` only, since it needs the network; it needs Rust
+  1.99 as well, because the amalgamation *defines* twenty variadic functions.
+  It is the largest single C translation unit anyone ships, and what it
+  exercises that no small program does — and what it costs — is in
+  [`doc/testsuites.md`](doc/testsuites.md).
+
+* **BLAKE3 compiles, and picks AVX-512.** `scripts/check-blake3.sh` downloads
+  the BLAKE3 1.8.7 release, verifies it against a pinned SHA-256, and builds
+  and runs `tests/blake3-fixture/`: the seven upstream C files, unedited, one
+  unit each — `blake3.c`, the dispatcher, the portable code, and the SSE2,
+  SSE4.1, AVX2 and AVX-512 implementations under the `#pragma GCC target`
+  that stands in for the `-m` flag upstream compiles each with. The
+  dispatcher reads `cpuid` and `xgetbv` with inline assembly and, on a
+  processor with AVX-512, chooses it (`blake3_simd_degree()` is 16); the 35
+  official test vectors pass in `hash`, `keyed_hash` and `derive_key` modes,
+  and each SIMD implementation agrees with the portable one. Two things it
+  wrote were refused before this release and are not now: the `"=b"`
+  constraint on its `cpuid`, and `always_inline` under a target feature (see
+  Fixed). It is in `scripts/ci.sh --full` only, since it needs the network.
+
+* **xxHash compiles, and picks AVX-512.** `scripts/check-xxhash.sh` downloads
+  the xxHash v0.8.4 release, verifies it against a pinned SHA-256, and builds
+  and runs `tests/xxhash-fixture/`: `xxhash.c` four times, unedited, with
+  `XXH_VECTOR` set to scalar, SSE2, AVX2 and AVX-512 under the matching
+  `#pragma GCC target`, and `xxh_x86dispatch.c` as shipped, whose `cpuid`
+  dispatcher chooses AVX-512 on a processor that has it. Every unit passes all
+  45,771 checks of upstream's generated sanity table, the four agree on every
+  length up to 4,096, and the streaming API matches the one-shot one. Four
+  things it wrote were refused or wrong before this release and are not now:
+  `#ifdef __has_include`, the feature macros under `#pragma GCC target`, the
+  `{att|intel}` dialect braces in its `cpuid`, and `aligned(1)` on a `typedef`
+  (see Fixed). It is in `scripts/ci.sh --full` only, since it needs the
+  network.
+
+* **Atomic operations on a function pointer.** Loading, storing, exchanging and
+  compare-exchanging an object of function-pointer type — `_Atomic(void (*)
+  (void))`, `<stdatomic.h>`'s `atomic_store` on one, and the `__atomic_*`,
+  `__sync_*` and `__c11_atomic_*` builtins — used to be refused with "a
+  function pointer is an `Option<fn>` in Rust, which no atomic holds". It goes
+  through the same `AtomicPtr<c_void>` as any other pointer now, with a
+  `transmute` at each end: an `Option<unsafe extern "C" fn(…)>` is
+  pointer-sized and uses the null pointer as its `None`, which is exactly the
+  representation C gives a function pointer. Arithmetic (`__atomic_fetch_add`
+  and friends) is still refused, because C has none on a function pointer
+  either. See `tests/atomics.rs`.
+
 ### Changed
 
 * **The minimum supported Rust version is 1.98**, up from 1.88. The bundled
@@ -313,47 +366,6 @@ follows [Semantic Versioning][semver].
   match token for token exactly as an unsaved buffer's does. `cargo build` never
   went near any of this: it has the positions. See
   `crates/cinrs-core/src/locate.rs`.
-
-### Added
-
-* **SQLite compiles.** `scripts/check-sqlite.sh` downloads the SQLite 3.53.4
-  amalgamation — 9.5 MB, 269,649 lines of C in one file — verifies it against
-  the SHA3-256 sqlite.org publishes, and builds and runs
-  `tests/sqlite-fixture/`: one `include_gnu11!`, in both of SQLite's threading
-  configurations, with an in-memory database, a `CREATE TABLE`, three inserts, a
-  `SELECT` through `sqlite3_prepare_v2`/`step`/`column_int` and a Rust
-  `extern "C"` function called from SQL. The 9 MB is not committed and the check
-  is in `scripts/ci.sh --full` only, since it needs the network; it needs Rust
-  1.99 as well, because the amalgamation *defines* twenty variadic functions.
-  It is the largest single C translation unit anyone ships, and what it
-  exercises that no small program does — and what it costs — is in
-  [`doc/testsuites.md`](doc/testsuites.md).
-
-* **BLAKE3 compiles, and picks AVX-512.** `scripts/check-blake3.sh` downloads
-  the BLAKE3 1.8.7 release, verifies it against a pinned SHA-256, and builds
-  and runs `tests/blake3-fixture/`: the seven upstream C files, unedited, one
-  unit each — `blake3.c`, the dispatcher, the portable code, and the SSE2,
-  SSE4.1, AVX2 and AVX-512 implementations under the `#pragma GCC target`
-  that stands in for the `-m` flag upstream compiles each with. The
-  dispatcher reads `cpuid` and `xgetbv` with inline assembly and, on a
-  processor with AVX-512, chooses it (`blake3_simd_degree()` is 16); the 35
-  official test vectors pass in `hash`, `keyed_hash` and `derive_key` modes,
-  and each SIMD implementation agrees with the portable one. Two things it
-  wrote were refused before this release and are not now: the `"=b"`
-  constraint on its `cpuid`, and `always_inline` under a target feature (see
-  Fixed). It is in `scripts/ci.sh --full` only, since it needs the network.
-
-* **Atomic operations on a function pointer.** Loading, storing, exchanging and
-  compare-exchanging an object of function-pointer type — `_Atomic(void (*)
-  (void))`, `<stdatomic.h>`'s `atomic_store` on one, and the `__atomic_*`,
-  `__sync_*` and `__c11_atomic_*` builtins — used to be refused with "a
-  function pointer is an `Option<fn>` in Rust, which no atomic holds". It goes
-  through the same `AtomicPtr<c_void>` as any other pointer now, with a
-  `transmute` at each end: an `Option<unsafe extern "C" fn(…)>` is
-  pointer-sized and uses the null pointer as its `None`, which is exactly the
-  representation C gives a function pointer. Arithmetic (`__atomic_fetch_add`
-  and friends) is still refused, because C has none on a function pointer
-  either. See `tests/atomics.rs`.
 
 ### Fixed
 
