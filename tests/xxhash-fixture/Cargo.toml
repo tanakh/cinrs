@@ -1,0 +1,26 @@
+# The crate `scripts/check-xxhash.sh` builds and runs.
+#
+# Deliberately outside the workspace — the empty `[workspace]` table below is
+# what detaches it — because it needs C that is not in this repository: xxHash,
+# which the script downloads into `target/xxhash/` and verifies against a
+# pinned SHA-256. An ordinary `cargo build` of this repository does not touch
+# it, and neither does CI.
+#
+# What it is for: xxHash is one header that becomes four programs — its XXH3
+# kernel is scalar, SSE2, AVX2 or AVX-512 depending on `XXH_VECTOR` — and a
+# run-time dispatcher that compiles all of them into one unit behind
+# `__attribute__((__target__))` and reads `cpuid` through inline assembly, with
+# upstream's table of expected hashes to say whether the result is right.
+[package]
+name = "cinrs-xxhash-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+cinrs = { path = "../.." }
+
+[lib]
+path = "src/lib.rs"
