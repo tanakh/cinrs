@@ -1,0 +1,18 @@
+error: this function definition uses SIMD vector type `std::arch::x86_64::__m512` which (with the chosen ABI) requires the `avx512f` target feature, which is not enabled
+  --> tests/ui/simd_abi_512.rs:13:12
+   |
+13 |     __m512 no_feature(__m512 a) { return a; }
+   |            ^^^^^^^^^^ function defined here
+   |
+   = help: consider enabling it globally (`-C target-feature=+avx512f`) or locally (`#[target_feature(enable="avx512f")]`)
+
+error: this function definition uses SIMD vector type `std::arch::x86_64::__m512d` which (with the chosen ABI) requires the `avx512f` target feature, which is not enabled
+  --> tests/ui/simd_abi_512.rs:15:45
+   |
+15 |     __attribute__((target("avx2"))) __m512d only_avx2(__m512d a) { return a; }
+   |                                             ^^^^^^^^^ function defined here
+   |
+   = help: consider enabling it globally (`-C target-feature=+avx512f`) or locally (`#[target_feature(enable="avx512f")]`)
+
+error: aborting due to 2 previous errors
+

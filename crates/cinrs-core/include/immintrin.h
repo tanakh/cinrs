@@ -12,15 +12,15 @@
  * <xmmintrin.h> for the rest of the rules and doc/features.md for the prose.
  *
  * **A function that passes or returns a 256-bit vector by value needs
- * `__attribute__((target("avx")))`** (or `avx2`, which implies it): that is
- * the ABI Rust and C both use for a value that wide, and rustc refuses the
- * definition otherwise. A 128-bit vector needs nothing, because SSE2 is the
- * x86-64 baseline.
+ * `__attribute__((target("avx")))`** (or `avx2`), and a 512-bit one needs
+ * `target("avx512f")`: that is the ABI Rust and C both use for a value that
+ * wide, and rustc refuses the definition otherwise. A 128-bit vector needs
+ * nothing, because SSE2 is the x86-64 baseline. AVX-512 is included last.
  *
- * What is **not** here: AVX-512 and the mask types, MMX and `__m64` (see
- * <mmintrin.h>), and the GNU vector extensions — `__attribute__((vector_size))`
- * and arithmetic on vectors — which cinrs refuses with a diagnostic. The
- * intrinsics are the API.
+ * What is **not** here: MMX and `__m64` (see <mmintrin.h>), the AVX-512
+ * intrinsics core::arch keeps unstable, and the GNU vector extensions —
+ * `vector_size` and arithmetic on vectors — which cinrs refuses with a
+ * diagnostic. The intrinsics are the API.
  */
 #ifndef _CINRS_IMMINTRIN_H
 #define _CINRS_IMMINTRIN_H

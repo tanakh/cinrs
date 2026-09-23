@@ -17,7 +17,7 @@ cinrs::c11! {
     __attribute__((target("sse4.2,popcnt"))) int also_good(void) { return 2; }
     __attribute__((target("abm"))) int abm_is_two_of_them(void) { return 3; }
 
-    __attribute__((target("avx512f"))) int too_new(void) { return 4; } //~ ERROR: AVX-512 is still unstable
+    __attribute__((target("sse4a"))) int too_new(void) { return 4; } //~ ERROR: SSE4a target feature is still unstable
 
     __attribute__((target("arch=haswell"))) int a_processor(void) { return 5; } //~ ERROR: selects a processor
 

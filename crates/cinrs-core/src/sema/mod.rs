@@ -339,11 +339,9 @@ pub fn check_safe(program: &mut Program, named: &[crate::pp::SafeName]) -> Diagn
         // say so itself, at the caret on the C; saying it here names the
         // instruction set and what to do about it.
         if let Some(intr) = callee.intrinsic {
-            let feature = if intr.feature.is_empty() {
-                "an instruction set".to_owned()
-            } else {
-                format!("the '{}' instruction set", intr.feature)
-            };
+            // A comma-separated list — `gfni,avx512bw,avx512vl` — is read
+            // out as the instruction sets it names.
+            let feature = crate::x86::describe_features(intr.feature);
             diags.error(
                 call.range,
                 format!(

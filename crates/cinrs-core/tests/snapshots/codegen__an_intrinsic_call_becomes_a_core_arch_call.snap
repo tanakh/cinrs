@@ -11,6 +11,23 @@ mod __cinrs_unit_de41b25e {
     pub type __m256 = ::core::arch::x86_64::__m256;
     pub type __m256i = ::core::arch::x86_64::__m256i;
     pub type __m256d = ::core::arch::x86_64::__m256d;
+    pub type __m512 = ::core::arch::x86_64::__m512;
+    pub type __m512i = ::core::arch::x86_64::__m512i;
+    pub type __m512d = ::core::arch::x86_64::__m512d;
+    pub type __mmask8 = ::core::ffi::c_uchar;
+    pub type __mmask16 = ::core::ffi::c_ushort;
+    pub type _MM_CMPINT_ENUM = ::core::ffi::c_int;
+    pub type _MM_MANTISSA_NORM_ENUM = ::core::ffi::c_int;
+    pub type _MM_MANTISSA_SIGN_ENUM = ::core::ffi::c_int;
+    pub type _MM_PERM_ENUM = ::core::ffi::c_int;
+    pub type __mmask32 = ::core::ffi::c_uint;
+    pub type __mmask64 = ::core::ffi::c_ulonglong;
+    pub type __m128bh = ::core::arch::x86_64::__m128bh;
+    pub type __m256bh = ::core::arch::x86_64::__m256bh;
+    pub type __m512bh = ::core::arch::x86_64::__m512bh;
+    pub type __m128h = ::core::arch::x86_64::__m128h;
+    pub type __m256h = ::core::arch::x86_64::__m256h;
+    pub type __m512h = ::core::arch::x86_64::__m512h;
     pub unsafe extern "C" fn sum4(
         mut p: *const ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {

@@ -34,10 +34,16 @@
 //!   [`target_features`] maps GCC's spelling of it —
 //!   `__attribute__((target("avx2")))` — onto Rust's.
 //!
-//! What is deliberately not here: AVX-512 and the `__mmask*` types, which are
-//! still unstable in `core::arch` on this crate's minimum supported Rust
-//! version, and MMX and `__m64`, which the standard library dropped. See
-//! `doc/features.md`.
+//! AVX-512 is here as the rest is: `core::arch` stabilised it in Rust 1.89
+//! (AVX512-FP16 in 1.94), and the `__m512*`, `__m…bh` and `__m…h` vectors and
+//! the `__mmask*` integers come from the same generated headers. A feature
+//! such as `"gfni,avx512bw,avx512vl"` is a comma-separated list, which
+//! `#[target_feature(enable = …)]` takes as it is.
+//!
+//! What is deliberately not here: the intrinsics `core::arch` still keeps
+//! unstable — AVX512-VP2INTERSECT, and the FP16 and BF16 ones that take or
+//! return a scalar `f16` or `bf16` — and MMX and `__m64`, which the standard
+//! library dropped. See `doc/features.md`.
 
 mod table;
 
@@ -112,10 +118,12 @@ pub fn all() -> &'static [Intrinsic] {
 /// name for LZCNT and POPCNT together.
 ///
 /// Every Rust name here is one `rustc` accepts on its **stable** channel and
-/// `is_x86_feature_detected!` knows; an unstable one — `avx512f`, `sse4a`,
-/// `gfni` — would turn a `target` attribute into a nightly-only build, so it
-/// is refused with the reason instead. The list is checked against `rustc` by
-/// `tests/simd.rs`.
+/// `is_x86_feature_detected!` knows; an unstable one — `sse4a`, `tbm`, `rtm` —
+/// would turn a `target` attribute into a nightly-only build, so it is refused
+/// with the reason instead. The list is checked against `rustc` by
+/// `tests/simd.rs`. Every AVX-512 name, and each instruction set that arrived
+/// with it, is spelled the same by GCC 15 (in `target` and in
+/// `__builtin_cpu_supports` alike) and by Rust 1.89 and later.
 pub const TARGET_FEATURES: &[(&str, &[&str])] = &[
     // GCC's ABM is LZCNT plus POPCNT; LLVM splits them.
     ("abm", &["lzcnt", "popcnt"]),
@@ -123,12 +131,35 @@ pub const TARGET_FEATURES: &[(&str, &[&str])] = &[
     ("aes", &["aes"]),
     ("avx", &["avx"]),
     ("avx2", &["avx2"]),
+    ("avx512bf16", &["avx512bf16"]),
+    ("avx512bitalg", &["avx512bitalg"]),
+    ("avx512bw", &["avx512bw"]),
+    ("avx512cd", &["avx512cd"]),
+    ("avx512dq", &["avx512dq"]),
+    ("avx512f", &["avx512f"]),
+    ("avx512fp16", &["avx512fp16"]),
+    ("avx512ifma", &["avx512ifma"]),
+    ("avx512vbmi", &["avx512vbmi"]),
+    ("avx512vbmi2", &["avx512vbmi2"]),
+    ("avx512vl", &["avx512vl"]),
+    ("avx512vnni", &["avx512vnni"]),
+    // No intrinsics (they are unstable in `core::arch`), but the instruction
+    // set is a stable target feature and a fair question to ask the CPU.
+    ("avx512vp2intersect", &["avx512vp2intersect"]),
+    ("avx512vpopcntdq", &["avx512vpopcntdq"]),
+    ("avxifma", &["avxifma"]),
+    ("avxneconvert", &["avxneconvert"]),
+    ("avxvnni", &["avxvnni"]),
+    ("avxvnniint16", &["avxvnniint16"]),
+    ("avxvnniint8", &["avxvnniint8"]),
     ("bmi", &["bmi1"]),
     ("bmi2", &["bmi2"]),
     ("cx16", &["cmpxchg16b"]),
     ("f16c", &["f16c"]),
     ("fma", &["fma"]),
     ("fxsr", &["fxsr"]),
+    ("gfni", &["gfni"]),
+    ("kl", &["kl"]),
     ("lzcnt", &["lzcnt"]),
     ("movbe", &["movbe"]),
     ("pclmul", &["pclmulqdq"]),
@@ -136,6 +167,9 @@ pub const TARGET_FEATURES: &[(&str, &[&str])] = &[
     ("rdrnd", &["rdrand"]),
     ("rdseed", &["rdseed"]),
     ("sha", &["sha"]),
+    ("sha512", &["sha512"]),
+    ("sm3", &["sm3"]),
+    ("sm4", &["sm4"]),
     ("sse", &["sse"]),
     ("sse2", &["sse2"]),
     ("sse3", &["sse3"]),
@@ -144,6 +178,9 @@ pub const TARGET_FEATURES: &[(&str, &[&str])] = &[
     ("sse4.1", &["sse4.1"]),
     ("sse4.2", &["sse4.2"]),
     ("ssse3", &["ssse3"]),
+    ("vaes", &["vaes"]),
+    ("vpclmulqdq", &["vpclmulqdq"]),
+    ("widekl", &["widekl"]),
     ("xsave", &["xsave"]),
 ];
 
@@ -212,13 +249,23 @@ pub fn unsupported_feature(gcc: &str) -> Option<&'static str> {
         .iter()
         .find(|(n, _)| *n == name)
         .map(|(_, why)| *why)
-        .or_else(|| {
-            // Everything AVX-512 is one answer, and there are forty names.
-            name.starts_with("avx512").then_some(
-                "AVX-512 is still unstable in rustc's core::arch on the Rust \
-                 version this crate supports, so cinrs does not map it",
-            )
-        })
+}
+
+/// An intrinsic's feature string as prose: `'sse2'` is "the 'sse2'
+/// instruction set", and the comma-separated `'gfni,avx512bw,avx512vl'` is
+/// "the 'gfni', 'avx512bw' and 'avx512vl' instruction sets".
+pub fn describe_features(feature: &str) -> String {
+    let names: Vec<String> = feature
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("'{name}'"))
+        .collect();
+    match names.as_slice() {
+        [] => "an instruction set".to_owned(),
+        [one] => format!("the {one} instruction set"),
+        [init @ .., last] => format!("the {} and {last} instruction sets", init.join(", ")),
+    }
 }
 
 /// The instruction sets [`target_features`] knows, for a diagnostic that lists
