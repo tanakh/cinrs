@@ -16,7 +16,7 @@
 //!
 //! So the boundary is handled rather than trusted, in two ways.
 //!
-//! * A declared-only function in [`LONG_DOUBLE_TWINS`] — an ISO C function
+//! * A declared-only function in `LONG_DOUBLE_TWINS` — an ISO C function
 //!   whose only difference from a `double` sibling is the type — is linked to
 //!   the sibling, through the `#[link_name]` its `asm_label` becomes. That is
 //!   exactly what "`long double` is `double`" means for this crate.
@@ -149,7 +149,7 @@ pub(super) const LONG_DOUBLE_TWINS: &[(&str, &str)] = &[
 ];
 
 /// The `double` sibling of the ISO C function `name`, if it is one of
-/// [`LONG_DOUBLE_TWINS`].
+/// `LONG_DOUBLE_TWINS`.
 pub fn long_double_twin(name: &str) -> Option<&'static str> {
     LONG_DOUBLE_TWINS
         .iter()
