@@ -100,6 +100,15 @@ pub const X86_VECTOR_TYPEDEF_NAMES: &[(&str, Ty)] = &[
     ("__cinrs_m256", Ty::Vector(VecTy::M256)),
     ("__cinrs_m256d", Ty::Vector(VecTy::M256d)),
     ("__cinrs_m256i", Ty::Vector(VecTy::M256i)),
+    ("__cinrs_m512", Ty::Vector(VecTy::M512)),
+    ("__cinrs_m512d", Ty::Vector(VecTy::M512d)),
+    ("__cinrs_m512i", Ty::Vector(VecTy::M512i)),
+    ("__cinrs_m128bh", Ty::Vector(VecTy::M128bh)),
+    ("__cinrs_m256bh", Ty::Vector(VecTy::M256bh)),
+    ("__cinrs_m512bh", Ty::Vector(VecTy::M512bh)),
+    ("__cinrs_m128h", Ty::Vector(VecTy::M128h)),
+    ("__cinrs_m256h", Ty::Vector(VecTy::M256h)),
+    ("__cinrs_m512h", Ty::Vector(VecTy::M512h)),
 ];
 
 /// The builtin C23's `unreachable()` stands for.
@@ -283,6 +292,26 @@ pub enum VecTy {
     M256i,
     /// `__m256d`: four `double` lanes.
     M256d,
+    /// `__m512`: sixteen `float` lanes (AVX-512).
+    M512,
+    /// `__m512i`: sixty-four bytes of integer lanes.
+    M512i,
+    /// `__m512d`: eight `double` lanes.
+    M512d,
+    /// `__m128bh`, `__m256bh`, `__m512bh`: bfloat16 lanes (AVX512-BF16). C
+    /// only moves them between intrinsics; no scalar `__bf16` is needed.
+    M128bh,
+    /// See [`VecTy::M128bh`].
+    M256bh,
+    /// See [`VecTy::M128bh`].
+    M512bh,
+    /// `__m128h`, `__m256h`, `__m512h`: half-precision lanes (AVX512-FP16),
+    /// opaque in the same way: no `_Float16` scalar is needed.
+    M128h,
+    /// See [`VecTy::M128h`].
+    M256h,
+    /// See [`VecTy::M128h`].
+    M512h,
 }
 
 impl VecTy {
@@ -295,6 +324,15 @@ impl VecTy {
             VecTy::M256 => "__m256",
             VecTy::M256i => "__m256i",
             VecTy::M256d => "__m256d",
+            VecTy::M512 => "__m512",
+            VecTy::M512i => "__m512i",
+            VecTy::M512d => "__m512d",
+            VecTy::M128bh => "__m128bh",
+            VecTy::M256bh => "__m256bh",
+            VecTy::M512bh => "__m512bh",
+            VecTy::M128h => "__m128h",
+            VecTy::M256h => "__m256h",
+            VecTy::M512h => "__m512h",
         }
     }
 
@@ -302,8 +340,9 @@ impl VecTy {
     /// width on every x86 ABI, and so is Rust's.
     pub fn bytes(self) -> u64 {
         match self {
-            VecTy::M128 | VecTy::M128i | VecTy::M128d => 16,
-            VecTy::M256 | VecTy::M256i | VecTy::M256d => 32,
+            VecTy::M128 | VecTy::M128i | VecTy::M128d | VecTy::M128bh | VecTy::M128h => 16,
+            VecTy::M256 | VecTy::M256i | VecTy::M256d | VecTy::M256bh | VecTy::M256h => 32,
+            VecTy::M512 | VecTy::M512i | VecTy::M512d | VecTy::M512bh | VecTy::M512h => 64,
         }
     }
 }

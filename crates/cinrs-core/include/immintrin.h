@@ -562,5 +562,47 @@ int _popcnt64(long long);
 #define _mm256_broadcast_pd(p) \
     _mm256_set_m128d(*(const __m128d *)(p), *(const __m128d *)(p))
 
+/* AVX-512 and the instruction sets that arrived with it, one header each as
+ * GCC has them, in the order their typedefs need: `__m512*`, `__mmask8` and
+ * `__mmask16` come from <avx512fintrin.h>, the wide masks from
+ * <avx512bwintrin.h>. Each of these, included on its own, includes this file.
+ * A function that passes or returns a 512-bit vector by value needs
+ * `__attribute__((target("avx512f")))`, as a 256-bit one needs "avx". */
+#include <avx512fintrin.h>
+#include <avx512bwintrin.h>
+#include <avx512cdintrin.h>
+#include <avx512dqintrin.h>
+#include <avx512vlintrin.h>
+#include <avx512vlbwintrin.h>
+#include <avx512vldqintrin.h>
+#include <avx512vbmiintrin.h>
+#include <avx512vbmivlintrin.h>
+#include <avx512vbmi2intrin.h>
+#include <avx512vbmi2vlintrin.h>
+#include <avx512vnniintrin.h>
+#include <avx512vnnivlintrin.h>
+#include <avx512bitalgintrin.h>
+#include <avx512bitalgvlintrin.h>
+#include <avx512vpopcntdqintrin.h>
+#include <avx512vpopcntdqvlintrin.h>
+#include <avx512ifmaintrin.h>
+#include <avx512ifmavlintrin.h>
+#include <avx512bf16intrin.h>
+#include <avx512bf16vlintrin.h>
+#include <avx512fp16intrin.h>
+#include <avx512fp16vlintrin.h>
+#include <avx512vp2intersectintrin.h>
+#include <gfniintrin.h>
+#include <vaesintrin.h>
+#include <vpclmulqdqintrin.h>
+#include <avxvnniintrin.h>
+#include <avxvnniint8intrin.h>
+#include <avxvnniint16intrin.h>
+#include <avxifmaintrin.h>
+#include <f16cintrin.h>
+#include <sha512intrin.h>
+#include <sm3intrin.h>
+#include <sm4intrin.h>
+
 #endif /* x86 */
 #endif /* _CINRS_IMMINTRIN_H */

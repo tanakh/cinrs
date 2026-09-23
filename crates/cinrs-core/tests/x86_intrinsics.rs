@@ -58,10 +58,94 @@ const FAMILIES: &[Family] = &[
     Family::new("avx", "immintrin.h", "avx"),
     Family::new("avx2", "immintrin.h", "avx2"),
     Family::new("fma", "immintrin.h", "fma"),
-    Family::new("sha", "immintrin.h", "sha"),
+    // `sha.rs` also holds SHA512, SM3 and SM4, which GCC gives headers of
+    // their own; `split` sends them there (see [`route`]).
+    Family::new("sha", "immintrin.h", "sha").split(None),
     Family::new("bmi1", "immintrin.h", "bmi1").also("bmi"),
     Family::new("bmi2", "immintrin.h", "bmi2"),
     Family::new("abm", "immintrin.h", "lzcnt"),
+    // AVX-512 and what arrived with it. GCC splits each AVX-512 family's
+    // 128- and 256-bit forms — the ones that also need AVX512VL — into a
+    // second header, and `stdarch` keeps AVX-VNNI and AVX-IFMA in the AVX-512
+    // files; `split` and [`route`] put every prototype where GCC has it. These
+    // headers do not exist until the generator first writes them, from the
+    // skeleton [`skeleton`] builds; after that only their regions are
+    // rewritten, like every other header's.
+    //
+    // Left out, and listed in the report as unstable: AVX512VP2INTERSECT (the
+    // whole module is `#[unstable]` in `core::arch`, so its header is declared
+    // empty), and the AVX512-FP16 and AVX512-BF16 intrinsics that take or
+    // return an `f16` or `bf16` scalar, which Rust has not stabilised.
+    Family::new("avx512f", "avx512fintrin.h", "avx512f").split(Some("avx512vlintrin.h")),
+    Family::new("avx512bw", "avx512bwintrin.h", "avx512bw").split(Some("avx512vlbwintrin.h")),
+    Family::new("avx512cd", "avx512cdintrin.h", "avx512cd").split(Some("avx512vlintrin.h")),
+    Family::new("avx512dq", "avx512dqintrin.h", "avx512dq").split(Some("avx512vldqintrin.h")),
+    Family::new("avx512vbmi", "avx512vbmiintrin.h", "avx512vbmi")
+        .split(Some("avx512vbmivlintrin.h")),
+    Family::new("avx512vbmi2", "avx512vbmi2intrin.h", "avx512vbmi2")
+        .split(Some("avx512vbmi2vlintrin.h")),
+    Family::new("avx512vnni", "avx512vnniintrin.h", "avx512vnni")
+        .split(Some("avx512vnnivlintrin.h")),
+    Family::new("avx512bitalg", "avx512bitalgintrin.h", "avx512bitalg")
+        .split(Some("avx512bitalgvlintrin.h")),
+    Family::new(
+        "avx512vpopcntdq",
+        "avx512vpopcntdqintrin.h",
+        "avx512vpopcntdq",
+    )
+    .split(Some("avx512vpopcntdqvlintrin.h")),
+    Family::new("avx512ifma", "avx512ifmaintrin.h", "avx512ifma")
+        .split(Some("avx512ifmavlintrin.h")),
+    Family::new("avx512bf16", "avx512bf16intrin.h", "avx512bf16")
+        .split(Some("avx512bf16vlintrin.h")),
+    Family::new("avx512fp16", "avx512fp16intrin.h", "avx512fp16")
+        .split(Some("avx512fp16vlintrin.h")),
+    Family::new(
+        "avx512vp2intersect",
+        "avx512vp2intersectintrin.h",
+        "avx512vp2intersect",
+    ),
+    Family::new("gfni", "gfniintrin.h", "gfni"),
+    Family::new("vaes", "vaesintrin.h", "vaes"),
+    Family::new("vpclmulqdq", "vpclmulqdqintrin.h", "vpclmulqdq"),
+    Family::new("f16c", "f16cintrin.h", "f16c"),
+];
+
+/// The typedefs a new header opens with, where GCC has them: the 512-bit
+/// vectors, `__mmask8`, `__mmask16` and the `_MM_*_ENUM` immediates in
+/// `<avx512fintrin.h>`, the wide masks in `<avx512bwintrin.h>`, and the
+/// BF16 and FP16 vectors in their own headers. A mask is a plain unsigned
+/// integer in C and in `core::arch` alike, and each enum is `i32` in Rust.
+const PREAMBLES: &[(&str, &str)] = &[
+    (
+        "avx512fintrin.h",
+        "typedef __cinrs_m512 __m512;\n\
+         typedef __cinrs_m512i __m512i;\n\
+         typedef __cinrs_m512d __m512d;\n\
+         typedef unsigned char __mmask8;\n\
+         typedef unsigned short __mmask16;\n\
+         typedef int _MM_CMPINT_ENUM;\n\
+         typedef int _MM_MANTISSA_NORM_ENUM;\n\
+         typedef int _MM_MANTISSA_SIGN_ENUM;\n\
+         typedef int _MM_PERM_ENUM;\n",
+    ),
+    (
+        "avx512bwintrin.h",
+        "typedef unsigned int __mmask32;\n\
+         typedef unsigned long long __mmask64;\n",
+    ),
+    (
+        "avx512bf16intrin.h",
+        "typedef __cinrs_m128bh __m128bh;\n\
+         typedef __cinrs_m256bh __m256bh;\n\
+         typedef __cinrs_m512bh __m512bh;\n",
+    ),
+    (
+        "avx512fp16intrin.h",
+        "typedef __cinrs_m128h __m128h;\n\
+         typedef __cinrs_m256h __m256h;\n\
+         typedef __cinrs_m512h __m512h;\n",
+    ),
 ];
 
 /// One `core_arch` source file and where its declarations belong.
@@ -79,6 +163,11 @@ struct Family {
     /// A second stem to look for, because the two directories do not always
     /// agree: BMI1 is `x86/bmi1.rs` and `x86_64/bmi.rs`.
     alt: &'static str,
+    /// Whether [`route`] may send a prototype somewhere other than `header`.
+    split: bool,
+    /// The header the forms that also need AVX512VL go into, if GCC gives
+    /// them one of their own.
+    vl: Option<&'static str>,
 }
 
 impl Family {
@@ -88,7 +177,16 @@ impl Family {
             header,
             region,
             alt: "",
+            split: false,
+            vl: None,
         }
+    }
+
+    /// The same family, with its prototypes routed by instruction set.
+    const fn split(mut self, vl: Option<&'static str>) -> Self {
+        self.split = true;
+        self.vl = vl;
+        self
     }
 
     /// The same family under a second file name.
@@ -185,7 +283,18 @@ fn scan(text: &str) -> Vec<(Vec<String>, String)> {
             attrs.push(attr);
             continue;
         }
-        if trimmed.starts_with("pub fn ") || trimmed.starts_with("pub unsafe fn ") {
+        // Since 1.9x most of `core::arch` is `const fn`, and a reader that
+        // only knew `pub fn` found a third of it (see the count check in
+        // [`regenerate`]).
+        if [
+            "pub fn ",
+            "pub unsafe fn ",
+            "pub const fn ",
+            "pub const unsafe fn ",
+        ]
+        .iter()
+        .any(|p| trimmed.starts_with(p))
+        {
             let mut sig = trimmed.to_owned();
             while depth(&sig, '(', ')') > 0 || !sig.contains('{') {
                 match lines.next() {
@@ -256,7 +365,29 @@ fn c_type(rust: &str) -> Option<String> {
             "u64" => "unsigned long long",
             "f32" => "float",
             "f64" => "double",
-            "__m128" | "__m128i" | "__m128d" | "__m256" | "__m256i" | "__m256d" => rust,
+            "__m128"
+            | "__m128i"
+            | "__m128d"
+            | "__m256"
+            | "__m256i"
+            | "__m256d"
+            | "__m512"
+            | "__m512i"
+            | "__m512d"
+            | "__m128bh"
+            | "__m256bh"
+            | "__m512bh"
+            | "__m128h"
+            | "__m256h"
+            | "__m512h"
+            | "__mmask8"
+            | "__mmask16"
+            | "__mmask32"
+            | "__mmask64"
+            | "_MM_CMPINT_ENUM"
+            | "_MM_MANTISSA_NORM_ENUM"
+            | "_MM_MANTISSA_SIGN_ENUM"
+            | "_MM_PERM_ENUM" => rust,
             _ => return None,
         }
         .to_owned(),
@@ -377,14 +508,21 @@ fn convert(attrs: &[String], sig: &str, x86_64_only: bool) -> Result<Intrinsic, 
             let Some((_, ty)) = generic.split_once(':') else {
                 return skip("unreadable const generic");
             };
-            imm.push((*index, ty.trim().to_owned()));
             // Intel writes the immediate as `const int`; the C prototype has
             // to have a parameter there for the argument to be checked at all.
-            let spelling = match ty.trim() {
-                "i32" => "const int",
-                "u32" => "const unsigned int",
+            // The `_MM_*_ENUM` immediates are `i32` aliases in `core::arch`,
+            // and the table records the type the generated literal's suffix
+            // is taken from.
+            let (spelling, rust_ty) = match ty.trim() {
+                "i32" => ("const int", "i32"),
+                "u32" => ("const unsigned int", "u32"),
+                "_MM_CMPINT_ENUM"
+                | "_MM_MANTISSA_NORM_ENUM"
+                | "_MM_MANTISSA_SIGN_ENUM"
+                | "_MM_PERM_ENUM" => ("const int", "i32"),
                 other => return skip(&format!("a const operand of type '{other}'")),
             };
+            imm.push((*index, rust_ty.to_owned()));
             if *index > params.len() {
                 return skip("an immediate past the end of the argument list");
             }
@@ -503,6 +641,81 @@ fn declaration(intr: &Intrinsic) -> String {
     format!("{} {}({});", intr.ret, intr.name, params)
 }
 
+/// The header and region one intrinsic of `family` is declared in.
+///
+/// Only a `split` family routes. An intrinsic whose first instruction set is
+/// not the family's and not an AVX-512 one — AVX-VNNI in `avx512vnni.rs`,
+/// SHA512 in `sha.rs` — goes to the header GCC names after it; one that also
+/// needs AVX512VL goes to the family's `vl` header when GCC has one; anything
+/// else stays in the family's own header.
+fn route(family: &Family, feature: &str) -> (String, String) {
+    let own = || (family.header.to_owned(), family.region.to_owned());
+    if !family.split {
+        return own();
+    }
+    let first = feature.split(',').next().unwrap_or("");
+    if !first.is_empty() && first != family.region && !first.starts_with("avx512") {
+        return (format!("{first}intrin.h"), first.to_owned());
+    }
+    match family.vl {
+        Some(vl) if feature.split(',').any(|f| f == "avx512vl") => {
+            (vl.to_owned(), format!("{}-vl", family.region))
+        }
+        _ => own(),
+    }
+}
+
+/// What marks a header [`skeleton`] wrote, and that is therefore rewritten
+/// whole on every run.
+const SKELETON_MARK: &str = "Written by crates/cinrs-core/tests/x86_intrinsics.rs";
+
+/// The text of a header the generator owns: the comment, the guard, the
+/// architecture check, the typedefs of [`PREAMBLES`], and one empty region
+/// per instruction set, which [`regenerate`] then fills.
+///
+/// `<immintrin.h>` includes every one of these, in the order the typedefs
+/// need, and a unit that includes one of them on its own is sent to
+/// `<immintrin.h>` first, which brings this file back in at its place — so
+/// `__mmask8` is always declared before `<avx512vlintrin.h>` uses it.
+fn skeleton(header: &str, regions: &BTreeMap<String, Vec<String>>, constants: bool) -> String {
+    let guard = format!("_CINRS_{}", header.replace('.', "_").to_ascii_uppercase());
+    let sets: Vec<&str> = regions.keys().map(String::as_str).collect();
+    let mut out = format!(
+        "/* <{header}> — the {} intrinsics, as GCC arranges them.\n\
+         \x20*\n\
+         \x20* Written by crates/cinrs-core/tests/x86_intrinsics.rs; the regions below\n\
+         \x20* are regenerated from `core::arch`'s source, and an empty one is an\n\
+         \x20* instruction set whose intrinsics are all still unstable there. Needs the\n\
+         \x20* instruction set in `__attribute__((target(\"…\")))` on the function that\n\
+         \x20* calls them, and a function that passes or returns a 512-bit vector by\n\
+         \x20* value needs `target(\"avx512f\")`; see <immintrin.h>.\n\
+         \x20*/\n\
+         #ifndef {guard}\n\
+         #if !defined(__i386__) && !defined(__x86_64__)\n\
+         #error \"the Intel intrinsics headers are x86 only; this unit is being translated for \
+         another architecture. Guard the #include with #ifdef __x86_64__, or see \
+         doc/features.md, 'SIMD intrinsics'.\"\n\
+         #elif !defined(_CINRS_IMMINTRIN_H)\n\
+         /* On its own: <immintrin.h> includes this file back, in its place. */\n\
+         #include <immintrin.h>\n\
+         #else\n\
+         #define {guard}\n\n",
+        sets.join(", ").replace("-vl", "+VL"),
+    );
+    if let Some((_, typedefs)) = PREAMBLES.iter().find(|(h, _)| *h == header) {
+        out.push_str(typedefs);
+        out.push('\n');
+    }
+    if constants {
+        out.push_str(&format!("{}\n{REGION_END}\n\n", region_begin("constants")));
+    }
+    for region in regions.keys() {
+        out.push_str(&format!("{}\n{REGION_END}\n\n", region_begin(region)));
+    }
+    out.push_str(&format!("#endif\n#endif /* {guard} */\n"));
+    out
+}
+
 // ---------------------------------------------------------------------------
 // the tests
 // ---------------------------------------------------------------------------
@@ -523,8 +736,8 @@ fn regenerate() {
     let mut all: Vec<Intrinsic> = Vec::new();
     let mut skipped: Vec<Skipped> = Vec::new();
     // header -> region -> lines
-    let mut regions: BTreeMap<&str, BTreeMap<&str, Vec<String>>> = BTreeMap::new();
-    let mut consts: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    let mut regions: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    let mut consts: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
 
     for family in FAMILIES {
         for (dir, x86_64_only) in [("x86", false), ("x86_64", true)] {
@@ -536,7 +749,10 @@ fn regenerate() {
             if !x86_64_only {
                 let found = constants(&text);
                 if !found.is_empty() {
-                    consts.entry(family.header).or_default().extend(found);
+                    consts
+                        .entry(family.header.to_owned())
+                        .or_default()
+                        .extend(found);
                 }
             }
             let mut found: Vec<Intrinsic> = Vec::new();
@@ -547,26 +763,73 @@ fn regenerate() {
                 }
             }
             found.sort_by(|a, b| a.name.cmp(&b.name));
-            let lines = regions
-                .entry(family.header)
+            // The family's own region exists even when nothing is declared in
+            // it, so that a header whose every intrinsic is unstable is still
+            // written (empty) rather than missing.
+            regions
+                .entry(family.header.to_owned())
                 .or_default()
-                .entry(family.region)
+                .entry(family.region.to_owned())
                 .or_default();
-            if x86_64_only && !found.is_empty() {
-                lines.push("#ifdef __x86_64__".to_owned());
-            }
+            let mut routed: BTreeMap<(String, String), Vec<&Intrinsic>> = BTreeMap::new();
             for intr in &found {
-                lines.push(declaration(intr));
+                routed
+                    .entry(route(family, &intr.feature))
+                    .or_default()
+                    .push(intr);
             }
-            if x86_64_only && !found.is_empty() {
-                lines.push("#endif".to_owned());
+            for ((header, region), intrs) in routed {
+                let lines = regions
+                    .entry(header)
+                    .or_default()
+                    .entry(region)
+                    .or_default();
+                if x86_64_only {
+                    lines.push("#ifdef __x86_64__".to_owned());
+                }
+                for intr in intrs {
+                    lines.push(declaration(intr));
+                }
+                if x86_64_only {
+                    lines.push("#endif".to_owned());
+                }
             }
             all.extend(found);
         }
     }
 
+    // A reader that stops recognising `core::arch`'s declarations would
+    // otherwise shrink the table without a word: the count may only grow.
+    let previous = std::fs::read_to_string(root.join("src/x86/table.rs"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.trim().starts_with("Intrinsic { name: \""))
+        .count();
+    let mut names: Vec<&str> = all.iter().map(|intr| intr.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert!(
+        names.len() >= previous,
+        "the generator found {} intrinsics where the committed table has {previous}: it no \
+         longer reads this stdarch's declarations (a new `pub … fn` form?)",
+        names.len()
+    );
+
     for (header, by_region) in &regions {
         let path = root.join("include").join(header);
+        // A header the generator wrote from a skeleton has no hand-written
+        // text, so it is rewritten whole, and a change to [`skeleton`] reaches
+        // every such header; the hand-written ones only have their regions
+        // replaced.
+        let owned =
+            std::fs::read_to_string(&path).map_or(true, |text| text.contains(SKELETON_MARK));
+        if owned {
+            std::fs::write(
+                &path,
+                skeleton(header, by_region, consts.contains_key(header)),
+            )
+            .unwrap();
+        }
         let mut text =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         for (region, lines) in by_region {
@@ -697,7 +960,7 @@ fn header_and_table_agree() {
     // here so that the prose cannot quietly go out of date.
     assert_eq!(
         from_table.len(),
-        881,
+        6075,
         "the intrinsics table changed size: update the table in doc/features.md, \
          \"SIMD intrinsics\", and this number"
     );
@@ -712,35 +975,75 @@ fn header_and_table_agree() {
             ("aes", 6),
             ("avx", 184),
             ("avx2", 193),
+            ("avx512bf16,avx512f", 12),
+            ("avx512bf16,avx512vl", 24),
+            ("avx512bitalg", 8),
+            ("avx512bitalg,avx512vl", 16),
+            ("avx512bw", 318),
+            ("avx512bw,avx512vl", 510),
+            ("avx512cd", 14),
+            ("avx512cd,avx512vl", 28),
+            ("avx512dq", 222),
+            ("avx512dq,avx512vl", 177),
+            ("avx512f", 1421),
+            ("avx512f,avx512vl", 1212),
+            ("avx512fp16", 551),
+            ("avx512fp16,avx512vl", 342),
+            ("avx512ifma", 6),
+            ("avx512ifma,avx512vl", 12),
+            ("avx512vbmi", 10),
+            ("avx512vbmi,avx512vl", 20),
+            ("avx512vbmi2", 50),
+            ("avx512vbmi2,avx512vl", 100),
+            ("avx512vnni", 12),
+            ("avx512vnni,avx512vl", 24),
+            ("avx512vpopcntdq", 6),
+            ("avx512vpopcntdq,avx512vl", 12),
+            ("avxifma", 4),
+            ("avxvnni", 8),
+            ("avxvnniint16", 12),
+            ("avxvnniint8", 12),
             ("bmi1", 17),
             ("bmi2", 6),
+            ("f16c", 4),
             ("fma", 32),
+            ("gfni", 3),
+            ("gfni,avx", 3),
+            ("gfni,avx512bw,avx512f", 6),
+            ("gfni,avx512bw,avx512vl", 12),
+            ("gfni,avx512f", 3),
             ("lzcnt", 2),
             ("pclmulqdq", 1),
             ("popcnt", 2),
             ("sha", 7),
+            ("sha512,avx", 3),
+            ("sm3,avx", 3),
+            ("sm4,avx", 4),
             ("sse", 97),
             ("sse2", 226),
             ("sse3", 11),
             ("sse4.1", 61),
             ("sse4.2", 19),
             ("ssse3", 16),
+            ("vaes", 4),
+            ("vaes,avx512f", 4),
+            ("vpclmulqdq", 1),
+            ("vpclmulqdq,avx512f", 1),
         ]),
         "the per-instruction-set counts in doc/features.md are these"
     );
 
     let mut from_headers: BTreeMap<String, (usize, Vec<usize>)> = BTreeMap::new();
-    for header in [
-        "xmmintrin.h",
-        "emmintrin.h",
-        "pmmintrin.h",
-        "tmmintrin.h",
-        "smmintrin.h",
-        "nmmintrin.h",
-        "wmmintrin.h",
-        "immintrin.h",
-    ] {
-        let text = std::fs::read_to_string(root.join("include").join(header)).unwrap();
+    // Every bundled header with a generated region, so that a header the
+    // generator adds is checked without being listed here.
+    let mut headers: Vec<PathBuf> = std::fs::read_dir(root.join("include"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "h"))
+        .collect();
+    headers.sort();
+    for header in &headers {
+        let text = std::fs::read_to_string(header).unwrap();
         let mut generated = false;
         for line in text.lines() {
             let line = line.trim();
