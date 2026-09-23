@@ -948,16 +948,43 @@ const TRIGRAPHS: &[(u8, u8)] = &[
 /// than reported; scanning always runs to the end of the input.
 pub fn lex(source: &Source, options: &Options) -> Vec<Token> {
     let file = source.map.file(source.root);
-    lex_text(file.text(), file.base(), &options.into())
+    lex_file(file.text(), file.base(), &options.into())
+}
+
+/// The UTF-8 byte order mark, which an editor on Windows may write at the start
+/// of a file.
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
+/// Lexes the whole of a file's `text` — a unit's own or an `#include`d one —
+/// whose first byte lives at global offset `base`.
+///
+/// A byte order mark at the very start is skipped, as GCC and Clang skip it.
+/// It is skipped rather than removed: scanning simply starts three bytes in,
+/// so every token's offset, and every column the source map computes from one,
+/// is still the file's own. A byte order mark anywhere else is an ordinary
+/// stray character and an error, which [`lex_text`] reports.
+pub fn lex_file(text: &str, base: Pos, options: &LexOptions) -> Vec<Token> {
+    let start = if text.starts_with(BYTE_ORDER_MARK) {
+        BYTE_ORDER_MARK.len_utf8()
+    } else {
+        0
+    };
+    lex_from(text, base, start, options)
 }
 
 /// Lexes `text`, whose first byte lives at global offset `base`.
 pub fn lex_text(text: &str, base: Pos, options: &LexOptions) -> Vec<Token> {
+    lex_from(text, base, 0, options)
+}
+
+/// Lexes `text` from byte `start` on; the tokens' offsets count from the
+/// beginning of `text` all the same.
+fn lex_from(text: &str, base: Pos, start: usize, options: &LexOptions) -> Vec<Token> {
     Lexer {
         text,
         bytes: text.as_bytes(),
         base,
-        pos: 0,
+        pos: start,
         options: *options,
         pending: Vec::new(),
     }

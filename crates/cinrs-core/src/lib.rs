@@ -692,7 +692,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         mut options,
     } = input;
     let mut diagnostics = Diagnostics::new();
-    let mut raw = lex::lex_text(&ctx.text, ctx.base, &(&options).into());
+    let mut raw = lex::lex_file(&ctx.text, ctx.base, &(&options).into());
     // `#pragma cinrs target` has to be answered before anything else looks at
     // the model: the predefined macros are built from it, so it cannot be a
     // pragma like the others, handled where it stands. The scan is lexical and
@@ -702,7 +702,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
     let (target_pragmas, relex) = pp::scan_target_pragma(&raw, &mut options, &mut diagnostics);
     ctx.target_pragmas = target_pragmas;
     if relex {
-        raw = lex::lex_text(&ctx.text, ctx.base, &(&options).into());
+        raw = lex::lex_file(&ctx.text, ctx.base, &(&options).into());
     }
     let pp::Preprocessed {
         tokens,

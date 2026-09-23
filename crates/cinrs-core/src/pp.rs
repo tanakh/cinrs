@@ -3528,7 +3528,7 @@ impl Pp<'_> {
         self.next_base = base
             .saturating_add(found.text.len() as Pos)
             .saturating_add(FILE_GAP);
-        let mut input: Vec<PTok> = lex::lex_text(&found.text, base, &self.lex_options)
+        let mut input: Vec<PTok> = lex::lex_file(&found.text, base, &self.lex_options)
             .iter()
             .map(PTok::from_lexed)
             .collect();

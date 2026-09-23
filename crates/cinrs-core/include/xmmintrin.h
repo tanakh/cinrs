@@ -31,6 +31,9 @@
 #error "the Intel intrinsics headers are x86 only; this unit is being translated for another architecture. Guard the #include with #ifdef __x86_64__, or see doc/features.md, 'SIMD intrinsics'."
 #else
 
+/* GCC's and Clang's <xmmintrin.h> include this, and with it <stdlib.h>. */
+#include <mm_malloc.h>
+
 /* The 128-bit vector types are the compiler's own: they are
  * `::core::arch::x86_64::__m128` and friends in the generated Rust, sixteen
  * bytes long and sixteen-byte aligned, and they may be members, elements,

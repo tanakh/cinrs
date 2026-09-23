@@ -1302,3 +1302,40 @@ fn builtin_cpu_supports_knows_avx512() {
         assert_eq!(has512(4), i32::from(is_x86_feature_detected!("gfni")));
     }
 }
+
+// ---------------------------------------------------------------------------
+// <mm_malloc.h>, which <xmmintrin.h> brings with <stdlib.h>
+// ---------------------------------------------------------------------------
+
+c11! {
+    #include <xmmintrin.h>
+    #include <stdint.h>
+
+    /* No <stdlib.h>: `atoi` and `exit` come with <xmmintrin.h>, as they do
+     * in GCC and Clang, and real programs count on it. */
+    int aligned_blocks(void) {
+        size_t align;
+        unsigned char *p;
+        int i;
+        if (atoi("42") != 42) return 0;
+        for (align = 1; align <= 4096; align *= 2) {
+            p = (unsigned char *)_mm_malloc(100, align);
+            if (p == NULL) return 0;
+            if ((uintptr_t)p % (align < sizeof(void *) ? sizeof(void *) : align) != 0) return 0;
+            for (i = 0; i < 100; i++) p[i] = (unsigned char)i;
+            for (i = 0; i < 100; i++) if (p[i] != (unsigned char)i) return 0;
+            _mm_free(p);
+        }
+        /* GCC's rules: not a power of two, or zero, is refused */
+        if (_mm_malloc(16, 3) != NULL || _mm_malloc(16, 0) != NULL) return 0;
+        p = (unsigned char *)_mm_malloc(0, 64);
+        _mm_free(p);
+        _mm_free(NULL);
+        return 1;
+    }
+}
+
+#[test]
+fn mm_malloc_aligns_and_frees() {
+    assert_eq!(unsafe { aligned_blocks() }, 1);
+}

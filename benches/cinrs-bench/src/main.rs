@@ -928,7 +928,17 @@ fn raw_string_hashes(source: &str) -> usize {
 /// `.c` file next to it — Dhrystone does — finds it, since a string literal
 /// has no directory of its own) and the row's `#define`s, which stand in for
 /// the `-D` the native compilers get.
+///
+/// A UTF-8 byte order mark opening the program is dropped here, because
+/// with the lines above in front of it it would no longer be at the start of
+/// the text, where the lexer skips it, but in the middle, where it is a stray
+/// character. The vendored file keeps it; the native compilers skip it too.
+///
+/// The prepended lines do shift every line number by their count, and a
+/// `#line 1` would not undo that: cinrs honours `#line` for `__LINE__` and
+/// `__FILE__`, but a diagnostic always points at the line really written.
 fn generate_rust(p: &Program, csrc: &str, source_dir: &Path) -> String {
+    let csrc = csrc.strip_prefix('\u{feff}').unwrap_or(csrc);
     let mut c = String::new();
     c.push_str(&format!(
         "#pragma cinrs include_path {:?}\n",

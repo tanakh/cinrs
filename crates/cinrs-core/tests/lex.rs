@@ -990,3 +990,39 @@ fn no_gnu_dialect_and_no_c23_entry_point_has_trigraphs() {
         cinrs_core::Dialect::Iso
     ));
 }
+
+// ---------------------------------------------------------------------------
+// the byte order mark
+// ---------------------------------------------------------------------------
+
+/// A UTF-8 byte order mark opening a file is skipped, as GCC skips it: the
+/// directive after it is still at the start of a line, and every offset is
+/// still the file's own, three bytes in.
+#[test]
+fn a_byte_order_mark_opening_a_file_is_skipped() {
+    let src = "\u{feff}#define X 1\nint x;";
+    let tokens = cinrs_core::lex::lex_file(src, 100, &opts());
+    assert_eq!(messages(&tokens, Level::Error), Vec::<String>::new());
+    assert_eq!(tokens[0].kind, TokenKind::Punct(Punct::Hash));
+    assert!(tokens[0].bol, "the directive still starts its line");
+    assert_eq!(tokens[0].range.start, 103, "the offset is the file's own");
+    let int = tokens
+        .iter()
+        .position(|t| t.kind == TokenKind::Keyword(Keyword::Int))
+        .expect("the declaration is there");
+    assert_eq!(
+        tokens[int].range.start,
+        100 + src.find("int").unwrap() as u32
+    );
+}
+
+/// Anywhere else it is a stray character, and so is one at the start of text
+/// that is not a file — a macro body, a pasted spelling.
+#[test]
+fn a_byte_order_mark_elsewhere_is_an_error() {
+    let tokens = cinrs_core::lex::lex_file("int\u{feff} x;", 0, &opts());
+    assert!(!messages(&tokens, Level::Error).is_empty());
+    let tokens = cinrs_core::lex::lex_file("int x;\n\u{feff}int y;", 0, &opts());
+    assert!(!messages(&tokens, Level::Error).is_empty());
+    assert!(!errors("\u{feff}int x;").is_empty());
+}
