@@ -355,6 +355,16 @@ pub struct PointerType {
     /// Whether the pointee is `const`-qualified, which decides between
     /// `*const T` and `*mut T`.
     pub konst: bool,
+    /// The alignment the pointee has *in C*, when a `typedef` gave it one
+    /// that is not its type's own: `typedef uint64_t
+    /// __attribute__((aligned(1))) u64_unaligned;` makes `u64_unaligned *` a
+    /// pointer to a `u64` that may sit at any address. The Rust type is the
+    /// same `*const u64`; what changes is that every access through it is a
+    /// `read_unaligned`/`write_unaligned` (see `Codegen::place_underaligned`).
+    /// `None` is the pointee type's own alignment, which is almost always.
+    /// Two pointer types differing only here are compatible (GCC treats the
+    /// `typedef` as a variant of the same type).
+    pub align: Option<u64>,
 }
 
 /// One dimension of a [variably modified](Types::is_vm) array type.
@@ -678,7 +688,17 @@ impl Types {
 
     /// The type `pointee *`, with `konst` set when the pointee is `const`.
     pub fn pointer(&mut self, pointee: Ty, konst: bool) -> Ty {
-        let key = PointerType { pointee, konst };
+        self.pointer_aligned(pointee, konst, None)
+    }
+
+    /// The type `pointee *` where the pointee's C alignment is `align` rather
+    /// than its type's own; see [`PointerType::align`].
+    pub fn pointer_aligned(&mut self, pointee: Ty, konst: bool, align: Option<u64>) -> Ty {
+        let key = PointerType {
+            pointee,
+            konst,
+            align,
+        };
         if let Some(id) = self.pointer_index.get(&key) {
             return Ty::Pointer(*id);
         }

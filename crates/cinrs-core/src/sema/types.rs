@@ -348,6 +348,22 @@ impl Sema<'_> {
                 // so the type itself is fine wherever the *object* holding it
                 // is a local or a parameter. `Sema::reject_va_list` is what
                 // keeps it out of the other places.
+                // A pointer to a `typedef` that is under- or over-aligned
+                // (`const xxh_unalign64 *`) says so in the pointer type, which
+                // is what makes `*p` an unaligned access.
+                if let Some(align) = self.typedef_align(inner) {
+                    let natural = self
+                        .types()
+                        .size_align(pointee, &self.target)
+                        .map_or(1, |layout| layout.align);
+                    if align != natural {
+                        return Ok(self.program.types.pointer_aligned(
+                            pointee,
+                            inner.qualifiers.is_const,
+                            Some(align),
+                        ));
+                    }
+                }
                 Ok(self.ptr_to(pointee, inner.qualifiers.is_const))
             }
             ast::TypeKind::Array { elem, size, .. } => {
@@ -1351,7 +1367,55 @@ impl Sema<'_> {
             // Only the member's *own* `packed` makes it one-byte aligned; a
             // `#pragma pack(N)` caps every member at N instead, which
             // `packing` says on its own.
-            let packed = field.attrs.packed.is_some();
+            let mut packed = field.attrs.packed.is_some();
+            let mut align_request = align_request;
+            // A member declared with a `typedef` that `aligned(N)` gave its
+            // own alignment is N-aligned, as in GCC: `struct { char c;
+            // xxh_unalign64 v; }` puts `v` at offset 1. One byte is exactly a
+            // packed member, which the layout already has; a weaker alignment
+            // above one byte is not something it can express yet, and neither
+            // is an array of one-byte-aligned elements, so both are refused
+            // rather than laid out wrongly. A stronger one is an `aligned(N)`.
+            if field.bit_width.is_none() {
+                let natural = self
+                    .types()
+                    .size_align(ty, &self.target)
+                    .map_or(1, |layout| layout.align);
+                match self.typedef_align(&field.ty) {
+                    Some(1) if natural > 1 => packed = true,
+                    Some(n) if n < natural => {
+                        self.error(
+                            field.range,
+                            format!(
+                                "a member whose 'typedef' is 'aligned({n})', less than its \
+                                 type's {natural}, is not supported unless the alignment is 1"
+                            ),
+                        );
+                        continue;
+                    }
+                    Some(n) if n > natural => {
+                        align_request = Some(align_request.map_or(n, |a| a.max(n)));
+                    }
+                    _ => {}
+                }
+                if let Some(n) = self.array_of_typedef_align(&field.ty)
+                    && let Ty::Array(id) = ty
+                    && let elem = self.types().array_type(id).elem
+                    && self
+                        .types()
+                        .size_align(elem, &self.target)
+                        .is_some_and(|layout| n < layout.align)
+                {
+                    self.error(
+                        field.range,
+                        format!(
+                            "a member that is an array of a 'typedef' made 'aligned({n})', \
+                             less than its type's own alignment, is not supported"
+                        ),
+                    );
+                    continue;
+                }
+            }
 
             if let Some(width) = &field.bit_width {
                 if let Some(range) = align_range

@@ -1,0 +1,30 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        typedef __attribute__((__aligned__(1))) __attribute__((__may_alias__))\n            unsigned long long xxh_unalign64;\n        unsigned long long read64(const void *ptr) { return *((const xxh_unalign64 *) ptr); }\n        void write64(void *ptr, unsigned long long v) { *((xxh_unalign64 *) ptr) = v; }\n        \")"
+---
+mod __cinrs_unit_e9174309 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub type xxh_unalign64 = ::core::ffi::c_ulonglong;
+    pub unsafe extern "C" fn read64(
+        mut ptr: *const ::core::ffi::c_void,
+    ) -> ::core::ffi::c_ulonglong {
+        unsafe {
+            return {
+                let __cinrs_tmp0 = (ptr as *const ::core::ffi::c_ulonglong);
+                (&raw const (*__cinrs_tmp0)).read_unaligned()
+            };
+        }
+    }
+    pub unsafe extern "C" fn write64(
+        mut ptr: *mut ::core::ffi::c_void,
+        mut v: ::core::ffi::c_ulonglong,
+    ) {
+        unsafe {
+            let __cinrs_tmp0 = (ptr as *mut ::core::ffi::c_ulonglong);
+            (&raw mut (*__cinrs_tmp0)).write_unaligned(v);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_e9174309::*;

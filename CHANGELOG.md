@@ -357,6 +357,19 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`aligned(1)` on a `typedef` is honoured.** xxHash's idiom for an unaligned
+  read, `typedef __attribute__((__aligned__(1))) uint64_t xxh_unalign64;
+  return *(const xxh_unalign64 *) p;`, was compiled as an aligned `u64`
+  dereference because the attribute was dropped on a `typedef` that was not an
+  anonymous record — a silent misaligned read, undefined behaviour in Rust and
+  a panic in a debug build. `aligned(N)` on a `typedef` of a scalar or a pointer
+  now makes the variant GCC makes: a pointer to it carries alignment N, so an
+  access through it is a `read_unaligned`/`write_unaligned`; `_Alignof` is N; a
+  member of the type is N-aligned; and a stronger N over-aligns an object or a
+  member declared with it. The shapes whose layout cannot follow yet (a member
+  aligned to more than one byte but less than its type, an array member, a
+  weaker alignment on a record, array or `_Atomic` `typedef`) are refused
+  rather than dropped. `may_alias` stays accepted and ignored.
 * **`always_inline` under a target feature is `#[inline]`.** A
   `static inline __attribute__((always_inline))` helper in a function set
   compiled under `#pragma GCC target("avx2")` — BLAKE3's `INLINE` helpers, and

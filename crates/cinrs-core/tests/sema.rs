@@ -2063,3 +2063,66 @@ fn vector_subscripts_and_braces_are_checked() {
         vector_errors("static __m128d zeroed; __m128d *p(void) { return &zeroed; }\n").is_empty()
     );
 }
+
+/// GCC's `aligned(N)` on a `typedef` of a scalar makes a variant of the type
+/// with alignment N — one byte for xxHash's `xxh_unalign64`. The checks are
+/// constant expressions, so a wrong answer is a negative array size.
+#[test]
+fn an_aligned_typedef_of_a_scalar_has_that_alignment() {
+    accepted(
+        "typedef __attribute__((__aligned__(1))) __attribute__((__may_alias__)) \
+             unsigned long long xxh_unalign64;\n\
+         typedef unsigned int __attribute__((aligned(1))) u32_any;\n\
+         typedef xxh_unalign64 again;\n\
+         typedef double __attribute__((aligned(16))) d16;\n\
+         struct S { char c; xxh_unalign64 v; };\n\
+         struct T { char c; d16 d; };\n\
+         typedef char a1[__alignof__(xxh_unalign64) == 1 ? 1 : -1];\n\
+         typedef char a2[__alignof__(u32_any) == 1 ? 1 : -1];\n\
+         typedef char a3[__alignof__(again) == 1 ? 1 : -1];\n\
+         typedef char a4[sizeof(xxh_unalign64) == 8 ? 1 : -1];\n\
+         typedef char a5[__builtin_offsetof(struct S, v) == 1 ? 1 : -1];\n\
+         typedef char a6[sizeof(struct S) == 9 ? 1 : -1];\n\
+         typedef char a7[__alignof__(d16) == 16 ? 1 : -1];\n\
+         typedef char a8[__builtin_offsetof(struct T, d) == 16 ? 1 : -1];\n\
+         typedef char a9[sizeof(struct T) == 32 ? 1 : -1];\n\
+         unsigned long long read(const void *p) { return *(const xxh_unalign64 *) p; }\n\
+         void write(void *p, unsigned long long v) { *(xxh_unalign64 *) p = v; }\n\
+         unsigned long long *plain(xxh_unalign64 *p) { return (unsigned long long *) p; }\n",
+    );
+}
+
+/// What an aligned `typedef` cannot be made correct for yet is refused, and
+/// `_Alignas` on a `typedef` stays the constraint violation it is (C11 6.7.5p2).
+#[test]
+fn what_an_aligned_typedef_cannot_do_is_refused() {
+    let mut c11 = Options::new(Standard::C11);
+    c11.c_variadic = true;
+    assert_eq!(
+        errors_with("typedef _Alignas(8) int T;", &c11),
+        ["an alignment specifier is not allowed on a 'typedef'"]
+    );
+    rejected(
+        "typedef unsigned long long __attribute__((aligned(2))) u2;\n\
+         struct S { char c; u2 v; };",
+        &[
+            "a member whose 'typedef' is 'aligned(2)', less than its type's 8, is not \
+           supported unless the alignment is 1",
+        ],
+    );
+    rejected(
+        "typedef unsigned long long __attribute__((aligned(1))) u1;\n\
+         struct S { char c; u1 v[2]; };",
+        &[
+            "a member that is an array of a 'typedef' made 'aligned(1)', less than its \
+           type's own alignment, is not supported",
+        ],
+    );
+    rejected(
+        "struct P { int a; };\ntypedef struct P P1 __attribute__((aligned(1)));",
+        &[
+            "'aligned(1)' on a 'typedef' of 'struct P' would make it less aligned than its \
+           type, which is supported for a scalar or a pointer 'typedef' only",
+        ],
+    );
+}

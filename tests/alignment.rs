@@ -348,3 +348,89 @@ fn a_nested_function_can_capture_an_over_aligned_object() {
 
     assert_eq!(unsafe { captured() }, 7);
 }
+
+// ---------------------------------------------------------------------------
+// `aligned(N)` on a `typedef` of a scalar
+// ---------------------------------------------------------------------------
+
+/// xxHash's unaligned read, exactly as `xxhash.h` writes it: a `typedef` whose
+/// `aligned(1)` makes a `uint64_t` that may sit at any address, and a read
+/// through a pointer to it. This has to be an unaligned load — a debug build
+/// panics on a misaligned dereference, so the test runs at offsets 1 and 3 of
+/// a byte buffer to prove it is one. The 32-bit twin, a store, the `_Alignof`
+/// answer, a member laid out at offset 1, and an over-aligned `typedef`
+/// object complete the picture.
+#[test]
+fn an_under_aligned_typedef_reads_and_writes_at_any_address() {
+    gnu11! {
+        #include <stdint.h>
+        #include <string.h>
+
+        typedef __attribute__((__aligned__(1))) __attribute__((__may_alias__)) uint64_t xxh_unalign64;
+        typedef __attribute__((__aligned__(1))) __attribute__((__may_alias__)) uint32_t xxh_unalign32;
+        typedef uint64_t __attribute__((aligned(1))) u64_any;
+
+        static uint64_t read64(const void *ptr) { return *((const xxh_unalign64 *) ptr); }
+        static uint32_t read32(const void *ptr) { return *((const xxh_unalign32 *) ptr); }
+        static void write64(void *ptr, uint64_t v) { *((xxh_unalign64 *) ptr) = v; }
+
+        static unsigned char buf[32];
+
+        int unaligned_typedef_reads(void) {
+            int i, ok = 1;
+            uint64_t want1, want3;
+            uint32_t want32;
+            for (i = 0; i < 32; i++) buf[i] = (unsigned char) (i * 7 + 1);
+            memcpy(&want1, buf + 1, 8);
+            memcpy(&want3, buf + 3, 8);
+            memcpy(&want32, buf + 5, 4);
+            ok &= read64(buf + 1) == want1;
+            ok &= read64(buf + 3) == want3;
+            ok &= read32(buf + 5) == want32;
+            /* Indexing and arithmetic through the pointer stay unaligned. */
+            {
+                const u64_any *p = (const u64_any *) (buf + 3);
+                ok &= p[0] == want3;
+                ok &= *(p + 1) == read64(buf + 11);
+            }
+            write64(buf + 3, 0x1122334455667788ULL);
+            ok &= read64(buf + 3) == 0x1122334455667788ULL;
+            ok &= buf[3] == 0x88 && buf[10] == 0x11;
+            return ok;
+        }
+
+        struct with_unaligned { char c; xxh_unalign64 v; };
+
+        int unaligned_typedef_layout(void) {
+            struct with_unaligned s;
+            s.c = 1;
+            s.v = 42;
+            return _Alignof(xxh_unalign64) == 1 && _Alignof(xxh_unalign32) == 1
+                && sizeof(xxh_unalign64) == 8
+                && __builtin_offsetof(struct with_unaligned, v) == 1
+                && sizeof(struct with_unaligned) == 9
+                && s.v + s.c == 43;
+        }
+
+        typedef double __attribute__((aligned(16))) d16;
+        static d16 file_scope_d16 = 2.5;
+
+        int over_aligned_typedef(void) {
+            d16 local = 1.5;
+            char pad = 0;
+            d16 after = 0.5;
+            (void) pad;
+            return _Alignof(d16) == 16
+                && (uintptr_t) &local % 16 == 0
+                && (uintptr_t) &after % 16 == 0
+                && (uintptr_t) &file_scope_d16 % 16 == 0
+                && local + after + file_scope_d16 == 4.5;
+        }
+    }
+
+    unsafe {
+        assert_eq!(unaligned_typedef_reads(), 1);
+        assert_eq!(unaligned_typedef_layout(), 1);
+        assert_eq!(over_aligned_typedef(), 1);
+    }
+}

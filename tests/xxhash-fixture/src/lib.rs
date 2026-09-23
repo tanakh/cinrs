@@ -23,23 +23,17 @@
 //! `__attribute__((__target__("…")))`, choosing among them at run time with
 //! `cpuid`. It exports `XXH3_64bits_dispatch` and the rest, and
 //! `XXH_featureTest`.
-
-// STAGE-A WORKAROUNDS (findings, not fixes; see target/xxhash-notes.md):
-//
-// * XXH_FORCE_MEMORY_ACCESS. For `__GNUC__` xxhash.h picks method 1, which
-//   reads through `typedef __attribute__((__aligned__(1))) … xxh_u64
-//   xxh_unalign64;` (xxhash.h:2661, 3382). cinrs drops `aligned(1)` on a
-//   non-record typedef, so the read becomes an aligned `u64` dereference of an
-//   unaligned pointer: a debug build aborts with "misaligned pointer
-//   dereference" in `XXH_read64`, and it is undefined behaviour in release.
-//   Method 0 (`memcpy`, upstream's portable default) is selected instead.
+//!
+//! **Nothing is configured around cinrs.** In particular xxHash reads its input
+//! the way it does under GCC (`XXH_FORCE_MEMORY_ACCESS` 1): through
+//! `typedef __attribute__((__aligned__(1))) … xxh_u64 xxh_unalign64;`
+//! (xxhash.h:2661, 3382), which cinrs turns into `read_unaligned` — the debug
+//! build, which panics on a misaligned dereference, is what checks it.
 
 pub mod scalar {
     //! `xxhash.c` with `XXH_VECTOR=XXH_SCALAR`.
     cinrs::gnu11! {
         #pragma cinrs export
-        // STAGE-A WORKAROUND: see the note on XXH_FORCE_MEMORY_ACCESS above.
-        #define XXH_FORCE_MEMORY_ACCESS 0
         #define XXH_NAMESPACE scalar_
         #define XXH_VECTOR XXH_SCALAR
         #include "../../../target/xxhash/xxhash.c"
@@ -51,7 +45,6 @@ pub mod sse2 {
     cinrs::gnu11! {
         #pragma cinrs export
         #pragma GCC target("sse2")
-        #define XXH_FORCE_MEMORY_ACCESS 0 // STAGE-A WORKAROUND
         #define XXH_NAMESPACE sse2_
         #define XXH_VECTOR XXH_SSE2
         #include "../../../target/xxhash/xxhash.c"
@@ -65,7 +58,6 @@ pub mod avx2 {
         // The pragma also defines `__AVX2__` (and `__AVX__`, …), as GCC's
         // does, which is what makes xxhash.h:3881 include <immintrin.h>.
         #pragma GCC target("avx2")
-        #define XXH_FORCE_MEMORY_ACCESS 0 // STAGE-A WORKAROUND
         #define XXH_NAMESPACE avx2_
         #define XXH_VECTOR XXH_AVX2
         #include "../../../target/xxhash/xxhash.c"
@@ -78,7 +70,6 @@ pub mod avx512 {
     cinrs::gnu11! {
         #pragma cinrs export
         #pragma GCC target("avx512f")
-        #define XXH_FORCE_MEMORY_ACCESS 0 // STAGE-A WORKAROUND
         #define XXH_NAMESPACE avx512_
         #define XXH_VECTOR XXH_AVX512
         #include "../../../target/xxhash/xxhash.c"
@@ -94,7 +85,6 @@ pub mod dispatch {
     //! true and `__has_include(<avx2intrin.h>)` answers yes.
     cinrs::gnu11! {
         #pragma cinrs export
-        #define XXH_FORCE_MEMORY_ACCESS 0 // STAGE-A WORKAROUND
         #include "../../../target/xxhash/xxh_x86dispatch.c"
     }
 }

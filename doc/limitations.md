@@ -38,7 +38,12 @@
   deliver it for a *thread-local* object: on macOS, dyld allocates a thread's
   thread-local storage with `malloc`, which aligns to 16 bytes and honours no
   stricter request, so `_Thread_local _Alignas(64)` gets 16 there — from a C
-  compiler as much as from `cinrs`.
+  compiler as much as from `cinrs`. GCC's `aligned(N)` on a `typedef` of a
+  scalar or a pointer is honoured in both directions — `aligned(1)` makes every
+  access through a pointer to it unaligned — but a *weaker* one is refused where
+  the layout cannot follow yet: a member whose `typedef` is aligned to more
+  than one byte but less than its type, an array member of such a `typedef`,
+  and a `typedef` of a record, an array or an `_Atomic` type.
 * A `constexpr` object is a *constant*: its value is folded wherever the name
   is used (so it may be an array bound or a `case` label), and there is
   nothing to take the address of. Only the arithmetic types are accepted.

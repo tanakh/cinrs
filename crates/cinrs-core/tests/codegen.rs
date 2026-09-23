@@ -1073,6 +1073,22 @@ fn the_function_attributes_become_rust_ones() {
     ));
 }
 
+/// xxHash's unaligned access: a pointer to a `typedef` that `aligned(1)` made
+/// one-byte aligned is read with `read_unaligned` and written with
+/// `write_unaligned`, where a plain `*p` would be an aligned `u64` access —
+/// undefined behaviour in Rust, and a panic in a debug build.
+#[test]
+fn a_one_byte_aligned_typedef_is_read_and_written_unaligned() {
+    insta::assert_snapshot!(generate(
+        r"
+        typedef __attribute__((__aligned__(1))) __attribute__((__may_alias__))
+            unsigned long long xxh_unalign64;
+        unsigned long long read64(const void *ptr) { return *((const xxh_unalign64 *) ptr); }
+        void write64(void *ptr, unsigned long long v) { *((xxh_unalign64 *) ptr) = v; }
+        "
+    ));
+}
+
 #[test]
 fn a_packed_record_is_a_packed_rust_item() {
     // The Rust item has to have the layout C computed, which `packed(N)` says

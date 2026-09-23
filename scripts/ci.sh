@@ -158,6 +158,19 @@ if [ "$FULL" -eq 1 ]; then
         FAILED+=("scripts/check-blake3.sh")
     fi
 
+    # xxHash, from its upstream `xxhash.h`/`xxhash.c`/`xxh_x86dispatch.c`: one
+    # header compiled four ways (scalar, SSE2, AVX2, AVX-512) and a run-time
+    # dispatcher, checked against upstream's generated sanity table. Downloaded
+    # and verified like BLAKE3, so `--full` only.
+    say ""
+    say "=== scripts/check-xxhash.sh ==="
+    if scripts/check-xxhash.sh; then
+        say "ci: ok: scripts/check-xxhash.sh"
+    else
+        say "ci: FAILED: scripts/check-xxhash.sh"
+        FAILED+=("scripts/check-xxhash.sh")
+    fi
+
     # Each harness in its default *guard* mode: every case not in the
     # expected-failure list must pass, and a listed case that has started
     # passing is reported. `…_REQUIRED=1` turns the harness's own skip into a

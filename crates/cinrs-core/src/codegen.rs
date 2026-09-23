@@ -7378,7 +7378,16 @@ impl<'a> Codegen<'a> {
             // A pointer cast moves no bytes, and neither does the decay of an
             // array to its first element.
             ExprKind::Cast(inner) if inner.ty.is_pointer() || inner.ty.is_array() => {
-                self.pointer_align(inner)
+                let from = self.pointer_align(inner);
+                // ...but a cast *to* a pointer to an under-aligned `typedef`
+                // takes back the promise: `*(const xxh_unalign64 *) p`.
+                match &ptr.ty {
+                    Ty::Pointer(id) => match self.program.types.pointer_type(*id).align {
+                        Some(align) => from.min(align),
+                        None => from,
+                    },
+                    _ => from,
+                }
             }
             ExprKind::PtrOffset { ptr, .. } => self
                 .pointer_align(ptr)
@@ -7389,6 +7398,13 @@ impl<'a> Codegen<'a> {
 
     /// The alignment of the type a pointer or array type addresses.
     fn pointee_align(&self, ty: Ty) -> Option<u64> {
+        // A pointer to an under-aligned `typedef` (`xxh_unalign64 *`) promises
+        // only the `typedef`'s alignment; see `ir::PointerType::align`.
+        if let Ty::Pointer(id) = ty
+            && let Some(align) = self.program.types.pointer_type(id).align
+        {
+            return Some(align);
+        }
         let pointee = self.program.types.pointee(ty)?;
         (!pointee.is_void() && !pointee.is_func()).then(|| self.type_align(pointee))
     }

@@ -255,6 +255,15 @@ impl Sema<'_> {
                 if self.reject_incomplete_enum(&name.ty, "_Alignof", name.range) {
                     return None;
                 }
+                // A `typedef` that GCC's `aligned(N)` gave an alignment of its
+                // own answers N, and so does an array of it.
+                if let Some(align) = self
+                    .typedef_align(&name.ty)
+                    .or_else(|| self.array_of_typedef_align(&name.ty))
+                {
+                    let size_ty = self.size_ty();
+                    return Some(Expr::int(i128::from(align), size_ty, range));
+                }
                 self.alignof(ty, name.range, range)
             }
             ast::ExprKind::Generic {

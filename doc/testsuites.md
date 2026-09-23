@@ -273,14 +273,14 @@ would write it, and needs no corpus; it is part of an ordinary `cargo test`.
 `CINRS_EXPECTED_LISTS_BLESS=1 cargo test --test expected_lists` tidies a hand
 edit up without running a suite.
 
-## Two real programs: SQLite and BLAKE3
+## Three real programs: SQLite, BLAKE3 and xxHash
 
 A suite of small programs and one large program answer different questions. The
 three harnesses above ask whether each construct is translated correctly;
 `scripts/check-sqlite.sh` asks whether a quarter of a million lines of somebody
 else's C, written for GCC and never adjusted for this compiler, builds and works,
-and `scripts/check-blake3.sh` asks the same of a program whose whole point is
-SIMD.
+and `scripts/check-blake3.sh` and `scripts/check-xxhash.sh` ask the same of two
+programs whose whole point is SIMD.
 
 It downloads the **SQLite 3.53.4 amalgamation** — 9.5 MB, 269,649 lines of C in
 one file, public domain — from the pinned URL in the script, verifies it
@@ -339,6 +339,43 @@ whatever the machine has elsewhere.
 
 It is in `scripts/ci.sh --full` only, because it needs the network; it needs
 no particular toolchain.
+
+### xxHash
+
+`scripts/check-xxhash.sh` downloads the **xxHash 0.8.4** release archive —
+BSD-2-Clause, a 7,500-line header that is the whole library, `xxhash.c` to
+instantiate it and `xxh_x86dispatch.c` to choose a vector width at run time —
+verifies it against the SHA-256 pinned in the script, unpacks those four files,
+the licence and upstream's `tests/sanity_test_vectors.h` into `target/xxhash/`,
+and builds `tests/xxhash-fixture/`. The files are not edited. `xxhash.c` is
+included four times, once per `XXH_VECTOR` — scalar, SSE2, AVX2 and AVX-512 —
+each under the `#pragma GCC target` that stands in for the `-m` flag and its own
+`XXH_NAMESPACE` so the four copies of the API link side by side; the fifth unit
+is the dispatcher, which carries a private copy of the library
+(`XXH_INLINE_ALL`), compiles the SSE2, AVX2 and AVX-512 kernels in one unit
+behind `__attribute__((__target__))`, and picks one with `cpuid` and `xgetbv`.
+The sanity table is upstream's own generated list of expected XXH32, XXH64,
+XXH3-64 and XXH3-128 values over a pseudo-random buffer, 45,771 checks per unit,
+read as text; the tests also make the four units agree on every length from 0
+to 4,096 at an aligned and a misaligned start, check the streaming API in 1-,
+7- and 1,000-byte pieces against the one-shot functions, and check the
+dispatcher — which picks AVX-512 on a processor that has it — against the table
+and the scalar unit.
+
+It took four things, each now a general fix. `#ifdef __has_include` (and
+`__has_attribute`, `__has_builtin`) had to be true, as GCC's are, and a `__has_…`
+reached through a macro (`XXH_HAS_INCLUDE(x)`) answered: without them the
+dispatcher compiled only SSE2. `#pragma GCC target("avx2")` had to define
+`__AVX2__` and what it implies, because `xxhash.h` includes `<immintrin.h>` only
+under it. The dispatcher's `cpuid` is written with GCC's assembler dialect
+alternatives, `"{cpuid|cpuid}"`, of which the AT&T one is now taken. And
+`typedef __attribute__((aligned(1))) uint64_t xxh_unalign64;`, the header's way
+of reading unaligned input under GCC, had been a silent aligned read — a panic
+in a debug build — and is now `read_unaligned`, which the debug build of the
+fixture checks on every hash.
+
+It is in `scripts/ci.sh --full` only, because it needs the network; it needs no
+particular toolchain.
 
 ### SQLite's numbers, measured once
 

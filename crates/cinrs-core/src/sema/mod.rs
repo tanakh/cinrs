@@ -440,6 +440,10 @@ impl Entry {
 struct TypedefEntry {
     resolved: Result<Ty, String>,
     range: SourceRange,
+    /// The alignment `__attribute__((aligned(N)))` gave a `typedef` of a
+    /// scalar or pointer type, when it is not the type's own: GCC makes that a
+    /// new variant of the type with alignment N. See `Sema::typedef_align`.
+    align: Option<u64>,
 }
 
 /// What a tag name refers to.
@@ -966,6 +970,7 @@ impl<'a> Sema<'a> {
                 Entry::Typedef(TypedefEntry {
                     resolved: Ok(Ty::VaList),
                     range: SourceRange::at(0),
+                    align: None,
                 }),
             );
         }
@@ -977,6 +982,7 @@ impl<'a> Sema<'a> {
                 Entry::Typedef(TypedefEntry {
                     resolved: Ok(*ty),
                     range: SourceRange::at(0),
+                    align: None,
                 }),
             );
         }
@@ -994,6 +1000,7 @@ impl<'a> Sema<'a> {
                     Entry::Typedef(TypedefEntry {
                         resolved: Ok(*ty),
                         range: SourceRange::at(0),
+                        align: None,
                     }),
                 );
             }
@@ -1347,6 +1354,34 @@ impl<'a> Sema<'a> {
         let konst =
             konst || matches!(pointee, Ty::Array(id) if self.types().array_type(id).elem_const);
         self.program.types.pointer(pointee, konst)
+    }
+
+    /// The alignment a `typedef` name gave its scalar type, when `ty` is
+    /// written as that name: `Some(1)` for xxHash's `xxh_unalign64`, which is
+    /// `typedef uint64_t __attribute__((aligned(1))) xxh_unalign64;`.
+    ///
+    /// Only the name itself carries it. A pointer to it keeps it in
+    /// [`ir::PointerType::align`]; a member or an object declared with it
+    /// takes it as its alignment; `_Alignof` answers it.
+    fn typedef_align(&self, ty: &ast::Type) -> Option<u64> {
+        match &ty.kind {
+            ast::TypeKind::Typedef(name) => match self.lookup(&name.name) {
+                Some(Entry::Typedef(entry)) => entry.align,
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is an array whose elements, at some depth, are a
+    /// `typedef` name carrying an alignment of its own.
+    fn array_of_typedef_align(&self, ty: &ast::Type) -> Option<u64> {
+        match &ty.kind {
+            ast::TypeKind::Array { elem, .. } => self
+                .typedef_align(elem)
+                .or_else(|| self.array_of_typedef_align(elem)),
+            _ => None,
+        }
     }
 
     fn size_of(&self, ty: Ty) -> Option<u64> {

@@ -177,6 +177,16 @@ impl Sema<'_> {
             self.reject_safe(&attrs, "a 'typedef'");
             self.reject_weak(&attrs, "a 'typedef'");
             self.reject_alignas(&decl.specifiers, "a 'typedef'");
+            // `typedef __attribute__((aligned(1))) uint64_t T;` puts the
+            // attribute among the specifiers, which is where xxHash writes it.
+            if attrs.aligned.is_none() {
+                attrs.aligned = decl
+                    .specifiers
+                    .alignas
+                    .iter()
+                    .find(|s| s.from_attribute)
+                    .cloned();
+            }
             return self.declare_typedef(name, &declarator.ty, declarator.init.as_ref(), &attrs);
         }
 
@@ -261,6 +271,32 @@ impl Sema<'_> {
                 format!("an alignment specifier is not allowed on {what}"),
             );
             requested = None;
+        }
+        // An object declared with an over-aligned `typedef` (`typedef double
+        // __attribute__((aligned(16))) d16; d16 x;`) is that aligned. One
+        // declared with an under-aligned `typedef` keeps its type's own
+        // alignment, which is stricter and so still correct: a weaker request
+        // from an attribute is not applied (see `apply_object_alignment`).
+        if let Some(n) = self.typedef_align(&declarator.ty)
+            && !matches!(
+                storage,
+                Some(
+                    ast::StorageClass::Register
+                        | ast::StorageClass::Constexpr
+                        | ast::StorageClass::Extern
+                )
+            )
+        {
+            match &mut requested {
+                Some(request) => request.want = request.want.max(n),
+                None => {
+                    requested = Some(AlignRequest {
+                        want: n,
+                        range: declarator.ty.range,
+                        standard: false,
+                    });
+                }
+            }
         }
         // GCC drops `cleanup` on anything but an automatic object, with
         // "'cleanup' attribute ignored"; dropping it silently would change
@@ -1610,11 +1646,48 @@ impl Sema<'_> {
         // `typedef struct { … } T __attribute__((aligned(N)));` asks for a
         // stricter alignment than the members give; see
         // `Sema::align_typedef_record`.
+        //
+        // On a `typedef` of a scalar or a pointer, GCC makes a new variant of
+        // the type whose alignment is N — weaker than its own included, which
+        // is the one attribute that *lowers* an alignment: xxHash's
+        // `typedef __attribute__((aligned(1))) xxh_u64 xxh_unalign64;` is a
+        // `uint64_t` that may be at any address, and reads through a
+        // `xxh_unalign64 *` are unaligned loads. A `typedef` of another
+        // `typedef` that has one keeps it unless it says otherwise.
+        let mut align = self.typedef_align(ty);
         if let Ok(resolved) = &resolved
             && let Some(aligned) = attrs.aligned.clone()
             && let Some(want) = self.alignment_of(Some(&aligned))
         {
-            self.align_typedef_record(*resolved, want, aligned.range);
+            let resolved = *resolved;
+            let natural = self
+                .types()
+                .size_align(resolved, &self.target)
+                .map(|layout| layout.align);
+            let scalar = resolved.is_arithmetic()
+                || resolved.is_pointer()
+                || matches!(resolved, Ty::Enum(_));
+            if matches!(resolved, Ty::Atomic(_)) && natural.is_some_and(|n| want < n) {
+                self.error(
+                    aligned.range,
+                    "an '_Atomic' type cannot be given a weaker alignment: there is no \
+                     unaligned atomic access",
+                );
+            } else if scalar {
+                align = (natural != Some(want)).then_some(want);
+            } else if natural.is_some_and(|n| want < n) {
+                self.error(
+                    aligned.range,
+                    format!(
+                        "'aligned({want})' on a 'typedef' of '{}' would make it less aligned \
+                         than its type, which is supported for a scalar or a pointer 'typedef' \
+                         only",
+                        self.types().name(resolved)
+                    ),
+                );
+            } else {
+                self.align_typedef_record(resolved, want, aligned.range);
+            }
         }
         let already = self.declared_here(&name.name).is_some();
         if already {
@@ -1622,7 +1695,7 @@ impl Sema<'_> {
             // C99 mode too, so only a change of meaning is worth reporting.
             let same = matches!(
                 self.declared_here(&name.name),
-                Some(Entry::Typedef(entry)) if entry.resolved == resolved
+                Some(Entry::Typedef(entry)) if entry.resolved == resolved && entry.align == align
             );
             if !same {
                 self.check_redefinition(name);
@@ -1633,6 +1706,7 @@ impl Sema<'_> {
             Entry::Typedef(TypedefEntry {
                 resolved: resolved.clone(),
                 range: name.range,
+                align,
             }),
         );
 
