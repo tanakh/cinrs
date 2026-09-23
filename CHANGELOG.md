@@ -45,21 +45,49 @@ follows [Semantic Versioning][semver].
   of an intrinsic works — GCC's are `static inline` functions, so real code does
   — through a private `extern "C"` shim per intrinsic; an intrinsic with an
   immediate operand has no address, and that is a diagnostic. **Nothing is
-  exported**: those 881 prototypes add not one item to the unit's `extern` block
+  exported**: those prototypes add not one item to the unit's `extern` block
   or to its glob re-export, so a `use core::arch::x86_64::*` in the surrounding
   Rust cannot clash with them.
 
   See [SIMD intrinsics](doc/features.md#simd-intrinsics) for the coverage per
-  instruction set and the nineteen intrinsics whose `core::arch` signature C
-  cannot spell; `tests/simd.rs` runs every family, with the expected values
+  instruction set and the intrinsics whose `core::arch` signature C cannot
+  spell; `tests/simd.rs` runs every family, with the expected values
   computed in scalar C in the same block and cross-checked against `gcc -O2`.
   What stays refused, now with a diagnostic that names the intrinsic to write
   instead: the GNU vector extensions,
   `__attribute__((vector_size))` and `__builtin_ia32_*`. What is not here:
-  AVX-512 (every one of its target features is still unstable in rustc on this
-  crate's minimum supported version), and MMX and `__m64`, which `core::arch`
-  dropped — `<mmintrin.h>` is an `#error` that names the SSE2 form of each
-  intrinsic.
+  MMX and `__m64`, which `core::arch` dropped — `<mmintrin.h>` is an `#error`
+  that names the SSE2 form of each intrinsic.
+
+* **AVX-512, and what arrived with it.** The same mapping now covers
+  AVX-512F, BW, CD, DQ and VL, the VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ, IFMA,
+  BF16 and FP16 extensions, GFNI, VAES and VPCLMULQDQ at every width, AVX-VNNI
+  with its INT8 and INT16 forms, AVX-IFMA, F16C, SHA-512, SM3 and SM4: 6,075
+  intrinsics in all, 5,194 more than the SSE-to-AVX2 set above. The new types
+  are `__m512`, `__m512i` and `__m512d` (sixty-four bytes, aligned to
+  sixty-four), the bfloat16 vectors `__m128bh`/`__m256bh`/`__m512bh` and the
+  half-precision `__m128h`/`__m256h`/`__m512h`; the masks `__mmask8` to
+  `__mmask64` are plain unsigned integers, as in GCC, and the `_MM_*_ENUM`
+  immediates are `int`, with `_MM_CMPINT_*`, `_MM_MANT_*` and `_MM_PERM_*` —
+  in GCC's lower-case spellings (`_MM_MANT_SIGN_src`) as well as `core::arch`'s.
+  `<immintrin.h>` pulls in thirty-five new headers under GCC's names, from
+  `<avx512fintrin.h>` and `<avx512vlintrin.h>` to `<sm4intrin.h>`, and each one
+  included on its own works too. A function that passes or returns a 512-bit
+  vector by value needs `__attribute__((target("avx512f")))`, as a 256-bit one
+  needs `avx`; rustc refuses it otherwise (`tests/ui/simd_abi_512.rs`). `target`
+  and `__builtin_cpu_supports` know every one of the new names — the fourteen
+  `avx512*`, `gfni`, `vaes`, `vpclmulqdq`, `avxvnni`, `avxvnniint8`,
+  `avxvnniint16`, `avxifma`, `avxneconvert`, `sha512`, `sm3`, `sm4`, `kl` and
+  `widekl`, spelled as GCC 15 spells them — and a feature list such as
+  `gfni,avx512bw,avx512vl` is read out as the instruction sets it names in a
+  diagnostic. A memory operand takes any object pointer: a pointer parameter
+  is `void *` or `const void *` exactly where GCC 15.2's headers declare it so
+  — 335 of them, `_mm_prefetch` and the SSE2 `_mm_loadu_si16` family included
+  — and the generated call casts every pointer argument to `core::arch`'s
+  type, so `_mm512_loadu_si512(p)` takes an `int *` without a cast, as in GCC.
+  Still out, because `core::arch` keeps them unstable: AVX512-VP2INTERSECT,
+  and the fifty FP16 and BF16 intrinsics that take or return a scalar `f16` or
+  `bf16`.
 
 * **`__attribute__((target("avx2")))` and `#pragma GCC target`.** GCC's way of
   telling one function which instruction sets it may use becomes
@@ -117,6 +145,11 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **The minimum supported Rust version is 1.98**, up from 1.88. The bundled
+  intrinsics headers are generated from the oldest supported compiler's
+  `core::arch`, so that nothing is declared that it lacks, and AVX-512 is
+  stable there from 1.89; 1.98 is the release they were generated from. The
+  0.2.0 release will need 1.99, for `c_variadic`.
 * **`register int x asm("eax")` says what to write instead.** An `asm` label on
   a local variable — GCC's register variable — is still refused, and the
   message now says to write the register as a constraint of the `asm` that

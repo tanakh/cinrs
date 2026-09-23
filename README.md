@@ -72,8 +72,9 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   kinds `asm!` has. What has no honest translation (`setjmp`) is a located
   error, never a guess.
 * **The SIMD intrinsics, by name.** `#include <immintrin.h>` and write
-  `_mm_add_epi32(a, b)`: 881 of Intel's intrinsics, SSE through AVX2 with FMA,
-  AES and the BMI scalar ones, mapped straight onto `core::arch::x86_64`, whose
+  `_mm_add_epi32(a, b)`: 6,075 of Intel's intrinsics, SSE through AVX2 and
+  AVX-512 with FMA, AES, GFNI, VAES, SHA and the BMI scalar ones, mapped
+  straight onto `core::arch::x86_64`, whose
   signatures the bundled headers were generated from. `__m128i` punnes through a
   `union` like any 16-byte type, an immediate operand becomes `core::arch`'s
   `const` generic, and `__attribute__((target("avx2")))` becomes
@@ -233,8 +234,8 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 * `long double` is `double`.
 * The SIMD intrinsics are x86's, and only the baseline instruction set is
   predefined: a procedural macro cannot see `-C target-feature`, so `#ifdef
-  __AVX2__` is false and `__builtin_cpu_supports("avx2")` is the question to ask.
-  No AVX-512 and no MMX.
+  __AVX2__` and `#ifdef __AVX512F__` are false and
+  `__builtin_cpu_supports("avx2")` is the question to ask. No MMX.
 * Variable length arrays and `alloca` live on the heap (Rust cannot move the
   stack pointer); what the C can observe is unchanged.
 * `va_arg` of a `struct` works for records up to sixteen bytes on x86-64

@@ -46,26 +46,29 @@
 * `long double` is `double`: the extended precision, and the ABI that goes with
   it, are not there.
 * The [SIMD intrinsics](features.md#simd-intrinsics) are x86's and x86-64's, and
-  what `core::arch` has on this crate's minimum supported Rust version: no
-  AVX-512, no `__m512*` or `__mmask*`, no MMX or `__m64`, and nothing for NEON
-  or any other architecture's vectors, where `<immintrin.h>` is an `#error`
-  naming the reason. Three things a program written for GCC will notice.
+  what `core::arch` has on this crate's minimum supported Rust version — SSE
+  through AVX-512, with the AVX-512 intrinsics Rust still keeps unstable
+  (AVX512-VP2INTERSECT, and the FP16 and BF16 ones that take a scalar `f16` or
+  `bf16`) left out — no MMX or `__m64`, and nothing for NEON or any other
+  architecture's vectors, where `<immintrin.h>` is an `#error` naming the
+  reason. Three things a program written for GCC will notice.
   **Only the x86-64 baseline is predefined**: `__SSE__` and `__SSE2__` are
   there and nothing above them, because a procedural macro cannot see rustc's
-  `-C target-feature`, so `#ifdef __AVX2__` takes the other branch whatever the
-  machine and `__builtin_cpu_supports("avx2")` is the question to ask instead.
+  `-C target-feature`, so `#ifdef __AVX2__` and `#ifdef __AVX512F__` take the
+  other branch whatever the machine and `__builtin_cpu_supports("avx2")` is the
+  question to ask instead.
   **A function that passes or returns a 256-bit vector by value needs
-  `__attribute__((target("avx")))`** — that is the ABI's rule rather than this
-  crate's, and rustc refuses the definition and the call without it, where
-  `gcc -Wpsabi` warns about the same C; a 128-bit vector needs nothing.
+  `__attribute__((target("avx")))`, and a 512-bit one `target("avx512f")`** —
+  that is the ABI's rule rather than this crate's, and rustc refuses the
+  definition and the call without it, where `gcc -Wpsabi` warns about the same
+  C; a 128-bit vector, and a `__mmask*`, needs nothing.
   And **a `[[cinrs::safe]]` function cannot call an intrinsic**, because every
   `core::arch` intrinsic is a `#[target_feature]` function and Rust makes those
-  unsafe to call — which is refused with the instruction set named. Seven
-  intrinsics Intel spells `void const *` (`_mm_clflush`, `_mm_loadu_si16/32/64`,
-  `_mm_storeu_si16/32/64`) are declared `const unsigned char *` here, because
-  that is the type `core::arch` takes, so a call may need a cast that GCC does
-  not; twenty-two more that `core::arch` deprecates, keeps unstable or takes a
-  Rust reference for are listed in
+  unsafe to call — which is refused with the instruction set named. A memory
+  operand is `void *` or `const void *` exactly where GCC 15.2's headers have
+  it, and typed where GCC types it, so a call needs the casts it needs with GCC
+  and no others; sixty-two names that `core::arch` deprecates, keeps unstable or
+  takes a Rust reference for are absent, and are listed in
   [What works](features.md#simd-intrinsics).
 * [Inline assembly](features.md#inline-assembly) is x86's and x86-64's, and
   only what Rust's `asm!` can say; the rest is refused by name, with the
