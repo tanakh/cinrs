@@ -17,12 +17,13 @@
 //! | `"q"`, `"Q"`                       | as `"r"` (`reg_abcd` on 32-bit x86)     |
 //! | `"a" "c" "d" "S" "D"`              | `in("eax")` etc., at the operand's width |
 //! | `"b"` / `"=b"` / `"+b"`            | a scratch `inout(reg) v => _` / `out(reg)` / `inout(reg)`, swapped with rbx by an `xchg` either side of the template (below) |
-//! | `"x"`                              | `xmm_reg`                               |
+//! | `"x"`, `"v"`                       | by the operand's width: `xmm_reg` (scalars, 128-bit vectors), `ymm_reg` (256-bit), `zmm_reg` (512-bit) |
 //! | `"i"`, `"n"`                       | `const`, folded; written `${oN}`        |
 //! | `"0"` … (tied to an output)        | `inout(…) input => output`              |
 //! | `%N`, `%[name]`                    | `{oN}` at the operand's width (`{oN:e}` for 32 bits, `:x` for 16), or the register for an explicit one |
 //! | an operand the template never names | `{oN}` in a trailing `/* … */` comment |
 //! | `%kN` `%wN` `%bN` `%hN` `%qN`      | `{oN:e}` `:x` `:l` `:h` (`reg_abcd`) `:r` |
+//! | `%xN` `%tN` `%gN` (vector operand) | `{oN:x}` `:y` `:z`: its xmm, ymm, zmm name |
 //! | `%%`, `%{`, `%}`, `%\|`            | `%`, `{{`, `}}`, `\|`                   |
 //! | `{att\|intel}` (dialect alternatives, extended asm) | the first, AT&T, alternative; the rest dropped |
 //! | clobber `"rax"`, `"xmm0"`          | `out("rax") _`                          |
@@ -95,7 +96,21 @@
 //! * A `const` operand is substituted as a bare number, so AT&T's `$` has to
 //!   be in the template: `${o1}`.
 //! * `xmm_reg` takes `f32`, `f64`, 32- and 64-bit integers and the 128-bit
-//!   vector types.
+//!   vector types; `ymm_reg` the 256-bit ones and `zmm_reg` the 512-bit ones.
+//!   GCC's `"x"` is "any SSE register" with the width the operand's type
+//!   gives, so it is whichever of the three fits. `ymm_reg` needs the `avx`
+//!   target feature on the function and `zmm_reg` `avx512f` — rustc's own
+//!   error ("register class `ymm_reg` requires the `avx` target feature")
+//!   when the function has not got it, as GCC's is when a `__m256` is used
+//!   without AVX.
+//! * GCC's `"v"` (any EVEX-encodable register, 0–31) is mapped as `"x"`: the
+//!   three classes reach registers 16–31 themselves when the function has
+//!   `avx512f` (and `avx512vl` for xmm and ymm), so the only difference GCC
+//!   makes between the letters — which registers the allocator may pick — is
+//!   made by `asm!` from the target features.
+//! * With no modifier a vector operand prints at its class's width (`ymm0` for
+//!   `ymm_reg`); `:x`, `:y`, `:z` print the xmm, ymm, zmm register of the
+//!   same number on any of the three classes, which is GCC's `%x`, `%t`, `%g`.
 
 use crate::ast;
 use crate::capture::SourceRange;
@@ -111,7 +126,7 @@ enum Choice {
     General,
     /// `q`, `Q`: a register with an addressable low byte.
     Byte,
-    /// `x`: an SSE register.
+    /// `x`, `v`: a vector register as wide as the operand (xmm, ymm, zmm).
     Xmm,
     /// `a`, `c`, `d`, `S`, `D`: that register.
     Explicit(char),
@@ -693,7 +708,9 @@ impl Sema<'_> {
                     '%' | '*' | '?' | '!' | '#' | ' ' | '\t' => continue,
                     'r' | 'g' => Some(Choice::General),
                     'q' | 'Q' => Some(Choice::Byte),
-                    'x' => Some(Choice::Xmm),
+                    // `v` differs from `x` only in allowing registers 16–31,
+                    // which `asm!` allows by the function's target features.
+                    'x' | 'v' => Some(Choice::Xmm),
                     'a' | 'c' | 'd' | 'S' | 'D' => Some(Choice::Explicit(c)),
                     'b' => Some(Choice::Rbx),
                     'i' | 'n' => {
@@ -825,18 +842,29 @@ impl Sema<'_> {
                     _ => AsmReg::Class("reg"),
                 })
             }
-            Choice::Xmm => {
-                if (ty.is_integer() && size < 4) || size > 16 {
-                    return fail(
-                        self,
-                        format!(
-                            "a {size}-byte operand cannot live in an SSE register (\"x\"): \
-                             'asm!' takes 32- and 64-bit values and the 128-bit vector types"
-                        ),
-                    );
-                }
-                Some(AsmReg::Class("xmm_reg"))
-            }
+            // GCC's `"x"` and `"v"` are "a vector register" and the operand's
+            // type says which width: `asm!` has a class for each.
+            Choice::Xmm => match size {
+                _ if ty.is_integer() && size < 4 => fail(
+                    self,
+                    format!(
+                        "a {size}-byte operand cannot live in an SSE register \
+                         (\"{constraint}\"): 'asm!' takes 32- and 64-bit values and the \
+                         vector types"
+                    ),
+                ),
+                ..=16 => Some(AsmReg::Class("xmm_reg")),
+                32 if ty.is_vector() => Some(AsmReg::Class("ymm_reg")),
+                64 if ty.is_vector() => Some(AsmReg::Class("zmm_reg")),
+                _ => fail(
+                    self,
+                    format!(
+                        "a {size}-byte operand cannot live in a vector register \
+                         (\"{constraint}\"): 'asm!' takes 32- and 64-bit values and the \
+                         128-, 256- and 512-bit vector types"
+                    ),
+                ),
+            },
             Choice::Explicit(letter) => {
                 if ty.is_vector() {
                     return fail(
@@ -1065,7 +1093,7 @@ impl Sema<'_> {
                     continue;
                 }
                 '0'..='9' | '[' => None,
-                'k' | 'w' | 'b' | 'h' | 'q' => Some(next),
+                'k' | 'w' | 'b' | 'h' | 'q' | 'x' | 't' | 'g' => Some(next),
                 'c' | 'P' | 'a' => {
                     self.error(
                         at,
@@ -1303,10 +1331,16 @@ fn render_reference(
                  wider name for a byte register. Widen the operand to 'unsigned int'"
             )),
         },
-        AsmReg::Class("xmm_reg") => match modifier {
+        // Without a modifier `asm!` prints the register at its class's width,
+        // which is the operand's, as GCC does; `%x`, `%t`, `%g` name the xmm,
+        // ymm or zmm register of the same number whatever the class.
+        AsmReg::Class("xmm_reg" | "ymm_reg" | "zmm_reg") => match modifier {
             None => Ok(format!("{{{name}}}")),
+            Some('x') => Ok(format!("{{{name}:x}}")),
+            Some('t') => Ok(format!("{{{name}:y}}")),
+            Some('g') => Ok(format!("{{{name}:z}}")),
             Some(m) => Err(format!(
-                "the operand modifier '%{m}' cannot apply to an SSE register (\"x\") operand"
+                "the operand modifier '%{m}' cannot apply to a vector register (\"x\") operand"
             )),
         },
         AsmReg::Class(_) => {
@@ -1323,6 +1357,12 @@ fn render_reference(
                 Some('b') => ":l",
                 Some('h') => ":h",
                 Some('q') if x86_64 => ":r",
+                Some(m @ ('x' | 't' | 'g')) => {
+                    return Err(format!(
+                        "the operand modifier '%{m}' names a vector register, and this operand \
+                         is in a general-purpose one"
+                    ));
+                }
                 Some(m) => {
                     return Err(format!(
                         "the operand modifier '%{m}' is not available on this target"

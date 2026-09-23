@@ -369,6 +369,16 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`"x"` and `"v"` asm operands at 256 and 512 bits.** libdeflate's Adler-32
+  templates keep their AVX2 and AVX-512 accumulators live with an empty barrier,
+  `__asm__("" : "+x"(v))` or `"+v"(v)` on a `__m256i` or `__m512i`, which was
+  refused ("a 32-byte operand cannot live in an SSE register"), and `"v"` was
+  an unknown letter. As in GCC, `"x"` is now a vector register as wide as the
+  operand — `asm!`'s `xmm_reg`, `ymm_reg` or `zmm_reg` — and `"v"` maps the
+  same way, since `asm!` itself opens registers 16–31 to the three classes by
+  the function's target features. `%x0`, `%t0` and `%g0` (the operand's xmm,
+  ymm, zmm name) are `{o0:x}`, `{o0:y}` and `{o0:z}`. A 256-bit operand in a
+  function without `avx` gets rustc's own error naming the target feature.
 * **`_Pragma`'s operand is macro-expanded.** CRoaring and simdjson open a
   target region from a macro with `_Pragma(STRINGIFY(GCC target(T)))`, which
   was refused with "'_Pragma' takes one string literal" and three cascade

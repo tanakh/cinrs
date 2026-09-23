@@ -3537,7 +3537,7 @@ impl AsmOperand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AsmReg {
     /// A register `asm!` allocates from a class: `reg`, `reg_byte`,
-    /// `reg_abcd`, `xmm_reg`.
+    /// `reg_abcd`, `xmm_reg`, `ymm_reg`, `zmm_reg`.
     Class(&'static str),
     /// One register, spelled at the operand's width: `al`, `ecx`, `rdx`.
     Explicit(&'static str),

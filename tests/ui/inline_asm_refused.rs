@@ -53,6 +53,16 @@ cinrs::c23! {
     }
 }
 
+// A 256-bit "x" operand is a ymm register, which needs AVX: in a function
+// without it, rustc's own error says so.
+cinrs::gnu99! {
+    #pragma cinrs target "x86_64-unknown-linux-gnu"
+    #include <immintrin.h>
+    void keep(__m256i v) {
+        __asm__("" : "+x"(v)); //~ ERROR: register class `ymm_reg` requires the `avx` target feature
+    }
+}
+
 cinrs::gnu99! {
     #pragma cinrs target "aarch64-unknown-linux-gnu"
     void pause(void) {

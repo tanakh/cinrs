@@ -1,0 +1,285 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+assertion_line: 1946
+expression: "generate_asm(r#\"\n        #include <immintrin.h>\n        __attribute__((target(\"avx2\")))\n        __m256i barrier(__m256i v) {\n            __asm__(\"\" : \"+x\"(v));\n            __asm__(\"vpaddd %2, %1, %0\" : \"=x\"(v) : \"x\"(v), \"x\"(v));\n            return v;\n        }\n        __attribute__((target(\"avx512f\")))\n        __m512i wide(__m512i v) {\n            __asm__(\"vpaddd %g1, %0, %0\" : \"=v\"(v) : \"v\"(v), \"0\"(v));\n            return v;\n        }\n        \"#)"
+---
+mod __cinrs_unit_d16a1f7f {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct div_t {
+        pub quot: ::core::ffi::c_int,
+        pub rem: ::core::ffi::c_int,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct ldiv_t {
+        pub quot: ::core::ffi::c_long,
+        pub rem: ::core::ffi::c_long,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct lldiv_t {
+        pub quot: ::core::ffi::c_longlong,
+        pub rem: ::core::ffi::c_longlong,
+    }
+    pub type size_t = ::core::ffi::c_ulong;
+    pub type ptrdiff_t = ::core::ffi::c_long;
+    pub type wchar_t = ::core::ffi::c_int;
+    pub type int8_t = ::core::ffi::c_schar;
+    pub type uint8_t = ::core::ffi::c_uchar;
+    pub type int16_t = ::core::ffi::c_short;
+    pub type uint16_t = ::core::ffi::c_ushort;
+    pub type int32_t = ::core::ffi::c_int;
+    pub type uint32_t = ::core::ffi::c_uint;
+    pub type int64_t = ::core::ffi::c_long;
+    pub type uint64_t = ::core::ffi::c_ulong;
+    pub type int_least8_t = ::core::ffi::c_schar;
+    pub type int_least16_t = ::core::ffi::c_short;
+    pub type int_least32_t = ::core::ffi::c_int;
+    pub type int_least64_t = ::core::ffi::c_long;
+    pub type uint_least8_t = ::core::ffi::c_uchar;
+    pub type uint_least16_t = ::core::ffi::c_ushort;
+    pub type uint_least32_t = ::core::ffi::c_uint;
+    pub type uint_least64_t = ::core::ffi::c_ulong;
+    pub type int_fast8_t = ::core::ffi::c_schar;
+    pub type uint_fast8_t = ::core::ffi::c_uchar;
+    pub type int_fast16_t = ::core::ffi::c_long;
+    pub type int_fast32_t = ::core::ffi::c_long;
+    pub type uint_fast16_t = ::core::ffi::c_ulong;
+    pub type uint_fast32_t = ::core::ffi::c_ulong;
+    pub type int_fast64_t = ::core::ffi::c_long;
+    pub type uint_fast64_t = ::core::ffi::c_ulong;
+    pub type intptr_t = ::core::ffi::c_long;
+    pub type uintptr_t = ::core::ffi::c_ulong;
+    pub type intmax_t = ::core::ffi::c_long;
+    pub type uintmax_t = ::core::ffi::c_ulong;
+    pub type __m128 = ::core::arch::x86_64::__m128;
+    pub type __m128i = ::core::arch::x86_64::__m128i;
+    pub type __m128d = ::core::arch::x86_64::__m128d;
+    pub type __m256 = ::core::arch::x86_64::__m256;
+    pub type __m256i = ::core::arch::x86_64::__m256i;
+    pub type __m256d = ::core::arch::x86_64::__m256d;
+    pub type __m512 = ::core::arch::x86_64::__m512;
+    pub type __m512i = ::core::arch::x86_64::__m512i;
+    pub type __m512d = ::core::arch::x86_64::__m512d;
+    pub type __mmask8 = ::core::ffi::c_uchar;
+    pub type __mmask16 = ::core::ffi::c_ushort;
+    pub type _MM_CMPINT_ENUM = ::core::ffi::c_int;
+    pub type _MM_MANTISSA_NORM_ENUM = ::core::ffi::c_int;
+    pub type _MM_MANTISSA_SIGN_ENUM = ::core::ffi::c_int;
+    pub type _MM_PERM_ENUM = ::core::ffi::c_int;
+    pub type __mmask32 = ::core::ffi::c_uint;
+    pub type __mmask64 = ::core::ffi::c_ulonglong;
+    pub type __m128bh = ::core::arch::x86_64::__m128bh;
+    pub type __m256bh = ::core::arch::x86_64::__m256bh;
+    pub type __m512bh = ::core::arch::x86_64::__m512bh;
+    pub type __m128h = ::core::arch::x86_64::__m128h;
+    pub type __m256h = ::core::arch::x86_64::__m256h;
+    pub type __m512h = ::core::arch::x86_64::__m512h;
+    unsafe extern "C" {
+        #[link_name = "malloc"]
+        pub fn malloc(size: ::core::ffi::c_ulong) -> *mut ::core::ffi::c_void;
+        #[link_name = "calloc"]
+        pub fn calloc(
+            nmemb: ::core::ffi::c_ulong,
+            size: ::core::ffi::c_ulong,
+        ) -> *mut ::core::ffi::c_void;
+        #[link_name = "realloc"]
+        pub fn realloc(
+            ptr: *mut ::core::ffi::c_void,
+            size: ::core::ffi::c_ulong,
+        ) -> *mut ::core::ffi::c_void;
+        #[link_name = "free"]
+        pub fn free(ptr: *mut ::core::ffi::c_void);
+        #[link_name = "abs"]
+        pub fn abs(j: ::core::ffi::c_int) -> ::core::ffi::c_int;
+        #[link_name = "labs"]
+        pub fn labs(j: ::core::ffi::c_long) -> ::core::ffi::c_long;
+        #[link_name = "llabs"]
+        pub fn llabs(j: ::core::ffi::c_longlong) -> ::core::ffi::c_longlong;
+        #[link_name = "div"]
+        pub fn div(numer: ::core::ffi::c_int, denom: ::core::ffi::c_int) -> div_t;
+        #[link_name = "ldiv"]
+        pub fn ldiv(numer: ::core::ffi::c_long, denom: ::core::ffi::c_long) -> ldiv_t;
+        #[link_name = "lldiv"]
+        pub fn lldiv(
+            numer: ::core::ffi::c_longlong,
+            denom: ::core::ffi::c_longlong,
+        ) -> lldiv_t;
+        #[link_name = "atoi"]
+        pub fn atoi(nptr: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+        #[link_name = "atol"]
+        pub fn atol(nptr: *const ::core::ffi::c_char) -> ::core::ffi::c_long;
+        #[link_name = "atoll"]
+        pub fn atoll(nptr: *const ::core::ffi::c_char) -> ::core::ffi::c_longlong;
+        #[link_name = "atof"]
+        pub fn atof(nptr: *const ::core::ffi::c_char) -> ::core::ffi::c_double;
+        #[link_name = "strtol"]
+        pub fn strtol(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+            base: ::core::ffi::c_int,
+        ) -> ::core::ffi::c_long;
+        #[link_name = "strtoul"]
+        pub fn strtoul(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+            base: ::core::ffi::c_int,
+        ) -> ::core::ffi::c_ulong;
+        #[link_name = "strtoll"]
+        pub fn strtoll(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+            base: ::core::ffi::c_int,
+        ) -> ::core::ffi::c_longlong;
+        #[link_name = "strtoull"]
+        pub fn strtoull(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+            base: ::core::ffi::c_int,
+        ) -> ::core::ffi::c_ulonglong;
+        #[link_name = "strtod"]
+        pub fn strtod(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+        ) -> ::core::ffi::c_double;
+        #[link_name = "strtof"]
+        pub fn strtof(
+            nptr: *const ::core::ffi::c_char,
+            endptr: *mut *mut ::core::ffi::c_char,
+        ) -> ::core::ffi::c_float;
+        #[link_name = "rand"]
+        pub fn rand() -> ::core::ffi::c_int;
+        #[link_name = "srand"]
+        pub fn srand(seed: ::core::ffi::c_uint);
+        #[link_name = "exit"]
+        pub fn exit(status: ::core::ffi::c_int);
+        #[link_name = "_Exit"]
+        pub fn _Exit(status: ::core::ffi::c_int);
+        #[link_name = "abort"]
+        pub fn abort();
+        #[link_name = "atexit"]
+        pub fn atexit(
+            func: ::core::option::Option<unsafe extern "C" fn()>,
+        ) -> ::core::ffi::c_int;
+        #[link_name = "getenv"]
+        pub fn getenv(name: *const ::core::ffi::c_char) -> *mut ::core::ffi::c_char;
+        #[link_name = "system"]
+        pub fn system(string: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+        #[link_name = "qsort"]
+        pub fn qsort(
+            base: *mut ::core::ffi::c_void,
+            nmemb: ::core::ffi::c_ulong,
+            size: ::core::ffi::c_ulong,
+            compar: ::core::option::Option<
+                unsafe extern "C" fn(
+                    *const ::core::ffi::c_void,
+                    *const ::core::ffi::c_void,
+                ) -> ::core::ffi::c_int,
+            >,
+        );
+        #[link_name = "bsearch"]
+        pub fn bsearch(
+            key: *const ::core::ffi::c_void,
+            base: *const ::core::ffi::c_void,
+            nmemb: ::core::ffi::c_ulong,
+            size: ::core::ffi::c_ulong,
+            compar: ::core::option::Option<
+                unsafe extern "C" fn(
+                    *const ::core::ffi::c_void,
+                    *const ::core::ffi::c_void,
+                ) -> ::core::ffi::c_int,
+            >,
+        ) -> *mut ::core::ffi::c_void;
+    }
+    #[inline]
+    unsafe extern "C" fn _mm_malloc(
+        mut __size: ::core::ffi::c_ulong,
+        mut __align: ::core::ffi::c_ulong,
+    ) -> *mut ::core::ffi::c_void {
+        unsafe {
+            let mut __raw: *mut ::core::ffi::c_char = ::core::ptr::null_mut::<
+                ::core::ffi::c_char,
+            >();
+            let mut __skip: ::core::ffi::c_ulong = 0;
+            if __align == 1 || __align == 2 || __align == 4 {
+                __align = 8;
+            }
+            if __align == 0 || __align & __align.wrapping_sub(1) != 0 || __align < 8 {
+                return ::core::ptr::null_mut::<::core::ffi::c_void>();
+            }
+            if __size
+                > (18446744073709551615u64 as ::core::ffi::c_ulong)
+                    .wrapping_sub(__align)
+                    .wrapping_sub(8)
+            {
+                return ::core::ptr::null_mut::<::core::ffi::c_void>();
+            }
+            __raw = malloc(__size.wrapping_add(__align).wrapping_sub(1).wrapping_add(8))
+                as *mut ::core::ffi::c_char;
+            if __raw.is_null() {
+                return ::core::ptr::null_mut::<::core::ffi::c_void>();
+            }
+            __skip = 8;
+            __skip = __skip
+                .wrapping_add(
+                    __align
+                        .wrapping_sub(
+                            __raw.offset(__skip as ::core::primitive::isize)
+                                as ::core::primitive::usize as ::core::ffi::c_ulong
+                                & __align.wrapping_sub(1),
+                        ) & __align.wrapping_sub(1),
+                );
+            let __cinrs_tmp0 = (__raw.offset(__skip as ::core::primitive::isize)
+                as *mut *mut ::core::ffi::c_void)
+                .offset(-1);
+            (&raw mut (*__cinrs_tmp0))
+                .write_unaligned(__raw as *mut ::core::ffi::c_void);
+            return __raw.offset(__skip as ::core::primitive::isize)
+                as *mut ::core::ffi::c_void;
+        }
+    }
+    #[inline]
+    unsafe extern "C" fn _mm_free(mut __ptr: *mut ::core::ffi::c_void) {
+        unsafe {
+            if !__ptr.is_null() {
+                free({
+                    let __cinrs_tmp0 = (__ptr as *mut *mut ::core::ffi::c_void)
+                        .offset(-1);
+                    (*__cinrs_tmp0)
+                });
+            }
+        }
+    }
+    #[target_feature(enable = "avx2")]
+    pub unsafe extern "C" fn barrier(
+        mut v: ::core::arch::x86_64::__m256i,
+    ) -> ::core::arch::x86_64::__m256i {
+        unsafe {
+            ::core::arch::asm!(
+                " /* {o0} */", o0 = inout(ymm_reg) v, options(att_syntax)
+            );
+            ::core::arch::asm!(
+                "vpaddd {o2}, {o1}, {o0}", o0 = lateout(ymm_reg) v, o1 = in (ymm_reg) v,
+                o2 = in (ymm_reg) v, options(att_syntax)
+            );
+            return v;
+        }
+    }
+    #[target_feature(enable = "avx512f")]
+    pub unsafe extern "C" fn wide(
+        mut v: ::core::arch::x86_64::__m512i,
+    ) -> ::core::arch::x86_64::__m512i {
+        unsafe {
+            ::core::arch::asm!(
+                "vpaddd {o1:z}, {o0}, {o0}", o0 = inout(zmm_reg) v => v, o1 = in
+                (zmm_reg) v, options(att_syntax)
+            );
+            return v;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_d16a1f7f::*;

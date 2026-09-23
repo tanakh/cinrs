@@ -149,10 +149,16 @@ error: inline assembly cannot be written in the safe function 'fence': Rust's 'a
    |         ^^^^^^^
 
 error: inline assembly is only supported on x86 and x86-64: the template is assembly for one architecture and the operands are mapped onto x86's registers, and the target here is aarch64
-  --> tests/ui/inline_asm_refused.rs:59:9
+  --> tests/ui/inline_asm_refused.rs:69:9
    |
-59 |         asm volatile ("yield");
+69 |         asm volatile ("yield");
    |         ^^^
 
-error: aborting due to 26 previous errors
+error: register class `ymm_reg` requires the `avx` target feature
+  --> tests/ui/inline_asm_refused.rs:62:27
+   |
+62 |         __asm__("" : "+x"(v));
+   |                           ^
+
+error: aborting due to 27 previous errors
 

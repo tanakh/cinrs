@@ -1938,6 +1938,29 @@ fn extended_asm_maps_each_operand() {
     ));
 }
 
+/// A vector operand of `"x"` or `"v"` is in the register class of its width —
+/// `ymm_reg` for a `__m256i`, `zmm_reg` for a `__m512i` — and `%t0` / `%g0`
+/// are `{o0:y}` / `{o0:z}`. libdeflate's empty barrier is the first shape.
+#[test]
+fn vector_asm_operands_take_the_class_of_their_width() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        #include <immintrin.h>
+        __attribute__((target("avx2")))
+        __m256i barrier(__m256i v) {
+            __asm__("" : "+x"(v));
+            __asm__("vpaddd %2, %1, %0" : "=x"(v) : "x"(v), "x"(v));
+            return v;
+        }
+        __attribute__((target("avx512f")))
+        __m512i wide(__m512i v) {
+            __asm__("vpaddd %g1, %0, %0" : "=v"(v) : "v"(v), "0"(v));
+            return v;
+        }
+        "#
+    ));
+}
+
 /// An output whose place is not a plain local: the place's setup — where the
 /// side effect of `i++` happens — runs once, before the statement, and the
 /// output is written straight into the place. A member of a packed record is

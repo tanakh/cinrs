@@ -1680,6 +1680,78 @@ fn each_operand_kind_maps_onto_asm() {
     );
 }
 
+/// GCC's `"x"` and `"v"` are a vector register as wide as the operand's type:
+/// `asm!`'s `xmm_reg`, `ymm_reg` or `zmm_reg`. `%x`, `%t`, `%g` name the
+/// operand's xmm, ymm, zmm register, which is `:x`, `:y`, `:z` on any of them.
+#[test]
+fn vector_operands_take_the_register_of_their_width() {
+    assert_eq!(
+        asm_ir(
+            r#"#include <immintrin.h>
+            __attribute__((target("avx512f,avx512bf16,avx512fp16")))
+            void f(float s, double d, int i, long l, __m128i a, __m256i b, __m512i c,
+                   __m256d e, __m512 g, __m256bh h, __m512h k) {
+                asm("" : "+x"(s), "+x"(d), "+x"(i), "+x"(l));
+                asm("" : "+x"(a), "+x"(b), "+x"(c));
+                asm("" : "+v"(a), "+v"(b), "+v"(c));
+                asm("vpaddd %2, %1, %0" : "=x"(b) : "x"(b), "x"(b));
+                asm("vpaddd %2, %1, %0" : "=v"(c) : "v"(c), "0"(c));
+                asm("" : "+x"(e), "+v"(g), "+x"(h), "+v"(k));
+                asm("vpor %x0, %t0, %g0" : "+x"(a));
+                asm("vpor %x0, %t0, %g0" : "+v"(b));
+                asm("vpor %x0, %t0, %g0 %0" : "+v"(c));
+            }"#
+        ),
+        [
+            " /* {o0} {o1} {o2} {o3} */ | o0 = inout(xmm_reg), o1 = inout(xmm_reg), \
+             o2 = inout(xmm_reg), o3 = inout(xmm_reg) | ",
+            " /* {o0} {o1} {o2} */ | o0 = inout(xmm_reg), o1 = inout(ymm_reg), \
+             o2 = inout(zmm_reg) | ",
+            " /* {o0} {o1} {o2} */ | o0 = inout(xmm_reg), o1 = inout(ymm_reg), \
+             o2 = inout(zmm_reg) | ",
+            "vpaddd {o2}, {o1}, {o0} | o0 = lateout(ymm_reg), o1 = in(ymm_reg), \
+             o2 = in(ymm_reg) | ",
+            // The tied input is folded into its output.
+            "vpaddd {o0}, {o1}, {o0} | o0 = inout(zmm_reg), o1 = in(zmm_reg) | ",
+            " /* {o0} {o1} {o2} {o3} */ | o0 = inout(ymm_reg), o1 = inout(zmm_reg), \
+             o2 = inout(ymm_reg), o3 = inout(zmm_reg) | ",
+            "vpor {o0:x}, {o0:y}, {o0:z} | o0 = inout(xmm_reg) | ",
+            "vpor {o0:x}, {o0:y}, {o0:z} | o0 = inout(ymm_reg) | ",
+            "vpor {o0:x}, {o0:y}, {o0:z} {o0} | o0 = inout(zmm_reg) | ",
+        ]
+    );
+    let cases: &[(&str, &str)] = &[
+        (
+            r#"void f(short x) { asm("" : "+v"(x)); }"#,
+            "a 2-byte operand cannot live in an SSE register (\"+v\"): 'asm!' takes 32- and \
+             64-bit values and the vector types",
+        ),
+        (
+            r#"void f(int x) { asm("incl %t0" : "+r"(x)); }"#,
+            "the operand modifier '%t' names a vector register, and this operand is in a \
+             general-purpose one",
+        ),
+        (
+            r#"#include <immintrin.h>
+            void f(__m256i x) { asm("" : "+r"(x)); }"#,
+            "a vector operand needs an SSE register: write \"x\", not \"+r\"",
+        ),
+        (
+            r#"#include <immintrin.h>
+            void f(__m128i x) { asm("%k0" : "+x"(x)); }"#,
+            "the operand modifier '%k' cannot apply to a vector register (\"x\") operand",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "Yv"(x)); }"#,
+            "the constraint \"Yv\" is not supported: 'asm!' has no class for it. Use \"x\" for \
+             an SSE register",
+        ),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(asm_errors(source), [*expected], "for:\n{source}");
+    }
+}
+
 #[test]
 fn asm_is_carried_by_the_control_flow_graph() {
     let found = asm_ir(

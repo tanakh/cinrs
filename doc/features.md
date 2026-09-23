@@ -758,11 +758,12 @@ because `asm!` calls an unused named operand an error and GCC does not.
 | `"=r"`, `"=&r"`, `"+r"` | `lateout`, `out`, `inout` |
 | `"q"`, `"Q"` | as `"r"`; `reg_abcd` on 32-bit x86 |
 | `"a"`, `"c"`, `"d"`, `"S"`, `"D"` | that register at the operand's width: `in("al")`, `in("eax")`, `in("rax")`, … |
-| `"x"` | `xmm_reg` |
+| `"x"`, `"v"` | by the operand's width: `xmm_reg` (scalars and 128-bit vectors), `ymm_reg` (`__m256*`), `zmm_reg` (`__m512*`) |
 | `"i"`, `"n"` | `const`, folded to a constant, and written `${oN}` in the template |
 | `"0"` … `"9"` (tied to an output) | `inout(…) input => output` |
 | `%0`, `%[name]` | `{o0}` at the operand's width — `{o0:e}` for 32 bits, `{o0:x}` for 16 — or the register itself for an explicit one |
 | `%k0`, `%w0`, `%b0`, `%h0`, `%q0` | `{o0:e}`, `{o0:x}`, `{o0:l}`, `{o0:h}` (in `reg_abcd`), `{o0:r}` |
+| `%x0`, `%t0`, `%g0` (a vector operand) | `{o0:x}`, `{o0:y}`, `{o0:z}`: its xmm, ymm, zmm register |
 | `%%`, `%{`, `%}`, `%\|` | `%`, `{{`, `}}`, `\|` |
 | clobber `"rax"`, `"ecx"`, `"xmm0"`, … | `out("rax") _` |
 | clobber `"memory"`, `"cc"` | nothing: `asm!` assumes both |
@@ -772,8 +773,15 @@ may change the instruction GCC would have picked but not what the statement
 does. An explicit register cannot be named from an `asm!` template, so a `%0`
 that refers to `"a"` is written as the register — `%eax`, or `%al`, `%ax`,
 `%rax`, `%ah` for the modifiers. The operand types are C's own integers,
-pointers, `float` and `double` (and the 128-bit vector types in `"x"`); a
-`_Bool`, an `__int128` or a `struct` operand is refused. An output may be any
+pointers, `float` and `double`, and the vector types in `"x"`; a
+`_Bool`, an `__int128` or a `struct` operand is refused. As in GCC, `"x"` is a
+vector register as wide as the operand: a `__m256i` is a ymm register — so
+libdeflate's `__asm__("" : "+x"(v))` barrier on AVX2 accumulators maps — and
+needs a function with the `avx` target feature, a `__m512i` a zmm register and
+`avx512f`; without it rustc's own error says so ("register class `ymm_reg`
+requires the `avx` target feature"). GCC's AVX-512 `"v"` (any register 0–31)
+maps exactly as `"x"`: `asm!` lets the classes reach registers 16–31 by the
+function's target features, which is the only difference between the letters. An output may be any
 lvalue but a bit-field: a member, an element, `*p`. The place's own side
 effects — the `i++` in `a[i++]` — happen once. **Basic asm**, with no colon,
 is its template and `options(att_syntax)`: `asm("mfence")`,

@@ -335,6 +335,77 @@ gnu99! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// "x" and "v" at 256 and 512 bits: the operand's type picks ymm or zmm. The
+// instructions are plain lane-wise adds, so the values are checked against a
+// scalar loop here rather than against a gcc build.
+// ---------------------------------------------------------------------------
+
+gnu99! {
+    #include <immintrin.h>
+    /* libdeflate's Adler-32 template keeps its accumulators live with an empty
+       barrier on each iteration. */
+    __attribute__((target("avx2")))
+    void barrier_sums(const int *in, int n, int *out) {
+        __m256i acc = _mm256_setzero_si256();
+        for (int i = 0; i < n; i++) {
+            acc = _mm256_add_epi32(acc, _mm256_loadu_si256((const __m256i *)(in + 8 * i)));
+            __asm__("" : "+x"(acc));
+        }
+        _mm256_storeu_si256((__m256i *)out, acc);
+    }
+    __attribute__((target("avx2")))
+    void vpaddd_ymm(const int *a, const int *b, int *out) {
+        __m256i x = _mm256_loadu_si256((const __m256i *)a);
+        __m256i y = _mm256_loadu_si256((const __m256i *)b);
+        __m256i r;
+        __asm__("vpaddd %2, %1, %0" : "=x"(r) : "x"(x), "x"(y));
+        /* %t names the ymm register, %x its low half. */
+        __asm__("vpaddd %t1, %t0, %t0" : "+x"(r) : "x"(y));
+        __m128i lo;
+        __asm__("vmovdqa %x1, %0" : "=x"(lo) : "x"(r));
+        _mm256_storeu_si256((__m256i *)out, r);
+        _mm_storeu_si128((__m128i *)(out + 8), lo);
+    }
+    __attribute__((target("avx512f")))
+    void vpaddd_zmm(const int *a, const int *b, int *out) {
+        __m512i x = _mm512_loadu_si512(a);
+        __m512i y = _mm512_loadu_si512(b);
+        __m512i r;
+        __asm__("vpaddd %2, %1, %0" : "=v"(r) : "v"(x), "v"(y));
+        /* A tied input, and %g naming the zmm register. */
+        __asm__("vpaddd %g2, %g1, %g0" : "=v"(r) : "0"(r), "v"(y));
+        _mm512_storeu_si512(out, r);
+    }
+}
+
+#[test]
+fn vector_operands_at_256_and_512_bits() {
+    let a: Vec<i32> = (0..16).map(|i| i * 3 - 7).collect();
+    let b: Vec<i32> = (0..16).map(|i| 1000 - i * i).collect();
+    if is_x86_feature_detected!("avx2") {
+        let input: Vec<i32> = (0..8 * 5).map(|i| i * 17 - 100).collect();
+        let mut out = [0i32; 8];
+        unsafe { barrier_sums(input.as_ptr(), 5, out.as_mut_ptr()) };
+        let expected: Vec<i32> = (0..8)
+            .map(|lane| (0..5).map(|i| input[8 * i + lane]).sum())
+            .collect();
+        assert_eq!(out[..], expected[..]);
+
+        let mut out = [0i32; 12];
+        unsafe { vpaddd_ymm(a.as_ptr(), b.as_ptr(), out.as_mut_ptr()) };
+        let expected: Vec<i32> = (0..8).map(|i| a[i] + 2 * b[i]).collect();
+        assert_eq!(out[..8], expected[..]);
+        assert_eq!(out[8..], expected[..4]);
+    }
+    if is_x86_feature_detected!("avx512f") {
+        let mut out = [0i32; 16];
+        unsafe { vpaddd_zmm(a.as_ptr(), b.as_ptr(), out.as_mut_ptr()) };
+        let expected: Vec<i32> = (0..16).map(|i| a[i] + 2 * b[i]).collect();
+        assert_eq!(out[..], expected[..]);
+    }
+}
+
 #[test]
 fn the_b_constraint_goes_through_rbx() {
     unsafe {
