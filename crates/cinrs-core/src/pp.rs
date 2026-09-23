@@ -433,12 +433,23 @@ impl HideSet {
 // ---------------------------------------------------------------------------
 
 /// A token inside the preprocessor: the lexer's, plus a hide set and an origin.
+///
+/// `space`, `pad` and `trail` are GCC's "padding" (see [`Lead`]) folded into
+/// the tokens it separates. `space` is whether white space precedes the token
+/// as things stand. `pad` answers the same question for the case where the
+/// white-space status of a macro name or parameter is put in front of the
+/// token: `None` when nothing but that status would count, `Some(b)` when an
+/// expansion to nothing sits between the two, and it is `b` that counts once
+/// that status says "no white space". `trail` is the padding that follows the
+/// token, handed on to whichever token is read next.
 #[derive(Clone, Debug)]
 struct PTok {
     kind: TokenKind,
     range: SourceRange,
     bol: bool,
     space: bool,
+    pad: Option<bool>,
+    trail: Option<Lead>,
     origin: Origin,
     hide: HideSet,
     errors: Vec<Diagnostic>,
@@ -451,12 +462,72 @@ impl PTok {
             range: tok.range,
             bol: tok.bol,
             space: tok.preceded_by_space,
+            pad: None,
+            trail: None,
             origin: Origin::Source,
             hide: HideSet::default(),
             errors: tok.errors.clone(),
         }
     }
 
+    /// Puts the white-space status of the macro name or parameter this token
+    /// now stands for in front of it (6.10.3.2p2's "white space before the
+    /// first preprocessing token … is deleted", as GCC implements it): the
+    /// first token of a replacement or of a substituted argument is spaced
+    /// like the name or parameter it replaced, not like it was written.
+    fn lead_with(&mut self, space: bool, pad: Option<bool>) {
+        let under = self.pad.unwrap_or(false);
+        self.space = space || under;
+        self.pad = pad.map(|p| p || under).or(self.pad);
+    }
+}
+
+/// The padding an expansion to nothing leaves behind, folded to what it does
+/// to the next token.
+///
+/// GCC marks where a macro or argument was with padding tokens: one carrying
+/// the name's or parameter's white-space status in front, one carrying none
+/// behind. The next real token is spaced like the first padding in front of
+/// it, except that padding without white space is forgotten by a following
+/// padding that carries no status at all. Every run of padding ending in the
+/// status-less kind comes down to "white space if `space`, or if the token
+/// has it" — and, for [`PTok::pad`], "if `pad`, or if the token has it".
+#[derive(Clone, Copy, Debug)]
+struct Lead {
+    space: bool,
+    pad: bool,
+}
+
+impl Lead {
+    /// What a name or parameter with this status leaves behind when it
+    /// expands to nothing, `inner` being the padding its expansion left.
+    fn of_empty(space: bool, pad: Option<bool>, inner: Option<Lead>) -> Self {
+        let inner_pad = inner.is_some_and(|l| l.pad);
+        Self {
+            space: space || inner_pad,
+            pad: pad.unwrap_or(false) || inner_pad,
+        }
+    }
+
+    /// `first`, then `then`.
+    fn join(first: Option<Lead>, then: Option<Lead>) -> Option<Lead> {
+        match (first, then) {
+            (Some(a), Some(b)) => Some(Lead {
+                space: a.space || b.space,
+                pad: a.pad || b.space,
+            }),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn apply(self, tok: &mut PTok) {
+        let own = tok.space;
+        tok.space = self.space || own;
+        tok.pad = Some(self.pad || own);
+    }
+}
+
+impl PTok {
     fn is_eof(&self) -> bool {
         self.kind == TokenKind::Eof
     }
@@ -1216,6 +1287,8 @@ struct Pp<'a> {
     open: Vec<OpenFile>,
     /// Tokens produced by macro replacement, innermost last.
     pending: Vec<PTok>,
+    /// The padding waiting for the next token read (see [`Lead`]).
+    carry: Option<Lead>,
     out: Vec<Token>,
     macros: HashMap<String, Arc<MacroDef>>,
     conds: Vec<Cond>,
@@ -1329,6 +1402,7 @@ impl<'a> Pp<'a> {
                 site: DefSite::Program,
             }],
             pending: Vec::new(),
+            carry: None,
             out: Vec::new(),
             macros: HashMap::new(),
             conds: Vec::new(),
@@ -1434,7 +1508,7 @@ impl<'a> Pp<'a> {
     /// emitted, or read twice, to one diagnostic.
     fn bump(&mut self, allow_input: bool) -> Option<PTok> {
         if let Some(t) = self.pending.pop() {
-            return Some(t);
+            return Some(self.arrive(t));
         }
         if !allow_input {
             return None;
@@ -1444,7 +1518,17 @@ impl<'a> Pp<'a> {
             self.cur_mut().pos += 1;
         }
         self.report_lexical_errors(&tok);
-        Some(tok)
+        Some(self.arrive(tok))
+    }
+
+    /// A token as it is read: the padding before it is applied, and the
+    /// padding after it waits for the next one.
+    fn arrive(&mut self, mut tok: PTok) -> PTok {
+        if let Some(lead) = self.carry.take() {
+            lead.apply(&mut tok);
+        }
+        self.carry = tok.trail.take();
+        tok
     }
 
     /// Whether the file's next token opens a directive.
@@ -1591,10 +1675,12 @@ impl<'a> Pp<'a> {
             if self.pending.is_empty() && (self.ahead().is_eof() || self.at_directive()) {
                 return self.peek(true);
             }
-            let tok = self.bump(true)?;
+            let mut tok = self.bump(true)?;
             if tok.name().is_some() && self.try_expand(&tok, true) {
                 continue;
             }
+            // Unread: the padding after it goes back with it.
+            tok.trail = self.carry.take();
             self.pending.push(tok);
             return self.peek(true);
         }
@@ -1778,6 +1864,8 @@ fn eof_token(base: Pos) -> PTok {
         range: SourceRange::at(base),
         bol: true,
         space: true,
+        pad: None,
+        trail: None,
         origin: Origin::Source,
         hide: HideSet::default(),
         errors: Vec::new(),
@@ -1795,7 +1883,8 @@ struct Args {
     /// The arguments after full macro replacement, computed on demand: an
     /// argument used only by `#` or `##` must never be expanded, and expanding
     /// an unused one could report an error the program does not contain.
-    expanded: Vec<Option<Vec<PTok>>>,
+    /// The padding its expansion ended with comes with it.
+    expanded: Vec<Option<(Vec<PTok>, Option<Lead>)>>,
 }
 
 impl Args {
@@ -1815,10 +1904,14 @@ impl Args {
 ///
 /// The placemarker is the standard's own device (6.10.3.3p2): it stands where
 /// an empty argument was, so that `a ## b` with an empty `b` pastes into `a`
-/// rather than into whatever came next.
+/// rather than into whatever came next. It keeps the white-space status of
+/// the parameter it replaced, which spaces whatever it is pasted to; and
+/// padding is what an argument that expanded to nothing leaves (see
+/// [`Lead`]).
 enum Piece {
     Tok(PTok),
-    Placemarker,
+    Placemarker { space: bool, pad: Option<bool> },
+    Padding(Lead),
 }
 
 impl Pp<'_> {
@@ -1848,16 +1941,19 @@ impl Pp<'_> {
 
         if let Some(builtin) = def.builtin {
             let value = self.builtin_token(builtin, tok, &def, &name);
-            self.push_pending(vec![value], tok.space);
+            let after = self.carry.take();
+            self.push_pending(vec![value], tok, None, after);
             return true;
         }
 
         let Some(params) = &def.params else {
+            // The padding that followed the name follows its replacement.
+            let after = self.carry.take();
             let hide = tok.hide.add(&name);
             let exp = self.expansion_of(&name, tok.range, &def, tok);
             let mut args = Args::new(Vec::new());
-            let body = self.subst(&def, &mut args, &hide, tok.range, &exp);
-            self.push_pending(body, tok.space);
+            let (body, rest) = self.subst(&def, &mut args, &hide, tok.range, &exp);
+            self.push_pending(body, tok, rest, after);
             if !def.predefined {
                 self.expansions.record(tok.range, &name, def.name_range);
             }
@@ -1879,6 +1975,9 @@ impl Pp<'_> {
         else {
             return true;
         };
+        // The padding before the `(` and inside the list is gone with them;
+        // what followed the `)` follows the replacement.
+        let after = self.carry.take();
         let invocation = tok.range.join(rparen.range);
         if !self.check_arity(&def, &params, raw.len(), &name, invocation) {
             return true;
@@ -1895,8 +1994,8 @@ impl Pp<'_> {
         let hide = tok.hide.intersect(&rparen.hide).add(&name);
         let exp = self.expansion_of(&name, invocation, &def, tok);
         let mut args = Args::new(raw);
-        let body = self.subst(&def, &mut args, &hide, invocation, &exp);
-        self.push_pending(body, tok.space);
+        let (body, rest) = self.subst(&def, &mut args, &hide, invocation, &exp);
+        self.push_pending(body, tok, rest, after);
         if !def.predefined {
             self.expansions.record(invocation, &name, def.name_range);
         }
@@ -1918,8 +2017,17 @@ impl Pp<'_> {
         })
     }
 
-    /// Pushes replacement output back onto the stream, innermost first.
-    fn push_pending(&mut self, mut toks: Vec<PTok>, space: bool) {
+    /// Pushes the replacement of `name` back onto the stream, innermost first.
+    ///
+    /// `rest` is the padding the replacement ended with and `after` the
+    /// padding that followed the invocation (see [`Lead`]).
+    fn push_pending(
+        &mut self,
+        mut toks: Vec<PTok>,
+        name: &PTok,
+        rest: Option<Lead>,
+        after: Option<Lead>,
+    ) {
         if self.budget < toks.len() {
             if !self.aborted {
                 let range = toks.first().map_or(SourceRange::at(self.base), |t| t.range);
@@ -1930,12 +2038,18 @@ impl Pp<'_> {
             return;
         }
         self.budget -= toks.len();
-        if let Some(first) = toks.first_mut() {
-            // The replacement stands where the invocation did, so it inherits
-            // its spacing — and it can never open a directive.
-            first.space = space;
-            first.bol = false;
-        }
+        let Some(first) = toks.first_mut() else {
+            // Nothing left but padding, for the token read next.
+            let empty = Lead::of_empty(name.space, name.pad, rest);
+            self.carry = Lead::join(Some(empty), after);
+            return;
+        };
+        // The replacement stands where the invocation did, so it inherits
+        // its spacing — and it can never open a directive.
+        first.lead_with(name.space, name.pad);
+        first.bol = false;
+        let last = toks.last_mut().expect("not empty");
+        last.trail = Lead::join(Lead::join(last.trail, rest), after);
         self.pending.extend(toks.into_iter().rev());
     }
 
@@ -1953,7 +2067,7 @@ impl Pp<'_> {
         loop {
             // Running out of tokens is the same failure whether the file ended
             // or the argument being pre-expanded did.
-            let Some(tok) = self.bump(allow_input).filter(|t| !t.is_eof()) else {
+            let Some(mut tok) = self.bump(allow_input).filter(|t| !t.is_eof()) else {
                 self.diags.error(
                     name_range,
                     "unterminated argument list of a function-like macro",
@@ -1979,9 +2093,12 @@ impl Pp<'_> {
                 args.push(Vec::new());
                 continue;
             }
-            args.last_mut()
-                .expect("the argument list is never empty")
-                .push(tok);
+            let arg = args.last_mut().expect("the argument list is never empty");
+            if arg.is_empty() {
+                // Padding in front of an argument is not part of it.
+                tok.pad = None;
+            }
+            arg.push(tok);
         }
     }
 
@@ -2022,6 +2139,9 @@ impl Pp<'_> {
     }
 
     /// Builds a replacement list: the standard's `subst`, placemarkers and all.
+    ///
+    /// The padding the list ends with — an argument at its end that expanded
+    /// to nothing — comes back beside it.
     fn subst(
         &mut self,
         def: &MacroDef,
@@ -2029,7 +2149,7 @@ impl Pp<'_> {
         hide: &HideSet,
         invocation: SourceRange,
         exp: &Arc<Expansion>,
-    ) -> Vec<PTok> {
+    ) -> (Vec<PTok>, Option<Lead>) {
         // `__VA_OPT__` is resolved first, so that everything below sees an
         // ordinary replacement list.
         let expanded;
@@ -2076,8 +2196,10 @@ impl Pp<'_> {
                     comma.range = invocation;
                     comma.origin = Origin::Expansion(exp.clone());
                     pieces.push(Piece::Tok(comma));
-                    let arg = self.expanded_arg(args, index);
-                    pieces.extend(arg.into_iter().map(Piece::Tok));
+                    // No padding in front: the arguments keep their own
+                    // spacing after the comma, as in GCC.
+                    let (arg, rest) = self.expanded_arg(args, index);
+                    push_expanded(&mut pieces, arg, rest, None);
                 }
                 i += 3;
                 continue;
@@ -2094,18 +2216,25 @@ impl Pp<'_> {
             }
 
             // A parameter: `##` on either side keeps it unexpanded.
+            // Either way the argument's first token is spaced like the
+            // parameter it replaces (6.10.3.2p2): in `(b)`, `V(1, 2)`'s ` 2`
+            // comes out as `(2)`.
             if let Some(index) = tok.name().and_then(|n| def.param_index(n)) {
                 let raw = body.get(i + 1).is_some_and(|t| t.is_punct(Punct::HashHash));
                 if raw {
-                    let arg = args.get(index).to_vec();
-                    if arg.is_empty() {
-                        pieces.push(Piece::Placemarker);
-                    } else {
+                    let mut arg = args.get(index).to_vec();
+                    if let Some(first) = arg.first_mut() {
+                        first.lead_with(tok.space, tok.pad);
                         pieces.extend(arg.into_iter().map(Piece::Tok));
+                    } else {
+                        pieces.push(Piece::Placemarker {
+                            space: tok.space,
+                            pad: tok.pad,
+                        });
                     }
                 } else {
-                    let arg = self.expanded_arg(args, index);
-                    pieces.extend(arg.into_iter().map(Piece::Tok));
+                    let (arg, rest) = self.expanded_arg(args, index);
+                    push_expanded(&mut pieces, arg, rest, Some(tok));
                 }
                 i += 1;
                 continue;
@@ -2120,16 +2249,24 @@ impl Pp<'_> {
             i += 1;
         }
 
-        pieces
-            .into_iter()
-            .filter_map(|p| match p {
+        let mut carry: Option<Lead> = None;
+        let mut out = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            match piece {
                 Piece::Tok(mut t) => {
+                    if let Some(lead) = carry.take() {
+                        lead.apply(&mut t);
+                    }
                     t.hide = t.hide.union(hide);
-                    Some(t)
+                    out.push(t);
                 }
-                Piece::Placemarker => None,
-            })
-            .collect()
+                Piece::Placemarker { space, pad } => {
+                    carry = Lead::join(carry, Some(Lead::of_empty(space, pad, None)));
+                }
+                Piece::Padding(lead) => carry = Lead::join(carry, Some(lead)),
+            }
+        }
+        (out, carry)
     }
 
     /// Pastes the last piece built so far onto the first of `rhs`.
@@ -2147,8 +2284,18 @@ impl Pp<'_> {
         let left = pieces.pop();
         let joined = match (left, head) {
             (None, head) => head,
-            (Some(Piece::Placemarker), head) => head,
-            (Some(left), Piece::Placemarker) => left,
+            // What an empty left operand leaves is spaced like its parameter.
+            (Some(Piece::Placemarker { space, pad }), Piece::Tok(mut head)) => {
+                head.lead_with(space, pad);
+                Piece::Tok(head)
+            }
+            (Some(left @ Piece::Placemarker { .. }), Piece::Placemarker { .. }) => left,
+            (Some(left), Piece::Placemarker { .. }) => left,
+            (Some(left @ Piece::Padding(_)), head) | (Some(left), head @ Piece::Padding(_)) => {
+                // Not produced: an argument beside `##` is never expanded.
+                pieces.push(left);
+                head
+            }
             (Some(Piece::Tok(l)), Piece::Tok(r)) => match self.paste(&l, &r, invocation) {
                 Some(kind) => Piece::Tok(self.synthetic(kind, &l, invocation, exp)),
                 None => {
@@ -2201,6 +2348,8 @@ impl Pp<'_> {
             range: invocation,
             bol: false,
             space: like.space,
+            pad: like.pad,
+            trail: None,
             origin: Origin::Expansion(exp.clone()),
             hide: like.hide.clone(),
             errors: Vec::new(),
@@ -2208,12 +2357,12 @@ impl Pp<'_> {
     }
 
     /// An argument after full macro replacement, computed once.
-    fn expanded_arg(&mut self, args: &mut Args, index: usize) -> Vec<PTok> {
+    fn expanded_arg(&mut self, args: &mut Args, index: usize) -> (Vec<PTok>, Option<Lead>) {
         if let Some(Some(done)) = args.expanded.get(index) {
             return done.clone();
         }
         let raw = args.get(index).to_vec();
-        let done = self.expand_sequence(raw);
+        let done = self.expand_padded(raw);
         if let Some(slot) = args.expanded.get_mut(index) {
             *slot = Some(done.clone());
         }
@@ -2226,8 +2375,13 @@ impl Pp<'_> {
     /// if it were the whole rest of the file, so a function-like macro name at
     /// its end does not reach out for a `(` that follows the invocation.
     fn expand_sequence(&mut self, toks: Vec<PTok>) -> Vec<PTok> {
+        self.expand_padded(toks).0
+    }
+
+    /// [`Pp::expand_sequence`], with the padding the sequence ended with.
+    fn expand_padded(&mut self, toks: Vec<PTok>) -> (Vec<PTok>, Option<Lead>) {
         if toks.is_empty() {
-            return toks;
+            return (toks, None);
         }
         self.depth += 1;
         if self.depth > MAX_EXPANSION_DEPTH {
@@ -2237,19 +2391,23 @@ impl Pp<'_> {
                 self.diags.error(range, "macro arguments nest too deeply");
                 self.aborted = true;
             }
-            return toks;
+            return (toks, None);
         }
         let saved = std::mem::replace(&mut self.pending, toks.into_iter().rev().collect());
+        let saved_carry = self.carry.take();
         let mut out = Vec::new();
         while let Some(tok) = self.pending.pop() {
+            let tok = self.arrive(tok);
             if tok.name().is_some() && self.try_expand(&tok, false) {
                 continue;
             }
             out.push(tok);
         }
+        let rest = self.carry.take();
         self.pending = saved;
+        self.carry = saved_carry;
         self.depth -= 1;
-        out
+        (out, rest)
     }
 
     /// The token a built-in macro stands for at this use.
@@ -2293,6 +2451,8 @@ impl Pp<'_> {
             range: tok.range,
             bol: false,
             space: tok.space,
+            pad: tok.pad,
+            trail: None,
             origin: Origin::Expansion(exp),
             hide: tok.hide.add(name),
             errors: Vec::new(),
@@ -2363,9 +2523,41 @@ fn paste_operand(def: &MacroDef, args: &Args, tok: &PTok) -> Vec<Piece> {
     };
     let arg = args.get(index);
     if arg.is_empty() {
-        return vec![Piece::Placemarker];
+        // Its spacing never counts: pasted to a token, it vanishes, and
+        // pasted to another placemarker, that one is kept.
+        return vec![Piece::Placemarker {
+            space: tok.space,
+            pad: tok.pad,
+        }];
     }
     arg.iter().cloned().map(Piece::Tok).collect()
+}
+
+/// Adds an argument after macro replacement to a replacement list under
+/// construction, spaced like the parameter it replaces when there is one, and
+/// followed by the padding its expansion ended with.
+fn push_expanded(
+    pieces: &mut Vec<Piece>,
+    mut arg: Vec<PTok>,
+    rest: Option<Lead>,
+    param: Option<&PTok>,
+) {
+    let Some(first) = arg.first_mut() else {
+        let lead = match param {
+            Some(p) => Some(Lead::of_empty(p.space, p.pad, rest)),
+            None => rest,
+        };
+        if let Some(lead) = lead {
+            pieces.push(Piece::Padding(lead));
+        }
+        return;
+    };
+    if let Some(p) = param {
+        first.lead_with(p.space, p.pad);
+    }
+    let last = arg.last_mut().expect("not empty");
+    last.trail = Lead::join(last.trail, rest);
+    pieces.extend(arg.into_iter().map(Piece::Tok));
 }
 
 /// The largest line number `#line` may name (C99 6.10.4p3).
@@ -2445,6 +2637,8 @@ fn quote_c_string(text: &str) -> String {
 impl Pp<'_> {
     /// Executes the directive the file's next token opens.
     fn directive(&mut self) {
+        // Padding is about the spacing of text lines; a directive ends it.
+        self.carry = None;
         let hash = self.ahead().clone();
         self.cur_mut().pos += 1;
         let start = self.cur().pos;
@@ -3458,7 +3652,9 @@ impl Pp<'_> {
             }
             out.extend(params.suffix);
         }
-        self.push_pending(out, true);
+        // The directive stands like a name preceded by white space.
+        let at = self.embed_token(TokenKind::Punct(Punct::Comma), range);
+        self.push_pending(out, &at, None, None);
     }
 
     /// The resource name an `#embed` names, how it was spelled, and how many
@@ -3633,6 +3829,8 @@ impl Pp<'_> {
             range,
             bol: false,
             space: true,
+            pad: None,
+            trail: None,
             origin: Origin::Source,
             hide: HideSet::default(),
             errors: Vec::new(),
@@ -5183,6 +5381,8 @@ impl Pp<'_> {
             range: SourceRange::at(self.base),
             bol: false,
             space: false,
+            pad: None,
+            trail: None,
             origin: Origin::Source,
             hide: HideSet::default(),
             errors: Vec::new(),

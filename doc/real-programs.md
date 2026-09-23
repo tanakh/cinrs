@@ -359,6 +359,75 @@ assembly, and all 41 test files, ms:
 All four compilers (upstream's `-O0 -g` build included) emit byte-identical
 assembly for the inputs; the test loop is process start-up.
 
+## cmark 0.31.2 (not in the repository)
+
+The CommonMark reference implementation (BSD-2-Clause), nineteen `src/*.c`
+files one unit each under `#pragma cinrs export` (the renderers share
+`static` names), with the two headers CMake would generate written by hand:
+a 9,400-line re2c-generated scanner of `goto` state machines, the
+`case_fold_switch.inc` and `entities.inc` tables, the five renderers.
+Compiled unedited on the first try in 5.7 s, no diagnostic, no warning.
+
+**Correctness.** The specification's 652 examples with the options
+upstream's own test runner passes, 652/652, and every example also rendered
+to XML, man, LaTeX and CommonMark; `smart_punct.txt` 16/16 and
+`regression.txt` 23/23; the whole `spec.txt` through all five renderers with
+and without source positions and smart punctuation; and the 24 pathological
+inputs (deep nesting, thousands of backticks, the reference-collision
+document built against its own hash), each under 200 ms. Every one of those
+outputs is byte-identical to the `gcc` build's, in release and in the debug
+build with overflow checks on.
+
+**Speed.** ms per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `spec.txt` (200 KB) to HTML | 1.56 | 1.45 | 1.38 | 0.88× | 0.95× |
+| the same with smart punctuation and source positions | 1.70 | 1.56 | 1.49 | 0.88× | 0.96× |
+| `spec.txt` to XML | 1.55 | 1.40 | 1.28 | 0.83× | 0.91× |
+| `spec.txt` to man | 2.70 | 2.50 | 2.47 | 0.91× | 0.99× |
+| `spec.txt` to LaTeX | 2.53 | 2.38 | 2.39 | 0.94× | 1.00× |
+| `spec.txt` to CommonMark | 2.60 | 2.41 | 2.39 | 0.92× | 0.99× |
+| a synthetic 5 MB document to HTML | 145.2 | 141.0 | 138.0 | 0.95× | 0.98× |
+
+Ahead of both native builds, most likely because the nineteen units are one
+Rust crate the optimiser inlines across, where the native libraries get no
+link-time optimisation.
+
+**What it took.** Nothing.
+
+## brotli 1.2.0 (not in the repository)
+
+Google's compressor (MIT): `c/common`, `c/dec` and `c/enc`, thirty-five
+units — the 120 KB dictionary table, the Huffman tables, `hash_*_inc.h`
+included many times under different macros to stamp out the hashers, the
+decoder's state machine, `platform.h`'s compiler sniffing. Its `platform.h`
+includes `<sys/types.h>`, so the units need `#pragma cinrs system_include`;
+with it, compiled unedited with no diagnostic and no warning in 8.4 s, and
+`platform.h` takes exactly the paths `gcc -E` takes for a GCC 14 (`restrict`,
+`always_inline`, the `__builtin_` forms, `memcpy` unaligned loads, x86-64).
+
+**Correctness.** 190 inputs (zeros, random, text-like; 0 bytes to 4 MiB) at
+qualities 0, 5, 9 and 11 with windows 16 and 22, one-shot and streaming in
+small pieces both ways: all 358 compressed outputs byte-identical to the
+`gcc` build's, and every `gcc` stream decodes in the `cinrs` build; the
+tarball's test data decodes to the same bytes.
+
+**Speed.** 16 MiB of text-like data, window 22, ms per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| compress, quality 5 | 217.2 | 202.5 | 213.5 | 0.98× | 1.05× |
+| decompress the quality-5 stream | 16.4 | 17.0 | 17.9 | 1.09× | 1.05× |
+| compress, quality 9 | 569.7 | 633.5 | 584.2 | 1.03× | 0.92× |
+| decompress the quality-9 stream | 12.0 | 12.2 | 13.3 | 1.11× | 1.09× |
+
+**What it took.** Nothing that changed a byte of output; it did show one
+conformance slip in the preprocessor — stringifying a macro argument kept
+the space before the argument (`"((14) * 1000000) + (( 2) * 1000)"` where
+GCC prints `((2) * 1000)`), which C11 6.10.3.2 says to drop — fixed with a
+test.
+
 ## Kissat 4.0.4 (not in the repository)
 
 Armin Biere's SAT solver (MIT): 38,944 lines of C99 in 93 `src/*.c` files,

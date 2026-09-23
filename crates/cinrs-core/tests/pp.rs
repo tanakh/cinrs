@@ -347,6 +347,139 @@ fn stringification_normalises_white_space() {
     assert_eq!(pp("#define s(x) #x\ns()"), "\"\"");
 }
 
+/// Macros for the spacing tests below, which stringify what they expand to.
+const SPACING: &str = "\
+#define S_(x) #x
+#define S(x) S_(x)
+#define SV_(...) #__VA_ARGS__
+#define SV(...) SV_(__VA_ARGS__)
+#define V(a,b) ((a)+(b))
+#define F(x) [x]
+#define G(x) [ x ]
+#define G1(x) [ x]
+#define W(x) x
+#define N
+#define N2()
+#define P(a,b) a ## b
+#define P2(a,b) [a ## b]
+#define P3(a,b) [ a ## b]
+#define P7(a,b) [a ##b ]
+#define P11(a,b) [ a ## b x]
+#define P12(a,b) [ a ## b(x)]
+#define P13(a,b) [a ## b ## a]
+#define P14(a,b) [a ## b a]
+#define Q(a,b) <a b>
+#define R(a) [ a]
+#define R2(a) [a ]
+#define R3(a,b) [ a b]
+#define M(x) [ N x]
+#define H(x) - x
+#define O [ 1 ]
+#define K(x) x x
+#define T(x) #x x
+#define Y(a) x a
+#define M3(a,b) a-b
+#define E(f, ...) f(0, ## __VA_ARGS__)
+#define E3(f, ...) f(0,##__VA_ARGS__)
+#define E4(f, ...) f(0 , ##__VA_ARGS__)
+";
+
+#[track_caller]
+fn spaced(line: &str) -> String {
+    pp(&format!("{SPACING}{line}"))
+}
+
+#[test]
+fn a_substituted_argument_is_spaced_like_its_parameter() {
+    // brotli's `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__, ...)`, through
+    // two macros: the white space before `2` in the invocation is not part
+    // of the argument, and `(b)` has none before `b`.
+    assert_eq!(spaced("S(V(1, 2))"), r#""((1)+(2))""#);
+    // `#` does not expand its operand, and the space inside it stays.
+    assert_eq!(spaced("S_(V(1, 2))"), r#""V(1, 2)""#);
+    assert_eq!(spaced("SV(a, b)"), r#""a, b""#);
+    assert_eq!(spaced("SV_(a,   b)"), r#""a, b""#);
+    assert_eq!(spaced("S(F( 1 ))"), r#""[1]""#);
+    assert_eq!(spaced("S(G(1))"), r#""[ 1 ]""#);
+    assert_eq!(spaced("S(-W( 1))"), r#""-1""#);
+    assert_eq!(spaced("S(H(  1))"), r#""- 1""#);
+    assert_eq!(spaced("S(W( V(1,2) ))"), r#""((1)+(2))""#);
+    // Line breaks and runs of white space inside an argument are one space.
+    assert_eq!(spaced("S_(  a\n   +\n     b  )"), r#""a + b""#);
+    assert_eq!(spaced("S(Q( 1 ,\n   2 ))"), r#""<1 2>""#);
+    // An empty argument.
+    assert_eq!(spaced("S(F())"), r#""[]""#);
+    assert_eq!(spaced("S(V( , ))"), r#""(()+())""#);
+}
+
+#[test]
+fn spacing_around_macros_matches_gcc_padding() {
+    // Each expectation is what `gcc -E` makes of the line.
+    let cases = [
+        ("S(P(, x))", r#""x""#),
+        ("S(P( x , y ))", r#""xy""#),
+        ("S(F( W( 1 ) ))", r#""[1]""#),
+        ("S(F(N2()))", r#""[]""#),
+        ("S( P(x, ) y)", r#""x y""#),
+        ("S(-F(1))", r#""-[1]""#),
+        ("S(-W(1))", r#""-1""#),
+        ("S(E(SV_,  1,  2))", r#""\"0, 1, 2\"""#),
+        ("S(E3(SV_,1,2))", r#""\"0,1,2\"""#),
+        ("S(E3(SV_,  1,  2))", r#""\"0, 1, 2\"""#),
+        ("S(E4(SV_, 1))", r#""\"0 , 1\"""#),
+        ("S(H(1))", r#""- 1""#),
+        ("S(P2( x, y))", r#""[xy]""#),
+        ("S(P3( x, y))", r#""[ xy]""#),
+        ("S(P2(, y))", r#""[y]""#),
+        ("S(P2( , y))", r#""[y]""#),
+        ("S(P3(,y))", r#""[ y]""#),
+        ("S(P7( , y))", r#""[y ]""#),
+        ("S(P7(x, ))", r#""[x ]""#),
+        ("S(F(O))", r#""[[ 1 ]]""#),
+        ("S(K( 1 ))", r#""1 1""#),
+        ("S(T( 1 ))", r#""\"1\" 1""#),
+        ("S(Q(,2))", r#""< 2>""#),
+        ("S(Q(1,))", r#""<1 >""#),
+        ("S(R())", r#""[ ]""#),
+        ("S(R2())", r#""[ ]""#),
+        ("S(R3(,))", r#""[ ]""#),
+        ("S(R3(,1))", r#""[ 1]""#),
+        ("S(M(1))", r#""[ 1]""#),
+        ("S(F(N 1))", r#""[ 1]""#),
+        ("S(F( N 1))", r#""[ 1]""#),
+        ("S([ N])", r#""[ ]""#),
+        ("S(x N y)", r#""x y""#),
+        ("S(F(N2() 1))", r#""[ 1]""#),
+        ("S(-W())", r#""-""#),
+        ("S(- W() +)", r#""- +""#),
+        ("S(-W()+)", r#""-+""#),
+        ("S(F(1 N))", r#""[1 ]""#),
+        ("S(F(N))", r#""[]""#),
+        ("S(G1(N))", r#""[ ]""#),
+        ("S(Y()z)", r#""x z""#),
+        ("S(+M3(,1))", r#""+-1""#),
+        ("S(F(N)z)", r#""[]z""#),
+        ("S(-F(N 1))", r#""-[ 1]""#),
+        ("S(P2(,))", r#""[]""#),
+        ("S(P3(,))", r#""[ ]""#),
+        ("S(P11(,))", r#""[ x]""#),
+        ("S(P11(,y))", r#""[ y x]""#),
+        ("S(P12(,))", r#""[ (x)]""#),
+        ("S(P13(,))", r#""[]""#),
+        ("S(P13(, y))", r#""[y]""#),
+        ("S(P14(, y))", r#""[y ]""#),
+        ("S(P3( x, ))", r#""[ x]""#),
+    ];
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|&(line, want)| {
+            let got = spaced(line);
+            (got != want).then(|| format!("{line}: got {got}, want {want}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 #[test]
 fn the_hash_hash_rule_accepts_two_separate_hashes() {
     // Rust's own lexer refuses `##` in raw-token mode, so `a # # b` has to

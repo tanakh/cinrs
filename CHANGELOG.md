@@ -423,6 +423,18 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **A stringified macro argument is spaced the way GCC and Clang space it.**
+  brotli stringifies `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__,
+  __GNUC_PATCHLEVEL__)` through two macros, and with `#define V(a,b)
+  ((a)+(b))` the string `S(V(1, 2))` came out as `"((1)+( 2))"`: the space
+  before `2` in the invocation travelled into `(b)`. The first token of a
+  substituted argument, and of a macro's replacement, now takes the white
+  space of the parameter or name it replaces (C11 6.10.3.2p2 — white space
+  around an argument is not part of it), giving `"((1)+(2))"`. A macro or
+  argument that expands to nothing, and an empty operand of `##`, leave their
+  white space for the next token as GCC's padding does, so `[ EMPTY]` and
+  `[ a b]` with two empty arguments stringify to `"[ ]"`; sixty-odd such
+  shapes are checked against `gcc -E`.
 * **A function declaration may name an incomplete return type.** Kissat's
   `kimits.h` declares `changes kissat_changes (struct kissat *);` with
   `struct changes` defined nowhere, and every unit including it stopped at

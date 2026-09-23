@@ -235,6 +235,59 @@ c99! {
     const char *name_of_two(void) { return STRINGIFY(scale_two); }
 }
 
+// A substituted argument is spaced like the parameter it replaces, not like it
+// was written in the invocation — brotli stringifies
+// `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__)` through
+// two macros. Each expectation is what GCC and Clang make of the line.
+c99! { r#"
+#include <string.h>
+
+#define V(a, b) ((a)+(b))
+#define F(x) [x]
+#define EMPTY
+#define S_(x) #x
+#define S(x) S_(x)
+#define SV_(...) #__VA_ARGS__
+#define SV(...) SV_(__VA_ARGS__)
+
+/* Bit i set when case i comes out wrong. */
+int stringified_spacing_failures(void) {
+    const char *got[] = {
+        S(V(1, 2)),
+        S_(V(1, 2)),
+        SV(a, b),
+        S(F( 1 )),
+        S_(  a
+             +   b  ),
+        S(F()),
+        S([ EMPTY]),
+    };
+    const char *want[] = {
+        "((1)+(2))",
+        "V(1, 2)",
+        "a, b",
+        "[1]",
+        "a + b",
+        "[]",
+        "[ ]",
+    };
+    int failures = 0;
+    for (int i = 0; i < (int)(sizeof got / sizeof got[0]); i++) {
+        if (strcmp(got[i], want[i]) != 0) {
+            failures |= 1 << i;
+        }
+    }
+    return failures;
+}
+"# }
+
+#[test]
+fn stringified_arguments_are_spaced_like_gcc() {
+    unsafe {
+        assert_eq!(stringified_spacing_failures(), 0);
+    }
+}
+
 #[test]
 fn pasting_generates_functions_in_string_literal_mode() {
     unsafe {
