@@ -1247,6 +1247,9 @@ impl Sema<'_> {
             },
             ast::UnaryOp::Plus | ast::UnaryOp::Minus => {
                 let value = self.expr(operand)?;
+                if value.ty.is_vector() {
+                    return self.vector_unary(op, value, range);
+                }
                 self.require_arithmetic(&value, op.as_str(), operand.range)?;
                 let promoted = self.promoted(&value);
                 let bits = self.narrow_bits(&value);
@@ -1274,6 +1277,9 @@ impl Sema<'_> {
                 if value.ty.is_complex() {
                     let ty = value.ty;
                     return Some(Expr::new(ExprKind::BitNot(Box::new(value)), ty, range));
+                }
+                if value.ty.is_vector() {
+                    return self.vector_unary(op, value, range);
                 }
                 self.require_integer(&value, "~", operand.range)?;
                 let promoted = self.promoted(&value);
@@ -1485,6 +1491,13 @@ impl Sema<'_> {
         }
 
         let rhs_value = self.expr(rhs)?;
+
+        // GCC's vector extension on the Intel types: `a * b`, `v * 2.0`,
+        // `a < b` — each is the intrinsic that does the same; see
+        // [`super::vector`].
+        if lhs_value.ty.is_vector() || rhs_value.ty.is_vector() {
+            return self.vector_binary(op, lhs_value, rhs_value, range);
+        }
 
         if let Some(cmp) = compare_op(op) {
             if lhs_value.ty.is_pointer() || rhs_value.ty.is_pointer() {
@@ -2458,6 +2471,12 @@ impl Sema<'_> {
                 range,
             ));
         };
+
+        // `v += w` on a vector is `v = v + w`, the operator lowered as it is
+        // anywhere else.
+        if ty.is_vector() {
+            return self.vector_compound(op, place, value, range);
+        }
 
         let bin = arith_op(op).expect("every compound assignment operator is arithmetic");
 

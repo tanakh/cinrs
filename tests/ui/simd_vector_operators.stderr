@@ -1,10 +1,10 @@
-error: invalid operands to binary '+' ('__m128i' and '__m128i')
+error: '*' on '__m128i' is not supported: GCC reads the type as two, four or eight 64-bit lanes, and SSE and AVX have no single instruction for that. Write the intrinsic for the lanes you mean — _mm_mullo_epi32, _mm_mul_epu32, _mm_slli_epi64, _mm_srli_epi64, _mm_srai_epi32 and their 256- and 512-bit forms
   --> tests/ui/simd_vector_operators.rs:15:16
    |
-15 |         return a + b;
+15 |         return a * b;
    |                ^
 
-error: invalid operand of type '__m128i' to unary operator '=='
+error: comparing '__m128i' vectors is not supported: GCC compares them as 64-bit lanes, which SSE2 cannot do in one instruction. Write the intrinsic for the lanes you mean — _mm_cmpeq_epi32, _mm_cmpgt_epi32, _mm_cmpeq_epi64 (SSE4.1), _mm_cmpgt_epi64 (SSE4.2) and their 256-bit forms
   --> tests/ui/simd_vector_operators.rs:19:16
    |
 19 |         return a == b;

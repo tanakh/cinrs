@@ -1869,3 +1869,90 @@ fn asm_is_refused_where_it_cannot_be_had() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// GCC's vector operators on the Intel types
+// ---------------------------------------------------------------------------
+
+/// The errors of `body`, on x86-64 with `<immintrin.h>` included.
+fn vector_errors(body: &str) -> Vec<String> {
+    errors(&format!("{X86_64}#include <immintrin.h>\n{body}"))
+}
+
+/// The operators GCC's vector extension gives the Intel types are accepted,
+/// and their results have the types GCC gives them: the operand's own for
+/// arithmetic, the same-size integer vector for a comparison.
+#[test]
+fn vector_operators_are_lowered_with_gccs_types() {
+    let found = vector_errors(
+        "__attribute__((target(\"avx512f\"))) void f(__m128d a, __m128d b, __m128 x, \
+             __m256d c, __m512d d, __m128i i, __m128i j, double s, int n) {\n\
+             __m128d r = a * b + a / b - a;\n\
+             __m128 y = x * 2.0f + 1 - x;\n\
+             __m128d t = 2.0 / a + n * a;\n\
+             __m256d u = c * c - 3.0;\n\
+             __m512d w = d / d + s;\n\
+             __m128d neg = -a, pos = +a, bits = (a & b) | (a ^ b);\n\
+             __m512d neg512 = -d, and512 = d & d;\n\
+             __m128i k = i + j - i, l = (i & j) | (i ^ ~j), m = -i;\n\
+             __m128i lt = a < b, ne = x != x;\n\
+             __m256i ge = c >= c;\n\
+             struct { __m128d v; } h = { a };\n\
+             __m128d arr[2] = { a, b };\n\
+             h.v += a; h.v *= 2.0; arr[n] -= b; arr[1] /= arr[0]; i ^= j;\n\
+             (void)r; (void)y; (void)t; (void)u; (void)w; (void)neg; (void)pos; (void)bits;\n\
+             (void)neg512; (void)and512; (void)k; (void)l; (void)m; (void)lt; (void)ne; (void)ge;\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "{found:#?}");
+    // A comparison is an integer vector, not the operand's type.
+    let found = vector_errors("void f(__m128d a) { __m128d r = a < a; (void)r; }\n");
+    assert_eq!(found.len(), 1, "{found:#?}");
+}
+
+/// What GCC's extension means but no single instruction does, what GCC
+/// refuses, and the vectors without operators: each a diagnostic naming the
+/// intrinsic to write.
+#[test]
+fn vector_operators_without_an_intrinsic_are_refused() {
+    let cases: &[(&str, &str)] = &[
+        ("__m128i f(__m128i a) { return a * a; }", "_mm_mullo_epi32"),
+        ("__m128i f(__m128i a) { return a << 1; }", "_mm_slli_epi64"),
+        ("__m128i f(__m128i a) { return a % a; }", "_mm_mullo_epi32"),
+        ("__m128i f(__m128i a) { return a == a; }", "_mm_cmpeq_epi64"),
+        (
+            "__attribute__((target(\"avx512f\"))) __m512i f(__m512d a) { return a < a; }",
+            "_mm512_cmp_pd_mask",
+        ),
+        ("__m128d f(__m128d a) { return ~a; }", "unary operator '~'"),
+        (
+            "__m128d f(__m128d a) { return a % a; }",
+            "floating vector type",
+        ),
+        (
+            "__attribute__((target(\"avx512fp16\"))) __m512h f(__m512h a) { return a + a; }",
+            "_mm512_add_ph",
+        ),
+        (
+            "__m128d f(__m128d a, __m128 b) { return a + b; }",
+            "different types",
+        ),
+        (
+            "__m128d f(__m128d a, double *p) { return a + p; }",
+            "real arithmetic scalar",
+        ),
+        ("int f(__m128d a) { return !a; }", "'!'"),
+        ("int f(__m128d a) { return a && a; }", "'&&'"),
+        (
+            "__m128d f(__m128d *p, int i) { p[i++] += *p; return *p; }",
+            "side effects",
+        ),
+    ];
+    for (source, expected) in cases {
+        let found = vector_errors(source);
+        assert!(
+            found.iter().any(|m| m.contains(expected)),
+            "{source}: expected a message containing {expected:?}, got {found:#?}"
+        );
+    }
+}

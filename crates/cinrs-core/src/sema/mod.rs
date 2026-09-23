@@ -107,6 +107,7 @@ mod init;
 mod stmt;
 mod types;
 mod va;
+mod vector;
 
 pub use atomics::is_atomic_builtin;
 

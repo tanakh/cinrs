@@ -1747,6 +1747,25 @@ fn an_intrinsic_call_becomes_a_core_arch_call() {
     ));
 }
 
+/// GCC's vector operators on the Intel types are the intrinsics that do the
+/// same: `a * b + c * 2.0` is `_mm_add_pd(_mm_mul_pd(a, b), _mm_mul_pd(c,
+/// _mm_set1_pd(2.0)))`, `-v` flips the sign bits, and a comparison is the SSE2
+/// compare cast to the integer vector GCC types it as.
+#[test]
+fn a_vector_operator_becomes_an_intrinsic_call() {
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
+        r#"
+        #include <immintrin.h>
+
+        __m128d fma_like(__m128d a, __m128d b, __m128d c) { return a * b + c * 2.0; }
+        __m128d negate(__m128d v) { return -v; }
+        __m128i less(__m128d a, __m128d b) { return a < b; }
+        "#
+    ));
+}
+
 /// `#pragma GCC target` reaches the functions *defined* after it, successive
 /// pragmas accumulate, `pop_options` puts the set back, and an attribute
 /// written on a function wins over the region outright — on either side of the

@@ -1,8 +1,8 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr#\"\n        #include <immintrin.h>\n\n        int sum4(const int *p) {\n            __m128i v = _mm_loadu_si128((const __m128i *) p);\n            __m128i s = _mm_add_epi32(v, _mm_shuffle_epi32(v, _MM_SHUFFLE(1, 0, 3, 2)));\n            return _mm_cvtsi128_si32(_mm_slli_epi32(s, 3));\n        }\n\n        __attribute__((target(\"avx2,fma\"))) float wide(const float *p) {\n            __m256 v = _mm256_loadu_ps(p);\n            return _mm256_cvtss_f32(_mm256_add_ps(v, v));\n        }\n\n        int detect(void) { return __builtin_cpu_supports(\"avx2\"); }\n        \"#)"
+expression: "generate_for_target(Standard::C99, \"x86_64-unknown-linux-gnu\",\nr#\"\n        #include <immintrin.h>\n\n        __m128d fma_like(__m128d a, __m128d b, __m128d c) { return a * b + c * 2.0; }\n        __m128d negate(__m128d v) { return -v; }\n        __m128i less(__m128d a, __m128d b) { return a < b; }\n        \"#)"
 ---
-mod __cinrs_unit_de41b25e {
+mod __cinrs_unit_dd0858e3 {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
     #[repr(C)]
@@ -252,41 +252,41 @@ mod __cinrs_unit_de41b25e {
             }
         }
     }
-    pub unsafe extern "C" fn sum4(
-        mut p: *const ::core::ffi::c_int,
-    ) -> ::core::ffi::c_int {
+    pub unsafe extern "C" fn fma_like(
+        mut a: ::core::arch::x86_64::__m128d,
+        mut b: ::core::arch::x86_64::__m128d,
+        mut c: ::core::arch::x86_64::__m128d,
+    ) -> ::core::arch::x86_64::__m128d {
         unsafe {
-            let mut v: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_loadu_si128(
-                p as *const ::core::arch::x86_64::__m128i as *const _,
+            return ::core::arch::x86_64::_mm_add_pd(
+                ::core::arch::x86_64::_mm_mul_pd(a, b),
+                ::core::arch::x86_64::_mm_mul_pd(
+                    c,
+                    ::core::arch::x86_64::_mm_set1_pd(2.0),
+                ),
             );
-            let mut s: ::core::arch::x86_64::__m128i = ::core::arch::x86_64::_mm_add_epi32(
+        }
+    }
+    pub unsafe extern "C" fn negate(
+        mut v: ::core::arch::x86_64::__m128d,
+    ) -> ::core::arch::x86_64::__m128d {
+        unsafe {
+            return ::core::arch::x86_64::_mm_xor_pd(
                 v,
-                ::core::arch::x86_64::_mm_shuffle_epi32::<{ 78i32 }>(v),
-            );
-            return ::core::arch::x86_64::_mm_cvtsi128_si32(
-                ::core::arch::x86_64::_mm_slli_epi32::<{ 3i32 }>(s),
+                ::core::arch::x86_64::_mm_set1_pd(-0.0),
             );
         }
     }
-    #[target_feature(enable = "avx2")]
-    #[target_feature(enable = "fma")]
-    pub unsafe extern "C" fn wide(
-        mut p: *const ::core::ffi::c_float,
-    ) -> ::core::ffi::c_float {
+    pub unsafe extern "C" fn less(
+        mut a: ::core::arch::x86_64::__m128d,
+        mut b: ::core::arch::x86_64::__m128d,
+    ) -> ::core::arch::x86_64::__m128i {
         unsafe {
-            let mut v: ::core::arch::x86_64::__m256 = ::core::arch::x86_64::_mm256_loadu_ps(
-                p as *const _,
+            return ::core::arch::x86_64::_mm_castpd_si128(
+                ::core::arch::x86_64::_mm_cmplt_pd(a, b),
             );
-            return ::core::arch::x86_64::_mm256_cvtss_f32(
-                ::core::arch::x86_64::_mm256_add_ps(v, v),
-            );
-        }
-    }
-    pub unsafe extern "C" fn detect() -> ::core::ffi::c_int {
-        unsafe {
-            return ((::std::is_x86_feature_detected!("avx2")) as ::core::ffi::c_int);
         }
     }
 }
 #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
-pub use __cinrs_unit_de41b25e::*;
+pub use __cinrs_unit_dd0858e3::*;

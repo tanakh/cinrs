@@ -1335,6 +1335,132 @@ c11! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GCC's vector operators on the Intel types
+// ---------------------------------------------------------------------------
+//
+// In GCC `__m128d` is a vector of two doubles, and code writes `a * b`,
+// `v * 2.0`, `-v` and `v += w` on it; each is lowered to the intrinsic that
+// does the same. The expected values are the scalar loops beside them.
+
+gnu11! {
+    #include <immintrin.h>
+    #include <stdint.h>
+    #include <string.h>
+
+    int vector_operators_128(void) {
+        double a[2] = {1.5, -3.25}, b[2] = {0.5, 8.0}, got[2];
+        float x[4] = {1.0f, 2.5f, -4.0f, 100.0f}, y[4] = {3.0f, -0.5f, 2.0f, 0.25f}, fgot[4];
+        __m128d va = _mm_loadu_pd(a), vb = _mm_loadu_pd(b);
+        __m128 vx = _mm_loadu_ps(x), vy = _mm_loadu_ps(y);
+        int i;
+
+        _mm_storeu_pd(got, va * vb + va / vb - va);
+        for (i = 0; i < 2; i++) if (got[i] != a[i] * b[i] + a[i] / b[i] - a[i]) return 0;
+        _mm_storeu_pd(got, va * 2.0);
+        for (i = 0; i < 2; i++) if (got[i] != a[i] * 2.0) return 0;
+        _mm_storeu_pd(got, 2.0 / va);
+        for (i = 0; i < 2; i++) if (got[i] != 2.0 / a[i]) return 0;
+        _mm_storeu_pd(got, 3 - va); /* an int, converted to the lane type */
+        for (i = 0; i < 2; i++) if (got[i] != 3.0 - a[i]) return 0;
+
+        _mm_storeu_ps(fgot, vx * vy - vx / vy + 1.0f);
+        for (i = 0; i < 4; i++) if (fgot[i] != x[i] * y[i] - x[i] / y[i] + 1.0f) return 0;
+        return 1;
+    }
+
+    /* `-v` flips the sign bit, so `-(0.0)` is -0.0 and `-(-0.0)` is 0.0. */
+    int vector_negation(void) {
+        double in[2] = {0.0, -0.0}, out[2];
+        uint64_t bits[2];
+        _mm_storeu_pd(out, -_mm_loadu_pd(in));
+        memcpy(bits, out, sizeof bits);
+        return bits[0] == 0x8000000000000000ull && bits[1] == 0;
+    }
+
+    int vector_integer_bitwise(void) {
+        long long a[2] = {0x0f0f0f0f0f0f0f0fll, -1}, b[2] = {0x00ff00ff00ff00ffll, 12345};
+        long long got[2];
+        __m128i va = _mm_loadu_si128((const __m128i *)a);
+        __m128i vb = _mm_loadu_si128((const __m128i *)b);
+        int i;
+        _mm_storeu_si128((__m128i *)got, (va & vb) | (va ^ ~vb));
+        for (i = 0; i < 2; i++) if (got[i] != ((a[i] & b[i]) | (a[i] ^ ~b[i]))) return 0;
+        _mm_storeu_si128((__m128i *)got, va + vb - -va);
+        for (i = 0; i < 2; i++)
+            if (got[i] != (long long)((unsigned long long)a[i] + (unsigned long long)b[i] +
+                                      (unsigned long long)a[i]))
+                return 0;
+        return 1;
+    }
+
+    struct body { __m128d pos, vel; };
+
+    /* Compound assignment through a member and an element, and a comparison
+     * feeding `_mm_movemask_pd`. */
+    int vector_compound_and_compare(void) {
+        struct body b;
+        __m128d steps[2];
+        double got[2];
+        b.pos = _mm_set_pd(2.0, 1.0);
+        b.vel = _mm_set_pd(-1.0, 0.5);
+        steps[0] = _mm_set1_pd(0.25);
+        steps[1] = _mm_set1_pd(4.0);
+        b.pos += b.vel * steps[0];
+        b.vel *= 2.0;
+        steps[1] -= b.vel;
+        _mm_storeu_pd(got, b.pos);
+        if (got[0] != 1.0 + 0.5 * 0.25 || got[1] != 2.0 - 0.25) return 0;
+        _mm_storeu_pd(got, b.vel);
+        if (got[0] != 1.0 || got[1] != -2.0) return 0;
+        _mm_storeu_pd(got, steps[1]);
+        if (got[0] != 3.0 || got[1] != 6.0) return 0;
+        /* lane 0: 1.125 < 1.0 is false; lane 1: 1.75 < 2.0 is true */
+        return _mm_movemask_pd(_mm_castsi128_pd(b.pos < _mm_set_pd(2.0, 1.0))) == 2;
+    }
+
+    __attribute__((target("avx"))) int vector_operators_256(void) {
+        double a[4] = {1.0, 2.0, -3.0, 0.125}, b[4] = {4.0, -8.0, 0.5, 2.0}, got[4];
+        __m256d va = _mm256_loadu_pd(a), vb = _mm256_loadu_pd(b);
+        int i;
+        _mm256_storeu_pd(got, (va + vb) * (va - vb) / 2.0);
+        for (i = 0; i < 4; i++) if (got[i] != (a[i] + b[i]) * (a[i] - b[i]) / 2.0) return 0;
+        /* only lane 1 holds: 2.0 >= -8.0 */
+        return _mm256_movemask_pd(_mm256_castsi256_pd(va >= vb)) == 0x2;
+    }
+
+    __attribute__((target("avx512f"))) int vector_operators_512(void) {
+        double a[8], b[8], got[8];
+        __m512d va, vb;
+        int i;
+        for (i = 0; i < 8; i++) {
+            a[i] = i * 1.5 - 4.0;
+            b[i] = 8 - i;
+        }
+        va = _mm512_loadu_pd(a);
+        vb = _mm512_loadu_pd(b);
+        _mm512_storeu_pd(got, -(va * vb - va / vb) + 1.0);
+        for (i = 0; i < 8; i++) if (got[i] != -(a[i] * b[i] - a[i] / b[i]) + 1.0) return 0;
+        return 1;
+    }
+}
+
+#[test]
+fn gcc_vector_operators_on_the_intel_types() {
+    unsafe {
+        assert_eq!(vector_operators_128(), 1);
+        assert_eq!(vector_negation(), 1);
+        assert_eq!(vector_integer_bitwise(), 1);
+        assert_eq!(vector_compound_and_compare(), 1);
+        if is_x86_feature_detected!("avx") {
+            assert_eq!(vector_operators_256(), 1);
+        }
+        if is_x86_feature_detected!("avx512f") {
+            assert_eq!(vector_operators_512(), 1);
+        }
+    }
+}
+
 #[test]
 fn mm_malloc_aligns_and_frees() {
     assert_eq!(unsafe { aligned_blocks() }, 1);

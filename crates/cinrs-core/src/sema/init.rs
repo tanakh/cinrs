@@ -1407,7 +1407,9 @@ fn existing_member(current: Option<&Expr>, index: usize) -> Option<Expr> {
 fn is_zero_value(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Int(v) => *v == 0,
-        ExprKind::Float(v) => *v == 0.0,
+        // `-0.0 == 0.0`, but its sign bit is set: `{0.0, -0.0}` is not a
+        // zero fill.
+        ExprKind::Float(v) => v.to_bits() == 0,
         ExprKind::Zeroed => true,
         ExprKind::ArrayRepeat { value, .. } => is_zero_value(value),
         ExprKind::ArrayLit(items) => items.iter().all(is_zero_value),

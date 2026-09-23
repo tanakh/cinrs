@@ -1,22 +1,22 @@
 //@compile-flags: --crate-type lib
-//! `__m128i` is opaque, exactly as C's own compilers make it.
+//! What GCC's vector extension gives `__m128i` that cinrs does not.
 //!
-//! The GNU vector extensions — `a + b` on a vector, `v[0]`, a cast between a
-//! vector and an integer — are what `__attribute__((vector_size))` buys in GCC,
-//! and `cinrs` refuses that attribute (see `tests/ui/gnu_unsupported.rs`). What
-//! it has instead is the Intel intrinsics, which is the API real code uses:
-//! `_mm_add_epi32(a, b)` rather than `a + b`, and a union or
-//! `_mm_extract_epi32` rather than a subscript.
+//! The operators with an intrinsic that does the same — `a + b` on 64-bit
+//! lanes, `& | ^ ~`, and the floating ones — are lowered to it (see
+//! `tests/simd.rs`). The rest are refused with the intrinsic to write: integer
+//! `*` and the comparisons have no single SSE2 instruction for GCC's 64-bit
+//! lanes, and `v[0]` and a cast between a vector and an integer are not here;
+//! a union or `_mm_extract_epi32` is how to reach a lane.
 
 cinrs::c11! {
     #include <immintrin.h>
 
-    __m128i added(__m128i a, __m128i b) {
-        return a + b; //~ ERROR: invalid operands to binary '+'
+    __m128i multiplied(__m128i a, __m128i b) {
+        return a * b; //~ ERROR: '*' on '__m128i' is not supported
     }
 
     int compared(__m128i a, __m128i b) {
-        return a == b; //~ ERROR: invalid operand of type '__m128i' to unary operator '=='
+        return a == b; //~ ERROR: comparing '__m128i' vectors is not supported
     }
 
     int subscripted(__m128i v) {
