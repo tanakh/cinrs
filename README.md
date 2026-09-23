@@ -97,7 +97,7 @@ That is `examples/readme.rs`: `cargo run --example readme`.
 cargo add cinrs
 ```
 
-Rust **1.88** or later. One thing needs a newer compiler: *defining* a variadic
+Rust **1.98** or later. One thing needs a newer compiler: *defining* a variadic
 function needs Rust 1.99's `c_variadic` and is a clear error before that —
 declaring and calling one, `printf` included, works everywhere.
 

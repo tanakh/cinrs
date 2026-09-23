@@ -4,13 +4,13 @@ members = ["benches/cinrs-bench", "crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Verified: `cargo +1.88.0 check -p cinrs` and the facade's behavioural tests
-# pass on 1.88.0, which is the release that stabilised
-# `proc_macro::Span::local_file` — the call this crate needs to find the `.rs`
-# file an invocation is written in. Defining a variadic function additionally
-# needs 1.99 (`c_variadic`); below that it is a located error rather than a
-# build failure. See the README.
-rust-version = "1.88"
+# Verified: `cargo +1.98.1 check -p cinrs` and the facade's behavioural tests
+# pass on 1.98.1, whose `core::arch` source the bundled x86 intrinsics headers
+# are generated from (AVX-512 is stable from 1.89; `Span::local_file`, the call
+# that finds the `.rs` file an invocation is written in, from 1.88). Defining a
+# variadic function additionally needs 1.99 (`c_variadic`); below that it is a
+# located error rather than a build failure. See the README.
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tanakh/cinrs"
 description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
