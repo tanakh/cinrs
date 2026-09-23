@@ -147,3 +147,65 @@ per-function regions changes nothing.
 **What it took.** One fix: `_Pragma`'s operand was not macro-expanded, which
 refused the `STRINGIFY` idiom (64 sites, four errors each). The fixture is not
 in this repository; the fix and its `tests/ui/pragma_operator.rs` are.
+
+## lz4 1.10.0 (not in the repository)
+
+`lib/lz4.c`, `lz4hc.c`, `lz4frame.c` and lz4's own `xxhash.c` (BSD-2-Clause),
+included into one unit in that order — no `static` name collides, and
+`lz4hc.c`'s `LZ4_SRC_INCLUDED` guard does the rest — and compiled unedited on
+the first try, with no diagnostic and no warning.
+
+**Correctness.** Round trips of the block API (`LZ4_compress_default`,
+`LZ4_compress_HC` at levels 1, 9 and 12, `LZ4_decompress_safe` and
+`_partial`), the frame API (`LZ4F_compressFrame`/`LZ4F_decompress`, with
+content checksums) and the streaming ring buffer
+(`LZ4_compress_fast_continue`/`LZ4_decompress_safe_continue`) over 21 inputs
+(zeros, random, text-like; 0 bytes to 1 MiB), plus truncated inputs and
+too-small destinations; every one of the 165 compressed outputs from the
+`cinrs` build is byte-identical to the `gcc` build's, in release and in
+debug.
+
+**Speed.** 64 MiB of text-like data, ms per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| block compress, default | 79.1 | 79.4 | 82.3 | 1.04× | 1.04× |
+| block decompress, default | 13.6 | 13.0 | 13.2 | 0.97× | 1.02× |
+| block compress, HC level 9 | 3309 | 3434 | 3320 | 1.00× | 0.97× |
+| block decompress, HC level 9 | 9.9 | 9.6 | 9.9 | 1.00× | 1.03× |
+| frame compress | 81.0 | 82.5 | 83.1 | 1.03× | 1.01× |
+| frame decompress | 13.2 | 13.3 | 13.7 | 1.04× | 1.03× |
+
+**What it took.** Nothing.
+
+## cJSON 1.7.19 (not in the repository)
+
+`cJSON.c` and `cJSON_Utils.c` (MIT), one unit each under `#pragma cinrs
+export`; compiled unedited on the first try, with no diagnostic and no warning.
+(Two units that both declare `struct cJSON` give Rust two distinct types, and
+glob-importing both makes every `cJSON_*` name ambiguous, so the test names
+the Utils functions explicitly — a property of one-unit-per-block rather than
+a fault; see [Limitations](limitations.md).)
+
+**Correctness.** 58 documents covering every value kind, `é` and
+surrogate pairs, the edge numbers (`-0`, `1e400`, 2⁵³+1, `DBL_MAX`),
+999- and 1,001-deep nesting and 17 malformed inputs, through `Print`,
+`PrintUnformatted`, `PrintBuffered`, `PrintPreallocated`, `Minify`,
+`ParseWithOpts`/`WithLength`, `GetErrorPtr`, the mutation API, JSON pointers,
+patches, merge patches and `SortObject`, with every allocation counted through
+`cJSON_InitHooks` (4,108 allocations, none live at the end of a section). The
+250-line transcript from the `cinrs` build is byte-identical to the `gcc`
+build's, every `%1.15g` number and error offset included.
+
+**Speed.** A generated 10 MB document, ms per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| parse | 58.6 | 57.8 | 57.4 | 0.98× | 0.99× |
+| print, unformatted | 54.8 | 54.3 | 55.6 | 1.01× | 1.02× |
+| print, formatted | 57.3 | 56.2 | 57.9 | 1.01× | 1.03× |
+| print, buffered | 53.1 | 51.3 | 53.6 | 1.01× | 1.04× |
+| duplicate + compare + delete | 103.6 | 102.0 | 103.1 | 1.00× | 1.01× |
+| minify | 6.8 | 6.6 | 7.3 | 1.07× | 1.11× |
+
+**What it took.** Nothing.
