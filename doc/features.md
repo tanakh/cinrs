@@ -489,10 +489,48 @@ and `__mmask64` are plain `unsigned char`, `unsigned short`, `unsigned int` and
 built and tested with ordinary integer arithmetic. And `_MM_CMPINT_ENUM`,
 `_MM_MANTISSA_NORM_ENUM`, `_MM_MANTISSA_SIGN_ENUM` and `_MM_PERM_ENUM` are
 `int`: the enumerators are the macros above, and an operand of one of these
-types is an immediate like any other. What the vectors are *not* is arithmetic:
-`a + b`, `a == b`, `v[0]` and a cast to or from an integer are each a
-diagnostic that says to use an intrinsic, exactly as they are in C compiled
-without the GNU vector extensions.
+types is an immediate like any other. A cast between a vector and an integer is
+a diagnostic that says to use an intrinsic.
+
+**GCC's vector operators work on the Intel types.** In GCC `__m128d` is a
+vector of two `double`s, and real code writes `a * b + c`, `v * 2.0`,
+`1.0 / v`, `-v`, `v += w`, `v[1]` and `(__m128d){x, y}` on it as often as it
+writes `_mm_mul_pd`. Each of those is **lowered to the intrinsic that does the
+same**, as a call of the function the included header declares — so the
+`target` attribute, the pointer rule below and the `[[cinrs::safe]]` refusal
+apply to an operator exactly as to the call written out. The lanes are GCC's:
+`float` for `__m128`/`__m256`/`__m512`, `double` for the `…d` types, and `long
+long` for the `…i` types.
+
+| Operator | `float`/`double` vectors | integer vectors (64-bit lanes) |
+| --- | --- | --- |
+| `+ - * /` | `_mm*_{add,sub,mul,div}_{ps,pd}` | `+ -` only: `_mm*_{add,sub}_epi64` |
+| `& \| ^` | `_mm*_{and,or,xor}_{ps,pd}` (512-bit: through `_si512` and the casts, which AVX-512F has) | `_mm*_{and,or,xor}_si{128,256,512}` |
+| unary `-` | the sign bits flipped, `v ^ set1(-0.0)`, as GCC does | `sub_epi64` from zero |
+| `~` | refused, as in GCC | `xor` with all ones |
+| `== != < <= > >=` | 128-bit `_mm_cmp{eq,neq,lt,le,gt,ge}`, 256-bit `_mm256_cmp` with `_CMP_*_OQ` (`!=` is `_CMP_NEQ_UQ`); all ones in a lane where it holds, typed as `__m128i`/`__m256i` | refused |
+
+A scalar operand, on either side, is converted to the lane type and broadcast
+with `set1`; `+= -= *= /= &= \|= ^=` are the operator and a store, on a
+variable, a member, an element or `*p` (not on a place reached through side
+effects). **`v[i]`** is a lane, of the lane type — an lvalue when the vector is
+an object, so `v[1] = x` and `v[0] += y` write into it, and a plain value when
+it is not (`(a * b)[0]`, which cannot be assigned to). There is no bounds check,
+as GCC has none, but a constant index outside the lanes is an error, and GCC's
+reversed `i[v]` is not taken. **Braces** list the lanes in memory order —
+`__m128d v = {a, b}`, `(__m128d){a, b}`, a member or an element inside a larger
+initialiser — as `_mm*_setr_*` (`_mm_set_epi64x(b, a)` for `__m128i`), the
+missing lanes zero and `{}` all zero; a designator is refused. A vector with
+static storage duration cannot be given lanes that way, because building one is
+a call to `core::arch` and a Rust `static` cannot make it: the message says to
+leave it zero and assign the lanes in a function, or to keep the constants in a
+`static const double[]` and load them with `_mm_loadu_pd`. **Refused**, each
+naming the intrinsic to write: integer `*`, `/`, `%`, shifts and comparisons
+(`_mm_mullo_epi32`, `_mm_slli_epi64`, `_mm_cmpeq_epi64` …, because GCC's 64-bit
+lanes have no single SSE instruction), the 512-bit comparisons (a mask:
+`_mm512_cmp_pd_mask`), every operator on the bfloat16 and half-precision
+vectors (`_mm512_add_ph`, `_mm512_dpbf16_ps`), two vectors of different types,
+and `!`, `&&`, `||` or `?:` with a vector operand.
 
 **An immediate operand must be a constant.** Intel requires the last operand of
 `_mm_slli_epi32(v, 3)`, `_mm_shuffle_epi32(v, _MM_SHUFFLE(3, 2, 1, 0))`,
@@ -591,10 +629,12 @@ The only Rust an intrinsic produces is the call.
 
 **What is not here.**
 
-* **The GNU vector extensions.** `__attribute__((vector_size(16)))`, arithmetic
-  on vectors, `__builtin_shuffle` and `__builtin_ia32_*` are refused, with a
-  diagnostic that names the Intel intrinsic to write instead. They need
-  `core::simd`, which is unstable.
+* **The GNU vector extensions' own types.** `__attribute__((vector_size(16)))`
+  on a `typedef` of the program's own, `__builtin_shuffle` and
+  `__builtin_ia32_*` are refused, with a diagnostic that names the Intel
+  intrinsic to write instead: an arbitrary vector type would need `core::simd`,
+  which is unstable. The operators on the Intel types themselves are here; see
+  above.
 * **What `core::arch` still keeps unstable.** AVX512-VP2INTERSECT's six
   `_mm*_2intersect_*` — its target feature is stable, so `target(
   "avx512vp2intersect")` and `__builtin_cpu_supports("avx512vp2intersect")`
@@ -631,8 +671,17 @@ The only Rust an intrinsic produces is the call.
   load-and-splat they are documented as, and `_MM_TRANSPOSE4_PS` is a macro in
   Intel's own headers too. `_mm_popcnt_u32` and `_mm_popcnt_u64` are macros for
   the same reason: `core::arch` calls them `_popcnt32` and `_popcnt64`.
-* **`_mm_malloc` and `_mm_free`.** GCC's `<mm_malloc.h>` wrappers around
-  `aligned_alloc`; write `aligned_alloc(32, n)` from `<stdlib.h>`.
+
+`<mm_malloc.h>` is bundled too: `_mm_malloc(size, align)` and `_mm_free(p)`,
+as `static inline` functions in portable C over `malloc` — GCC's call
+`posix_memalign`, which the Microsoft runtime lacks — with GCC's rules: an
+alignment of 1, 2 or 4 means a pointer's, zero or one that is not a power of
+two gives a null pointer, and only `_mm_free` may free the block.
+`<xmmintrin.h>` includes it as GCC's and Clang's do, which is also how
+`<stdlib.h>` arrives with `<xmmintrin.h>` — programs that call `exit` and
+`atoi` with only the intrinsics header included count on it — so every unit
+that includes an intrinsics header carries `<stdlib.h>`'s declarations and the
+two functions.
 
 One rule that is neither cinrs's nor C's but the ABI's, and worth knowing
 before it bites: **a function that passes or returns a 256-bit vector by value

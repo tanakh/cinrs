@@ -1382,12 +1382,16 @@ fn a_declared_functions_name_goes_through_the_usual_spelling() {
 
 /// **An x86 intrinsic produces no item at all.**
 ///
-/// `<immintrin.h>` declares nearly nine hundred prototypes, and not one of them
+/// `<immintrin.h>` declares some six thousand prototypes, and not one of them
 /// may reach the expansion: there is no symbol to link, and a `pub fn
 /// _mm_add_ps` in the unit's `extern` block would be glob re-exported into the
 /// user's module, where it would clash with the `use core::arch::x86_64::*`
 /// that any Rust code doing its own SIMD writes. The only Rust an intrinsic
-/// produces is the call expression at each call site.
+/// produces is the call expression at each call site. (The unit does have an
+/// `extern` block: `<xmmintrin.h>` includes `<mm_malloc.h>`, and with it
+/// `<stdlib.h>`, as GCC's does — so `malloc` and `atoi` are declared, and the
+/// two `static inline` allocation functions are defined. None of that is an
+/// intrinsic.)
 #[test]
 fn an_intrinsic_produces_no_item() {
     let output = expand_for(
@@ -1398,10 +1402,12 @@ fn an_intrinsic_produces_no_item() {
              return _mm_movemask_epi8(_mm_add_epi32(v, v));\n\
          }",
     );
-    // Not one `_mm_` item, and no `extern` block for them to have gone into.
+    // Not one `_mm_` item: no exported function, no linked symbol.
     assert!(!output.contains("pub fn _mm"), "{output}");
-    assert!(!output.contains("link_name"), "{output}");
-    assert!(!output.contains("unsafe extern \"C\" {"), "{output}");
+    assert!(!output.contains("link_name = \"_mm"), "{output}");
+    assert!(!output.contains("fn _mm_add_epi32"), "{output}");
+    // What `<stdlib.h>` brings is there, as it is with GCC's headers.
+    assert!(output.contains("# [link_name = \"malloc\"]"), "{output}");
     // What it does produce: the calls, fully qualified.
     assert!(
         output.contains(":: core :: arch :: x86_64 :: _mm_add_epi32 ("),

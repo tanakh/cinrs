@@ -64,7 +64,11 @@
   C; a 128-bit vector, and a `__mmask*`, needs nothing.
   And **a `[[cinrs::safe]]` function cannot call an intrinsic**, because every
   `core::arch` intrinsic is a `#[target_feature]` function and Rust makes those
-  unsafe to call — which is refused with the instruction set named. A memory
+  unsafe to call — which is refused with the instruction set named, and holds
+  for GCC's vector operators too (`a * b` on `__m128d` is `_mm_mul_pd`); the
+  operators with no single instruction behind them — integer multiplies,
+  shifts and comparisons on the 64-bit lanes GCC reads `__m128i` as, and the
+  512-bit comparisons — are refused with the intrinsic to write. A memory
   operand is `void *` or `const void *` exactly where GCC 15.2's headers have
   it, and typed where GCC types it, so a call needs the casts it needs with GCC
   and no others; sixty-two names that `core::arch` deprecates, keeps unstable or

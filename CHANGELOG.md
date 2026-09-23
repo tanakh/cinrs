@@ -89,6 +89,55 @@ follows [Semantic Versioning][semver].
   and the fifty FP16 and BF16 intrinsics that take or return a scalar `f16` or
   `bf16`.
 
+* **GCC's vector operators, subscripts and brace initialisers on the Intel
+  vector types.** In GCC `__m128d` is a vector of two doubles, and real code
+  writes `a * b + c`, `v * 2.0`, `1.0 / v`, `-v`, `v += w`, `v[1]` and
+  `(__m128d){x, y}` on it. Each is now lowered to the intrinsic that does the
+  same, a call of the function the header declares, so the `target`,
+  pointer and `[[cinrs::safe]]` rules apply unchanged: `+ - * /` and `& | ^`
+  on the float and double vectors at every width, `+ -` and the bitwise
+  operators on the integer vectors as GCC's 64-bit lanes, unary `-` as a
+  sign-bit flip, the comparisons on the 128- and 256-bit float and double
+  vectors typed as the same-size integer vector, a scalar on either side
+  converted to the lane type and broadcast, and the compound assignments.
+  `v[i]` is a lane of the lane type — an lvalue when the vector is an object
+  — with a constant index out of range an error; `{a, b}` lists the lanes in
+  memory order (`_mm_setr_pd`), the missing ones zero. Refused, each naming
+  the intrinsic to write: integer `*`, `/`, `%`, shifts and comparisons, the
+  512-bit comparisons, every operator on the bfloat16 and half-precision
+  vectors, designators in a vector's braces, `~` on a float vector, the
+  reversed `i[v]`, and lanes for a vector with static storage duration, which
+  would be a call in a Rust `static` (the message says to assign them in a
+  function). `__attribute__((vector_size))` on a type of the program's own
+  stays refused.
+* **`<mm_malloc.h>`**, bundled: `_mm_malloc` and `_mm_free` as `static inline`
+  functions in portable C over `malloc`, with GCC's alignment rules (1, 2 and
+  4 mean a pointer's; zero or a non-power of two is a null pointer), since
+  GCC's calls `posix_memalign`, which the Microsoft runtime lacks.
+  `<xmmintrin.h>` includes it as GCC's and Clang's do, and with it
+  `<stdlib.h>` — programs call `exit` and `atoi` with only the intrinsics
+  header included — so every unit that includes an intrinsics header carries
+  `<stdlib.h>`'s declarations and the two functions.
+* **An aligned variable length array.** `double v[n]
+  __attribute__((aligned(32)))` or `_Alignas(32)` on a variable length array
+  used to be refused; the heap storage is now over-allocated and the array
+  starts at the first multiple of the alignment, which is what an aligned AVX
+  load of it needs. An `_Alignas` weaker than the element type's is still the
+  error it is on any object.
+* **A byte order mark** opening a file — the unit's own text or an
+  `#include`d header — is skipped, as GCC and Clang skip it, with every
+  column still counted from the start of the file. One anywhere else is still
+  a stray character.
+* **The Benchmarks Game's SIMD programs in the benchmark suite.**
+  `fannkuch-redux-ssse3`, `n-body-sse`, `n-body-avx`, `mandelbrot-sse2`,
+  `spectral-norm-sse2`, `spectral-norm-sse41`, `spectral-norm-avx` and
+  `spectral-norm-avx2` are vendored under
+  `benches/cinrs-bench/programs/benchmarksgame/`, and all eight print, byte
+  for byte, what the `gcc -O2` and `clang -O2` builds print; the timings are
+  in [doc/benchmarks.md](doc/benchmarks.md). A program's row can now name the
+  instruction sets it is written for, which become `-mNAME` for the native
+  compilers and `-C target-feature=+NAME` for the `cinrs` build.
+
 * **`__attribute__((target("avx2")))` and `#pragma GCC target`.** GCC's way of
   telling one function which instruction sets it may use becomes
   `#[target_feature(enable = "avx2")]` on the generated item, with GCC's name
@@ -289,6 +338,13 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`{0.0, -0.0}` keeps its sign.** An initialiser whose values were all zero
+  was emitted as a zero fill, and `-0.0 == 0.0` counted it as one, so
+  `double d[2] = {0.0, -0.0}` lost the sign of its second element. A zero fill
+  is now only for values whose bits are all zero.
+* **Assigning to a lane of a vector value is refused.** `(a * b)[0] = 1`
+  wrote into the hidden local that holds the product; it is now "expression is
+  not assignable", as `f().x = 1` is, and as GCC's "lvalue required" says.
 * **A wide bit-field keeps its width under a cast, `_Generic` and
   `__builtin_choose_expr`.** A value computed in the width of a bit-field wider
   than `int` — `s.b - 8` with `unsigned long long b : 40` — wraps at forty bits,

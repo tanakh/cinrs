@@ -271,11 +271,19 @@ every generated function is one `unsafe` block, an intrinsic can be called
 without it: an `unsafe` block satisfies Rust's rule on its own, and the
 attribute is what a function that means to be *given* the instruction set says.
 
-And what is **not** there: no `extern "C"` block. `<immintrin.h>` declared eight
-hundred and eighty-one functions in this unit and not one of them produced an
-item — no `pub fn _mm_add_ps`, nothing in the glob re-export, nothing to link.
-The `pub type __m128i = …` aliases are there because the header wrote
-`typedef`s, exactly as it does in C.
+And what is **not** there: no `extern "C"` block for the intrinsics.
+`<immintrin.h>` declared six thousand and seventy-five of them in this unit and
+not one produced an item — no `pub fn _mm_add_ps`, nothing in the glob
+re-export, nothing to link. The `pub type __m128i = …` aliases are there because
+the header wrote `typedef`s, exactly as it does in C; so are `<stdlib.h>`'s
+declarations and `<mm_malloc.h>`'s two `static inline` functions, which
+`<xmmintrin.h>` includes as GCC's does.
+
+GCC's vector operators are the same call: `a * b + c * 2.0` on `__m128d` is
+written `_mm_add_pd(_mm_mul_pd(a, b), _mm_mul_pd(c, _mm_set1_pd(2.0)))`, `v[i]`
+is `*((double *)&v + i)`, and `(__m128d){a, b}` is `_mm_setr_pd(a, b)` —
+sema lowers each to the intrinsic the header declares, so nothing about them is
+new to code generation.
 
 The one intrinsic that produces an item is one whose **address** is taken, which
 GCC allows because its intrinsics are `static inline` functions. `core::arch`'s
@@ -611,6 +619,11 @@ changes is where the bytes are, and that a very large one fails the way a
 nothing, as it does in GCC; a *negative* one is undefined behaviour in C, and
 here it converts to a huge `size_t` and the allocation aborts rather than
 corrupting anything.
+
+A variable length array asked to be over-aligned —
+`double v[n] __attribute__((aligned(32)))` — gets enough spare elements in its
+`Vec` to reach the next multiple of the alignment, and the pointer starts
+there: `p.add((p as usize).wrapping_neg() & 31)` on the storage's bytes.
 
 `alloca(n)` takes one 16-byte aligned block out of a per-function arena, and the
 whole arena is freed by the `return` — which is `alloca`'s own lifetime, so a

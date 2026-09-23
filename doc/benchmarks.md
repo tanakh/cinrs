@@ -33,20 +33,28 @@ Regenerate with
 | Rust | rustc 1.98.1 (48a229cea 2026-09-01) |
 | GCC | gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0 |
 | Clang | Ubuntu clang version 21.1.8 (6ubuntu1) |
-| Measured | 2026-09-22 |
+| Measured | 2026-09-23 |
 
 ## Benchmarks Game
 
 | program | input | gcc (s) | clang (s) | cinrs (s) | cinrs/gcc | cinrs/clang | output |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `fannkuch-redux` | `11` | 1.826 | 1.832 | 1.955 | 1.07× | 1.07× | same |
-| `n-body` | `20000000` | 0.672 | 0.673 | 0.696 | 1.04× | 1.03× | same |
-| `spectral-norm` | `5500` | 0.919 | 0.929 | 0.929 | 1.01× | 1.00× | same |
-| `mandelbrot` | `4000` | 0.599 | 0.615 | 0.616 | 1.03× | 1.00× | same |
-| `fasta` | `2500000` | 0.362 | 0.366 | 0.384 | 1.06× | 1.05× | same |
-| `reverse-complement` | `stdin=fasta 25000000 (254 MB)` | 0.220 | 0.223 | 0.291 | 1.33× | 1.30× | same |
-| `binary-trees` | `18` | 0.765 | 0.815 | 0.836 | 1.09× | 1.03× | same |
-| `pidigits` | `10000` | 0.366 | 0.366 | 0.384 | 1.05× | 1.05× | same |
+| `fannkuch-redux` | `11` | 1.911 | 1.835 | 1.937 | 1.01× | 1.06× | same |
+| `n-body` | `20000000` | 0.666 | 0.665 | 0.680 | 1.02× | 1.02× | same |
+| `spectral-norm` | `5500` | 0.905 | 0.908 | 0.912 | 1.01× | 1.00× | same |
+| `mandelbrot` | `4000` | 0.588 | 0.605 | 0.606 | 1.03× | 1.00× | same |
+| `fasta` | `2500000` | 0.361 | 0.359 | 0.397 | 1.10× | 1.10× | same |
+| `reverse-complement` | `stdin=fasta 25000000 (254 MB)` | 0.236 | 0.214 | 0.247 | 1.05× | 1.15× | same |
+| `binary-trees` | `18` | 0.781 | 0.827 | 0.833 | 1.07× | 1.01× | same |
+| `pidigits` | `10000` | 0.387 | 0.372 | 0.361 | 0.93× | 0.97× | same |
+| `fannkuch-redux-ssse3` | `11` | 0.663 | 0.781 | 0.836 | 1.26× | 1.07× | same |
+| `n-body-sse` | `20000000` | 0.634 | 0.600 | 0.601 | 0.95× | 1.00× | same |
+| `n-body-avx` | `20000000` | 0.602 | 0.365 | 0.368 | 0.61× | 1.01× | same |
+| `spectral-norm-sse2` | `5500` | 0.452 | 0.461 | 0.528 | 1.17× | 1.15× | same |
+| `spectral-norm-sse41` | `5500` | 0.441 | 0.441 | 0.446 | 1.01× | 1.01× | same |
+| `spectral-norm-avx2` | `5500` | 0.225 | 0.227 | 0.226 | 1.01× | 1.00× | same |
+| `spectral-norm-avx` | `5500` | 0.691 | 0.542 | 0.544 | 0.79× | 1.00× | same |
+| `mandelbrot-sse2` | `4000` | 0.195 | 0.111 | 0.110 | 0.56× | 0.99× | same |
 
 <details><summary>what each row exercises</summary>
 
@@ -58,6 +66,14 @@ Regenerate with
 * `reverse-complement` — reads 254 MB from stdin through `fgets`; a table lookup per byte
 * `binary-trees` — `malloc`/`free` churn over a recursive tree; needs the platform's <malloc.h>
 * `pidigits` — spigot digits of pi through GMP; the work is in the library, not in the C
+* `fannkuch-redux-ssse3` — fannkuch-redux with each flip one `_mm_shuffle_epi8` (SSSE3)
+* `n-body-sse` — n-body two pairs at a time in `__m128d`, `_mm_rsqrt_ps` and Newton steps (SSE2)
+* `n-body-avx` — n-body one body per `__m256d`, `_mm256_hadd_pd` and `_mm_rsqrt_ps` (AVX)
+* `spectral-norm-sse2` — spectral-norm two columns at a time, `_mm_set_pd`/`_mm_div_pd` (SSE2)
+* `spectral-norm-sse41` — spectral-norm with A's entries computed in `__m128i`, `_mm_mullo_epi32` (SSE4.1)
+* `spectral-norm-avx2` — the SSE4.1 row at twice the width, `_mm256_mullo_epi32` (AVX2)
+* `spectral-norm-avx` — spectral-norm over 4x4 blocks of A, `_mm_rcp_ps` and a Goldschmidt step (AVX)
+* `mandelbrot-sse2` — mandelbrot eight pixels in four `__m128d`, GNU vector operators and subscripts (SSE2)
 
 </details>
 
@@ -65,9 +81,9 @@ Regenerate with
 
 | program | input | gcc (s) | clang (s) | cinrs (s) | cinrs/gcc | cinrs/clang | output |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `dhrystone` | `stdin=50000000` | 0.423 | 0.169 | 0.461 | 1.09× | 2.72× | same |
-| `whetstone` | `400000` | 1.620 | 1.633 | 1.644 | 1.01× | 1.01× | same |
-| `linpack` | `1600` | 0.378 | 0.244 | 0.246 | 0.65× | 1.01× | same |
+| `dhrystone` | `stdin=50000000` | 0.409 | 0.168 | 0.450 | 1.10× | 2.68× | same |
+| `whetstone` | `400000` | 1.584 | 1.628 | 1.624 | 1.03× | 1.00× | same |
+| `linpack` | `1600` | 0.332 | 0.213 | 0.215 | 0.65× | 1.01× | same |
 
 <details><summary>what each row exercises</summary>
 
@@ -81,35 +97,35 @@ Regenerate with
 
 | program | input | gcc (s) | clang (s) | cinrs (s) | cinrs/gcc | cinrs/clang | output |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `sieve` | `40000000 4` | 0.441 | 0.438 | 0.437 | 0.99× | 1.00× | same |
-| `recursion` | `32 10 3 8` | 0.547 | 0.069 | 0.069 | 0.13× | 1.00× | same |
-| `nqueens` | `15` | 0.748 | 0.825 | 0.791 | 1.06× | 0.96× | same |
-| `matmul` | `1024 4` | 0.506 | 0.514 | 0.511 | 1.01× | 1.00× | same |
-| `matmul-vla` | `1024 4` | 0.859 | 0.514 | 0.516 | 0.60× | 1.00× | same |
-| `sort` | `3000000 2` | 0.847 | 0.805 | 0.854 | 1.01× | 1.06× | same |
-| `binsearch` | `2000000 8000000` | 0.838 | 0.852 | 0.959 | 1.14× | 1.13× | same |
-| `fft` | `20 8` | 0.480 | 0.468 | 0.474 | 0.99× | 1.01× | same |
-| `crc32` | `4000000 100` | 0.588 | 0.589 | 0.593 | 1.01× | 1.01× | same |
-| `sha256` | `200000 900` | 0.417 | 0.419 | 0.394 | 0.94× | 0.94× | same |
-| `prng` | `400000000` | 0.447 | 0.441 | 0.441 | 0.99× | 1.00× | same |
-| `life` | `512 500` | 0.473 | 0.345 | 0.362 | 0.77× | 1.05× | same |
-| `levenshtein` | `2000 200` | 0.598 | 1.024 | 1.025 | 1.71× | 1.00× | same |
-| `hashtable` | `4000000 20000000` | 0.811 | 0.833 | 0.821 | 1.01× | 0.99× | same |
-| `libc-str` | `4096 4000000` | 0.424 | 0.430 | 0.431 | 1.02× | 1.00× | same |
-| `hand-str` | `4096 400000` | 0.626 | 0.011 | 0.011 | 0.02× | 1.05× | same |
-| `bitfields` | `200000 1200` | 0.382 | 0.484 | 0.374 | 0.98× | 0.77× | same |
-| `vla` | `64 10000000` | 0.425 | 0.434 | 0.543 | 1.28× | 1.25× | same |
-| `vla-hoisted` | `64 10000000` | 0.415 | 0.431 | 0.407 | 0.98× | 0.94× | same |
-| `interp-switch` | `150000000` | 0.728 | 0.598 | 0.708 | 0.97× | 1.18× | same |
-| `interp-goto` | `150000000` | 0.526 | 0.843 | 0.813 | 1.54× | 0.96× | same |
-| `structval` | `1000000000` | 0.455 | 1.501 | 1.441 | 3.17× | 0.96× | same |
-| `chase` | `4000000 6000000` | 0.731 | 0.768 | 0.737 | 1.01× | 0.96× | same |
-| `statemachine` | `8000000 30` | 0.411 | 0.401 | 0.405 | 0.98× | 1.01× | same |
-| `statemachine-structured` | `8000000 30` | 0.414 | 0.417 | 0.422 | 1.02× | 1.01× | same |
-| `complexmandel` | `1600 200` | 0.380 | 0.419 | 0.568 | 1.49× | 1.36× | same |
-| `wrapping` | `120000000` | 0.338 | 0.356 | 0.355 | 1.05× | 1.00× | same |
-| `divide` | `120000000` | 0.430 | 0.366 | 0.364 | 0.85× | 0.99× | same |
-| `simd-dot` | `200000 4000` | 0.397 | 0.534 | 0.513 | 1.29× | 0.96× | same |
+| `sieve` | `40000000 4` | 0.378 | 0.351 | 0.350 | 0.93× | 1.00× | same |
+| `recursion` | `32 10 3 8` | 0.542 | 0.068 | 0.069 | 0.13× | 1.01× | same |
+| `nqueens` | `15` | 0.740 | 0.815 | 0.780 | 1.05× | 0.96× | same |
+| `matmul` | `1024 4` | 0.500 | 0.505 | 0.506 | 1.01× | 1.00× | same |
+| `matmul-vla` | `1024 4` | 0.852 | 0.507 | 0.510 | 0.60× | 1.01× | same |
+| `sort` | `3000000 2` | 0.816 | 0.786 | 0.842 | 1.03× | 1.07× | same |
+| `binsearch` | `2000000 8000000` | 0.822 | 0.832 | 0.749 | 0.91× | 0.90× | same |
+| `fft` | `20 8` | 0.454 | 0.446 | 0.480 | 1.06× | 1.08× | same |
+| `crc32` | `4000000 100` | 0.598 | 0.609 | 0.649 | 1.09× | 1.07× | same |
+| `sha256` | `200000 900` | 0.428 | 0.419 | 0.391 | 0.91× | 0.93× | same |
+| `prng` | `400000000` | 0.445 | 0.433 | 0.442 | 0.99× | 1.02× | same |
+| `life` | `512 500` | 0.477 | 0.345 | 0.362 | 0.76× | 1.05× | same |
+| `levenshtein` | `2000 200` | 0.646 | 1.069 | 1.143 | 1.77× | 1.07× | same |
+| `hashtable` | `4000000 20000000` | 0.812 | 0.859 | 0.839 | 1.03× | 0.98× | same |
+| `libc-str` | `4096 4000000` | 0.432 | 0.465 | 0.496 | 1.15× | 1.07× | same |
+| `hand-str` | `4096 400000` | 0.661 | 0.012 | 0.011 | 0.02× | 0.97× | same |
+| `bitfields` | `200000 1200` | 0.413 | 0.493 | 0.407 | 0.99× | 0.83× | same |
+| `vla` | `64 10000000` | 0.454 | 0.460 | 0.570 | 1.26× | 1.24× | same |
+| `vla-hoisted` | `64 10000000` | 0.445 | 0.440 | 0.436 | 0.98× | 0.99× | same |
+| `interp-switch` | `150000000` | 0.761 | 0.744 | 0.822 | 1.08× | 1.11× | same |
+| `interp-goto` | `150000000` | 0.570 | 0.916 | 0.873 | 1.53× | 0.95× | same |
+| `structval` | `1000000000` | 0.503 | 1.540 | 1.495 | 2.98× | 0.97× | same |
+| `chase` | `4000000 6000000` | 0.847 | 0.753 | 0.724 | 0.85× | 0.96× | same |
+| `statemachine` | `8000000 30` | 0.429 | 0.414 | 0.431 | 1.00× | 1.04× | same |
+| `statemachine-structured` | `8000000 30` | 0.430 | 0.443 | 0.442 | 1.03× | 1.00× | same |
+| `complexmandel` | `1600 200` | 0.390 | 0.420 | 0.559 | 1.43× | 1.33× | same |
+| `wrapping` | `120000000` | 0.344 | 0.357 | 0.354 | 1.03× | 0.99× | same |
+| `divide` | `120000000` | 0.427 | 0.370 | 0.361 | 0.85× | 0.98× | same |
+| `simd-dot` | `200000 4000` | 0.396 | 0.598 | 0.624 | 1.58× | 1.04× | same |
 
 <details><summary>what each row exercises</summary>
 
@@ -155,49 +171,57 @@ The `cinrs` column is one `rustc` process: the macro expands the C — lexer, pr
 
 | program | C lines | gcc (s) | clang (s) | cinrs rustc (s) | cinrs peak RSS |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `fannkuch-redux` | 71 | 0.14 | 0.10 | 0.21 | 130 MiB |
-| `n-body` | 141 | 0.13 | 0.11 | 0.22 | 132 MiB |
-| `spectral-norm` | 52 | 0.13 | 0.11 | 0.22 | 131 MiB |
-| `mandelbrot` | 58 | 0.12 | 0.10 | 0.21 | 130 MiB |
-| `fasta` | 108 | 0.12 | 0.10 | 0.25 | 140 MiB |
-| `reverse-complement` | 70 | 0.12 | 0.09 | 0.21 | 131 MiB |
-| `binary-trees` | 131 | 0.16 | 0.10 | 0.22 | 134 MiB |
-| `pidigits` | 65 | 0.12 | 0.09 | 0.25 | 138 MiB |
-| `dhrystone` | 21 | 0.17 | 0.14 | 0.29 | 134 MiB |
-| `whetstone` | 433 | 0.17 | 0.12 | 0.24 | 135 MiB |
-| `linpack` | 172 | 0.14 | 0.12 | 0.25 | 133 MiB |
-| `sieve` | 46 | 0.13 | 0.10 | 0.20 | 131 MiB |
-| `recursion` | 46 | 0.14 | 0.11 | 0.20 | 130 MiB |
-| `nqueens` | 38 | 0.11 | 0.09 | 0.19 | 130 MiB |
-| `matmul` | 62 | 0.13 | 0.11 | 0.22 | 132 MiB |
-| `matmul-vla` | 66 | 0.12 | 0.11 | 0.22 | 133 MiB |
-| `sort` | 108 | 0.13 | 0.11 | 0.22 | 132 MiB |
-| `binsearch` | 53 | 0.11 | 0.09 | 0.20 | 132 MiB |
-| `fft` | 97 | 0.14 | 0.11 | 0.22 | 133 MiB |
-| `crc32` | 54 | 0.11 | 0.11 | 0.20 | 133 MiB |
-| `sha256` | 136 | 0.13 | 0.11 | 0.23 | 134 MiB |
-| `prng` | 33 | 0.11 | 0.09 | 0.20 | 130 MiB |
-| `life` | 56 | 0.13 | 0.10 | 0.22 | 132 MiB |
-| `levenshtein` | 69 | 0.12 | 0.10 | 0.21 | 132 MiB |
-| `hashtable` | 75 | 0.12 | 0.09 | 0.21 | 132 MiB |
-| `libc-str` | 55 | 0.11 | 0.10 | 0.21 | 132 MiB |
-| `hand-str` | 73 | 0.12 | 0.10 | 0.21 | 133 MiB |
-| `bitfields` | 84 | 0.11 | 0.10 | 0.20 | 134 MiB |
-| `vla` | 44 | 0.11 | 0.10 | 0.20 | 131 MiB |
-| `vla-hoisted` | 44 | 0.11 | 0.10 | 0.20 | 131 MiB |
-| `interp-switch` | 114 | 0.11 | 0.09 | 0.20 | 132 MiB |
-| `interp-goto` | 111 | 0.12 | 0.09 | 0.22 | 133 MiB |
-| `structval` | 76 | 0.11 | 0.09 | 0.19 | 131 MiB |
-| `chase` | 61 | 0.11 | 0.10 | 0.20 | 132 MiB |
-| `statemachine` | 109 | 0.12 | 0.10 | 0.20 | 132 MiB |
-| `statemachine-structured` | 108 | 0.12 | 0.10 | 0.21 | 133 MiB |
-| `complexmandel` | 44 | 0.11 | 0.09 | 0.21 | 133 MiB |
-| `wrapping` | 41 | 0.11 | 0.09 | 0.19 | 131 MiB |
-| `divide` | 44 | 0.11 | 0.09 | 0.20 | 131 MiB |
-| `simd-dot` | 190 | 0.34 | 0.22 | 0.25 | 139 MiB |
+| `fannkuch-redux` | 71 | 0.12 | 0.10 | 0.21 | 131 MiB |
+| `n-body` | 141 | 0.12 | 0.11 | 0.21 | 133 MiB |
+| `spectral-norm` | 52 | 0.13 | 0.11 | 0.21 | 132 MiB |
+| `mandelbrot` | 58 | 0.11 | 0.10 | 0.19 | 131 MiB |
+| `fasta` | 108 | 0.13 | 0.10 | 0.24 | 140 MiB |
+| `reverse-complement` | 70 | 0.12 | 0.09 | 0.21 | 133 MiB |
+| `binary-trees` | 131 | 0.16 | 0.09 | 0.22 | 135 MiB |
+| `pidigits` | 65 | 0.12 | 0.11 | 0.26 | 138 MiB |
+| `fannkuch-redux-ssse3` | 187 | 0.14 | 0.12 | 0.25 | 140 MiB |
+| `n-body-sse` | 233 | 0.33 | 0.21 | 0.39 | 152 MiB |
+| `n-body-avx` | 208 | 0.34 | 0.20 | 0.35 | 151 MiB |
+| `spectral-norm-sse2` | 87 | 0.14 | 0.13 | 0.24 | 142 MiB |
+| `spectral-norm-sse41` | 133 | 0.32 | 0.22 | 0.36 | 149 MiB |
+| `spectral-norm-avx2` | 138 | 0.33 | 0.21 | 0.37 | 149 MiB |
+| `spectral-norm-avx` | 196 | 0.38 | 0.21 | 0.38 | 153 MiB |
+| `mandelbrot-sse2` | 202 | 0.17 | 0.12 | 0.28 | 144 MiB |
+| `dhrystone` | 21 | 0.16 | 0.10 | 0.22 | 136 MiB |
+| `whetstone` | 433 | 0.14 | 0.11 | 0.22 | 135 MiB |
+| `linpack` | 172 | 0.15 | 0.12 | 0.23 | 135 MiB |
+| `sieve` | 46 | 0.11 | 0.09 | 0.20 | 130 MiB |
+| `recursion` | 46 | 0.13 | 0.09 | 0.19 | 130 MiB |
+| `nqueens` | 38 | 0.11 | 0.09 | 0.19 | 131 MiB |
+| `matmul` | 62 | 0.12 | 0.10 | 0.20 | 133 MiB |
+| `matmul-vla` | 66 | 0.12 | 0.10 | 0.20 | 133 MiB |
+| `sort` | 108 | 0.13 | 0.11 | 0.22 | 133 MiB |
+| `binsearch` | 53 | 0.11 | 0.09 | 0.19 | 133 MiB |
+| `fft` | 97 | 0.13 | 0.10 | 0.21 | 134 MiB |
+| `crc32` | 54 | 0.15 | 0.10 | 0.21 | 133 MiB |
+| `sha256` | 136 | 0.14 | 0.14 | 0.22 | 136 MiB |
+| `prng` | 33 | 0.11 | 0.09 | 0.19 | 133 MiB |
+| `life` | 56 | 0.12 | 0.11 | 0.21 | 132 MiB |
+| `levenshtein` | 69 | 0.13 | 0.10 | 0.24 | 132 MiB |
+| `hashtable` | 75 | 0.14 | 0.11 | 0.27 | 133 MiB |
+| `libc-str` | 55 | 0.13 | 0.12 | 0.24 | 133 MiB |
+| `hand-str` | 73 | 0.14 | 0.11 | 0.23 | 133 MiB |
+| `bitfields` | 84 | 0.13 | 0.10 | 0.25 | 135 MiB |
+| `vla` | 44 | 0.13 | 0.25 | 0.23 | 131 MiB |
+| `vla-hoisted` | 44 | 0.12 | 0.12 | 0.27 | 132 MiB |
+| `interp-switch` | 114 | 0.13 | 0.10 | 0.22 | 134 MiB |
+| `interp-goto` | 111 | 0.13 | 0.10 | 0.26 | 134 MiB |
+| `structval` | 76 | 0.12 | 0.10 | 0.23 | 134 MiB |
+| `chase` | 61 | 0.13 | 0.10 | 0.24 | 133 MiB |
+| `statemachine` | 109 | 0.14 | 0.12 | 0.21 | 133 MiB |
+| `statemachine-structured` | 108 | 0.14 | 0.10 | 0.23 | 133 MiB |
+| `complexmandel` | 44 | 0.12 | 0.10 | 0.28 | 132 MiB |
+| `wrapping` | 41 | 0.13 | 0.11 | 0.23 | 132 MiB |
+| `divide` | 44 | 0.13 | 0.11 | 0.22 | 132 MiB |
+| `simd-dot` | 190 | 0.39 | 0.47 | 0.44 | 150 MiB |
 
-The slowest `cinrs` compilation is `dhrystone` at **0.29 s**, and the largest is `fasta` at **140 MiB** — neither is close to the thresholds this report flags, which are 30 s and 2 GiB.
- Read them against the floor: `fn main() {}`, compiled with the very same flags and the same `--extern cinrs`, costs **0.11 s** and **79 MiB** on this machine. Nearly all of both columns is `rustc` starting and loading the procedural macro, not the C being translated.
+The slowest `cinrs` compilation is `simd-dot` at **0.44 s**, and the largest is `spectral-norm-avx` at **153 MiB** — neither is close to the thresholds this report flags, which are 30 s and 2 GiB.
+ Read them against the floor: `fn main() {}`, compiled with the very same flags and the same `--extern cinrs`, costs **0.14 s** and **79 MiB** on this machine. Nearly all of both columns is `rustc` starting and loading the procedural macro, not the C being translated.
 
 "C lines" is the length of the file named in the program table. `dhrystone` is the exception: the twenty-one lines there are an amalgamation that `#include`s Weicker's two source files, about seven hundred lines between them.
 
@@ -208,32 +232,37 @@ The slowest `cinrs` compilation is `dhrystone` at **0.29 s**, and the largest is
 
 ## What the numbers say
 
-Across the 40 programs measured, the median `cinrs`/`gcc -O2` ratio is **1.01×**, and **32 of 40** are within 10 % of `gcc -O2` or faster. The extremes are `hand-str` at 0.02× and `structval` at 3.17×.
+Across the 48 programs measured, the median `cinrs`/`gcc -O2` ratio is **1.02×**, and **39 of 48** are within 10 % of `gcc -O2` or faster. The extremes are `hand-str` at 0.02× and `structval` at 2.98×.
 
 The `clang` column is what separates the two kinds of difference. `cinrs` and `clang` share a back end, so a row where `clang` is exactly as slow as `cinrs` is not saying anything about the translation at all — it is LLVM's code generator against GCC's, and every Rust program on the machine is subject to it. A row where `cinrs` is slower than **both** is the translation's own.
 
 **Slower than both, which is `cinrs`'s own to answer for:**
 
-* `binsearch` — 1.14× gcc, 1.13× clang. unpredictable branches and cache misses
-* `vla` — 1.28× gcc, 1.25× clang. a variable length array made afresh every iteration (a `Vec` in the expansion)
-* `reverse-complement` — 1.33× gcc, 1.30× clang. reads 254 MB from stdin through `fgets`; a table lookup per byte
-* `complexmandel` — 1.49× gcc, 1.36× clang. `double _Complex` arithmetic, Annex G recovery and all
+* `spectral-norm-sse2` — 1.17× gcc, 1.15× clang. spectral-norm two columns at a time, `_mm_set_pd`/`_mm_div_pd` (SSE2)
+* `vla` — 1.26× gcc, 1.24× clang. a variable length array made afresh every iteration (a `Vec` in the expansion)
+* `complexmandel` — 1.43× gcc, 1.33× clang. `double _Complex` arithmetic, Annex G recovery and all
 
 **Slower than `gcc` but level with `clang`, i.e. LLVM against GCC and not this crate:**
 
-* `simd-dot` — 1.29× gcc, 0.96× clang.
-* `interp-goto` — 1.54× gcc, 0.96× clang.
-* `levenshtein` — 1.71× gcc, 1.00× clang.
-* `structval` — 3.17× gcc, 0.96× clang.
+* `libc-str` — 1.15× gcc, 1.07× clang.
+* `fannkuch-redux-ssse3` — 1.26× gcc, 1.07× clang.
+* `interp-goto` — 1.53× gcc, 0.95× clang.
+* `simd-dot` — 1.58× gcc, 1.04× clang.
+* `levenshtein` — 1.77× gcc, 1.07× clang.
+* `structval` — 2.98× gcc, 0.97× clang.
 
 **Faster than `gcc -O2`:**
 
 * `hand-str` — 0.02× gcc.
 * `recursion` — 0.13× gcc.
+* `mandelbrot-sse2` — 0.56× gcc.
 * `matmul-vla` — 0.60× gcc.
+* `n-body-avx` — 0.61× gcc.
 * `linpack` — 0.65× gcc.
-* `life` — 0.77× gcc.
+* `life` — 0.76× gcc.
+* `spectral-norm-avx` — 0.79× gcc.
 * `divide` — 0.85× gcc.
+* `chase` — 0.85× gcc.
 
 ### Why, construct by construct
 
