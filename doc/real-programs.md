@@ -209,3 +209,54 @@ build's, every `%1.15g` number and error offset included.
 | minify | 6.8 | 6.6 | 7.3 | 1.07× | 1.11× |
 
 **What it took.** Nothing.
+
+## libdeflate 1.26 (not in the repository)
+
+The DEFLATE/zlib/gzip library (MIT), `lib/*.c` and `lib/x86/*` as shipped:
+CRC32 in PCLMUL, VPCLMULQDQ and AVX-512 forms, Adler-32 in AVX2, AVX-512 and
+AVX-VNNI forms, a BMI2 decompressor, every one behind a per-function
+`__attribute__((target("…")))`, and a `cpuid`/`xgetbv` dispatcher in inline
+assembly. Upstream compiles every file with plain `-O2`, and so did the native
+builds here. Two units (`deflate_compress.c` and `deflate_decompress.c` each
+define a `BITBUF_NBITS` of their own, so they cannot share one).
+
+**What it took.** Two things, neither a bug in the translation of what runs:
+
+* `common_defs.h` is `#error "gcc versions older than 4.9 are no longer
+  supported"`, because `cinrs` says `__GNUC__` is 4.2, as clang does; and the
+  same version gate switches off the VPCLMULQDQ CRC32 (gcc ≥ 10.1) and the
+  AVX-VNNI Adler-32 (≥ 12.1). The fixture took clang's way out — defining
+  `__clang__` and its version before the include, which passes the gate and
+  selects exactly the paths the native clang build selects. What `cinrs`
+  should claim to be is an open question this program sharpened.
+* The AVX2 and AVX-512 Adler-32 templates keep their accumulators alive with
+  gcc's empty barrier, `__asm__("" : "+x"(v))` on an `__m256i` and
+  `"+v"` on an `__m512i`; `cinrs`'s inline assembly took `"x"` only at 128
+  bits and did not know `"v"`. Those are gaps in the asm subset (`asm!` has
+  `ymm_reg` and `zmm_reg`), on the list.
+
+**Correctness.** 189 streams — zeros, random and text-like inputs from 0 bytes
+to 4 MiB, levels 1, 6 and 12, raw, zlib and gzip — round-trip in release and
+in debug, and **every compressed stream from the `cinrs` build is
+byte-identical to the `gcc` build's**; each build decompresses the other two's
+streams; the platform's zlib 1.3.1, reached through a `system_include` unit,
+accepts all 126 zlib and gzip streams; `crc32` and `adler32` match bit-by-bit
+references over 1,806 short cases, 1 MiB of random bytes, 1 MiB of `0xFF` and
+chained uneven pieces. The dispatcher reports the same feature word in all
+three builds, so the runs used the VPCLMULQDQ/AVX-512 CRC32, the AVX-512 VNNI
+Adler-32 and the BMI2 decompressor.
+
+**Speed.** ms per pass:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| compress level 1, 64 MiB of text | 144.1 | 154.4 | 160.6 | 1.11× | 1.04× |
+| decompress the level-1 stream | 36.8 | 41.8 | 40.4 | 1.10× | 0.97× |
+| compress level 6 | 573.7 | 623.5 | 652.5 | 1.14× | 1.05× |
+| decompress the level-6 stream | 33.1 | 34.9 | 33.5 | 1.01× | 0.96× |
+| `crc32` over 256 MiB | 7.4 | 7.6 | 6.4 | 0.86× | 0.84× |
+| `adler32` over 256 MiB | 7.3 | 8.0 | 6.9 | 0.95× | 0.86× |
+
+Within 5 % of clang throughout; the compressor is 11–14 % behind gcc, which
+is ahead of clang on it too. The checksums run at memory bandwidth in all
+three.
