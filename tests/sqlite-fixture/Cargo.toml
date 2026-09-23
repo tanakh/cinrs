@@ -36,6 +36,13 @@ nothreads = []
 # Link the platform's own `libsqlite3` as well and compare the two on the same
 # query. Switched on by `scripts/check-sqlite.sh` when the library is there.
 system-sqlite = []
+# For `scripts/check-sqlite.sh --bench` only: translate no C, declare the API
+# from `sqlite3.h` alone, and link the same amalgamation as built by `gcc -O2`
+# / `clang -O2` into `target/sqlite/native/libsqlite3_{gcc,clang}.a` (see
+# `build.rs`). The benchmark in `tests/bench.rs` is then the same Rust over a
+# native build of the same C.
+native-gcc = []
+native-clang = []
 
 [dependencies]
 cinrs = { path = "../.." }

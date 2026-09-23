@@ -5,6 +5,7 @@
 #   scripts/check-sqlite.sh              both configurations, debug and release
 #   scripts/check-sqlite.sh --quick      the default configuration in debug only
 #   scripts/check-sqlite.sh --keep       do not delete the downloaded zip
+#   scripts/check-sqlite.sh --bench      time it against gcc -O2 and clang -O2
 #
 # SQLite's amalgamation is the largest single C translation unit anyone ships:
 # 269,649 lines of C in one file, a 7,000-line `switch` with `goto`s for the
@@ -31,6 +32,14 @@
 # is run against it too, so that there is a number to compare. It is not a
 # benchmark — one loop in one process, and the platform's library is a different
 # release built with different options — but it is a first number.
+#
+# `--bench` is the measurement that is: it builds the *same* amalgamation with
+# `gcc -O2 -std=gnu11 -c` and `clang -O2 -std=gnu11 -c`, `SQLITE_THREADSAFE=1`
+# as the default configuration has it, into
+# `target/sqlite/native/libsqlite3_{gcc,clang}.a`, runs `tests/bench.rs` over
+# the translated C and over each library (features `native-gcc`,
+# `native-clang`), and prints one table. It fails if the builds' checksums
+# differ. A compiler that is not installed is skipped with a note.
 #
 # Like every other step of this project's verification it runs under a ceiling on
 # the address space and one on the clock: `CINRS_SQLITE_ULIMIT_V` (kilobytes,
@@ -67,6 +76,7 @@ VMEM_KB=${CINRS_SQLITE_ULIMIT_V:-8000000}
 SECONDS_LIMIT=${CINRS_SQLITE_TIMEOUT:-2400}
 QUICK=0
 KEEP=0
+BENCH=0
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -78,8 +88,9 @@ for arg in "$@"; do
     case $arg in
     -q | --quick) QUICK=1 ;;
     -k | --keep) KEEP=1 ;;
+    --bench) BENCH=1 ;;
     -h | --help)
-        sed -n '3,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -213,6 +224,44 @@ fi
 
 grep -q "define SQLITE_VERSION *\"$SQLITE_VERSION\"" "$WORK/sqlite3.h" ||
     die "$WORK/sqlite3.h is not SQLite $SQLITE_VERSION"
+
+# ---------------------------------------------------------------------------
+# --bench: cinrs against gcc -O2 and clang -O2, through the same Rust
+# ---------------------------------------------------------------------------
+
+if [ "$BENCH" -eq 1 ]; then
+    # shellcheck source=native-bench.sh
+    . "$ROOT/scripts/native-bench.sh"
+    NB_NAME=check-sqlite
+    NB_TARGET_DIR=$ROOT/target/sqlite-fixture
+    NATIVE=$WORK/native
+    mkdir -p "$NATIVE"
+    nb_find_compilers
+    # The configuration the fixture's default unit is: the bare amalgamation,
+    # `SQLITE_THREADSAFE=1` (its default, spelled out).
+    for cc in "${NB_CCS[@]}"; do
+        say ""
+        say "=== native SQLite, $cc ==="
+        obj=$NATIVE/obj-$cc
+        rm -rf "$obj"
+        mkdir -p "$obj"
+        nb_compile "$cc" "$AMALGAMATION" "$obj/sqlite3.o" -DSQLITE_THREADSAFE=1 ||
+            die "$cc could not compile sqlite3.c"
+        nb_archive "$NATIVE/libsqlite3_$cc.a" "$obj/sqlite3.o"
+    done
+    RAN=(cinrs)
+    FAILED_BENCH=0
+    nb_run cinrs || FAILED_BENCH=1
+    for cc in "${NB_CCS[@]}"; do
+        if nb_run "$cc" "native-$cc"; then
+            RAN+=("$cc")
+        else
+            FAILED_BENCH=1
+        fi
+    done
+    nb_report "${RAN[@]}" || FAILED_BENCH=1
+    exit "$FAILED_BENCH"
+fi
 
 # ---------------------------------------------------------------------------
 # the platform's own libsqlite3, for comparison

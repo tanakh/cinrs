@@ -377,6 +377,30 @@ fixture checks on every hash.
 It is in `scripts/ci.sh --full` only, because it needs the network; it needs no
 particular toolchain.
 
+### Against gcc and clang: `--bench`
+
+Each of the three scripts takes `--bench`, which is not part of the check and
+not run by `scripts/ci.sh`. It compiles the same upstream C natively with
+`gcc -O2 -std=gnu11` and `clang -O2 -std=gnu11`, with the per-file flags
+upstream's own build uses (BLAKE3's `-msse4.1`, `-mavx2`,
+`-mavx512f -mavx512vl`; xxHash's `XXH_VECTOR`/`XXH_NAMESPACE` per copy and a
+plain `xxh_x86dispatch.c`; SQLite's `SQLITE_THREADSAFE=1`), into static
+libraries under `target/<program>/native/`. Then it runs the fixture's
+`tests/bench.rs` — `#[ignore]`d, so the check itself never times anything —
+three times, one `cargo test --release --test bench -- --ignored` at a time:
+over the C cinrs translated, and with `--features native-gcc` and
+`--features native-clang`, which replace the translated units with
+header-only ones (`blake3_impl.h`, `xxhash.h` under the same namespace and
+`xxh_x86dispatch.h`, `sqlite3.h`) and `#pragma cinrs link` the native library.
+The Rust that drives the workload is therefore the same in all three, and so
+are the declarations it calls through. The script prints one table —
+`section | gcc ms | clang ms | cinrs ms | cinrs/gcc | cinrs/clang`, medians of
+five repetitions — with each build's checksums, the compiler versions and the
+date, and fails if the checksums differ. The shared machinery is
+`scripts/native-bench.sh`. The numbers, and the same measurement for the
+programs tried outside the repository, are in
+[`doc/real-programs.md`](real-programs.md).
+
 ### SQLite's numbers, measured once
 
 On an x86-64 laptop under WSL2, glibc 2.43, `cargo +beta` 1.99.0-beta.6, SQLite

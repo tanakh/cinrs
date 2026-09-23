@@ -29,7 +29,16 @@
 //! `typedef __attribute__((__aligned__(1))) … xxh_u64 xxh_unalign64;`
 //! (xxhash.h:2661, 3382), which cinrs turns into `read_unaligned` — the debug
 //! build, which panics on a misaligned dereference, is what checks it.
+//!
+//! **`--features native-gcc` / `native-clang`** are for
+//! `scripts/check-xxhash.sh --bench` only. No C is translated then: `sse2` is
+//! `xxhash.h` under the same `XXH_NAMESPACE`, and `dispatch` is
+//! `xxh_x86dispatch.h`, both as header-only units, so the declarations and
+//! types are still cinrs's, and the functions come from the same five units
+//! compiled by `gcc -O2` or `clang -O2` into `target/xxhash/native/`
+//! (`build.rs` says where). The benchmark uses only those two modules.
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod scalar {
     //! `xxhash.c` with `XXH_VECTOR=XXH_SCALAR`.
     cinrs::gnu11! {
@@ -40,6 +49,7 @@ pub mod scalar {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod sse2 {
     //! `xxhash.c` with `XXH_VECTOR=XXH_SSE2` (the x86-64 baseline).
     cinrs::gnu11! {
@@ -51,6 +61,7 @@ pub mod sse2 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod avx2 {
     //! `xxhash.c` with `XXH_VECTOR=XXH_AVX2`, upstream built with `-mavx2`.
     cinrs::gnu11! {
@@ -64,6 +75,7 @@ pub mod avx2 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod avx512 {
     //! `xxhash.c` with `XXH_VECTOR=XXH_AVX512`, upstream built with
     //! `-mavx512f`.
@@ -76,6 +88,7 @@ pub mod avx512 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod dispatch {
     //! `xxh_x86dispatch.c`: its own copy of the library, the three kernels
     //! behind `__attribute__((__target__))`, and `cpuid` — whose template is
@@ -88,3 +101,51 @@ pub mod dispatch {
         #include "../../../target/xxhash/xxh_x86dispatch.c"
     }
 }
+
+#[cfg(feature = "native-gcc")]
+pub mod sse2 {
+    //! `sse2_XXH32`, `sse2_XXH64`, `sse2_XXH3_*`: `xxhash.h` under the
+    //! namespace the native `xxhash.c -DXXH_NAMESPACE=sse2_` exports.
+    cinrs::gnu11! {
+        #pragma cinrs link "xxhash_gcc"
+        #define XXH_NAMESPACE sse2_
+        #include "../../../target/xxhash/xxhash.h"
+    }
+}
+
+#[cfg(feature = "native-gcc")]
+pub mod dispatch {
+    //! `XXH3_*_dispatch` and `XXH_featureTest`, from `xxh_x86dispatch.h`.
+    cinrs::gnu11! {
+        #pragma cinrs link "xxhash_gcc"
+        #include "../../../target/xxhash/xxh_x86dispatch.h"
+    }
+}
+
+#[cfg(all(feature = "native-clang", not(feature = "native-gcc")))]
+pub mod sse2 {
+    //! As above, from the clang library.
+    cinrs::gnu11! {
+        #pragma cinrs link "xxhash_clang"
+        #define XXH_NAMESPACE sse2_
+        #include "../../../target/xxhash/xxhash.h"
+    }
+}
+
+#[cfg(all(feature = "native-clang", not(feature = "native-gcc")))]
+pub mod dispatch {
+    //! As above, from the clang library.
+    cinrs::gnu11! {
+        #pragma cinrs link "xxhash_clang"
+        #include "../../../target/xxhash/xxh_x86dispatch.h"
+    }
+}
+
+/// Which build this is, for the benchmark to print.
+pub const CONFIGURATION: &str = if cfg!(feature = "native-gcc") {
+    "native gcc -O2"
+} else if cfg!(feature = "native-clang") {
+    "native clang -O2"
+} else {
+    "cinrs"
+};

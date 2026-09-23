@@ -5,6 +5,7 @@
 #   scripts/check-xxhash.sh              debug and release
 #   scripts/check-xxhash.sh --quick      debug only
 #   scripts/check-xxhash.sh --keep       do not delete the downloaded archive
+#   scripts/check-xxhash.sh --bench      time it against gcc -O2 and clang -O2
 #
 # xxHash is one header, `xxhash.h` (7,500 lines), that is the whole library when
 # `XXH_IMPLEMENTATION` or `XXH_INLINE_ALL` is defined, plus `xxhash.c` to
@@ -30,6 +31,14 @@
 #   SHA-256   5738270935e7c3d38a79b3adf7c9692566ce7895a25f67de43ad52ab504acd32
 #             (computed from the archive on 2026-09-24; GitHub publishes none)
 #   Licence   BSD-2-Clause
+#
+# `--bench` builds the same five units natively — `gcc -O2 -std=gnu11 -c` and
+# `clang -O2 -std=gnu11 -c`, `xxhash.c` once per `XXH_VECTOR` with its
+# `XXH_NAMESPACE` and `-m` flag, `xxh_x86dispatch.c` with none, as upstream
+# builds it — into `target/xxhash/native/libxxhash_{gcc,clang}.a`, runs
+# `tests/bench.rs` over the translated C and over each library (features
+# `native-gcc`, `native-clang`), and prints one table. It fails if the builds'
+# checksums differ. A compiler that is not installed is skipped with a note.
 #
 # Like every other step of this project's verification it runs under a ceiling on
 # the address space and one on the clock: `CINRS_XXHASH_ULIMIT_V` (kilobytes,
@@ -58,6 +67,7 @@ VMEM_KB=${CINRS_XXHASH_ULIMIT_V:-8000000}
 SECONDS_LIMIT=${CINRS_XXHASH_TIMEOUT:-1200}
 QUICK=0
 KEEP=0
+BENCH=0
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -69,8 +79,9 @@ for arg in "$@"; do
     case $arg in
     -q | --quick) QUICK=1 ;;
     -k | --keep) KEEP=1 ;;
+    --bench) BENCH=1 ;;
     -h | --help)
-        sed -n '3,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -160,6 +171,54 @@ else
 fi
 
 is_this_version || die "$WORK/xxhash.h is not xxHash $XXHASH_TAG"
+
+# ---------------------------------------------------------------------------
+# --bench: cinrs against gcc -O2 and clang -O2, through the same Rust
+# ---------------------------------------------------------------------------
+
+if [ "$BENCH" -eq 1 ]; then
+    # shellcheck source=native-bench.sh
+    . "$ROOT/scripts/native-bench.sh"
+    NB_NAME=check-xxhash
+    NB_TARGET_DIR=$ROOT/target/xxhash-fixture
+    NATIVE=$WORK/native
+    mkdir -p "$NATIVE"
+    nb_find_compilers
+    # The fixture's five units, natively: `xxhash.c` per `XXH_VECTOR` under
+    # the fixture's `XXH_NAMESPACE`, with the `-m` flag that vector width needs
+    # (upstream leaves the choice to `-mavx2`/`-mavx512f`), and
+    # `xxh_x86dispatch.c` with no `-m` flag, as upstream's Makefile builds it.
+    for cc in "${NB_CCS[@]}"; do
+        say ""
+        say "=== native xxHash, $cc ==="
+        obj=$NATIVE/obj-$cc
+        rm -rf "$obj"
+        mkdir -p "$obj"
+        nb_compile "$cc" "$WORK/xxhash.c" "$obj/xxhash_scalar.o" -DXXH_NAMESPACE=scalar_ -DXXH_VECTOR=XXH_SCALAR ||
+            die "$cc could not compile xxhash.c (scalar)"
+        nb_compile "$cc" "$WORK/xxhash.c" "$obj/xxhash_sse2.o" -DXXH_NAMESPACE=sse2_ -DXXH_VECTOR=XXH_SSE2 -msse2 ||
+            die "$cc could not compile xxhash.c (sse2)"
+        nb_compile "$cc" "$WORK/xxhash.c" "$obj/xxhash_avx2.o" -DXXH_NAMESPACE=avx2_ -DXXH_VECTOR=XXH_AVX2 -mavx2 ||
+            die "$cc could not compile xxhash.c (avx2)"
+        nb_compile "$cc" "$WORK/xxhash.c" "$obj/xxhash_avx512.o" -DXXH_NAMESPACE=avx512_ -DXXH_VECTOR=XXH_AVX512 -mavx512f ||
+            die "$cc could not compile xxhash.c (avx512)"
+        nb_compile "$cc" "$WORK/xxh_x86dispatch.c" "$obj/xxh_x86dispatch.o" ||
+            die "$cc could not compile xxh_x86dispatch.c"
+        nb_archive "$NATIVE/libxxhash_$cc.a" "$obj"/*.o
+    done
+    RAN=(cinrs)
+    FAILED_BENCH=0
+    nb_run cinrs || FAILED_BENCH=1
+    for cc in "${NB_CCS[@]}"; do
+        if nb_run "$cc" "native-$cc"; then
+            RAN+=("$cc")
+        else
+            FAILED_BENCH=1
+        fi
+    done
+    nb_report "${RAN[@]}" || FAILED_BENCH=1
+    exit "$FAILED_BENCH"
+fi
 
 # ---------------------------------------------------------------------------
 # build and run

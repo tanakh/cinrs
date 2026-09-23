@@ -19,6 +19,15 @@ publish = false
 
 [workspace]
 
+[features]
+# For `scripts/check-blake3.sh --bench` only: translate no C, declare the API
+# from `blake3.h` alone, and link the same seven upstream files as built by
+# `gcc -O2` / `clang -O2` into `target/blake3/native/libblake3_{gcc,clang}.a`
+# (see `build.rs`). The benchmark in `tests/bench.rs` is then the same Rust
+# over a native build of the same C.
+native-gcc = []
+native-clang = []
+
 [dependencies]
 cinrs = { path = "../.." }
 

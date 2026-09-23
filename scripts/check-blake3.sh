@@ -5,6 +5,7 @@
 #   scripts/check-blake3.sh              debug and release
 #   scripts/check-blake3.sh --quick      debug only
 #   scripts/check-blake3.sh --keep       do not delete the downloaded archive
+#   scripts/check-blake3.sh --bench      time it against gcc -O2 and clang -O2
 #
 # BLAKE3's C implementation is small — about 3,000 lines in seven files — but it
 # is the SIMD side of cinrs in one program: SSE2, SSE4.1, AVX2 and AVX-512
@@ -25,6 +26,13 @@
 #   SHA-256   c6782a28842b1c0478524ac06a4f2ede784038ee298d6e2162c0b089c4306a3c
 #             (computed from the archive on 2026-09-24; GitHub publishes none)
 #   Licence   CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception
+#
+# `--bench` builds the same seven files natively — `gcc -O2 -std=gnu11 -c` and
+# `clang -O2 -std=gnu11 -c`, each SIMD file with the `-m` flags upstream's own
+# build gives it — into `target/blake3/native/libblake3_{gcc,clang}.a`, runs
+# `tests/bench.rs` over the translated C and over each library (features
+# `native-gcc`, `native-clang`), and prints one table. It fails if the builds'
+# checksums differ. A compiler that is not installed is skipped with a note.
 #
 # Like every other step of this project's verification it runs under a ceiling on
 # the address space and one on the clock: `CINRS_BLAKE3_ULIMIT_V` (kilobytes,
@@ -52,6 +60,7 @@ VMEM_KB=${CINRS_BLAKE3_ULIMIT_V:-8000000}
 SECONDS_LIMIT=${CINRS_BLAKE3_TIMEOUT:-1200}
 QUICK=0
 KEEP=0
+BENCH=0
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -63,8 +72,9 @@ for arg in "$@"; do
     case $arg in
     -q | --quick) QUICK=1 ;;
     -k | --keep) KEEP=1 ;;
+    --bench) BENCH=1 ;;
     -h | --help)
-        sed -n '3,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *)
@@ -140,6 +150,50 @@ fi
 
 grep -q "define BLAKE3_VERSION_STRING \"$BLAKE3_TAG\"" "$WORK/c/blake3.h" ||
     die "$WORK/c/blake3.h is not BLAKE3 $BLAKE3_TAG"
+
+# ---------------------------------------------------------------------------
+# --bench: cinrs against gcc -O2 and clang -O2, through the same Rust
+# ---------------------------------------------------------------------------
+
+if [ "$BENCH" -eq 1 ]; then
+    # shellcheck source=native-bench.sh
+    . "$ROOT/scripts/native-bench.sh"
+    NB_NAME=check-blake3
+    NB_TARGET_DIR=$ROOT/target/blake3-fixture
+    NATIVE=$WORK/native
+    mkdir -p "$NATIVE"
+    nb_find_compilers
+    # The seven files and the flags upstream's Makefile.testing and
+    # CMakeLists.txt give each: nothing for the portable three, `-msse2`,
+    # `-msse4.1`, `-mavx2` and `-mavx512f -mavx512vl` for the SIMD four.
+    for cc in "${NB_CCS[@]}"; do
+        say ""
+        say "=== native BLAKE3, $cc ==="
+        obj=$NATIVE/obj-$cc
+        rm -rf "$obj"
+        mkdir -p "$obj"
+        nb_compile "$cc" "$WORK/c/blake3.c" "$obj/blake3.o" || die "$cc could not compile blake3.c"
+        nb_compile "$cc" "$WORK/c/blake3_dispatch.c" "$obj/blake3_dispatch.o" || die "$cc could not compile blake3_dispatch.c"
+        nb_compile "$cc" "$WORK/c/blake3_portable.c" "$obj/blake3_portable.o" || die "$cc could not compile blake3_portable.c"
+        nb_compile "$cc" "$WORK/c/blake3_sse2.c" "$obj/blake3_sse2.o" -msse2 || die "$cc could not compile blake3_sse2.c"
+        nb_compile "$cc" "$WORK/c/blake3_sse41.c" "$obj/blake3_sse41.o" -msse4.1 || die "$cc could not compile blake3_sse41.c"
+        nb_compile "$cc" "$WORK/c/blake3_avx2.c" "$obj/blake3_avx2.o" -mavx2 || die "$cc could not compile blake3_avx2.c"
+        nb_compile "$cc" "$WORK/c/blake3_avx512.c" "$obj/blake3_avx512.o" -mavx512f -mavx512vl || die "$cc could not compile blake3_avx512.c"
+        nb_archive "$NATIVE/libblake3_$cc.a" "$obj"/*.o
+    done
+    RAN=(cinrs)
+    FAILED_BENCH=0
+    nb_run cinrs || FAILED_BENCH=1
+    for cc in "${NB_CCS[@]}"; do
+        if nb_run "$cc" "native-$cc"; then
+            RAN+=("$cc")
+        else
+            FAILED_BENCH=1
+        fi
+    done
+    nb_report "${RAN[@]}" || FAILED_BENCH=1
+    exit "$FAILED_BENCH"
+fi
 
 # ---------------------------------------------------------------------------
 # build and run

@@ -19,6 +19,15 @@ publish = false
 
 [workspace]
 
+[features]
+# For `scripts/check-xxhash.sh --bench` only: translate no C, declare the API
+# from the headers alone, and link the same five units as built by `gcc -O2` /
+# `clang -O2` into `target/xxhash/native/libxxhash_{gcc,clang}.a` (see
+# `build.rs`). The benchmark in `tests/bench.rs` is then the same Rust over a
+# native build of the same C.
+native-gcc = []
+native-clang = []
+
 [dependencies]
 cinrs = { path = "../.." }
 

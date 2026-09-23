@@ -1,0 +1,149 @@
+# Real programs: what runs, and how fast
+
+[`doc/benchmarks.md`](benchmarks.md) measures whole *small* programs — the
+Benchmarks Game, Dhrystone, kernels — built three ways and compared byte for
+byte. This page is the same question asked of *libraries other people wrote*,
+taken as they ship and never edited: does the C build through `cinrs`, does it
+give the answers its own tests demand, and how fast is the result against the
+same source compiled by `gcc -O2` and `clang -O2`?
+
+The method is the same for every row. The upstream release is fetched at a
+pinned version and hash. It is compiled by `cinrs` (a release build, `rustc
+-C opt-level=3`), and separately by `gcc -O2 -std=gnu11` and `clang -O2
+-std=gnu11` into static libraries, with exactly the per-file flags upstream's
+own build uses (`-mavx2` for the file upstream compiles with `-mavx2`, and so
+on). One Rust test drives all three through the *same* declarations — the
+native builds are reached through a header-only `cinrs` unit and `#pragma
+cinrs link` — runs a fixed, seeded workload, and prints a checksum, so the
+three builds are shown to have done the same work before their times are
+compared. Times are the median of five repetitions, in milliseconds per pass.
+
+Neither `-march=native` nor `-ffast-math` nor link-time optimisation is given to
+any side, and every call in the native columns crosses into a static library
+while the `cinrs` column is Rust the optimiser can see through; see the
+[benchmark page's caveats](benchmarks.md#caveats). A library's own run-time
+dispatch (`cpuid`) is left to do what it does in each build, and on this host
+every dispatcher picks its AVX-512 path.
+
+For the three programs whose checks are in this repository the whole
+measurement is one command — `scripts/check-blake3.sh --bench`,
+`scripts/check-xxhash.sh --bench`, `scripts/check-sqlite.sh --bench` — which
+builds the native libraries, runs the three ways and prints the table
+([`doc/testsuites.md`](testsuites.md#against-gcc-and-clang---bench)). The
+programs tried outside the repository are measured the same way from a fixture
+under `target/wild/`, which is not committed; what *is* committed for those is
+every fix they prompted, each with a test naming the program.
+
+The host for every number below: AMD Ryzen 9 9950X (AVX-512), Linux 6.18 under
+WSL2, gcc 15.2.0, clang 21.1.8, rustc 1.98.1 — 1.99.0-beta.6 for the programs
+that define a variadic function — measured on 2026-09-24 with nothing else
+running.
+
+## SQLite 3.53.4
+
+The amalgamation, 269,649 lines in one file, public domain, `SQLITE_THREADSAFE=1`;
+what it exercises is in [`doc/testsuites.md`](testsuites.md#one-real-program-sqlite).
+Needs Rust 1.99 for its twenty variadic definitions. An in-memory database,
+`PRAGMA journal_mode=MEMORY`, everything through
+`sqlite3_prepare_v2`/`bind`/`step`/`reset`:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 200,000 inserts in one transaction | 38.9 | 39.0 | 41.2 | 1.06× | 1.06× |
+| 200,000 point lookups by primary key | 63.4 | 63.9 | 67.0 | 1.06× | 1.05× |
+| 200 range scans of 10,000 rows with `ORDER BY` | 303.8 | 293.3 | 305.9 | 1.01× | 1.04× |
+| `GROUP BY` over 200,000 rows | 42.0 | 41.2 | 41.7 | 0.99× | 1.01× |
+| 200,000 updates by primary key | 71.7 | 67.5 | 70.4 | 0.98× | 1.04× |
+
+Everything within 6 %. The virtual machine, `sqlite3VdbeExec` — a 7,000-line
+`switch` full of `goto`s that becomes a control-flow graph and is relooped —
+runs at the speed the C compilers give it.
+
+## BLAKE3 1.8.7
+
+The reference C implementation, about 3,000 lines in seven files: SSE2,
+SSE4.1, AVX2 and AVX-512 kernels each compiled under the target its file asks
+for, and a `cpuid` dispatcher in inline assembly, which picks AVX-512 here
+(`blake3_simd_degree()` is 16) in all three builds.
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 MiB in 1 MiB updates | 8.36 | 7.93 | 7.61 | 0.91× | 0.96× |
+| 1,000,000 messages of 64 bytes | 90.7 | 70.6 | 70.6 | 0.78× | 1.00× |
+| 100,000 messages of 1 KiB | 108.9 | 100.8 | 102.1 | 0.94× | 1.01× |
+| `keyed_hash` over 16 MiB | 1.62 | 1.43 | 1.48 | 0.92× | 1.04× |
+| `finalize_seek`, 16 MiB of output | 1.66 | 1.28 | 2.40 | 1.44× | 1.87× |
+
+The hashing sections are at or under the native builds (`cinrs` and clang
+agree; gcc is the slow one on the 64-byte messages). The one open item is the
+extended-output path: producing 16 MiB through `finalize_seek` costs 1.4–1.9×,
+which points at the translation of `blake3_xof_many` and the per-block output
+loop rather than at the kernels the other rows share. Not profiled yet.
+
+## xxHash 0.8.4
+
+`xxhash.h` compiled four times (scalar, SSE2, AVX2, AVX-512 — each the way
+upstream's own build compiles it) and `xxh_x86dispatch.c`, whose dispatcher
+picks AVX-512 here (`XXH_featureTest()` is 3) in all three builds. XXH3 goes
+through the dispatcher; XXH32 and XXH64, which it does not cover, come from
+the SSE2 unit, as in upstream's default x86-64 build.
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `XXH3_64bits` over 64 MiB | 1.33 | 1.41 | 1.49 | 1.12× | 1.05× |
+| `XXH3_128bits` over 64 MiB | 1.35 | 1.37 | 1.49 | 1.11× | 1.09× |
+| `XXH3_64bits`, 1,000,000 keys of 32 bytes | 1.79 | 1.64 | 1.53 | 0.86× | 0.93× |
+| `XXH3_64bits`, 1,000,000 keys of 256 bytes | 6.36 | 3.83 | 4.01 | 0.63× | 1.05× |
+| `XXH64` over 64 MiB | 2.30 | 2.33 | 2.31 | 1.00× | 0.99× |
+| `XXH32` over 64 MiB | 4.39 | 4.36 | 4.36 | 0.99× | 1.00× |
+| `XXH3_64bits` streaming, 64 MiB in 4 KiB updates | 1.91 | 1.93 | 2.78 | 1.46× | 1.44× |
+
+The one-shot rows are within 12 % (gcc is the outlier on the 256-byte keys, not
+`cinrs`). The open item is the streaming row: the same kernels reached through
+`XXH3_64bits_update` in 4 KiB pieces cost 1.45×, so the per-update path — the
+dispatcher's `update` and its consume-stripes code — is where the translation
+loses, not the kernels. Not profiled yet.
+
+## CRoaring 4.7.2 (not in the repository)
+
+The compressed-bitmap library, as its amalgamated `roaring.c` and `roaring.h`
+(21,497 and 10,543 lines; Apache-2.0 OR MIT). What it asks of a compiler: a
+`cpuid` dispatcher in inline assembly (`"=b"`), AVX2 and AVX-512 kernels behind
+per-function-group `_Pragma(STRINGIFY(GCC target(T)))` regions, `_pext_u64` and
+the other BMI2 intrinsics, `_Static_assert`, flexible array members, `_Atomic`
+reference counts, `restrict`, copy-on-write, and one variadic definition
+(`roaring_bitmap_of`), which is why it needs Rust 1.99.
+
+**Correctness.** A differential test against a `BTreeSet<u32>` reference:
+4,000 seeded operations (`add`, `add_many`, `add_range`, `remove_range`,
+`flip`, `and`/`or`/`xor`/`andnot` in the new-bitmap, in-place and cardinality
+forms, `run_optimize`, copies as copy-on-write snapshots) in four
+configurations, with `internal_validate`, cardinality, `contains`,
+`to_uint32_array`, `rank`, `select`, both iterators and a portable
+serialise/deserialise round trip checked along the way. No mismatch, in
+release, in debug (where a misaligned pointer or an overflow panics) or in the
+scalar build; and the same test passes against the `gcc` library through
+`cinrs`'s declarations, so the struct layouts agree. `croaring_hardware_support()`
+reports AVX2 and AVX-512 on this host and the binary carries the AVX-512
+kernels.
+
+**Speed.** 200 bitmaps of about 50,000 values each in three shapes (dense
+ranges, sparse randoms, mixed), total cardinality 9,993,809:
+
+| section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| construct + `run_optimize` | 239.1 | 225.3 | 237.0 | 0.99× | 1.05× |
+| 2,000 `and`/`or`/`xor`/`andnot` | 156.4 | 160.4 | 151.8 | 0.97× | 0.95× |
+| 2,000 `*_cardinality` | 47.5 | 43.9 | 43.1 | 0.91× | 0.98× |
+| 5,000,000 `contains` | 285.5 | 322.9 | 293.8 | 1.03× | 0.91× |
+| `roaring_iterate` over all | 15.0 | 15.8 | 15.2 | 1.01× | 0.96× |
+| serialise + `deserialize_safe` | 7.1 | 7.5 | 6.3 | 0.90× | 0.84× |
+
+Everything is within the run-to-run noise (the `contains` section, bound by
+cache misses over a 40 MB probe array, moves by 20 % between two runs of the
+same binary). Compiling the whole unit for AVX-512 instead of honouring the
+per-function regions changes nothing.
+
+**What it took.** One fix: `_Pragma`'s operand was not macro-expanded, which
+refused the `STRINGIFY` idiom (64 sites, four errors each). The fixture is not
+in this repository; the fix and its `tests/ui/pragma_operator.rs` are.

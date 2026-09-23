@@ -31,7 +31,16 @@
 //! `#[inline(always)]` there), `__builtin_clzll`, and `__asm__ __volatile__`
 //! for `cpuid`/`xgetbv` — whose `"=b"` operand cinrs carries through rbx with
 //! an `xchg` around the template.
+//!
+//! **`--features native-gcc` / `native-clang`** are for
+//! `scripts/check-blake3.sh --bench` only. No C is translated then: the
+//! `blake3` module is `blake3_impl.h` (which includes `blake3.h`) as a
+//! header-only unit, so the declarations and the types are still cinrs's, and
+//! the functions come from the same seven files compiled by `gcc -O2` or
+//! `clang -O2` into `target/blake3/native/` (`build.rs` says where). The
+//! benchmark is then one Rust program over three builds of one C program.
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod blake3 {
     //! `blake3.c`: the public API (`blake3_hasher_*`), the tree logic.
     cinrs::gnu11! {
@@ -40,6 +49,7 @@ pub mod blake3 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod dispatch {
     //! `blake3_dispatch.c`: `cpuid`/`xgetbv` detection and the choice of
     //! implementation at run time.
@@ -49,6 +59,7 @@ pub mod dispatch {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod portable {
     //! `blake3_portable.c`: the plain-C compression function.
     cinrs::gnu11! {
@@ -57,6 +68,7 @@ pub mod portable {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod sse2 {
     //! `blake3_sse2.c`, upstream built with `-msse2` (the x86-64 baseline).
     cinrs::gnu11! {
@@ -66,6 +78,7 @@ pub mod sse2 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod sse41 {
     //! `blake3_sse41.c`, upstream built with `-msse4.1`.
     cinrs::gnu11! {
@@ -75,6 +88,7 @@ pub mod sse41 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod avx2 {
     //! `blake3_avx2.c`, upstream built with `-mavx2`.
     cinrs::gnu11! {
@@ -84,6 +98,7 @@ pub mod avx2 {
     }
 }
 
+#[cfg(not(any(feature = "native-gcc", feature = "native-clang")))]
 pub mod avx512 {
     //! `blake3_avx512.c`, upstream built with `-mavx512f -mavx512vl`.
     cinrs::gnu11! {
@@ -92,3 +107,38 @@ pub mod avx512 {
         #include "../../../target/blake3/c/blake3_avx512.c"
     }
 }
+
+#[cfg(feature = "native-gcc")]
+pub mod blake3 {
+    //! The API from `blake3_impl.h`, the functions from
+    //! `libblake3_gcc.a` (`gcc -O2`).
+    cinrs::gnu11! {
+        #pragma cinrs link "blake3_gcc"
+        #include "../../../target/blake3/c/blake3_impl.h"
+    }
+}
+
+#[cfg(all(feature = "native-clang", not(feature = "native-gcc")))]
+pub mod blake3 {
+    //! The API from `blake3_impl.h`, the functions from
+    //! `libblake3_clang.a` (`clang -O2`).
+    cinrs::gnu11! {
+        #pragma cinrs link "blake3_clang"
+        #include "../../../target/blake3/c/blake3_impl.h"
+    }
+}
+
+#[cfg(any(feature = "native-gcc", feature = "native-clang"))]
+pub mod dispatch {
+    //! `blake3_simd_degree`, declared in `blake3_impl.h`.
+    pub use super::blake3::blake3_simd_degree;
+}
+
+/// Which build this is, for the benchmark to print.
+pub const CONFIGURATION: &str = if cfg!(feature = "native-gcc") {
+    "native gcc -O2"
+} else if cfg!(feature = "native-clang") {
+    "native clang -O2"
+} else {
+    "cinrs"
+};
