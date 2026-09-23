@@ -215,6 +215,148 @@ fn maths_functions_link_and_compute() {
     }
 }
 
+/// C99 7.12.3 and 7.12.14, as GCC's `<math.h>` defines them: one builtin per
+/// macro, type-generic over the three floating types. `isinf` is glibc's
+/// `__builtin_isinf_sign`, so negative infinity answers -1; `signbit` is only
+/// promised to be nonzero, hence the `!!`.
+#[test]
+fn math_h_classifies_and_compares() {
+    c99! {
+        #include <math.h>
+
+        #define CLASSIFY(x, out) (out[0] = !!isnan(x), out[1] = isinf(x), out[2] = !!isfinite(x), out[3] = !!isnormal(x), out[4] = !!signbit(x), out[5] = fpclassify(x))
+        void classify_f(float x, int *out) { CLASSIFY(x, out); }
+        void classify_d(double x, int *out) { CLASSIFY(x, out); }
+        void classify_ld(long double x, int *out) { CLASSIFY(x, out); }
+
+        #define COMPARE(x, y, out) (out[0] = !!isgreater(x, y), out[1] = !!isgreaterequal(x, y), out[2] = !!isless(x, y), out[3] = !!islessequal(x, y), out[4] = !!islessgreater(x, y), out[5] = !!isunordered(x, y))
+        void compare_f(float x, float y, int *out) { COMPARE(x, y, out); }
+        void compare_d(double x, double y, int *out) { COMPARE(x, y, out); }
+        void compare_ld(long double x, long double y, int *out) { COMPARE(x, y, out); }
+
+        static const float constants[4] = { NAN, INFINITY, -INFINITY, HUGE_VALF };
+        static const double wide[2] = { HUGE_VAL, HUGE_VALL };
+        float constant(int i) { return constants[i]; }
+        double wide_constant(int i) { return wide[i]; }
+        int kinds(void) {
+            return FP_NAN * 10000 + FP_INFINITE * 1000 + FP_ZERO * 100
+                + FP_SUBNORMAL * 10 + FP_NORMAL;
+        }
+        int errhandling(void) { return math_errhandling & (MATH_ERRNO | MATH_ERREXCEPT); }
+    }
+
+    // NaN, +inf, -inf, 0.0, -0.0, a subnormal, 1.0, -1.0, and per value:
+    // isnan, isinf, isfinite, isnormal, signbit, fpclassify.
+    let expected: [[i32; 6]; 8] = [
+        [1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 1],
+        [0, -1, 0, 0, 1, 1],
+        [0, 0, 1, 0, 0, 2],
+        [0, 0, 1, 0, 1, 2],
+        [0, 0, 1, 0, 0, 3],
+        [0, 0, 1, 1, 0, 4],
+        [0, 0, 1, 1, 1, 4],
+    ];
+    let floats = [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        0.0,
+        -0.0,
+        1e-40,
+        1.0,
+        -1.0,
+    ];
+    let doubles = [
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        0.0,
+        -0.0,
+        1e-310,
+        1.0,
+        -1.0,
+    ];
+    // (x, y) pairs, and per pair: isgreater, isgreaterequal, isless,
+    // islessequal, islessgreater, isunordered.
+    let pairs = [
+        (1.0, 2.0),
+        (2.0, 1.0),
+        (1.0, 1.0),
+        (f64::NAN, 1.0),
+        (-0.0, 0.0),
+    ];
+    let ordered: [[i32; 6]; 5] = [
+        [0, 0, 1, 1, 1, 0],
+        [1, 1, 0, 0, 1, 0],
+        [0, 1, 0, 1, 0, 0],
+        [0, 0, 0, 0, 0, 1],
+        [0, 1, 0, 1, 0, 0],
+    ];
+
+    unsafe {
+        for (i, want) in expected.iter().enumerate() {
+            let mut got = [9; 6];
+            classify_f(floats[i], got.as_mut_ptr());
+            assert_eq!(&got, want, "float {:?}", floats[i]);
+            classify_d(doubles[i], got.as_mut_ptr());
+            assert_eq!(&got, want, "double {:?}", doubles[i]);
+            classify_ld(doubles[i], got.as_mut_ptr());
+            assert_eq!(&got, want, "long double {:?}", doubles[i]);
+        }
+        for (&(x, y), want) in pairs.iter().zip(&ordered) {
+            let mut got = [9; 6];
+            compare_f(x as f32, y as f32, got.as_mut_ptr());
+            assert_eq!(&got, want, "float {x:?}, {y:?}");
+            compare_d(x, y, got.as_mut_ptr());
+            assert_eq!(&got, want, "double {x:?}, {y:?}");
+            compare_ld(x, y, got.as_mut_ptr());
+            assert_eq!(&got, want, "long double {x:?}, {y:?}");
+        }
+        // GCC's NAN is a positive quiet NaN.
+        assert_eq!(constant(0).to_bits(), 0x7fc0_0000);
+        assert_eq!(constant(1), f32::INFINITY);
+        assert_eq!(constant(2), f32::NEG_INFINITY);
+        assert_eq!(constant(3), f32::INFINITY);
+        assert_eq!(wide_constant(0), f64::INFINITY);
+        assert_eq!(wide_constant(1), f64::INFINITY);
+        assert_eq!(kinds(), 1234);
+        assert_ne!(errhandling(), 0);
+    }
+}
+
+/// Strict C89 has none of C99's `<math.h>` macros — the names are the
+/// program's, as they are with the platform's header under `-std=c89` — and
+/// `gnu89!` has them, as it does with GCC.
+#[test]
+fn math_h_classification_is_c99_or_gnu() {
+    cinrs::c89! {
+        #include <math.h>
+
+        static int isnan(double x) { return x != x; }
+        int c89_isnan(double x) { return isnan(x); }
+        int c89_has_fpclassify(void) {
+        #ifdef fpclassify
+            return 1;
+        #else
+            return 0;
+        #endif
+        }
+    }
+    cinrs::gnu89! {
+        #include <math.h>
+
+        int gnu89_isnan(double x) { return !!isnan(x); }
+    }
+
+    unsafe {
+        assert_eq!(c89_isnan(f64::NAN), 1);
+        assert_eq!(c89_has_fpclassify(), 0);
+        assert_eq!(gnu89_isnan(f64::NAN), 1);
+        assert_eq!(gnu89_isnan(1.0), 0);
+    }
+}
+
 /// `long double` is `double` here, and the platform's `strtold` and `powl`
 /// take and return an x87 (or 128-bit) value on most 64-bit targets: the
 /// declarations are linked to `strtod` and `pow`, which is what the type

@@ -339,6 +339,10 @@ impl Sema<'_> {
         let Callee::Direct(id) = target else {
             return;
         };
+        // An arm a constant condition excludes never calls anything.
+        if self.dead_code > 0 {
+            return;
+        }
         self.note_long_double_function_use(*id, callee_range);
         for (range, depth) in variadic_args {
             if let Some(depth @ (0 | 1)) = depth {
@@ -353,10 +357,11 @@ impl Sema<'_> {
 
     /// Records a call to, or the address of, the function `id`.
     pub(super) fn note_long_double_function_use(&mut self, id: FuncId, range: SourceRange) {
-        if self
-            .long_double_funcs
-            .get(&id)
-            .is_some_and(|sig| sig.offence.is_some())
+        if self.dead_code == 0
+            && self
+                .long_double_funcs
+                .get(&id)
+                .is_some_and(|sig| sig.offence.is_some())
         {
             self.long_double_uses
                 .push(LongDoubleUse::Function(id, range));

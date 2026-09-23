@@ -242,7 +242,7 @@ may use with `__attribute__((target("avx2")))`; see
 | Integer constant type rules | N629 | 🟢 Yes | |
 | Integer promotion rules | N725 | 🟢 Yes | |
 | Macros with a variable number of arguments | N707 | 🟢 Yes | |
-| IEC 60559 support | | 🟡 Partial | Arithmetic is IEEE (Rust `f32`/`f64`); `<fenv.h>` and `__STDC_IEC_559__` are absent. |
+| IEC 60559 support | | 🟡 Partial | Arithmetic is IEEE (Rust `f32`/`f64`), and `<math.h>` has C99's classification (`fpclassify`, `isnan`, `isinf`, `isfinite`, `isnormal`, `signbit`) and quiet comparison (`isgreater` … `isunordered`) macros, defined as GCC's header defines them; `<fenv.h>` and `__STDC_IEC_559__` are absent. |
 | Trailing comma allowed in `enum` declaration | | ⚪ Unverified | |
 | Inline functions | N741 | 🟢 Yes | `#[inline]`; C99's external-definition rules are not modelled. |
 | Boolean type in `<stdbool.h>` | N815 | 🟢 Yes | |

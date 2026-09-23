@@ -13,12 +13,21 @@
  * in the translation unit and the generated `extern` block carries
  * `#[link(name = "m")]`.
  *
+ * # Classification and comparison
+ *
+ * C99's classification macros (7.12.3: `fpclassify`, `isfinite`, `isinf`,
+ * `isnan`, `isnormal`, `signbit`) and quiet comparisons (7.12.14:
+ * `isgreater` … `isunordered`) are GCC's own definitions, one builtin each,
+ * and so type-generic over `float`, `double` and `long double` the way the
+ * standard asks. Like the platform's header, they are left out of strict
+ * C89 (`c89!`), where the names still belong to the program; `gnu89!` has
+ * them.
+ *
  * # What is not here
  *
- * The type-generic macros of <tgmath.h>, the classification macros
- * (`isnan`, `isinf`, `fpclassify`), and `long double` (which cinrs makes a
- * `double`) are absent. `NAN` and `INFINITY` are ordinary constant
- * expressions, which is all a program normally wants them for.
+ * The type-generic macros of <tgmath.h> and `long double` (which cinrs makes
+ * a `double`) are absent. `NAN` and `INFINITY` are constant expressions,
+ * spelt as GCC spells them.
  */
 #ifndef _CINRS_MATH_H
 #define _CINRS_MATH_H
@@ -27,8 +36,46 @@
  * constant too large for its type becomes. */
 #define HUGE_VAL 1e999
 #define HUGE_VALF 1e999f
-#define INFINITY 1e999f
-#define NAN (0.0f / 0.0f)
+#define HUGE_VALL __builtin_huge_vall()
+#define INFINITY __builtin_inff()
+/* A positive quiet NaN, where `0.0f / 0.0f` has whatever sign the host's
+ * division gives it. */
+#define NAN __builtin_nanf("")
+
+#if defined(__STDC_VERSION__) || !defined(__STRICT_ANSI__)
+
+#define FP_NAN 0
+#define FP_INFINITE 1
+#define FP_ZERO 2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL 4
+
+#define fpclassify(x) \
+    __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, x)
+#define isfinite(x) __builtin_isfinite(x)
+#define isinf(x) __builtin_isinf_sign(x)
+#define isnan(x) __builtin_isnan(x)
+#define isnormal(x) __builtin_isnormal(x)
+#define signbit(x) __builtin_signbit(x)
+
+#define isgreater(x, y) __builtin_isgreater(x, y)
+#define isgreaterequal(x, y) __builtin_isgreaterequal(x, y)
+#define isless(x, y) __builtin_isless(x, y)
+#define islessequal(x, y) __builtin_islessequal(x, y)
+#define islessgreater(x, y) __builtin_islessgreater(x, y)
+#define isunordered(x, y) __builtin_isunordered(x, y)
+
+/* The functions are the platform's libm. glibc, musl and the UCRT set
+ * `errno` and raise the exception; Apple's libm only raises it. */
+#define MATH_ERRNO 1
+#define MATH_ERREXCEPT 2
+#ifdef __APPLE__
+#define math_errhandling MATH_ERREXCEPT
+#else
+#define math_errhandling (MATH_ERRNO | MATH_ERREXCEPT)
+#endif
+
+#endif /* C99 or a GNU dialect */
 
 #define M_E 2.7182818284590452354
 #define M_LOG2E 1.4426950408889634074

@@ -216,8 +216,19 @@ impl Sema<'_> {
                 // does not leak into the enclosing block.
                 self.push_scope();
                 let cond = self.condition(cond);
-                let then_branch = Box::new(self.stmt(then_branch));
-                let else_branch = else_branch.as_ref().map(|s| Box::new(self.stmt(s)));
+                // `if (0) f(x);` never calls `f` — unless a label or a `case`
+                // inside the branch is a way in that the condition does not
+                // guard.
+                let truth = cond.as_ref().and_then(|cond| self.constant_truth(cond));
+                let dead = |branch: &ast::Stmt, taken: bool| {
+                    truth == Some(!taken) && !has_entry_point(branch)
+                };
+                let then_dead = dead(then_branch, true);
+                let then_branch = Box::new(self.dead_if(then_dead, |s| s.stmt(then_branch)));
+                let else_branch = else_branch.as_ref().map(|branch| {
+                    let else_dead = dead(branch, false);
+                    Box::new(self.dead_if(else_dead, |s| s.stmt(branch)))
+                });
                 self.pop_scope();
                 match cond {
                     Some(cond) => Stmt::If {
@@ -1262,5 +1273,30 @@ fn starts_with_case(stmt: &ast::Stmt) -> bool {
             ast::StmtKind::Labeled { body, .. } => stmt = body,
             _ => return false,
         }
+    }
+}
+
+/// Whether control can enter `stmt` other than from its top: a label a
+/// `goto` can name, or a `case` or `default` of an enclosing `switch`. A
+/// branch with one is not dead whatever its `if` says.
+fn has_entry_point(stmt: &ast::Stmt) -> bool {
+    match &stmt.kind {
+        ast::StmtKind::Labeled { .. }
+        | ast::StmtKind::Case { .. }
+        | ast::StmtKind::Default { .. } => true,
+        ast::StmtKind::Switch { body, .. }
+        | ast::StmtKind::While { body, .. }
+        | ast::StmtKind::DoWhile { body, .. }
+        | ast::StmtKind::For { body, .. } => has_entry_point(body),
+        ast::StmtKind::If {
+            then_branch,
+            else_branch,
+            ..
+        } => has_entry_point(then_branch) || else_branch.as_deref().is_some_and(has_entry_point),
+        ast::StmtKind::Compound(block) => block.items.iter().any(|item| match item {
+            ast::BlockItem::Stmt(stmt) => has_entry_point(stmt),
+            _ => false,
+        }),
+        _ => false,
     }
 }

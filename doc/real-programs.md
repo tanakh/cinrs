@@ -358,3 +358,67 @@ assembly, and all 41 test files, ms:
 
 All four compilers (upstream's `-O0 -g` build included) emit byte-identical
 assembly for the inputs; the test loop is process start-up.
+
+## Wren 0.4.0 (not in the repository)
+
+The scripting language's VM, `src/vm/*.c` and the two optional modules (MIT;
+about 12,000 lines in one unit, the nine files' statics never colliding):
+a bytecode interpreter loop written with **computed `goto`** through a
+272-entry `static void *dispatchTable[]` of `&&label`s, NaN-boxed values
+punned through unions, a mark-sweep collector, a single-pass compiler driven
+by a table of function pointers, and three variadic definitions, which is
+why it needs Rust 1.99. Upstream's `test/api/*.c` — seventeen files of
+foreign-function bindings — are translated too, so only the VM changes
+between the builds under test.
+
+**Correctness.** Wren's own suite, every `test/**/*.wren` with its
+`// expect:` lines, run by a Rust port of upstream's `test/main.c` and
+`util/test.py`:
+
+| VM | scripts | passed |
+| --- | ---: | ---: |
+| built by gcc | 857 | 857 |
+| built by clang | 857 | 857 |
+| built by `cinrs`, computed `goto` | 857 | 857 |
+| built by `cinrs`, `switch` dispatch (`WREN_COMPUTED_GOTO=0`) | 857 | 857 |
+
+The pass lists are identical, so there is nothing to minimise.
+
+**What it took.** Two small things and one large one. The bundled `<math.h>`
+had none of C99's classification macros — `isnan`, `isinf`, `isfinite`,
+`signbit`, `fpclassify` and the comparison macros — although the builtins
+behind them were there; they are defined now. Under the platform's
+`<math.h>` instead, glibc (seeing `__GNUC__` 4.2) expands `isnan(x)` to
+`sizeof (x) == sizeof (double) ? __isnan (x) : __isnanl (x)`, and the
+[`long double` boundary check](#chibicc-not-in-the-repository) refused the
+`__isnanl` call in the arm a `double` can never take; a use in an arm a
+constant condition excludes is not reported any more. And the large one is
+speed, below.
+
+**Speed.** Upstream's `test/benchmark/*.wren`, one whole run of the VM per
+script, ms:
+
+| script | gcc | clang | cinrs, computed `goto` | cinrs, `switch` |
+| --- | ---: | ---: | ---: | ---: |
+| api_call | 27.5 | 27.4 | 112.8 | 27.5 |
+| api_foreign_method | 146.4 | 150.5 | 603.6 | 150.6 |
+| binary_trees | 138.3 | 119.2 | 410.7 | 146.4 |
+| binary_trees_gc | 357.0 | 294.3 | 591.9 | 308.9 |
+| delta_blue | 58.8 | 65.1 | 299.0 | 73.4 |
+| fib | 121.4 | 123.4 | 572.1 | 113.1 |
+| fibers | 37.9 | 33.7 | 50.3 | 31.8 |
+| for | 38.0 | 35.8 | 210.8 | 40.0 |
+| map_numeric | 812.5 | 761.5 | 1350.0 | 782.2 |
+| map_string | 102.6 | 86.0 | 171.3 | 100.4 |
+| method_call | 58.9 | 52.7 | 283.5 | 65.0 |
+| string_equals | 77.6 | 83.8 | 435.6 | 85.8 |
+
+With `switch` dispatch the `cinrs` VM runs at the C compilers' speed
+(0.84–1.25× of gcc). With computed `goto` — upstream's default — it runs at
+1.3–5.6×, and `perf` says why: a function that takes a label's address is
+lowered to a whole-function state machine (the one tier the relooper does
+not take), so every opcode goes through the central `match` twice, 8.6 G
+instructions against gcc's 2.1 G on `fib`, with no more branch misses. The
+right lowering is GCC's own: `goto *p` is a `switch` over the labels whose
+address is taken, after which the function has only ordinary `goto`s for
+the relooper — on the list.

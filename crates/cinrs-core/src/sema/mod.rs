@@ -697,6 +697,11 @@ struct Sema<'a> {
     long_double_funcs: HashMap<FuncId, long_double::LongDoubleSig>,
     /// The uses of the platform boundary, checked at the end of the unit.
     long_double_uses: Vec<long_double::LongDoubleUse>,
+    /// How many arms that cannot run enclose what is being analysed: the
+    /// excluded operand of a `?:`, `&&` or `||`, or the excluded branch of an
+    /// `if`, whose condition is an integer constant expression. Nonzero means
+    /// the boundary uses are not recorded — see [`Sema::dead_if`].
+    dead_code: u32,
     /// Every Rust item name handed out so far, so that mangled names stay
     /// unique.
     item_names: HashSet<String>,
@@ -934,6 +939,7 @@ impl<'a> Sema<'a> {
             long_double_exprs: HashMap::new(),
             long_double_funcs: HashMap::new(),
             long_double_uses: Vec::new(),
+            dead_code: 0,
             item_names: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
@@ -2100,6 +2106,36 @@ impl<'a> Sema<'a> {
                 None
             }
         }
+    }
+
+    /// Whether a controlling expression is an integer constant expression, and
+    /// if so whether it is true: `sizeof (x) == sizeof (float)` in glibc's
+    /// `__MATH_TG` is one. Asking says nothing — a condition that only looks
+    /// constant, `1 << 40` say, is still just a runtime condition — so the
+    /// evaluator's own complaints are dropped.
+    fn constant_truth(&mut self, cond: &Expr) -> Option<bool> {
+        if !cond.ty.is_integer() {
+            return None;
+        }
+        let saved = std::mem::take(&mut self.diags);
+        let value = self.const_eval(cond);
+        self.diags = saved;
+        match value {
+            Some(ConstValue::Int(v)) => Some(v != 0),
+            _ => None,
+        }
+    }
+
+    /// Runs `analyse` counted as dead code when `dead` is set: an arm a
+    /// constant condition excludes, which GCC diagnoses nothing in. What that
+    /// silences is the [`long_double`] boundary — `__isnanl (x)` in the arm of
+    /// `__MATH_TG` that a `double` never reaches is not a call — while the arm
+    /// is still checked, and still generated, like any other code.
+    fn dead_if<T>(&mut self, dead: bool, analyse: impl FnOnce(&mut Self) -> T) -> T {
+        self.dead_code += u32::from(dead);
+        let result = analyse(self);
+        self.dead_code -= u32::from(dead);
+        result
     }
 
     /// Evaluates a constant expression over the typed IR.

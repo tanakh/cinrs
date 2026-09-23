@@ -1520,7 +1520,9 @@ impl Sema<'_> {
     ) -> Option<Expr> {
         use ast::BinaryOp as B;
         if matches!(op, B::LogAnd | B::LogOr) {
-            let rhs_value = self.expr(rhs)?;
+            // `0 && f(x)` never calls `f`, nor does `1 || f(x)`.
+            let short = self.constant_truth(&lhs_value) == Some(op == B::LogOr);
+            let rhs_value = self.dead_if(short, |s| s.expr(rhs))?;
             self.require_scalar(&lhs_value, op.as_str(), lhs_range)?;
             self.require_scalar(&rhs_value, op.as_str(), rhs.range)?;
             let logical = if op == B::LogAnd {
@@ -1992,8 +1994,12 @@ impl Sema<'_> {
             return self.conditional_default(cond, else_expr, range);
         };
         let cond = self.condition(cond)?;
-        let then_value = self.expr(then_expr)?;
-        let else_value = self.expr(else_expr)?;
+        // Both arms are kept, but an integer-constant condition leaves one
+        // of them dead: glibc's `__MATH_TG` picks the `float`, `double` or
+        // `long double` function with `sizeof`.
+        let truth = self.constant_truth(&cond);
+        let then_value = self.dead_if(truth == Some(false), |s| s.expr(then_expr))?;
+        let else_value = self.dead_if(truth == Some(true), |s| s.expr(else_expr))?;
         let build = |cond: Expr, then_value: Expr, else_value: Expr, ty: Ty| {
             Expr::new(
                 ExprKind::Cond {
@@ -2053,7 +2059,8 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         let value = self.condition(cond)?;
-        let other = self.expr(else_expr)?;
+        let truth = self.constant_truth(&value);
+        let other = self.dead_if(truth == Some(true), |s| s.expr(else_expr))?;
         let build = |value: Expr, other: Expr, ty: Ty| {
             Expr::new(
                 ExprKind::CondDefault {

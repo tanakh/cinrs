@@ -369,6 +369,27 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **The bundled `<math.h>` has C99's classification and comparison macros.**
+  `isnan`, `isinf`, `isfinite`, `isnormal`, `signbit` and `fpclassify` (with
+  `FP_NAN` … `FP_NORMAL`), and `isgreater`, `isgreaterequal`, `isless`,
+  `islessequal`, `islessgreater` and `isunordered` (C99 7.12.3, 7.12.14) were
+  missing, so Wren's VM stopped at "implicit declaration of function
+  'isnan'". Each is now GCC's definition, one builtin per macro and so
+  type-generic over `float`, `double` and `long double`; `HUGE_VALL`,
+  `MATH_ERRNO`, `MATH_ERREXCEPT` and `math_errhandling` are defined too, and
+  `NAN` and `INFINITY` are GCC's `__builtin_nanf("")` and `__builtin_inff()`,
+  so `NAN` is a positive quiet NaN on every host. Like glibc's header, the
+  macros are left out of strict `c89!`, where the names are the program's.
+* **The `long double` boundary check no longer fires in code that cannot
+  run.** Under `#pragma cinrs system_include first`, glibc's `isnan(x)` for
+  a compiler claiming GCC 4.2 is `__MATH_TG`, a `sizeof` chain naming
+  `__isnanf`, `__isnan` and `__isnanl`; the `__isnanl` arm is dead for a
+  `double`, but it was refused as a call across the boundary — Wren's VM
+  again. An operand a constant condition excludes — of `?:` (and GNU's
+  `?:` without a middle operand), of `&&` and `||` after a constant left
+  operand, or a branch of an `if` with a constant condition that has no label
+  or `case` inside it — is still checked and still generated, but its uses of
+  the boundary are not recorded, as GCC diagnoses nothing in dead code.
 * **`long double` at the platform boundary is redirected or refused, never
   silently wrong.** `long double` is `double` here, which is self-consistent
   inside a unit but was silently wrong at a call into the platform's library,

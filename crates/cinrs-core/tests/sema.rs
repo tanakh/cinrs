@@ -2291,6 +2291,74 @@ fn the_long_double_iso_functions_link_to_their_double_twins() {
     }
 }
 
+/// An arm a constant condition excludes calls nothing, and GCC diagnoses
+/// nothing in it. glibc's `isnan` under `__GNUC__` is `__MATH_TG`, which
+/// names all three functions and lets `sizeof` pick one: for a `double` the
+/// `__isnanl` arm is dead. So is it for a `long double`, which is eight bytes
+/// here and so takes the `double` arm — the right function for the value
+/// cinrs passes.
+#[test]
+fn the_long_double_boundary_ignores_arms_a_constant_condition_excludes() {
+    const VALUE: &str = "(which is 'double' here), and the platform passes a 'long double' \
+                         on the x87 stack, so the call would read the wrong register; use the \
+                         'double' function or wrap it in C compiled by a C compiler";
+    let decls = "int __isnanf(float); int __isnan(double); int __isnanl(long double);\n\
+                 #define __MATH_TG(TG_ARG, FUNC, ARGS) \\\n\
+                 (sizeof (TG_ARG) == sizeof (float) ? FUNC ## f ARGS \\\n\
+                 : sizeof (TG_ARG) == sizeof (double) ? FUNC ARGS : FUNC ## l ARGS)\n\
+                 #define isnan(x) __MATH_TG ((x), __isnan, (x))\n";
+    for arg in ["float", "double", "long double"] {
+        assert!(
+            errors_on(
+                X86_64_LINUX,
+                &format!("{decls}int k({arg} x) {{ return isnan(x); }}")
+            )
+            .is_empty(),
+            "for {arg}"
+        );
+    }
+    let refused = format!("'__isnanl' takes a 'long double' {VALUE}");
+    // The live arm, and an arm whose condition is only known at run time, are
+    // still refused.
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            &format!(
+                "{decls}int k(long double x, int c) {{ return (1 ? __isnanl(x) : 0) \
+                 + (c ? __isnanl(x) : 0) + (sizeof x == 8 && __isnanl(x)); }}"
+            )
+        ),
+        [refused.clone(), refused.clone(), refused.clone()]
+    );
+    // `if` with a constant condition, `&&` and `||` with a constant left
+    // operand, GNU's `?:` with a true one, and a function designator rather
+    // than a call.
+    assert!(
+        errors_on(
+            X86_64_LINUX,
+            &format!(
+                "{decls}int k(long double x) {{\n\
+                 if (0) __isnanl(x);\n\
+                 if (sizeof x == 8) ; else {{ int (*p)(long double) = __isnanl; p(x); }}\n\
+                 return (0 && __isnanl(x)) + (1 || __isnanl(x)) + (1 ?: __isnanl(x)); }}"
+            )
+        )
+        .is_empty()
+    );
+    // A label inside the `if (0)` branch is a way in the condition does not
+    // guard, so the call there can run.
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            &format!(
+                "{decls}int k(long double x) {{ goto in;\n\
+                 if (0) {{ in: return __isnanl(x); }} return 0; }}"
+            )
+        ),
+        [refused]
+    );
+}
+
 /// Everything else with a `long double` in its prototype is refused where it
 /// is used — not where it is declared, since the platform's headers declare
 /// dozens.

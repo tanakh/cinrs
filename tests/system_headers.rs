@@ -749,6 +749,22 @@ mod glibc {
         }
     }
 
+    /// glibc's `<math.h>` classification macros on a `double`; the test is
+    /// `the_platform_classification_macros_take_a_double`.
+    mod platform_classification {
+        use cinrs::gnu11;
+
+        gnu11! {
+            #pragma cinrs system_include first
+
+            #include <math.h>
+
+            int nan_of(double x) { return !!isnan(x); }
+            int inf_of(double x) { return !!isinf(x); }
+            int sign_of(double x) { return !!signbit(x); }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // the tests
     // -----------------------------------------------------------------------
@@ -866,6 +882,42 @@ mod glibc {
     fn the_platform_long_double_functions_reach_their_double_twins() {
         assert_eq!(unsafe { platform_long_double::parse() }, 2.5);
         assert_eq!(unsafe { platform_long_double::raise() }, 1024.0);
+    }
+
+    /// glibc's `isnan` and `isinf` for a compiler that says it is GCC 4.2 are
+    /// `__MATH_TG`, a `sizeof` chain naming `__isnanf`, `__isnan` and
+    /// `__isnanl`; for a `double` the `long double` arm is dead and is not a
+    /// call across the boundary. Wren's VM is the program that found it.
+    #[test]
+    fn the_platform_classification_macros_take_a_double() {
+        let values = [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+        ];
+        let wanted = [
+            (1, 0, 0),
+            (0, 1, 0),
+            (0, 1, 1),
+            (0, 0, 0),
+            (0, 0, 1),
+            (0, 0, 0),
+            (0, 0, 1),
+        ];
+        for (x, want) in values.into_iter().zip(wanted) {
+            let got = unsafe {
+                (
+                    platform_classification::nan_of(x),
+                    platform_classification::inf_of(x),
+                    platform_classification::sign_of(x),
+                )
+            };
+            assert_eq!(got, want, "for {x:?}");
+        }
     }
 
     #[test]
