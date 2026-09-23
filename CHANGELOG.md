@@ -435,6 +435,13 @@ follows [Semantic Versioning][semver].
   white space for the next token as GCC's padding does, so `[ EMPTY]` and
   `[ a b]` with two empty arguments stringify to `"[ ]"`; sixty-odd such
   shapes are checked against `gcc -E`.
+* **The variable arguments of GNU's `, ## __VA_ARGS__` are not
+  macro-replaced before they are substituted.** They are an operand of `##`,
+  which C11 6.10.3.3p2 substitutes unexpanded, leaving the replacement to the
+  rescan; cinrs expanded them first, so with `#define E(f, ...) f(0, ##
+  __VA_ARGS__)` and a `#`-stringifying `S`, `E(S, ONE)` gave `"0, 1"` where
+  GCC and Clang give `"0, ONE"`. Where nothing stringifies or pastes them the
+  rescan still replaces them, so the result is the same as before.
 * **A function declaration may name an incomplete return type.** Kissat's
   `kimits.h` declares `changes kissat_changes (struct kissat *);` with
   `struct changes` defined nowhere, and every unit including it stopped at

@@ -47,6 +47,26 @@ fn comma_elision_drops_the_comma_when_there_is_nothing_after_it() {
     assert_eq!(text(), b"<1,2>");
 }
 
+c99! { r#"
+    #include <string.h>
+
+    /* The variable arguments beside `##` go in unexpanded, so the `#` in
+     * `SHOW` sees `ONE`, not `1`; `gcc -E` agrees. */
+    #define ONE 1
+    #define SHOW(...) #__VA_ARGS__
+    #define WITH_ZERO(f, ...) f(0, ## __VA_ARGS__)
+
+    int comma_paste_is_unexpanded(void) {
+        return strcmp(WITH_ZERO(SHOW, ONE), "0, ONE") == 0
+            && strcmp(WITH_ZERO(SHOW), "0") == 0;
+    }
+"# }
+
+#[test]
+fn comma_elision_leaves_the_arguments_unexpanded() {
+    assert_eq!(unsafe { comma_paste_is_unexpanded() }, 1);
+}
+
 // ---------------------------------------------------------------------------
 // `__COUNTER__`
 // ---------------------------------------------------------------------------

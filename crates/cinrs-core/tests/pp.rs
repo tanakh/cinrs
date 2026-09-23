@@ -480,6 +480,61 @@ fn spacing_around_macros_matches_gcc_padding() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// An operand of `##` is substituted without macro replacement (6.10.3.3p2),
+/// and that includes the variable arguments of GNU's `, ## __VA_ARGS__`: they
+/// are replaced only on the rescan, too late for a `#` in the macro they are
+/// handed to. Every expectation is what `gcc -E` and `clang -E` print.
+#[test]
+fn an_operand_of_hash_hash_is_not_expanded_first() {
+    const DEFS: &str = "\
+#define ONE 1
+#define S_(...) #__VA_ARGS__
+#define XS(...) S_(__VA_ARGS__)
+#define E3(f, ...) f(0, ## __VA_ARGS__)
+#define E4(...) XS(0, ## __VA_ARGS__)
+#define E6(...) S_(0, ## __VA_ARGS__) XS(__VA_ARGS__)
+#define ID(...) __VA_ARGS__
+#define CAT(a,b) a ## b
+#define A1 hit
+#define G(x) x ## 1
+#define TWICE(x) x ## x x
+#define E5(f, ...) f(__VA_ARGS__ ## 2)
+#define STR(x) #x
+";
+    let cases = [
+        // The comma kept, the arguments unexpanded, their spacing their own.
+        ("E3(S_, ONE)", r#""0, ONE""#),
+        ("E3(S_, ONE, ONE)", r#""0, ONE, ONE""#),
+        ("E3(S_,ONE , 2)", r#""0,ONE , 2""#),
+        ("E3(S_, ID(ONE))", r#""0, ID(ONE)""#),
+        // The comma dropped.
+        ("E3(S_)", r#""0""#),
+        // The rescan still replaces them where nothing stringifies.
+        ("E4(ONE)", r#""0,1""#),
+        ("E3(ID, ONE)", "0 , 1"),
+        // Unexpanded at the `##`, expanded elsewhere (6.10.3.1p1).
+        ("E6(ONE)", r#""0,ONE" "1""#),
+        ("TWICE(ONE)", "ONEONE 1"),
+        // The ordinary paste, on either side.
+        ("CAT(ONE, X)", "ONEX"),
+        ("E5(S_, ONE)", r#""ONE2""#),
+        // What the paste makes is rescanned.
+        ("G(A)", "hit"),
+        ("CAT(ONE, )", "1"),
+        ("CAT(, ONE)", "1"),
+        // `#` never expands.
+        ("STR(ONE)", r#""ONE""#),
+    ];
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|&(line, want)| {
+            let got = pp(&format!("{DEFS}{line}"));
+            (got != want).then(|| format!("{line}: got {got}, want {want}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 #[test]
 fn the_hash_hash_rule_accepts_two_separate_hashes() {
     // Rust's own lexer refuses `##` in raw-token mode, so `a # # b` has to

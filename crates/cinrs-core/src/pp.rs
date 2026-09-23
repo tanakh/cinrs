@@ -2179,9 +2179,11 @@ impl Pp<'_> {
 
             // GNU's comma elision, `printf(fmt, ## __VA_ARGS__)`: the `##`
             // between a comma and the variable arguments deletes the comma
-            // when the invocation passed none, and does nothing at all when it
-            // passed some — the arguments are then macro-replaced as usual,
-            // which is what makes it different from an ordinary paste.
+            // when the invocation passed none, and pastes nothing when it
+            // passed some. The arguments are still an operand of `##`, though,
+            // so they go in *unexpanded* (6.10.3.3p2) and are replaced only on
+            // the rescan: `E(S_, ONE)` with `E(f, ...) f(0, ## __VA_ARGS__)`
+            // hands `S_` the tokens `0, ONE`, as in GCC and Clang.
             // `__VA_OPT__` is C23's way of saying the same thing.
             if tok.is_punct(Punct::Comma)
                 && body.get(i + 1).is_some_and(|t| t.is_punct(Punct::HashHash))
@@ -2191,15 +2193,15 @@ impl Pp<'_> {
                     .and_then(|n| def.param_index(n))
                 && Some(index) == def.va_index()
             {
-                if !args.get(index).is_empty() {
+                let arg = args.get(index);
+                if !arg.is_empty() {
                     let mut comma = tok.clone();
                     comma.range = invocation;
                     comma.origin = Origin::Expansion(exp.clone());
                     pieces.push(Piece::Tok(comma));
-                    // No padding in front: the arguments keep their own
-                    // spacing after the comma, as in GCC.
-                    let (arg, rest) = self.expanded_arg(args, index);
-                    push_expanded(&mut pieces, arg, rest, None);
+                    // The arguments keep their own spacing after the comma,
+                    // as in GCC.
+                    pieces.extend(arg.iter().cloned().map(Piece::Tok));
                 }
                 i += 3;
                 continue;
