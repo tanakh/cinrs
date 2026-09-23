@@ -26,6 +26,18 @@ typedef int _MM_MANTISSA_NORM_ENUM;
 typedef int _MM_MANTISSA_SIGN_ENUM;
 typedef int _MM_PERM_ENUM;
 
+/* Intel's and GCC's own spellings, where `core::arch` capitalised
+ * them or has no name at all: real code writes these. */
+#define _MM_MANT_NORM_p5_2 _MM_MANT_NORM_P5_2
+#define _MM_MANT_NORM_p5_1 _MM_MANT_NORM_P5_1
+#define _MM_MANT_NORM_p75_1p5 _MM_MANT_NORM_P75_1P5
+#define _MM_MANT_SIGN_src _MM_MANT_SIGN_SRC
+#define _MM_MANT_SIGN_zero _MM_MANT_SIGN_ZERO
+#define _MM_MANT_SIGN_nan _MM_MANT_SIGN_NAN
+#define _MM_CMPINT_UNUSED 0x0003
+#define _MM_CMPINT_GE _MM_CMPINT_NLT
+#define _MM_CMPINT_GT _MM_CMPINT_NLE
+
 /* @generated constants — see crates/cinrs-core/tests/x86_intrinsics.rs */
 #define _MM_CMPINT_EQ 0x0000
 #define _MM_CMPINT_LT 0x0001

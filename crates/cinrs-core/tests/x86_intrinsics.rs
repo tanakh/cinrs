@@ -127,7 +127,19 @@ const PREAMBLES: &[(&str, &str)] = &[
          typedef int _MM_CMPINT_ENUM;\n\
          typedef int _MM_MANTISSA_NORM_ENUM;\n\
          typedef int _MM_MANTISSA_SIGN_ENUM;\n\
-         typedef int _MM_PERM_ENUM;\n",
+         typedef int _MM_PERM_ENUM;\n\
+         \n\
+         /* Intel's and GCC's own spellings, where `core::arch` capitalised\n\
+         \x20* them or has no name at all: real code writes these. */\n\
+         #define _MM_MANT_NORM_p5_2 _MM_MANT_NORM_P5_2\n\
+         #define _MM_MANT_NORM_p5_1 _MM_MANT_NORM_P5_1\n\
+         #define _MM_MANT_NORM_p75_1p5 _MM_MANT_NORM_P75_1P5\n\
+         #define _MM_MANT_SIGN_src _MM_MANT_SIGN_SRC\n\
+         #define _MM_MANT_SIGN_zero _MM_MANT_SIGN_ZERO\n\
+         #define _MM_MANT_SIGN_nan _MM_MANT_SIGN_NAN\n\
+         #define _MM_CMPINT_UNUSED 0x0003\n\
+         #define _MM_CMPINT_GE _MM_CMPINT_NLT\n\
+         #define _MM_CMPINT_GT _MM_CMPINT_NLE\n",
     ),
     (
         "avx512bwintrin.h",

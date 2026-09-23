@@ -781,3 +781,493 @@ fn the_address_of_an_intrinsic_is_a_shim() {
         assert!(chosen(1).is_some());
     }
 }
+
+// ---------------------------------------------------------------------------
+// AVX-512, and the instruction sets that arrived with it
+// ---------------------------------------------------------------------------
+//
+// The same shape as above: every function computes its own expected values in
+// scalar C and answers 1 when the instruction agrees. Each asks for its
+// instruction sets with `target("…")` — the comma lists the table carries,
+// such as "gfni,avx512bw,avx512f" — and the Rust side asks the processor first.
+// A 512-bit vector passed by value needs "avx512f" on both sides, as a 256-bit
+// one needs "avx"; `tests/ui/simd_abi_512.rs` has the refusal.
+//
+// The memory operands are written the way `core::arch` declares them
+// (`const __m512i *`, `const int *`); Intel's prototypes say `void *`.
+
+gnu11! {
+    #include <immintrin.h>
+    #include <stdint.h>
+
+    __attribute__((target("avx512f"))) __m512i twice512(__m512i v) {
+        return _mm512_add_epi32(v, v);
+    }
+
+    __attribute__((target("avx512f"))) int avx512f_ops(void) {
+        int32_t a[16], b[16], c[16], got[16], want[16];
+        _Alignas(64) int32_t streamed[16];
+        float fx[16], fy[16], fgot[16];
+        static const float mant_in[6] = {12.0f, -0.75f, 1.0f, 3.0f, 10.0f, 7.0f};
+        static const float mant_out[6] = {1.5f, -1.5f, 1.0f, 1.5f, 1.25f, 1.75f};
+        long long sum = 0;
+        int i;
+        __mmask16 k, want_k;
+        __m512i va, vb, vc;
+
+        for (i = 0; i < 16; i++) {
+            a[i] = i * 3 - 7;
+            b[i] = 100 - i * i;
+            c[i] = i % 3 == 0 ? a[i] : a[i] + 1;
+        }
+        va = _mm512_loadu_si512((const __m512i *)a);
+        vb = _mm512_loadu_si512((const __m512i *)b);
+        vc = _mm512_loadu_si512((const __m512i *)c);
+
+        /* add, and a horizontal sum */
+        _mm512_storeu_si512((__m512i *)got, _mm512_add_epi32(va, vb));
+        for (i = 0; i < 16; i++) if (got[i] != a[i] + b[i]) return 0;
+        for (i = 0; i < 16; i++) sum += a[i];
+        if (_mm512_reduce_add_epi32(va) != sum) return 0;
+
+        /* by value, twice over */
+        _mm512_storeu_si512((__m512i *)got, twice512(twice512(va)));
+        for (i = 0; i < 16; i++) if (got[i] != 4 * a[i]) return 0;
+
+        /* a merge-masked add and a zero-masked load */
+        k = 0x5a5a;
+        _mm512_storeu_si512((__m512i *)got, _mm512_mask_add_epi32(va, k, va, vb));
+        for (i = 0; i < 16; i++) want[i] = (k >> i) & 1 ? a[i] + b[i] : a[i];
+        for (i = 0; i < 16; i++) if (got[i] != want[i]) return 0;
+        _mm512_storeu_si512((__m512i *)got, _mm512_maskz_loadu_epi32(0x00ff, a));
+        for (i = 0; i < 16; i++) if (got[i] != (i < 8 ? a[i] : 0)) return 0;
+
+        /* compares that produce a mask, one through the enum immediate */
+        want_k = 0;
+        for (i = 0; i < 16; i++) if (i % 3 == 0) want_k |= (__mmask16)(1u << i);
+        if (_mm512_cmpeq_epi32_mask(va, vc) != want_k) return 0;
+        want_k = 0;
+        for (i = 0; i < 16; i++) if (a[i] < b[i]) want_k |= (__mmask16)(1u << i);
+        if (_mm512_cmp_epi32_mask(va, vb, _MM_CMPINT_LT) != want_k) return 0;
+        if (_mm512_cmp_epi32_mask(va, vb, _MM_CMPINT_GE) != (__mmask16)~want_k) return 0;
+
+        /* an explicit rounding mode: exact sums, so any mode agrees */
+        for (i = 0; i < 16; i++) {
+            fx[i] = (float)i * 0.5f;
+            fy[i] = (float)(16 - i);
+        }
+        _mm512_storeu_ps(fgot, _mm512_add_round_ps(_mm512_loadu_ps(fx), _mm512_loadu_ps(fy),
+                                                   _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        for (i = 0; i < 16; i++) if (fgot[i] != fx[i] + fy[i]) return 0;
+
+        /* the mantissa in [1, 2) with the source's sign: two enum immediates,
+         * in Intel's spelling */
+        for (i = 0; i < 16; i++) fx[i] = mant_in[i % 6];
+        _mm512_storeu_ps(fgot, _mm512_getmant_ps(_mm512_loadu_ps(fx), _MM_MANT_NORM_1_2,
+                                                 _MM_MANT_SIGN_src));
+        for (i = 0; i < 16; i++) if (fgot[i] != mant_out[i % 6]) return 0;
+
+        /* the upper half, by immediate */
+        _mm256_storeu_si256((__m256i *)got, _mm512_extracti64x4_epi64(va, 1));
+        for (i = 0; i < 8; i++) if (got[i] != a[8 + i]) return 0;
+
+        /* a non-temporal store into aligned memory */
+        _mm512_stream_si512((__m512i *)streamed, vb);
+        _mm_sfence();
+        for (i = 0; i < 16; i++) if (streamed[i] != b[i]) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx512f,avx512vl"))) int avx512vl_ops(void) {
+        int32_t a[4] = {10, 20, 30, 40}, src[4] = {-1, -2, -3, -4}, got[4];
+        __m128i va = _mm_loadu_si128((const __m128i *)a);
+        __m128i vs = _mm_loadu_si128((const __m128i *)src);
+
+        _mm_storeu_si128((__m128i *)got, _mm_mask_compress_epi32(vs, 0xa, va));
+        if (got[0] != 20 || got[1] != 40 || got[2] != -3 || got[3] != -4) return 0;
+        _mm_storeu_si128((__m128i *)got, _mm_maskz_expand_epi32(0xa, va));
+        if (got[0] != 0 || got[1] != 10 || got[2] != 0 || got[3] != 20) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx512bw"))) int avx512bw_ops(void) {
+        uint8_t x[64], y[64];
+        unsigned long long want = 0;
+        int j;
+        for (j = 0; j < 64; j++) {
+            x[j] = (uint8_t)j;
+            y[j] = (uint8_t)(j % 5 == 0 ? j : 255 - j);
+            if (j % 5 == 0) want |= 1ull << j;
+        }
+        return _mm512_cmpeq_epi8_mask(_mm512_loadu_si512((const __m512i *)x),
+                                      _mm512_loadu_si512((const __m512i *)y)) == want;
+    }
+
+    __attribute__((target("avx512cd"))) int avx512cd_ops(void) {
+        uint32_t x[16];
+        int32_t got[16];
+        int i, n;
+        for (i = 0; i < 16; i++) x[i] = i == 15 ? 0 : (uint32_t)1 << (i * 2);
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_lzcnt_epi32(_mm512_loadu_si512((const __m512i *)x)));
+        for (i = 0; i < 16; i++) {
+            for (n = 0; n < 32 && !((x[i] << n) & 0x80000000u); n++) {}
+            if (got[i] != n) return 0;
+        }
+        return 1;
+    }
+
+    __attribute__((target("avx512vpopcntdq"))) int avx512vpopcntdq_ops(void) {
+        uint32_t x[16];
+        int32_t got[16];
+        int i, n;
+        uint32_t v;
+        for (i = 0; i < 16; i++) x[i] = (uint32_t)i * 0x01010101u ^ ((uint32_t)i << 28);
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_popcnt_epi32(_mm512_loadu_si512((const __m512i *)x)));
+        for (i = 0; i < 16; i++) {
+            for (n = 0, v = x[i]; v; v &= v - 1) n++;
+            if (got[i] != n) return 0;
+        }
+        return 1;
+    }
+
+    /* u8 × s8 dot products into 32-bit lanes: the reference for both the
+     * AVX512-VNNI and the AVX-VNNI form. */
+    static int32_t dot_us(const uint8_t *a, const int8_t *b, int lane, int32_t acc) {
+        int k;
+        for (k = 0; k < 4; k++) acc += (int32_t)a[lane * 4 + k] * (int32_t)b[lane * 4 + k];
+        return acc;
+    }
+
+    __attribute__((target("avx512vnni"))) int avx512vnni_ops(void) {
+        uint8_t ua[64];
+        int8_t sb[64];
+        int32_t acc[16], got[16];
+        int i;
+        for (i = 0; i < 64; i++) {
+            ua[i] = (uint8_t)(i * 7 + 3);
+            sb[i] = (int8_t)(i * 5 - 100);
+        }
+        for (i = 0; i < 16; i++) acc[i] = i * 1000;
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_dpbusd_epi32(_mm512_loadu_si512((const __m512i *)acc),
+                                                _mm512_loadu_si512((const __m512i *)ua),
+                                                _mm512_loadu_si512((const __m512i *)sb)));
+        for (i = 0; i < 16; i++) if (got[i] != dot_us(ua, sb, i, acc[i])) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avxvnni"))) int avxvnni_ops(void) {
+        uint8_t ua[32];
+        int8_t sb[32];
+        int32_t acc[8], got[8];
+        int i;
+        for (i = 0; i < 32; i++) {
+            ua[i] = (uint8_t)(255 - i * 3);
+            sb[i] = (int8_t)(i * 9 - 128);
+        }
+        for (i = 0; i < 8; i++) acc[i] = -i * 77;
+        _mm256_storeu_si256((__m256i *)got,
+                            _mm256_dpbusd_avx_epi32(_mm256_loadu_si256((const __m256i *)acc),
+                                                    _mm256_loadu_si256((const __m256i *)ua),
+                                                    _mm256_loadu_si256((const __m256i *)sb)));
+        for (i = 0; i < 8; i++) if (got[i] != dot_us(ua, sb, i, acc[i])) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx512vbmi"))) int avx512vbmi_ops(void) {
+        uint8_t idx[64], x[64], got[64];
+        int j;
+        for (j = 0; j < 64; j++) {
+            idx[j] = (uint8_t)(j * 13 + 5 + 64 * (j & 1)); /* bits above 6 are ignored */
+            x[j] = (uint8_t)(200 - j);
+        }
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_permutexvar_epi8(_mm512_loadu_si512((const __m512i *)idx),
+                                                    _mm512_loadu_si512((const __m512i *)x)));
+        for (j = 0; j < 64; j++) if (got[j] != x[idx[j] & 63]) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx512ifma"))) int avx512ifma_ops(void) {
+        uint64_t a[8], b[8], c[8], got[8];
+        int i;
+        for (i = 0; i < 8; i++) {
+            a[i] = (uint64_t)i << 40;
+            b[i] = (uint64_t)i * 1000003u; /* both under 2^26, so the */
+            c[i] = (uint64_t)i * 999983u + 7u; /* product fits in 52 bits */
+        }
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_madd52lo_epu64(_mm512_loadu_si512((const __m512i *)a),
+                                                  _mm512_loadu_si512((const __m512i *)b),
+                                                  _mm512_loadu_si512((const __m512i *)c)));
+        for (i = 0; i < 8; i++) if (got[i] != a[i] + b[i] * c[i]) return 0;
+        return 1;
+    }
+
+    __attribute__((target("avx512bitalg"))) int avx512bitalg_ops(void) {
+        uint64_t b[8];
+        uint8_t sel[64];
+        unsigned long long want = 0;
+        int i, j;
+        for (i = 0; i < 8; i++) b[i] = 0x0123456789abcdefull * (uint64_t)(i + 1);
+        for (j = 0; j < 64; j++) sel[j] = (uint8_t)(j * 11 + 3);
+        for (i = 0; i < 8; i++)
+            for (j = 0; j < 8; j++)
+                if ((b[i] >> (sel[i * 8 + j] & 63)) & 1) want |= 1ull << (i * 8 + j);
+        return _mm512_bitshuffle_epi64_mask(_mm512_loadu_si512((const __m512i *)b),
+                                            _mm512_loadu_si512((const __m512i *)sel)) == want;
+    }
+
+    __attribute__((target("avx512bf16,avx512f"))) int avx512bf16_ops(void) {
+        float got[16];
+        int i;
+        /* small integers are exact in bfloat16: 1 + 2*3 + 2*3 per lane */
+        __m512bh twos = _mm512_cvtne2ps_pbh(_mm512_set1_ps(2.0f), _mm512_set1_ps(2.0f));
+        __m512bh threes = _mm512_cvtne2ps_pbh(_mm512_set1_ps(3.0f), _mm512_set1_ps(3.0f));
+        __m256bh half;
+        _mm512_storeu_ps(got, _mm512_dpbf16_ps(_mm512_set1_ps(1.0f), twos, threes));
+        for (i = 0; i < 16; i++) if (got[i] != 13.0f) return 0;
+        /* a round trip through the narrow type */
+        half = _mm512_cvtneps_pbh(_mm512_set1_ps(1.5f));
+        _mm512_storeu_ps(got, _mm512_cvtpbh_ps(half));
+        for (i = 0; i < 16; i++) if (got[i] != 1.5f) return 0;
+        return 1;
+    }
+
+    /* GF(2^8) with the AES polynomial x^8 + x^4 + x^3 + x + 1. */
+    static uint8_t gf_mul(uint8_t a, uint8_t b) {
+        unsigned int r = 0, x = a;
+        while (b) {
+            if (b & 1) r ^= x;
+            x <<= 1;
+            if (x & 0x100) x ^= 0x11b;
+            b >>= 1;
+        }
+        return (uint8_t)r;
+    }
+
+    __attribute__((target("gfni,avx512f"))) int gfni_ops(void) {
+        uint8_t x[64], y[64], got[64];
+        int j;
+        for (j = 0; j < 64; j++) {
+            x[j] = (uint8_t)(j * 37 + 1);
+            y[j] = (uint8_t)(255 - j * 3);
+        }
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_gf2p8mul_epi8(_mm512_loadu_si512((const __m512i *)x),
+                                                 _mm512_loadu_si512((const __m512i *)y)));
+        for (j = 0; j < 64; j++) if (got[j] != gf_mul(x[j], y[j])) return 0;
+        return 1;
+    }
+
+    /* The 512-bit AES round and carry-less multiply are four 128-bit ones side
+     * by side: each lane is checked against the AES-NI and PCLMULQDQ form. */
+    __attribute__((target("vaes,avx512f,aes"))) int vaes_ops(void) {
+        uint64_t s[8], k[8], got[8], one[2];
+        int i;
+        for (i = 0; i < 8; i++) {
+            s[i] = 0x0f1e2d3c4b5a6978ull * (uint64_t)(i + 3);
+            k[i] = 0x1122334455667788ull ^ (uint64_t)i;
+        }
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_aesenc_epi128(_mm512_loadu_si512((const __m512i *)s),
+                                                 _mm512_loadu_si512((const __m512i *)k)));
+        for (i = 0; i < 4; i++) {
+            _mm_storeu_si128((__m128i *)one,
+                             _mm_aesenc_si128(_mm_loadu_si128((const __m128i *)(s + 2 * i)),
+                                              _mm_loadu_si128((const __m128i *)(k + 2 * i))));
+            if (got[2 * i] != one[0] || got[2 * i + 1] != one[1]) return 0;
+        }
+        return 1;
+    }
+
+    __attribute__((target("vpclmulqdq,avx512f,pclmul"))) int vpclmulqdq_ops(void) {
+        uint64_t a[8], b[8], got[8], one[2];
+        int i;
+        for (i = 0; i < 8; i++) {
+            a[i] = 0x9e3779b97f4a7c15ull * (uint64_t)(i + 1);
+            b[i] = 0xc2b2ae3d27d4eb4full ^ ((uint64_t)i << 32);
+        }
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_clmulepi64_epi128(_mm512_loadu_si512((const __m512i *)a),
+                                                     _mm512_loadu_si512((const __m512i *)b), 0x01));
+        for (i = 0; i < 4; i++) {
+            _mm_storeu_si128((__m128i *)one,
+                             _mm_clmulepi64_si128(_mm_loadu_si128((const __m128i *)(a + 2 * i)),
+                                                  _mm_loadu_si128((const __m128i *)(b + 2 * i)),
+                                                  0x01));
+            if (got[2 * i] != one[0] || got[2 * i + 1] != one[1]) return 0;
+        }
+        return 1;
+    }
+
+    /* F16C was stable all along; its header is new. 1.0 is 0x3c00 in
+     * binary16, and these values survive the round trip exactly. */
+    __attribute__((target("f16c,avx"))) int f16c_ops(void) {
+        static const float in[8] = {1.0f, 0.5f, -2.0f, 1024.0f, 0.0f, -0.25f, 3.0f, 65504.0f};
+        uint16_t halves[8];
+        float back[8];
+        int i;
+        __m128i h = _mm256_cvtps_ph(_mm256_loadu_ps(in), _MM_FROUND_TO_NEAREST_INT);
+        _mm_storeu_si128((__m128i *)halves, h);
+        if (halves[0] != 0x3c00 || halves[2] != 0xc000) return 0;
+        _mm256_storeu_ps(back, _mm256_cvtph_ps(h));
+        for (i = 0; i < 8; i++) if (back[i] != in[i]) return 0;
+        return 1;
+    }
+
+    /* `__builtin_cpu_supports` knows the AVX-512 names. */
+    int has512(int which) {
+        switch (which) {
+        case 0: return __builtin_cpu_supports("avx512f") != 0;
+        case 1: return __builtin_cpu_supports("avx512bw") != 0;
+        case 2: return __builtin_cpu_supports("avx512bf16") != 0;
+        case 3: return __builtin_cpu_supports("avx512vp2intersect") != 0;
+        default: return __builtin_cpu_supports("gfni") != 0;
+        }
+    }
+
+    /* These instruction sets are not on the machine this was written on, so
+     * the functions below were compile-checked only there; each runs where
+     * the processor has it. SHA512 and SM3 map all-zero input to zero (their
+     * mixing functions are rotations and XORs); SM4's S-box does not, so its
+     * key expansion is only checked to change its input. */
+    __attribute__((target("avx512fp16,avx512bw"))) int avx512fp16_ops(void) {
+        uint16_t got[32];
+        int i;
+        __m512h one = _mm512_castsi512_ph(_mm512_set1_epi16(0x3c00));
+        _mm512_storeu_si512((__m512i *)got, _mm512_castph_si512(_mm512_add_ph(one, one)));
+        for (i = 0; i < 32; i++) if (got[i] != 0x4000) return 0; /* 2.0 */
+        _mm512_storeu_si512((__m512i *)got,
+                            _mm512_castph_si512(_mm512_fmadd_ph(one, one, one)));
+        for (i = 0; i < 32; i++) if (got[i] != 0x4000) return 0;
+        return 1;
+    }
+
+    __attribute__((target("sha512,avx"))) int sha512_ops(void) {
+        uint64_t got[4];
+        int i;
+        _mm256_storeu_si256((__m256i *)got,
+                            _mm256_sha512msg1_epi64(_mm256_setzero_si256(), _mm_setzero_si128()));
+        for (i = 0; i < 4; i++) if (got[i] != 0) return 0;
+        return 1;
+    }
+
+    __attribute__((target("sm3,avx"))) int sm3_ops(void) {
+        __m128i z = _mm_setzero_si128();
+        return _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_sm3msg1_epi32(z, z, z), z)) == 0xffff;
+    }
+
+    __attribute__((target("sm4,avx"))) int sm4_ops(void) {
+        __m128i z = _mm_setzero_si128();
+        return _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_sm4key4_epi32(z, z), z)) != 0xffff;
+    }
+
+    __attribute__((target("avxvnniint8"))) int avxvnniint8_ops(void) {
+        int8_t a[16], b[16];
+        int32_t got[4];
+        int i, k, want;
+        for (i = 0; i < 16; i++) {
+            a[i] = (int8_t)(i * 17 - 120);
+            b[i] = (int8_t)(90 - i * 11);
+        }
+        _mm_storeu_si128((__m128i *)got,
+                         _mm_dpbssd_epi32(_mm_set1_epi32(5), _mm_loadu_si128((const __m128i *)a),
+                                          _mm_loadu_si128((const __m128i *)b)));
+        for (i = 0; i < 4; i++) {
+            for (want = 5, k = 0; k < 4; k++) want += a[i * 4 + k] * b[i * 4 + k];
+            if (got[i] != want) return 0;
+        }
+        return 1;
+    }
+
+    __attribute__((target("avxifma"))) int avxifma_ops(void) {
+        uint64_t got[2];
+        _mm_storeu_si128((__m128i *)got,
+                         _mm_madd52lo_avx_epu64(_mm_set_epi64x(1, 2), _mm_set_epi64x(1000, 3000),
+                                                _mm_set_epi64x(7, 11)));
+        return got[0] == 2 + 3000 * 11 && got[1] == 1 + 1000 * 7;
+    }
+}
+
+#[test]
+fn avx512_when_the_processor_has_it() {
+    let has = |names: &[&str]| {
+        names.iter().all(|name| match *name {
+            "avx512f" => is_x86_feature_detected!("avx512f"),
+            "avx512vl" => is_x86_feature_detected!("avx512vl"),
+            "avx512bw" => is_x86_feature_detected!("avx512bw"),
+            "avx512cd" => is_x86_feature_detected!("avx512cd"),
+            "avx512vpopcntdq" => is_x86_feature_detected!("avx512vpopcntdq"),
+            "avx512vnni" => is_x86_feature_detected!("avx512vnni"),
+            "avxvnni" => is_x86_feature_detected!("avxvnni"),
+            "avx512vbmi" => is_x86_feature_detected!("avx512vbmi"),
+            "avx512ifma" => is_x86_feature_detected!("avx512ifma"),
+            "avx512bitalg" => is_x86_feature_detected!("avx512bitalg"),
+            "avx512bf16" => is_x86_feature_detected!("avx512bf16"),
+            "avx512fp16" => is_x86_feature_detected!("avx512fp16"),
+            "gfni" => is_x86_feature_detected!("gfni"),
+            "vaes" => is_x86_feature_detected!("vaes"),
+            "aes" => is_x86_feature_detected!("aes"),
+            "vpclmulqdq" => is_x86_feature_detected!("vpclmulqdq"),
+            "pclmulqdq" => is_x86_feature_detected!("pclmulqdq"),
+            "f16c" => is_x86_feature_detected!("f16c"),
+            "avx" => is_x86_feature_detected!("avx"),
+            "sha512" => is_x86_feature_detected!("sha512"),
+            "sm3" => is_x86_feature_detected!("sm3"),
+            "sm4" => is_x86_feature_detected!("sm4"),
+            "avxvnniint8" => is_x86_feature_detected!("avxvnniint8"),
+            "avxifma" => is_x86_feature_detected!("avxifma"),
+            other => panic!("no detection for {other}"),
+        })
+    };
+    let cases: &[(&[&str], unsafe extern "C" fn() -> i32, &str)] = &[
+        (&["avx512f"], avx512f_ops, "avx512f"),
+        (&["avx512f", "avx512vl"], avx512vl_ops, "avx512vl"),
+        (&["avx512bw"], avx512bw_ops, "avx512bw"),
+        (&["avx512cd"], avx512cd_ops, "avx512cd"),
+        (&["avx512vpopcntdq"], avx512vpopcntdq_ops, "avx512vpopcntdq"),
+        (&["avx512vnni"], avx512vnni_ops, "avx512vnni"),
+        (&["avxvnni"], avxvnni_ops, "avxvnni"),
+        (&["avx512vbmi"], avx512vbmi_ops, "avx512vbmi"),
+        (&["avx512ifma"], avx512ifma_ops, "avx512ifma"),
+        (&["avx512bitalg"], avx512bitalg_ops, "avx512bitalg"),
+        (&["avx512bf16", "avx512f"], avx512bf16_ops, "avx512bf16"),
+        (&["gfni", "avx512f"], gfni_ops, "gfni"),
+        (&["vaes", "avx512f", "aes"], vaes_ops, "vaes"),
+        (
+            &["vpclmulqdq", "avx512f", "pclmulqdq"],
+            vpclmulqdq_ops,
+            "vpclmulqdq",
+        ),
+        (&["f16c", "avx"], f16c_ops, "f16c"),
+        // Compile-checked only where these tests were written.
+        (&["avx512fp16", "avx512bw"], avx512fp16_ops, "avx512fp16"),
+        (&["sha512", "avx"], sha512_ops, "sha512"),
+        (&["sm3", "avx"], sm3_ops, "sm3"),
+        (&["sm4", "avx"], sm4_ops, "sm4"),
+        (&["avxvnniint8"], avxvnniint8_ops, "avxvnniint8"),
+        (&["avxifma"], avxifma_ops, "avxifma"),
+    ];
+    for (needs, case, name) in cases {
+        if has(needs) {
+            assert_eq!(unsafe { case() }, 1, "{name}");
+        }
+    }
+}
+
+#[test]
+fn builtin_cpu_supports_knows_avx512() {
+    unsafe {
+        assert_eq!(has512(0), i32::from(is_x86_feature_detected!("avx512f")));
+        assert_eq!(has512(1), i32::from(is_x86_feature_detected!("avx512bw")));
+        assert_eq!(has512(2), i32::from(is_x86_feature_detected!("avx512bf16")));
+        assert_eq!(
+            has512(3),
+            i32::from(is_x86_feature_detected!("avx512vp2intersect"))
+        );
+        assert_eq!(has512(4), i32::from(is_x86_feature_detected!("gfni")));
+    }
+}
