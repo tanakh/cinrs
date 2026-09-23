@@ -1,0 +1,8 @@
+error: '_Pragma' takes one string literal
+  --> tests/ui/pragma_operator.rs:25:5
+   |
+25 |     _Pragma(NOT_A_STRING(GCC target("avx2")))
+   |     ^^^^^^^
+
+error: aborting due to 1 previous error
+

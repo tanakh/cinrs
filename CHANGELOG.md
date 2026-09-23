@@ -369,6 +369,15 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`_Pragma`'s operand is macro-expanded.** CRoaring and simdjson open a
+  target region from a macro with `_Pragma(STRINGIFY(GCC target(T)))`, which
+  was refused with "'_Pragma' takes one string literal" and three cascade
+  errors from the operand's tokens reaching the parser. The operand is now
+  macro-replaced before it is destringized, written directly or produced by a
+  macro, as GCC and Clang do (even the `(` may come out of a macro), and the
+  result goes through the same `#pragma` path a literal operand does. An
+  operand that is still not one string literal is one error, and the whole
+  parenthesised operand is consumed with it.
 * **`aligned(1)` on a `typedef` is honoured.** xxHash's idiom for an unaligned
   read, `typedef __attribute__((__aligned__(1))) uint64_t xxh_unalign64;
   return *(const xxh_unalign64 *) p;`, was compiled as an aligned `u64`

@@ -1842,6 +1842,66 @@ fn pragma_gcc_target_defines_the_feature_macros() {
     );
 }
 
+/// `_Pragma`'s operand is macro-replaced before it is destringized, as in GCC
+/// and Clang: CRoaring (and simdjson) open a target region with
+/// `_Pragma(STRINGIFY(GCC target(T)))` out of a macro.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn pragma_operator_expands_its_operand() {
+    let croaring = "#define STRINGIFY_IMPLEMENTATION_(a) #a\n\
+        #define STRINGIFY(a) STRINGIFY_IMPLEMENTATION_(a)\n\
+        #define CROARING_TARGET_REGION(T) _Pragma(\"GCC push_options\") _Pragma(STRINGIFY(GCC target(T)))\n\
+        #define CROARING_UNTARGET_REGION _Pragma(\"GCC pop_options\")\n\
+        #define CROARING_TARGET_AVX2 CROARING_TARGET_REGION(\"avx2,bmi,pclmul,lzcnt,popcnt\")\n\
+        CROARING_TARGET_AVX2\n\
+        #ifdef __AVX2__\na\n#endif\n\
+        #ifdef __BMI__\nb\n#endif\n\
+        static inline int f(void) { return 1; }\n\
+        CROARING_UNTARGET_REGION\n\
+        #ifdef __AVX2__\nc\n#endif\n\
+        #ifdef __BMI__\nd\n#endif\n\
+        end";
+    assert_eq!(
+        pp(croaring),
+        "a b static inline int f ( void ) { return 1 ; } end"
+    );
+    // Written directly, with an object-like macro as the operand.
+    assert_eq!(
+        pp("#define X \"GCC target(\\\"avx2\\\")\"\n_Pragma(X)\n#ifdef __AVX2__\na\n#endif"),
+        "a"
+    );
+    // The `(` may come out of a macro as well.
+    assert_eq!(
+        pp("#define LP (\n_Pragma LP \"GCC target(\\\"avx2\\\")\")\n#ifdef __AVX2__\na\n#endif"),
+        "a"
+    );
+    // `_Pragma` on its own is an ordinary name.
+    assert_eq!(pp("#define Y 1\n_Pragma Y"), "_Pragma 1");
+}
+
+/// An operand that is not one string literal after replacement is one error,
+/// and the whole parenthesised operand goes with it.
+#[test]
+fn pragma_operator_with_a_bad_operand_is_one_error() {
+    one_error("_Pragma(1) int y;", "'_Pragma' takes one string literal");
+    assert_eq!(run("_Pragma(1) int y;").0.join(" "), "int y ;");
+    one_error(
+        "#define S(a) a\n_Pragma(S(GCC target(\"avx2\"))) int y;",
+        "'_Pragma' takes one string literal",
+    );
+    assert_eq!(
+        run("#define S(a) a\n_Pragma(S(GCC target(\"avx2\"))) int y;")
+            .0
+            .join(" "),
+        "int y ;"
+    );
+    one_error(
+        "_Pragma(\"a\" \"b\") int z;",
+        "'_Pragma' takes one string literal",
+    );
+    one_error("_Pragma(\"once\"\nint z;", "missing ')' after '_Pragma'");
+}
+
 #[test]
 fn the_has_family_answers_from_this_implementations_tables() {
     // `packed` and `cleanup` are honoured, `vector_size` is refused, and the

@@ -1497,25 +1497,65 @@ impl<'a> Pp<'a> {
     ///
     /// Returns whether it really was one: the name on its own is an ordinary
     /// identifier.
+    ///
+    /// Its operand is macro-replaced first, as GCC and Clang do and as the
+    /// rescan of a replacement list containing `_Pragma` would anyway: that is
+    /// what makes `_Pragma(STRINGIFY(GCC target(T)))` — CRoaring's and
+    /// simdjson's way of opening a target region from a macro — a pragma. The
+    /// `(` may come out of a macro too. When the operand is not one string
+    /// literal, the whole parenthesised operand is consumed with the one
+    /// error, so none of it reaches the parser.
     fn pragma_operator(&mut self, tok: &PTok) -> bool {
-        if !self.peek(true).is_some_and(|t| t.is_punct(Punct::LParen)) {
+        if !self
+            .peek_expanded()
+            .is_some_and(|t| t.is_punct(Punct::LParen))
+        {
             return false;
         }
         self.require_standard(Standard::C99, "'_Pragma'", tok.range);
         self.bump(true);
-        let literal = self.bump(true);
-        let Some(text) = literal.as_ref().and_then(|t| match &t.kind {
-            TokenKind::Str(lit) => Some(destringize(&lit.text)),
-            _ => None,
-        }) else {
-            self.diags
-                .error(tok.range, "'_Pragma' takes one string literal");
-            return true;
-        };
-        if !self.bump(true).is_some_and(|t| t.is_punct(Punct::RParen)) {
+        let mut operand = Vec::new();
+        let mut depth = 0usize;
+        let mut closed = false;
+        loop {
+            if self.peek_expanded().is_none_or(PTok::is_eof)
+                || (self.pending.is_empty() && self.at_directive())
+            {
+                // The operand never closes before the file (or the next
+                // directive) does; neither is swallowed.
+                break;
+            }
+            let Some(t) = self.bump(true) else {
+                break;
+            };
+            if t.is_punct(Punct::LParen) {
+                depth += 1;
+            } else if t.is_punct(Punct::RParen) {
+                if depth == 0 {
+                    closed = true;
+                    break;
+                }
+                depth -= 1;
+            }
+            operand.push(t);
+        }
+        if !closed {
             self.diags.error(tok.range, "missing ')' after '_Pragma'");
             return true;
         }
+        let text = match operand.as_slice() {
+            [
+                PTok {
+                    kind: TokenKind::Str(lit),
+                    ..
+                },
+            ] => destringize(&lit.text),
+            _ => {
+                self.diags
+                    .error(tok.range, "'_Pragma' takes one string literal");
+                return true;
+            }
+        };
         // The destringized text is a directive line without its `#pragma`, so
         // it is lexed and handed to the same code the directive uses. The
         // tokens are placed at the `_Pragma` itself, which is where a
@@ -1527,6 +1567,25 @@ impl<'a> Pp<'a> {
             .collect();
         self.pragma(&tokens, tok.range);
         true
+    }
+
+    /// The next token after macro replacement, left unconsumed: names that
+    /// invoke a macro are replaced (their replacement goes back onto the
+    /// stream, exactly as the main loop's rescan would put it) until a token
+    /// that is not one comes up. Neither the end of the file nor a directive
+    /// line is read past.
+    fn peek_expanded(&mut self) -> Option<&PTok> {
+        loop {
+            if self.pending.is_empty() && (self.ahead().is_eof() || self.at_directive()) {
+                return self.peek(true);
+            }
+            let tok = self.bump(true)?;
+            if tok.name().is_some() && self.try_expand(&tok, true) {
+                continue;
+            }
+            self.pending.push(tok);
+            return self.peek(true);
+        }
     }
 
     /// Leaves an `#include`d file, reporting the conditionals it left open.

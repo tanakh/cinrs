@@ -453,6 +453,53 @@ fn avx2_when_the_processor_has_it() {
     }
 }
 
+// The same instruction set asked for the way CRoaring does it: a `#pragma GCC
+// target` region opened and closed by macros, through `_Pragma` with a
+// macro-replaced operand.
+gnu11! {
+    #include <immintrin.h>
+    #include <stdint.h>
+
+    #define STRINGIFY_IMPLEMENTATION_(a) #a
+    #define STRINGIFY(a) STRINGIFY_IMPLEMENTATION_(a)
+    #define CROARING_TARGET_REGION(T) _Pragma("GCC push_options") _Pragma(STRINGIFY(GCC target(T)))
+    #define CROARING_UNTARGET_REGION _Pragma("GCC pop_options")
+    #define CROARING_TARGET_AVX2 CROARING_TARGET_REGION("avx2,bmi,pclmul,lzcnt,popcnt")
+
+    CROARING_TARGET_AVX2
+    int avx2_in_a_pragma_region(void) {
+        int32_t a[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        int32_t got[8];
+        int i;
+        __m256i va = _mm256_loadu_si256((const __m256i *)a);
+        _mm256_storeu_si256((__m256i *)got, _mm256_add_epi32(va, va));
+        for (i = 0; i < 8; i++) if (got[i] != 2 * a[i]) return 0;
+    #ifdef __AVX2__
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+    CROARING_UNTARGET_REGION
+
+    int avx2_after_the_region(void) {
+    #ifdef __AVX2__
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+}
+
+#[test]
+fn avx2_in_a_region_opened_through_pragma_operator() {
+    assert_eq!(unsafe { avx2_after_the_region() }, 0);
+    if !is_x86_feature_detected!("avx2") {
+        return;
+    }
+    assert_eq!(unsafe { avx2_in_a_pragma_region() }, 1);
+}
+
 // ---------------------------------------------------------------------------
 // the scalar bit-manipulation intrinsics
 // ---------------------------------------------------------------------------
