@@ -1,0 +1,28 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for_target(Standard::C99, \"riscv64gc-unknown-linux-gnu\", source)"
+---
+mod __cinrs_unit_73f82632 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn ahead(mut p: *const ::core::ffi::c_char) {
+        unsafe {
+            let _ = {
+                let __cinrs_tmp0 = p as *const ::core::ffi::c_void;
+            };
+            let _ = {
+                let __cinrs_tmp1 = p.offset(64) as *const ::core::ffi::c_void;
+            };
+            let _ = {
+                let __cinrs_tmp2 = p.offset(128) as *const ::core::ffi::c_void;
+            };
+        }
+    }
+    pub extern "C" fn hint(mut p: *mut ::core::ffi::c_int) {
+        let _ = {
+            let __cinrs_tmp0 = p as *const ::core::ffi::c_void;
+        };
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_73f82632::*;

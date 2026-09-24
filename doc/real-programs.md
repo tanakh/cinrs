@@ -68,17 +68,26 @@ for, and a `cpuid` dispatcher in inline assembly, which picks AVX-512 here
 
 | section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 64 MiB in 1 MiB updates | 8.36 | 7.93 | 7.61 | 0.91× | 0.96× |
-| 1,000,000 messages of 64 bytes | 90.7 | 70.6 | 70.6 | 0.78× | 1.00× |
-| 100,000 messages of 1 KiB | 108.9 | 100.8 | 102.1 | 0.94× | 1.01× |
-| `keyed_hash` over 16 MiB | 1.62 | 1.43 | 1.48 | 0.92× | 1.04× |
-| `finalize_seek`, 16 MiB of output | 1.66 | 1.28 | 2.40 | 1.44× | 1.87× |
+| 64 MiB in 1 MiB updates | 8.99 | 8.39 | 8.12 | 0.90× | 0.97× |
+| 1,000,000 messages of 64 bytes | 91.5 | 70.6 | 70.4 | 0.77× | 1.00× |
+| 100,000 messages of 1 KiB | 110.0 | 101.2 | 101.5 | 0.92× | 1.00× |
+| `keyed_hash` over 16 MiB | 1.70 | 1.56 | 1.57 | 0.92× | 1.01× |
+| `finalize_seek`, 16 MiB of output | 1.66 | 1.29 | 1.29 | 0.78× | 1.01× |
 
-The hashing sections are at or under the native builds (`cinrs` and clang
-agree; gcc is the slow one on the 64-byte messages). The one open item is the
-extended-output path: producing 16 MiB through `finalize_seek` costs 1.4–1.9×,
-which points at the translation of `blake3_xof_many` and the per-block output
-loop rather than at the kernels the other rows share. Not profiled yet.
+Every section is at or under the native builds (`cinrs` and clang agree; gcc
+is the slow one on the 64-byte messages and the extended output). The
+extended-output row was 2.40 ms, 1.44× gcc and 1.87× clang, until the
+`always_inline` helpers were fixed: `round_fn16` is `static inline
+__attribute__((always_inline))` under `#pragma GCC target("avx512f,…")`, which
+had become `#[inline]` beside `#[target_feature]` (rustc refuses
+`#[inline(always)]` there), and LLVM declined to inline it into
+`blake3_xof16_avx512`, which calls it seven times. `perf` showed 87 % of the
+time in the out-of-line `round_fn16`, the sixteen state vectors loaded and
+stored around every G step, the message schedule read at run time, and the
+16 output stores merged into a 1 KiB `memcpy` call. Such a helper is now a
+Rust `#[inline(always)]` function without the feature (see
+[features.md](features.md#simd-intrinsics)), and the kernel is one
+function with the state in registers, as gcc's is.
 
 ## xxHash 0.8.4
 
@@ -90,19 +99,23 @@ the SSE2 unit, as in upstream's default x86-64 build.
 
 | section | gcc | clang | cinrs | cinrs/gcc | cinrs/clang |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `XXH3_64bits` over 64 MiB | 1.33 | 1.41 | 1.49 | 1.12× | 1.05× |
-| `XXH3_128bits` over 64 MiB | 1.35 | 1.37 | 1.49 | 1.11× | 1.09× |
-| `XXH3_64bits`, 1,000,000 keys of 32 bytes | 1.79 | 1.64 | 1.53 | 0.86× | 0.93× |
-| `XXH3_64bits`, 1,000,000 keys of 256 bytes | 6.36 | 3.83 | 4.01 | 0.63× | 1.05× |
-| `XXH64` over 64 MiB | 2.30 | 2.33 | 2.31 | 1.00× | 0.99× |
-| `XXH32` over 64 MiB | 4.39 | 4.36 | 4.36 | 0.99× | 1.00× |
-| `XXH3_64bits` streaming, 64 MiB in 4 KiB updates | 1.91 | 1.93 | 2.78 | 1.46× | 1.44× |
+| `XXH3_64bits` over 64 MiB | 1.74 | 1.63 | 1.53 | 0.88× | 0.94× |
+| `XXH3_128bits` over 64 MiB | 1.63 | 1.58 | 1.67 | 1.03× | 1.06× |
+| `XXH3_64bits`, 1,000,000 keys of 32 bytes | 1.84 | 1.65 | 1.57 | 0.85× | 0.95× |
+| `XXH3_64bits`, 1,000,000 keys of 256 bytes | 6.31 | 3.95 | 4.16 | 0.66× | 1.05× |
+| `XXH64` over 64 MiB | 2.46 | 2.50 | 2.63 | 1.07× | 1.06× |
+| `XXH32` over 64 MiB | 4.55 | 4.50 | 4.57 | 1.01× | 1.02× |
+| `XXH3_64bits` streaming, 64 MiB in 4 KiB updates | 2.23 | 2.16 | 2.29 | 1.03× | 1.06× |
 
-The one-shot rows are within 12 % (gcc is the outlier on the 256-byte keys, not
-`cinrs`). The open item is the streaming row: the same kernels reached through
-`XXH3_64bits_update` in 4 KiB pieces cost 1.45×, so the per-update path — the
-dispatcher's `update` and its consume-stripes code — is where the translation
-loses, not the kernels. Not profiled yet.
+Every row is within 7 % of the native builds or under them (gcc is the outlier
+on the 256-byte keys, not `cinrs`); the 64 MiB rows move by about 10 % from
+run to run on this host. The streaming row was 2.78 ms, 1.45× both compilers,
+until `__builtin_prefetch` became a real prefetch: `XXH3_accumulate` prefetches
+384 bytes ahead through `XXH_PREFETCH`, `cinrs` had evaluated the pointer and
+dropped the hint, and in 4 KiB pieces the accumulate loop then waited on
+memory — `perf` showed fewer instructions than gcc's build and more cycles,
+and gcc's own build with `-DXXH_NO_PREFETCH` was exactly as slow. It is now
+`_mm_prefetch` (see [gnu-extensions.md](gnu-extensions.md)).
 
 ## CRoaring 4.7.2 (not in the repository)
 

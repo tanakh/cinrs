@@ -65,7 +65,14 @@ impl Rng {
 
 /// Runs `pass` `n` times per repetition, five repetitions, and prints the
 /// median in ms per pass. The checksum is the first repetition's last pass.
+/// `CINRS_BENCH_ONLY=g` (a list of section letters) skips the other sections,
+/// for profiling one of them.
 fn time(name: &str, n: usize, mut pass: impl FnMut() -> u64, sums: &mut Vec<(String, u64)>) {
+    if let Ok(only) = std::env::var("CINRS_BENCH_ONLY") {
+        if !only.contains(&name[..1]) {
+            return;
+        }
+    }
     let mut samples = Vec::new();
     let mut first = None;
     for _ in 0..5 {

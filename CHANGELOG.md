@@ -423,6 +423,15 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`__builtin_prefetch` prefetches.** It was evaluated for its operands and
+  dropped, which left xxHash's streaming `XXH3_64bits_update` in 4 KiB pieces
+  at 1.45× the time of gcc's and clang's builds: its accumulate loop prefetches
+  384 bytes ahead, and without that it waits on memory (a gcc build with
+  `-DXXH_NO_PREFETCH` was exactly as slow). On x86 and x86-64 it is now
+  `core::arch`'s `_mm_prefetch` with GCC's hint for the locality, on AArch64 a
+  `prfm` through `asm!`; elsewhere, and in a safe function, the operand is
+  still only evaluated. `rw` and `locality` must be integer constants in
+  range, as GCC requires; one that is not is an error.
 * **A stringified macro argument is spaced the way GCC and Clang space it.**
   brotli stringifies `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__,
   __GNUC_PATCHLEVEL__)` through two macros, and with `#define V(a,b)
@@ -542,13 +551,20 @@ follows [Semantic Versioning][semver].
   aligned to more than one byte but less than its type, an array member, a
   weaker alignment on a record, array or `_Atomic` `typedef`) are refused
   rather than dropped. `may_alias` stays accepted and ignored.
-* **`always_inline` under a target feature is `#[inline]`.** A
+* **`always_inline` under a target feature compiles, and is inlined.** A
   `static inline __attribute__((always_inline))` helper in a function set
   compiled under `#pragma GCC target("avx2")` — BLAKE3's `INLINE` helpers, and
   the shape of every SIMD kernel written for one `-m` flag — became
   `#[inline(always)]` beside `#[target_feature]`, which rustc refuses
-  (rust-lang/rust#145574). A function with a target feature now gets
-  `#[inline]`; without one, `#[inline(always)]` as before.
+  (rust-lang/rust#145574). Such a helper, when it is `static` and nothing
+  takes its address, is now a Rust `#[inline(always)] unsafe fn` without
+  `#[target_feature]` and without `extern "C"`: GCC only ever inlines one
+  into a caller with the same features, and once it is inlined there the
+  intrinsics in it are too. Plain `#[inline]` with the feature, the first fix,
+  left BLAKE3's `round_fn16` out of line in its extended-output kernel, which
+  put `blake3_hasher_finalize_seek` at 1.44× gcc's time. A helper whose
+  address is taken, or that is not `static`, is `#[inline]` with the feature;
+  without a feature, `#[inline(always)]` as before.
 * **`{0.0, -0.0}` keeps its sign.** An initialiser whose values were all zero
   was emitted as a zero fill, and `-0.0 == 0.0` counted it as one, so
   `double d[2] = {0.0, -0.0}` lost the sign of its second element. A zero fill

@@ -618,6 +618,22 @@ picks its SIMD path with `#ifdef __AVX2__` — xxHash's does — sees the
 instruction set a `#pragma GCC target` before its `#include` asked for. The
 *attribute* on one function changes no macro, in GCC or here.
 
+**`always_inline` helpers under a target feature.** A SIMD kernel is usually
+written as small `static inline __attribute__((always_inline))` helpers under
+the same `-m` flag (BLAKE3's `INLINE`, xxHash's `XXH_FORCE_INLINE`). rustc
+refuses `#[inline(always)]` beside `#[target_feature]`, and plain `#[inline]`
+is a hint LLVM may decline — BLAKE3's `round_fn16`, called seven times from
+one kernel, stayed out of line with its state spilled around every call. So
+such a helper, when it is `static` and nothing takes its address, is generated
+as a Rust `#[inline(always)] unsafe fn` *without* `#[target_feature]` and
+without `extern "C"`: GCC refuses to inline an `always_inline` function into a
+caller without its target options, so every caller of a program GCC accepts
+has the features, and once the helper is inlined there, so are the intrinsics
+it calls. Vectors pass by value between Rust functions whatever the features.
+A helper whose address is taken (or named by `cleanup`), one with external
+linkage, and a [safe](#safe-functions) one stay `extern "C"` functions with the
+feature and `#[inline]`.
+
 **Asking the processor.** Without the pragma, only the baseline is predefined,
 so `#ifdef __AVX2__` and `#ifdef __AVX512F__` take the other branch, whatever
 the machine — the right question

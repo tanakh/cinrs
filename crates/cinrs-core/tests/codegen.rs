@@ -1803,6 +1803,37 @@ fn an_initialised_flexible_array_member_gets_a_companion_type() {
 /// Nothing at all is generated *for* the intrinsics themselves — the header
 /// declares nearly nine hundred of them and there is no symbol behind any of
 /// them — so the `extern` block this unit would otherwise open with is absent.
+/// `__builtin_prefetch` is `_mm_prefetch` on x86 with the locality's hint, a
+/// `prfm` on AArch64, and nothing but its operand in a safe function or on a
+/// target with neither.
+#[test]
+fn prefetch_becomes_the_targets_prefetch() {
+    let source = r#"
+        void ahead(const char *p) {
+            __builtin_prefetch(p);
+            __builtin_prefetch(p + 64, 1);
+            __builtin_prefetch(p + 128, 0, 0);
+        }
+        __attribute__((cinrs_safe)) void hint(int *p) { __builtin_prefetch(p, 0, 2); }
+    "#;
+    insta::assert_snapshot!(
+        "prefetch_x86_64",
+        generate_for_target(Standard::C99, "x86_64-unknown-linux-gnu", source)
+    );
+    insta::assert_snapshot!(
+        "prefetch_i686",
+        generate_for_target(Standard::C99, "i686-unknown-linux-gnu", source)
+    );
+    insta::assert_snapshot!(
+        "prefetch_aarch64",
+        generate_for_target(Standard::C99, "aarch64-unknown-linux-gnu", source)
+    );
+    insta::assert_snapshot!(
+        "prefetch_riscv64",
+        generate_for_target(Standard::C99, "riscv64gc-unknown-linux-gnu", source)
+    );
+}
+
 /// The target is named so that the snapshot reads the same on a machine that is
 /// not x86-64.
 #[test]
@@ -1899,13 +1930,16 @@ fn a_region_pragma_becomes_target_feature_attributes() {
     ));
 }
 
-/// `always_inline` together with a target feature is `#[inline]`, not
-/// `#[inline(always)]`, which rustc refuses beside `#[target_feature]` —
-/// whether the feature comes from the function's own attribute or from a
-/// `#pragma GCC target` region, as in BLAKE3's SIMD files. Without a feature
-/// it stays `#[inline(always)]`.
+/// A `static` `always_inline` function with a target feature — from its own
+/// attribute or from a `#pragma GCC target` region, as in BLAKE3's SIMD files
+/// — whose address is never taken is a Rust `#[inline(always)] unsafe fn`
+/// with no `#[target_feature]` and no `extern "C"`: rustc refuses
+/// `#[inline(always)]` beside `#[target_feature]`, and every caller GCC
+/// accepts has the feature. One whose address is taken, and one that is not
+/// `static`, stay `#[inline]` `extern "C"` functions with the feature. Without
+/// a feature it is `#[inline(always)]` as ever.
 #[test]
-fn always_inline_with_a_target_feature_is_plain_inline() {
+fn always_inline_with_a_target_feature_is_a_rust_helper() {
     insta::assert_snapshot!(generate_for_target(
         Standard::C99,
         "x86_64-unknown-linux-gnu",
@@ -1919,8 +1953,11 @@ fn always_inline_with_a_target_feature_is_plain_inline() {
         #pragma GCC push_options
         #pragma GCC target("avx2")
         static inline __attribute__((always_inline)) int region(int n) { return n + 3; }
+        static inline __attribute__((always_inline)) int pointed(int n) { return n + 4; }
+        __attribute__((always_inline)) inline int visible(int n) { return n + 5; }
 
-        int call(int n) { return own(n) + region(n); }
+        int call(int n) { return own(n) + region(n) + visible(n); }
+        int (*take(void))(int) { return pointed; }
         #pragma GCC pop_options
 
         int call_plain(int n) { return plain(n); }

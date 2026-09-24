@@ -796,7 +796,10 @@ fn a_region_pragma_reaches_the_functions_after_it() {
 
 // `always_inline` under a target feature, BLAKE3's `INLINE` helpers in its
 // SIMD files: rustc refuses `#[inline(always)]` beside `#[target_feature]`,
-// so the helper is `#[inline]`.
+// so a `static` helper whose address is not taken is a Rust
+// `#[inline(always)]` function without the feature, taking and returning
+// vectors by value — 512-bit ones too, which the C ABI could not pass without
+// `avx512f` — and inlined into callers that have it.
 gnu11! {
     #include <immintrin.h>
     #include <stdint.h>
@@ -814,6 +817,30 @@ gnu11! {
     }
 
     #pragma GCC pop_options
+
+    #pragma GCC push_options
+    #pragma GCC target("avx512f")
+
+    static inline __attribute__((always_inline)) __m512i mixed(__m512i a, __m512i b) {
+        return _mm512_add_epi32(_mm512_ror_epi32(a, 7), b);
+    }
+
+    static inline __attribute__((always_inline)) void rounds(__m512i v[2], int n) {
+        for (int i = 0; i < n; i++) {
+            v[0] = mixed(v[0], v[1]);
+            v[1] = mixed(v[1], v[0]);
+        }
+    }
+
+    int always_inline_helper_512(int x) {
+        __m512i v[2] = { _mm512_set1_epi32(x), _mm512_set1_epi32(x + 1) };
+        rounds(v, 3);
+        int out[16];
+        _mm512_storeu_si512(out, mixed(v[0], v[1]));
+        return out[15];
+    }
+
+    #pragma GCC pop_options
 }
 
 #[test]
@@ -821,6 +848,17 @@ fn an_always_inline_helper_under_a_target_feature() {
     let values: [i32; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
     if is_x86_feature_detected!("avx2") {
         assert_eq!(unsafe { always_inline_helper(values.as_ptr()) }, 28);
+    }
+    if is_x86_feature_detected!("avx512f") {
+        // The same computation in plain Rust.
+        let mixed = |a: u32, b: u32| a.rotate_right(7).wrapping_add(b);
+        let (mut a, mut b) = (5u32, 6u32);
+        for _ in 0..3 {
+            a = mixed(a, b);
+            b = mixed(b, a);
+        }
+        let expected = mixed(a, b) as i32;
+        assert_eq!(unsafe { always_inline_helper_512(5) }, expected);
     }
 }
 

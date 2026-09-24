@@ -27,6 +27,14 @@ cinrs::c99! {
         return __builtin_alloca_with_align(n, 256); //~ ERROR: must be between 1 and 128 bits
     }
 
+    /* The hints select the instruction, so GCC wants them constant. */
+    void fetch(const char *p, int rw) {
+        __builtin_prefetch(p, rw, 3); //~ ERROR: must be an integer constant
+        __builtin_prefetch(p, 0, 4); //~ ERROR: must be 0 to 3, not 4
+        __builtin_prefetch(p, 2); //~ ERROR: must be 0 to 1, not 2
+        __builtin_prefetch(rw); //~ ERROR: must be a pointer
+    }
+
     int backwards_designator(void) {
         static const int table[8] = { [5 ... 1] = 3 }; //~ ERROR: empty range designator
         return table[0];

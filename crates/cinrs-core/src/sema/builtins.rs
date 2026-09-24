@@ -276,7 +276,8 @@ impl Sema<'_> {
             "classify_type" => self.classify_type(name, args, range),
             // Hints with nowhere to go. The operands are still evaluated,
             // because C says they are.
-            "prefetch" | "assume" | "speculation_safe_value" => {
+            "prefetch" => self.prefetch(name, args, range),
+            "assume" | "speculation_safe_value" => {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.expr(arg)?);
@@ -832,6 +833,69 @@ impl Sema<'_> {
         Some(Expr::int(class, Ty::Int, range))
     }
 
+    /// `__builtin_prefetch(p)`, `(p, rw)` or `(p, rw, locality)`.
+    ///
+    /// GCC requires `rw` and `locality` to be integer constants — it refuses
+    /// anything else, since they select the instruction — and they default to
+    /// 0 (a read) and 3 (keep in every level of cache). A value outside 0..=1
+    /// or 0..=3 is an error here, as it is in Clang; GCC warns and uses zero.
+    /// The pointer is the only operand that reaches the generated code, as a
+    /// `const void *`.
+    fn prefetch(&mut self, name: &str, args: &[ast::Expr], range: SourceRange) -> Option<Expr> {
+        if args.is_empty() || args.len() > 3 {
+            self.error(
+                range,
+                format!("'{name}' expects 1 to 3 arguments, have {}", args.len()),
+            );
+            return None;
+        }
+        let pointer = self.expr(&args[0])?;
+        if !pointer.ty.is_pointer() {
+            self.error(
+                args[0].range,
+                format!(
+                    "the first argument of '{name}' must be a pointer, not '{}'",
+                    self.tyname(pointer.ty)
+                ),
+            );
+            return None;
+        }
+        let mut hint = [0i128, 3];
+        let limits = [("second", 1), ("third", 3)];
+        for (index, (arg, (which, max))) in args[1..].iter().zip(limits).enumerate() {
+            let value = self.expr(arg)?;
+            match self.const_eval(&value) {
+                Some(ir::ConstValue::Int(v)) if (0..=max).contains(&v) => hint[index] = v,
+                Some(ir::ConstValue::Int(v)) => {
+                    self.error(
+                        arg.range,
+                        format!("the {which} argument of '{name}' must be 0 to {max}, not {v}"),
+                    );
+                    return None;
+                }
+                _ => {
+                    self.error(
+                        arg.range,
+                        format!("the {which} argument of '{name}' must be an integer constant"),
+                    );
+                    return None;
+                }
+            }
+        }
+        let void = self.ptr_to(Ty::Void, true);
+        let pointer = self.convert(pointer, void);
+        // Both are in range, so the packed byte is at most 7.
+        let packed = (hint[1] | hint[0] << 2) as u8;
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::Prefetch(packed),
+                args: vec![pointer],
+            },
+            Ty::Void,
+            range,
+        ))
+    }
+
     /// Checks a builtin's argument count.
     fn builtin_arity(
         &mut self,
@@ -1096,6 +1160,7 @@ impl Sema<'_> {
             asm_label: None,
             init_kind: None,
             target_features: Vec::new(),
+            address_taken: false,
             // A `__builtin_memcpy` is `memcpy`, which is a symbol; nothing
             // here is ever an intrinsic mapped onto `core::arch`.
             intrinsic: None,

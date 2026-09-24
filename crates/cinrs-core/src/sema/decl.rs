@@ -725,6 +725,8 @@ impl Sema<'_> {
             range,
         );
         self.cleanup_depth += 1;
+        // The guard holds the function as an `extern "C" fn` pointer.
+        self.program.functions[func.0 as usize].address_taken = true;
         Some(Stmt::Cleanup(Box::new(ir::CleanupDef {
             object,
             func,
@@ -2351,6 +2353,7 @@ impl Sema<'_> {
                     asm_label: asm_label.map(|label| label.node.clone()),
                     init_kind,
                     target_features,
+                    address_taken: false,
                     intrinsic,
                     safe: attrs.safe,
                     locals: Vec::new(),

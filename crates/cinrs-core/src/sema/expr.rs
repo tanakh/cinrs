@@ -629,6 +629,7 @@ impl Sema<'_> {
             self.program.types.unprototyped_func(sig.ret)
         };
         let ty = self.ptr_to(func, false);
+        self.program.functions[id.0 as usize].address_taken = true;
         Expr::new(ExprKind::FuncAddr(id), ty, range)
     }
 
@@ -2407,6 +2408,7 @@ impl Sema<'_> {
             asm_label: None,
             init_kind: None,
             target_features: Vec::new(),
+            address_taken: false,
             // An implicit declaration has no prototype, and an intrinsic only
             // ever arrives with one — from the bundled header.
             intrinsic: None,

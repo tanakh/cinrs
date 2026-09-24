@@ -1080,6 +1080,9 @@ struct Codegen<'a> {
     /// machine](crate::cfg), in which case every local is already bound at the
     /// top and a definition is an assignment.
     in_cfg: bool,
+    /// Whether the function being generated is [safe](Function::is_safe), so
+    /// that its body has no `unsafe` block around it.
+    in_safe: bool,
     temporaries: u32,
     /// Set the first time a `__int128` reaches the output, which is what
     /// decides whether the [data-model check](Codegen::data_model_check) has
@@ -1185,6 +1188,7 @@ impl<'a> Codegen<'a> {
             va_source: VaSource::None,
             ret_ty: Ty::Void,
             in_cfg: false,
+            in_safe: false,
             temporaries: 0,
             uses_int128: Cell::new(false),
             uses_complex: Cell::new(false),
@@ -2544,10 +2548,14 @@ impl<'a> Codegen<'a> {
         // `#[inline(always)]` with `#[target_feature]`", rust-lang/rust#145574),
         // and BLAKE3's SIMD files are exactly that pairing, an `INLINE` macro
         // of `static inline __attribute__((always_inline))` under `#pragma GCC
-        // target("sse4.1")`. The hint is then only a hint; a caller with the
-        // same features still inlines it in practice.
+        // target("sse4.1")`. The hint is then only a hint, and LLVM does not
+        // always take it — so where it can, the helper drops the
+        // `#[target_feature]` instead and keeps `#[inline(always)]`; see
+        // [`Function::inline_helper`] for when, and why that is sound.
+        let helper = func.inline_helper();
         let inline = match func.inline_hint {
             Some(_) if exported => TokenStream::new(),
+            _ if helper => quote_spanned! {span=> #[inline(always)] },
             Some(ir::InlineHint::Always) if !func.target_features.is_empty() => {
                 quote_spanned! {span=> #[inline] }
             }
@@ -2582,7 +2590,19 @@ impl<'a> Codegen<'a> {
         // `#[target_feature(enable = "avx2")]` makes: the body may use that
         // instruction set, and a caller has to have checked that the
         // processor has it — with `__builtin_cpu_supports`, as in C.
-        let target_feature = self.target_feature_attrs(func, span);
+        let target_feature = if helper {
+            TokenStream::new()
+        } else {
+            self.target_feature_attrs(func, span)
+        };
+        // Everything is `extern "C"`, so that its address is a C function
+        // pointer, except that helper, whose address nothing takes and which
+        // could not pass a vector through the C ABI without the feature.
+        let abi = if helper {
+            TokenStream::new()
+        } else {
+            quote_spanned! {span=> extern "C" }
+        };
         // A function the unit asked to be safe is generated without `unsafe`,
         // and its body without the `unsafe` block, so that `rustc` checks every
         // operation in it; see [`crate::sema::check_safe`] for what that
@@ -2599,7 +2619,7 @@ impl<'a> Codegen<'a> {
             #deprecated
             #section
             #target_feature
-            #vis #unsafety extern "C" fn #name(#params) #ret
+            #vis #unsafety #abi fn #name(#params) #ret
         }
     }
 
@@ -2755,6 +2775,7 @@ impl<'a> Codegen<'a> {
     fn enter_function(&mut self, func: &Function) {
         self.ret_ty = func.sig.ret;
         self.in_cfg = matches!(func.body, Some(Body::Cfg(_)));
+        self.in_safe = func.is_safe();
         self.temporaries = 0;
         self.continue_styles.clear();
         self.local_names.clear();
@@ -5119,6 +5140,63 @@ impl<'a> Codegen<'a> {
                     out.extend(self.expr_stmt(arg));
                 }
                 Value::new(quote_spanned! {span=> { #out } }, prec::BLOCK)
+            }
+            // A hint, so dropping it is always correct, and it is dropped
+            // where emitting it would change what compiles: a safe function
+            // has no `unsafe` block for the call to sit in, and only x86 and
+            // AArch64 have a stable way to say it.
+            BuiltinOp::Prefetch(packed) => {
+                let (write, locality) = ir::prefetch_hint(packed);
+                let arch = self.options.target.arch;
+                let pointer = self.expr(&args[0]).at(prec::LOWEST, span);
+                let tmp = self.temporary();
+                let prefetch = match arch {
+                    _ if self.in_safe => TokenStream::new(),
+                    // `_mm_prefetch` has no form for writing without
+                    // `prefetchw`, which is a feature of its own, so `rw` is
+                    // not passed on. The hints are GCC's: locality 3 is
+                    // `prefetcht0`, 0 is `prefetchnta`. The `cfg` is for a
+                    // 32-bit target without SSE (`i586`), where there is
+                    // nothing to call; x86-64 always has SSE.
+                    crate::target::Arch::X86 | crate::target::Arch::X86_64 => {
+                        let module = self.arch_module(span);
+                        let hint = Ident::new(
+                            ["_MM_HINT_NTA", "_MM_HINT_T2", "_MM_HINT_T1", "_MM_HINT_T0"]
+                                [usize::from(locality)],
+                            span,
+                        );
+                        let sse = if arch == crate::target::Arch::X86 {
+                            quote_spanned! {span=> #[cfg(target_feature = "sse")] }
+                        } else {
+                            TokenStream::new()
+                        };
+                        quote_spanned! {span=>
+                            #sse
+                            ::core::arch::#module::_mm_prefetch::<{ ::core::arch::#module::#hint }>(
+                                #tmp.cast::<i8>()
+                            );
+                        }
+                    }
+                    // GCC's choice of `prfm` operation for each locality.
+                    crate::target::Arch::Aarch64 => {
+                        let kind = if write { "pst" } else { "pld" };
+                        let level = ["l1strm", "l3keep", "l2keep", "l1keep"][usize::from(locality)];
+                        let mut template = Literal::string(&format!("prfm {kind}{level}, [{{0}}]"));
+                        template.set_span(span);
+                        quote_spanned! {span=>
+                            ::core::arch::asm!(
+                                #template,
+                                in(reg) #tmp,
+                                options(nostack, preserves_flags, readonly)
+                            );
+                        }
+                    }
+                    _ => TokenStream::new(),
+                };
+                Value::new(
+                    quote_spanned! {span=> { let #tmp = #pointer; #prefetch } },
+                    prec::BLOCK,
+                )
             }
             // `__builtin_cpu_supports("avx2")` asks the processor, exactly as
             // it does in C, and the answer is an `int` because that is what

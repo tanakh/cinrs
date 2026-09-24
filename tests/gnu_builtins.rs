@@ -292,6 +292,24 @@ c99! {
     float not_a_numberf(void) { return __builtin_nanf(""); }
 
     void hint(const char *p) { __builtin_prefetch(p, 0, 3); }
+
+    /* A prefetch is a real instruction on x86 and AArch64, and only a hint:
+       the sum is the same whatever it does. */
+    long fetched_sum(const int *p, int n) {
+        long sum = 0;
+        for (int i = 0; i < n; i++) {
+            __builtin_prefetch(p + (i + 16) % n);
+            __builtin_prefetch(p + (i + 32) % n, 0, 0);
+            __builtin_prefetch(p + (i + 48) % n, 1, 1);
+            __builtin_prefetch(&p[i], 0, 2);
+            sum += p[i];
+        }
+        return sum;
+    }
+    __attribute__((cinrs_safe)) int safe_hint(int x) {
+        __builtin_prefetch(&x);
+        return x + 1;
+    }
     void *aligned(void *p) { return __builtin_assume_aligned(p, 16); }
 
     /* A library builtin is a call to the library function, declared into the
@@ -317,6 +335,9 @@ fn the_constants_hints_and_library_builtins() {
     assert!(unsafe { not_a_numberf() }.is_nan());
 
     unsafe { hint(c"x".as_ptr()) };
+    let numbers: Vec<i32> = (1..=1000).collect();
+    assert_eq!(unsafe { fetched_sum(numbers.as_ptr(), 1000) }, 500_500);
+    assert_eq!(safe_hint(41), 42);
     let mut buf = [1u8, 2, 3, 4];
     assert_eq!(
         unsafe { aligned(buf.as_mut_ptr().cast()) },

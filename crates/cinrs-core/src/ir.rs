@@ -2067,6 +2067,15 @@ pub struct Function {
     /// for the attribute to go on, and the function it names was compiled
     /// somewhere else.
     pub target_features: Vec<String>,
+    /// Whether anything in the unit uses the function other than by calling
+    /// it by name: its address taken as a value (`&f`, or `f` where a pointer
+    /// is wanted), or it named by `__attribute__((cleanup))`, whose guard
+    /// holds a pointer to it. Such a function has to be an `extern "C" fn`,
+    /// since that is what a C function pointer is; one that is only ever called
+    /// can be a Rust function, which is what an
+    /// [always-inline helper with target features](Function::inline_helper)
+    /// needs.
+    pub address_taken: bool,
     /// Set when this name is an [x86 intrinsic](crate::x86) rather than a
     /// symbol: a call to it is generated as `::core::arch::x86_64::<name>`,
     /// and it is left out of the unit's `extern` block because there is
@@ -2174,6 +2183,36 @@ impl Function {
     /// [`Function::safe`].
     pub fn is_safe(&self) -> bool {
         self.safe.is_some()
+    }
+
+    /// Whether the function is an `always_inline` helper under a target
+    /// feature that is generated as a Rust `#[inline(always)] unsafe fn`
+    /// *without* `#[target_feature]`.
+    ///
+    /// rustc refuses `#[inline(always)]` together with `#[target_feature]`
+    /// (rust-lang/rust#145574), and `#[inline]` alone is a hint LLVM may
+    /// decline: BLAKE3's `round_fn16`, called seven times from one kernel, was
+    /// left out of line, its state spilled to the stack around every call.
+    /// GCC's contract makes the attribute unnecessary: it refuses to inline an
+    /// `always_inline` function into a caller without its target options, so
+    /// every caller of one that compiles has the features, and once the helper
+    /// is inlined into such a caller the intrinsics in its body are inlined
+    /// there too. Without the attribute the helper must not be a C-ABI
+    /// function — the C ABI passes a 256- or 512-bit vector in registers the
+    /// feature provides — so it is a Rust function, and that is only possible
+    /// when nothing needs it as a C function pointer: it is `static`, never
+    /// has its address taken, is not variadic, nested, safe (whose body would
+    /// then call intrinsics without `unsafe`), a constructor or an intrinsic.
+    pub fn inline_helper(&self) -> bool {
+        self.inline_hint == Some(InlineHint::Always)
+            && !self.target_features.is_empty()
+            && self.is_static
+            && !self.address_taken
+            && !self.sig.variadic
+            && !self.is_nested()
+            && !self.is_safe()
+            && self.init_kind.is_none()
+            && self.intrinsic.is_none()
     }
 }
 
@@ -2470,6 +2509,12 @@ pub enum LogicalOp {
     Or,
 }
 
+/// The `(rw, locality)` of a [`BuiltinOp::Prefetch`]: whether it is a
+/// prefetch for writing, and how long the line should stay, 0 to 3.
+pub fn prefetch_hint(packed: u8) -> (bool, u8) {
+    (packed & 4 != 0, packed & 3)
+}
+
 /// A GNU builtin that becomes a fixed piece of Rust rather than a call.
 ///
 /// The bit-manipulation ones map onto the integer methods of the same name;
@@ -2496,10 +2541,21 @@ pub enum BuiltinOp {
     Overflow(BinOp),
     /// The `_p` forms, which only ask whether it *would* overflow.
     OverflowP(BinOp),
-    /// Evaluate the operands and produce nothing: `__builtin_prefetch` and
-    /// `__builtin_assume`, which promise something the generated code cannot
-    /// pass on.
+    /// Evaluate the operands and produce nothing: `__builtin_assume` and
+    /// `__builtin_speculation_safe_value`, which promise something the
+    /// generated code cannot pass on.
     Discard,
+    /// `__builtin_prefetch(p, rw, locality)`, whose one operand is `p`
+    /// converted to `const void *`. The payload is the two constants packed
+    /// into one byte, `locality | rw << 2`, so that [`BuiltinOp`] stays two
+    /// bytes wide (see [`BuiltinOp::CpuSupports`]); [`prefetch_hint`] takes
+    /// it apart.
+    ///
+    /// On x86 it is `_mm_prefetch` with the locality's hint, on AArch64 a
+    /// `prfm`, and anywhere else — or in a [safe](Function::is_safe) function,
+    /// where the call would need `unsafe` — the operand is evaluated and the
+    /// hint dropped, which is always a correct translation of a hint.
+    Prefetch(u8),
     /// `__builtin_alloca(size)`, whose one operand is the size in bytes,
     /// converted to `size_t`.
     ///
