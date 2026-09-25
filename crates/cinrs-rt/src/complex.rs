@@ -23,7 +23,13 @@
 //!   produces NaN + iNaN out of an `∞ − ∞` or an `∞ · 0`. [`mul_f64`] and
 //!   [`div_f64`] therefore compute the cheap answer first and only fix it up
 //!   when both parts came out NaN, which is what makes the common case cost
-//!   four multiplications and an addition.
+//!   four multiplications and an addition. Only that answer and the NaN test
+//!   are inlined into the caller, as GCC and Clang inline the product before
+//!   their call of `__muldc3`: the fix-up is a separate `#[cold]` function,
+//!   never inlined, in both operations. Inlined, it made LLVM pack a loop's
+//!   real and imaginary parts into one vector for the sake of the path never
+//!   taken and put the shuffles on the one that is, costing a `z = z * z + c`
+//!   loop a quarter of its time.
 //!
 //! # The algorithms
 //!
@@ -76,7 +82,7 @@ use crate::Complex;
 /// spell the format with, and the two `$doc` fragments name it in the
 /// documentation.
 macro_rules! complex_ops {
-    ($t:ty, $mul:ident, $div:ident, $mul_real:ident, $real_mul:ident, $add_real:ident,
+    ($t:ty, $mul:ident, $recover_product:ident, $div:ident, $mul_real:ident, $real_mul:ident, $add_real:ident,
      $real_add:ident, $sub_real:ident, $real_sub:ident, $div_real:ident, $real_div:ident,
      $conj:ident, $proj:ident, $nonzero:ident, $eq:ident, $ne:ident, $cty:literal) => {
         /// The product of two
@@ -87,50 +93,71 @@ macro_rules! complex_ops {
         /// recovered when it comes out NaN + iNaN.
         #[inline]
         pub fn $mul(z: Complex<$t>, w: Complex<$t>) -> Complex<$t> {
-            let (mut a, mut b, mut c, mut d) = (z.re, z.im, w.re, w.im);
+            let (a, b, c, d) = (z.re, z.im, w.re, w.im);
             let (ac, bd, ad, bc) = (a * c, b * d, a * d, b * c);
-            let mut x = ac - bd;
-            let mut y = ad + bc;
+            let x = ac - bd;
+            let y = ad + bc;
             if x.is_nan() && y.is_nan() {
-                let mut recalc = false;
-                // An infinite operand: reduce it to a signed one or zero, and
-                // reduce a NaN in the other operand to a signed zero, so that
-                // the recomputation below cannot produce another NaN.
-                if a.is_infinite() || b.is_infinite() {
-                    a = unit(a);
-                    b = unit(b);
-                    c = tame(c);
-                    d = tame(d);
-                    recalc = true;
-                }
-                if c.is_infinite() || d.is_infinite() {
-                    c = unit(c);
-                    d = unit(d);
-                    a = tame(a);
-                    b = tame(b);
-                    recalc = true;
-                }
-                // Neither operand is infinite, but one of the four products
-                // overflowed to one: the result is infinite all the same.
-                if !recalc
-                    && (ac.is_infinite()
-                        || bd.is_infinite()
-                        || ad.is_infinite()
-                        || bc.is_infinite())
-                {
-                    a = tame(a);
-                    b = tame(b);
-                    c = tame(c);
-                    d = tame(d);
-                    recalc = true;
-                }
-                if recalc {
-                    let inf = <$t>::INFINITY;
-                    x = inf * (a * c - b * d);
-                    y = inf * (a * d + b * c);
-                }
+                return $recover_product(z, w, [ac, bd, ad, bc], x, y);
             }
             Complex { re: x, im: y }
+        }
+
+        /// Annex G.5.1's recovery for a product of `z` and `w` that came out
+        /// NaN + iNaN: `products` are `ac`, `bd`, `ad` and `bc`, and `(x, y)`
+        /// the naive result, returned as it is when nothing is infinite.
+        ///
+        /// Out of line and cold, as `__muldc3` is for GCC and Clang; the
+        /// module documentation says why.
+        #[cold]
+        #[inline(never)]
+        fn $recover_product(
+            z: Complex<$t>,
+            w: Complex<$t>,
+            products: [$t; 4],
+            x: $t,
+            y: $t,
+        ) -> Complex<$t> {
+            let (mut a, mut b, mut c, mut d) = (z.re, z.im, w.re, w.im);
+            let [ac, bd, ad, bc] = products;
+            let mut recalc = false;
+            // An infinite operand: reduce it to a signed one or zero, and
+            // reduce a NaN in the other operand to a signed zero, so that the
+            // recomputation below cannot produce another NaN.
+            if a.is_infinite() || b.is_infinite() {
+                a = unit(a);
+                b = unit(b);
+                c = tame(c);
+                d = tame(d);
+                recalc = true;
+            }
+            if c.is_infinite() || d.is_infinite() {
+                c = unit(c);
+                d = unit(d);
+                a = tame(a);
+                b = tame(b);
+                recalc = true;
+            }
+            // Neither operand is infinite, but one of the four products
+            // overflowed to one: the result is infinite all the same.
+            if !recalc
+                && (ac.is_infinite() || bd.is_infinite() || ad.is_infinite() || bc.is_infinite())
+            {
+                a = tame(a);
+                b = tame(b);
+                c = tame(c);
+                d = tame(d);
+                recalc = true;
+            }
+            if recalc {
+                let inf = <$t>::INFINITY;
+                Complex {
+                    re: inf * (a * c - b * d),
+                    im: inf * (a * d + b * c),
+                }
+            } else {
+                Complex { re: x, im: y }
+            }
         }
 
         /// A
@@ -291,6 +318,7 @@ macro_rules! complex_ops {
 complex_ops!(
     f32,
     mul_f32,
+    recover_product_f32,
     div_f32,
     mul_real_f32,
     real_mul_f32,
@@ -311,6 +339,7 @@ complex_ops!(
 complex_ops!(
     f64,
     mul_f64,
+    recover_product_f64,
     div_f64,
     mul_real_f64,
     real_mul_f64,
@@ -386,11 +415,32 @@ pub fn div_f64(z: Complex<f64>, w: Complex<f64>) -> Complex<f64> {
 /// Shared by both widths: [`div_f32`] has already widened its operands, so the
 /// three cases — a zero divisor, an infinite dividend, an infinite divisor —
 /// are the same arithmetic in both.
+///
+/// Only the test is inline; the recovery itself is [`recover_nan_quotient`],
+/// out of line and cold.
 #[inline]
-fn recover_quotient(mut a: f64, mut b: f64, mut c: f64, mut d: f64, x: f64, y: f64) -> (f64, f64) {
-    if !(x.is_nan() && y.is_nan()) {
-        return (x, y);
+fn recover_quotient(a: f64, b: f64, c: f64, d: f64, x: f64, y: f64) -> (f64, f64) {
+    if x.is_nan() && y.is_nan() {
+        return recover_nan_quotient(a, b, c, d, x, y);
     }
+    (x, y)
+}
+
+/// The body of [`recover_quotient`] once the quotient `(x, y)` of `a + ib`
+/// by `c + id` is known to be NaN + iNaN.
+///
+/// Out of line and cold, as [`mul_f64`]'s recovery is; the module
+/// documentation says why.
+#[cold]
+#[inline(never)]
+fn recover_nan_quotient(
+    mut a: f64,
+    mut b: f64,
+    mut c: f64,
+    mut d: f64,
+    x: f64,
+    y: f64,
+) -> (f64, f64) {
     let inf = f64::INFINITY;
     if c == 0.0 && d == 0.0 && (!a.is_nan() || !b.is_nan()) {
         // Division by zero: a signed infinity, not a NaN.

@@ -2163,11 +2163,21 @@ fn write_interpretation(
          * **Structs by value go through Rust's C ABI.** `structval` passes and returns a \
            two-`double` struct (two SSE registers on x86-64 System V) and a three-`long` one \
            (memory). Nothing in the expansion decides that — `#[repr(C)]` and \
-           `extern \"C\"` hand it to `rustc`.\n\
+           `extern \"C\"` hand it to `rustc`. It is not what the row's gap to `gcc` is, \
+           either: every call is inlined in all three builds and no struct touches memory. \
+           `cinrs` and `clang` take the same time because they share a back end, and LLVM's \
+           SLP vectoriser packs the pair of `double`s into one vector and turns the periodic \
+           reset of it into a branchless blend on the loop-carried chain, about eight cycles \
+           an iteration, where `gcc` keeps two scalars and a predicted branch, about two and \
+           a half. `clang -fno-slp-vectorize` is within a quarter of `gcc`. That is a \
+           back-end heuristic, and no expansion can reach it.\n\
          * **`_Complex` is `num_complex::Complex`.** `complexmandel` multiplies complex numbers \
            in the inner loop, and C's complex multiplication is not four multiplies and two \
            adds: Annex G.5.1 requires an infinity-recovery path. What the row measures is what \
-           that path costs when it is never taken.\n\
+           that path costs when it is never taken. As in `gcc` and `clang`, that is a NaN test: \
+           the product is inline and the recovery is a cold function it never calls. Inlined, \
+           the recovery made LLVM pack the real and imaginary parts into one vector and put \
+           the shuffles on the loop-carried chain, and the row was 1.47× `gcc`.\n\
          * **The C library is the C library.** `libc-str`, `chase` and `pidigits` are controls \
            — a `strlen` call, a dependent load, and a program whose work is all inside GMP. \
            They should be the same in every column, and are.\n"

@@ -448,6 +448,16 @@ follows [Semantic Versioning][semver].
   `prfm` through `asm!`; elsewhere, and in a safe function, the operand is
   still only evaluated. `rw` and `locality` must be integer constants in
   range, as GCC requires; one that is not is an error.
+* **A complex product's infinity recovery is out of line.** Annex G.5.1's
+  fix-up for a product that comes out NaN + iNaN was inlined into every
+  `*` of two complex values, and in `complexmandel`'s `z = z * z + c` it made
+  LLVM pack the real and imaginary parts into one vector for the sake of the
+  path never taken, with the shuffles on the loop-carried chain: 1.47× gcc's
+  time and 1.35× clang's. As in GCC and Clang, whose inline product calls
+  `__muldc3` only on a NaN, `cinrs_rt::complex::mul_f64` and `mul_f32` now
+  inline the four products and the NaN test and call a `#[cold]` function
+  for the rest; the quotients do the same with theirs. The row is now 1.06×
+  gcc and 0.96× clang, and the results are the same bits as before.
 * **A stringified macro argument is spaced the way GCC and Clang space it.**
   brotli stringifies `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__,
   __GNUC_PATCHLEVEL__)` through two macros, and with `#define V(a,b)
