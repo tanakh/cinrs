@@ -86,7 +86,7 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   — about 2,270 cases, every failure listed by name with its reason, and **not
   one of them a known bug**. See [Conformance and speed](#conformance-and-speed).
 * **As fast as a C compiler.** Over 48 whole programs the median run time is
-  **1.02×** that of `gcc -O2`, with byte-identical output — the SIMD-intrinsics
+  **1.01×** that of `gcc -O2`, with byte-identical output — the SIMD-intrinsics
   entries of the Benchmarks Game included.
 * **Safety you can opt into.** Mark a function `[[cinrs::safe]]` (or
   `__attribute__((cinrs_safe))`) and it is generated *without* `unsafe`, so
@@ -267,7 +267,7 @@ or needing a newer toolchain — **not one is tagged as a bug**.
 of the Benchmarks Game, including the eight written with SIMD intrinsics,
 Dhrystone, Whetstone and two dozen kernels that isolate one construct each —
 built as `gcc -O2`, `clang -O2` and a `cinrs` block under
-`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.02×**, 36 of the
+`rustc -C opt-level=3`. The median `cinrs`/`gcc` ratio is **1.01×**, 42 of the
 48 are within 10 % of `gcc` or faster, and every output is identical across the
 three builds. A `goto` costs nothing: an outward one is a labelled `break` or
 `continue`, and anything else is read back into loops and branches by a
