@@ -2087,3 +2087,27 @@ fn asm_outputs_are_written_into_their_places() {
         "#
     ));
 }
+
+/// Dhrystone's `strcpy` and `strcmp`, called with nothing declaring them: as
+/// in GCC, the implicit declaration of a library built-in is its real
+/// prototype, so the `extern` item has the real signature and each call is a
+/// direct one with typed arguments — no `transmute` of an `int ()` — which is
+/// what lets LLVM see the library calls it knows.
+#[test]
+fn an_implicitly_declared_library_function_is_called_directly() {
+    let target = cinrs_core::target::TargetModel::from_triple("x86_64-unknown-linux-gnu")
+        .expect("a known triple");
+    let out = generate_with(
+        Options::gnu(Standard::C89).for_target(target),
+        r#"
+        char Str_1[31];
+        int f(char *s) {
+            strcpy(Str_1, "DHRYSTONE PROGRAM, 1'ST STRING");
+            if (strcmp(Str_1, s) > 0) return 1;
+            return 0;
+        }
+        "#,
+    );
+    assert!(!out.contains("transmute"), "{out}");
+    insta::assert_snapshot!(out);
+}

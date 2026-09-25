@@ -712,6 +712,14 @@ struct Sema<'a> {
     /// Every Rust item name handed out so far, so that mangled names stay
     /// unique.
     item_names: HashSet<String>,
+    /// The functions whose prototype is the C library's rather than one the
+    /// program wrote: a library function called without a declaration, or
+    /// declared without a prototype, which GCC gives the prototype of the
+    /// built-in it knows. A later declaration that disagrees about the
+    /// parameters is the program's own function and replaces it, as GCC's
+    /// "conflicting types for built-in function" warning does; see
+    /// [`Sema::implicit_library_signature`].
+    library_prototyped: HashSet<ir::FuncId>,
     /// Objects with static storage that an initialiser has already been seen
     /// for, which is what tells a tentative definition from a redefinition.
     initialized: HashSet<ObjectId>,
@@ -962,6 +970,7 @@ impl<'a> Sema<'a> {
             no_complex: [None; 2],
             dead_code: 0,
             item_names: HashSet::new(),
+            library_prototyped: HashSet::new(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
             rvalue_lanes: HashSet::new(),

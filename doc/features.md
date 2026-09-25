@@ -71,11 +71,30 @@ declaration that is not a definition.
 
 `c89!` and `gnu89!` add the two rules C99 deleted: **implicit `int`**
 (`static x;`, `f() { … }`) and **implicit function declarations**, where calling
-an undeclared `abs` declares `extern int abs();` and the linker resolves it. The
+an undeclared `f` declares `extern int f();` and the linker resolves it. That
 implicit declaration has no prototype, so a later declaration of the same name
 has to be compatible with `int f()` or it is the ordinary "conflicting types"; a
 `__builtin_` name is never declared this way, since it belongs to the
 implementation and a diagnostic naming it is more use than a link error.
+
+A C library function GCC has a built-in for — `strcpy`, `strcmp`, `memcpy`,
+`strlen`, `malloc`, `printf`, `abs`, the `<math.h>` and `<ctype.h>` functions
+and the rest of the table `__builtin_strlen` and its relatives use — is the
+exception, as it is in GCC: calling it undeclared, or declaring it without a
+prototype (`char *strcpy();`, the K&R way), declares it with the **library's
+own prototype**. The arguments are converted to its parameter types, the result
+has its return type (`char *` for `strcpy`, with GCC's warning "incompatible
+implicit declaration of built-in function 'strcpy'" where that is not `int`),
+and the call is an ordinary typed call of the library function — one LLVM
+recognises, so it can fold `strcmp` of strings it can see, which is what
+Dhrystone spends its time on. A declaration without a prototype whose return
+type disagrees (`char *malloc();`) stays as written; a later `#include
+<string.h>` or prototype merges with the library's; and a program that goes on
+to define the function, or to declare it with other parameters and the same
+return type, has its own function, as GCC's "conflicting types for built-in
+function" warning lets it. The GNU and POSIX names (`index`, `bzero`,
+`strdup`, …) are built-ins only in the GNU dialects, and the C99 ones not in
+`c89!`, matching `-std=c89`.
 `gnu89!` is otherwise `gnu99!`: `gcc -std=gnu89` takes every later feature as an
 extension, and so does this.
 

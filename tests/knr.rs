@@ -219,9 +219,9 @@ fn an_implicitly_declared_library_function_links() {
             int length(s)
                 char *s;
             {
-                /* `strlen` really returns a `size_t`; an implicit declaration
-                   says `int`, which is what a program of the period assumed
-                   and what its low half really holds. */
+                /* `strlen` is one of GCC's built-in library functions, so
+                   the implicit declaration is its real prototype, returning
+                   a `size_t`, rather than `int strlen()`. */
                 return (int)strlen(s) + atoi("100");
             }
         }
@@ -233,6 +233,57 @@ fn an_implicitly_declared_library_function_links() {
             libc_by_implication::length(c"cinrs".as_ptr() as *mut _),
             105
         );
+    }
+}
+
+/// Dhrystone's shape: K&R C with no `<string.h>`, copying string literals
+/// into arrays with `strcpy` and testing `strcmp` of them. Both are declared
+/// by being called, and — as in GCC — take the library's prototype, so the
+/// copy returns `char *` and the calls are the ones the optimiser knows.
+#[test]
+fn an_implicit_strcpy_and_strcmp_are_the_library_functions() {
+    mod dhrystone_shape {
+        cinrs::gnu89! {
+            typedef char Str_30[31];
+
+            Str_30 Str_1_Loc;
+            Str_30 Str_2_Loc;
+
+            same_strings(n)
+                int n;
+            {
+                char *copied;
+                int count = 0;
+                int i;
+                copied = strcpy(Str_1_Loc, "DHRYSTONE PROGRAM, 1'ST STRING");
+                if (copied != Str_1_Loc)
+                    return -1;
+                for (i = 0; i < n; i++) {
+                    strcpy(Str_2_Loc, "DHRYSTONE PROGRAM, 2'ND STRING");
+                    if (strcmp(Str_1_Loc, Str_2_Loc) > 0)
+                        count++;
+                    if (!strcmp(Str_2_Loc, "DHRYSTONE PROGRAM, 2'ND STRING"))
+                        count += 10;
+                }
+                return count;
+            }
+
+            /* A later declaration of its own merges with the implicit one. */
+            char *strcpy();
+            int strcmp();
+
+            int again()
+            {
+                char local[8];
+                strcpy(local, "abc");
+                return strcmp(local, "abd") < 0;
+            }
+        }
+    }
+
+    unsafe {
+        assert_eq!(dhrystone_shape::same_strings(3), 3 * 10);
+        assert_eq!(dhrystone_shape::again(), 1);
     }
 }
 

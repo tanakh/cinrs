@@ -1291,6 +1291,81 @@ impl Sema<'_> {
         })
     }
 
+    /// The prototype a C89 implicit declaration of `name`, or a declaration
+    /// of it with no prototype, takes when `name` is a library function GCC
+    /// has a built-in for.
+    ///
+    /// GCC declares `strcpy` as `char *(char *, const char *)` whether or not
+    /// `<string.h>` was included, and a call to an undeclared `strcpy` or an
+    /// `int strcmp();` of K&R vintage is a declaration *of that built-in*:
+    /// the arguments are converted to its parameter types, the result has its
+    /// return type ("incompatible implicit declaration of built-in function
+    /// 'strcpy'" when that is not `int`), and the call is the library call the
+    /// optimiser knows — which is what lets it fold `strcmp` of two strings it
+    /// can see. The table is [`Sema::library_signature`]'s.
+    ///
+    /// Which names are built-ins depends on the dialect, as it does in GCC:
+    /// the GNU and POSIX functions are only in the GNU dialects
+    /// (`-std=c89` has no built-in `index`, so a program may have its own),
+    /// and the ones C99 added are not in strict C89.
+    pub(super) fn implicit_library_signature(&mut self, name: &str) -> Option<Signature> {
+        const GNU_ONLY: &[&str] = &[
+            "bcmp",
+            "bcopy",
+            "bzero",
+            "index",
+            "mempcpy",
+            "rindex",
+            "stpcpy",
+            "stpncpy",
+            "strcasecmp",
+            "strdup",
+            "strncasecmp",
+        ];
+        const C99_ONLY: &[&str] = &[
+            "_Exit",
+            "atoll",
+            "cbrt",
+            "copysign",
+            "erf",
+            "erfc",
+            "exp2",
+            "expm1",
+            "fdim",
+            "fma",
+            "fmax",
+            "fmin",
+            "hypot",
+            "imaxabs",
+            "isblank",
+            "lgamma",
+            "llabs",
+            "log1p",
+            "log2",
+            "nearbyint",
+            "nextafter",
+            "remainder",
+            "rint",
+            "round",
+            "scalbn",
+            "snprintf",
+            "strtof",
+            "strtoll",
+            "strtoull",
+            "tgamma",
+            "trunc",
+        ];
+        if !self.gating.dialect.is_gnu() {
+            if GNU_ONLY.contains(&name) {
+                return None;
+            }
+            if self.gating.standard < crate::Standard::C99 && C99_ONLY.contains(&name) {
+                return None;
+            }
+        }
+        self.library_signature(name)
+    }
+
     /// `intmax_t`, which is the widest signed integer the model has.
     fn intmax_ty(&self) -> Ty {
         if Ty::Long.bits(&self.target) >= Ty::LongLong.bits(&self.target) {

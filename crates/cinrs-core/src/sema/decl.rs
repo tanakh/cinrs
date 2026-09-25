@@ -2242,18 +2242,67 @@ impl Sema<'_> {
             None => None,
         };
 
+        // `char *strcpy();` — a declaration of a C library function with no
+        // prototype — declares GCC's built-in, whose prototype is the
+        // composite of the two; see [`Sema::implicit_library_signature`].
+        // Only when nothing the program wrote has declared the name yet: an
+        // earlier prototype of its own is what the declaration refers to. A
+        // return type that disagrees with the library's (`char *malloc();`)
+        // keeps the declaration as written.
+        let mut sig = sig;
+        let mut from_library = false;
+        if definition.is_none()
+            && !sig.prototyped
+            && !is_static
+            && scope == FuncScope::File
+            && existing.is_none_or(|id| self.library_prototyped.contains(&id))
+            && let Some(library) = self.implicit_library_signature(&name.name)
+            && let Some(composite) = self.composite_signature(&sig, &library)
+        {
+            param_names = vec![None; composite.params.len()];
+            sig = composite;
+            from_library = true;
+        }
+
         let id = match existing {
             Some(id) => {
                 let previous = self.program.function(id).clone();
-                let Some(composite) = self.composite_signature(&previous.sig, &sig) else {
+                // A library function that was declared with the library's
+                // prototype on the program's behalf and is now declared by the
+                // program with other parameters is the program's own function,
+                // which GCC accepts with "conflicting types for built-in
+                // function". Earlier calls converted their arguments for the
+                // library's parameters, and a call whose arguments disagree
+                // with the final signature is reinterpreted where it is
+                // generated — so only the return type has to agree.
+                let library_owned = self.library_prototyped.contains(&id);
+                let lenient = library_owned && self.compatible(previous.sig.ret, sig.ret);
+                let composite = self
+                    .composite_signature(&previous.sig, &sig)
+                    .or_else(|| lenient.then(|| sig.clone()));
+                let Some(composite) = composite else {
+                    let note = if library_owned {
+                        format!(
+                            "'{}' was declared here without a prototype of the program's own, \
+                             which gave it the C library's, as GCC does for a built-in function",
+                            name.name
+                        )
+                    } else {
+                        format!("previous declaration of '{}' is", name.name)
+                    };
                     self.error_note(
                         name.range,
                         format!("conflicting types for '{}'", name.name),
                         previous.range,
-                        format!("previous declaration of '{}' is", name.name),
+                        note,
                     );
                     return None;
                 };
+                // Anything the program writes with a prototype of its own, and
+                // any definition, makes the declaration the program's.
+                if !from_library && (sig.prototyped || definition.is_some()) {
+                    self.library_prototyped.remove(&id);
+                }
                 // The composite type is what later calls are checked against;
                 // a *definition* keeps its own signature instead, because that
                 // is what the generated Rust item really takes. The two differ
@@ -2369,6 +2418,9 @@ impl Sema<'_> {
                         self.insert_at_file_scope(&name.name, Entry::Function(id));
                     }
                     FuncScope::Nested => self.insert(&name.name, Entry::Function(id)),
+                }
+                if from_library {
+                    self.library_prototyped.insert(id);
                 }
                 id
             }

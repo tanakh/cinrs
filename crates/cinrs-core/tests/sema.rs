@@ -2754,3 +2754,159 @@ fn a_floatn_association_may_repeat_its_standard_twin() {
         ["'_Generic' has two associations for the compatible type 'double'"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// implicit declarations of the C library's built-in functions
+// ---------------------------------------------------------------------------
+
+/// Analyses `source` under `options`, returning the program and every
+/// diagnostic as `level: message`.
+fn analysed(source: &str, options: &Options) -> (ir::Program, Vec<String>) {
+    let literal = format!("r#####\"{source}\"#####");
+    let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+    let analysis = analyze(input, options);
+    assert!(
+        analysis.diagnostics.items().is_empty(),
+        "front end: {:#?}",
+        analysis.diagnostics.items()
+    );
+    let (program, diagnostics) = sema::analyze(&analysis.unit, options, analysis.source.unit_id());
+    let messages = diagnostics
+        .sorted()
+        .into_iter()
+        .map(|d| {
+            let level = if d.level == Level::Error {
+                "error"
+            } else {
+                "warning"
+            };
+            format!("{level}: {}", d.message)
+        })
+        .collect();
+    (program, messages)
+}
+
+/// The signature of the function called `name`.
+fn signature_of(program: &ir::Program, name: &str) -> ir::Signature {
+    program
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no function '{name}'"))
+        .sig
+        .clone()
+}
+
+#[test]
+fn an_implicit_declaration_of_a_library_function_has_its_prototype() {
+    let source = "int f(char *p) {\n\
+                  \x20   char *q = strcpy(p, \"x\");\n\
+                  \x20   void *m = memcpy(q, p, 2);\n\
+                  \x20   printf(\"%d\", strcmp(p, q));\n\
+                  \x20   return m != 0;\n\
+                  }";
+    let (program, messages) = analysed(source, &Options::gnu(Standard::C89));
+    // GCC's wording, and only where `int ()` is not compatible with the real
+    // type: `strcmp` returns `int` and takes what its arguments promote to.
+    assert_eq!(
+        messages,
+        [
+            "warning: incompatible implicit declaration of built-in function 'strcpy'",
+            "warning: incompatible implicit declaration of built-in function 'memcpy'",
+            "warning: incompatible implicit declaration of built-in function 'printf'",
+        ]
+    );
+    let strcpy = signature_of(&program, "strcpy");
+    assert!(strcpy.prototyped && strcpy.ret.is_pointer() && strcpy.params.len() == 2);
+    let strcmp = signature_of(&program, "strcmp");
+    assert!(strcmp.prototyped && strcmp.ret == ir::Ty::Int && strcmp.params.len() == 2);
+    let memcpy = signature_of(&program, "memcpy");
+    assert!(memcpy.prototyped && memcpy.params.len() == 3);
+    let printf = signature_of(&program, "printf");
+    assert!(printf.prototyped && printf.variadic && printf.params.len() == 1);
+    // Strict C89 has the ISO functions as built-ins too.
+    let (program, messages) = analysed(source, &Options::new(Standard::C89));
+    assert_eq!(messages.len(), 3, "{messages:#?}");
+    assert!(signature_of(&program, "strcmp").prototyped);
+}
+
+#[test]
+fn a_name_that_is_no_library_builtin_is_still_int_with_no_prototype() {
+    let (program, messages) = analysed(
+        "int f(void) { return helper(1) + index(\"a\", 'a'); }",
+        &Options::new(Standard::C89),
+    );
+    assert!(messages.is_empty(), "{messages:#?}");
+    let helper = signature_of(&program, "helper");
+    assert!(!helper.prototyped && helper.ret == ir::Ty::Int && helper.params.is_empty());
+    // `index` is a GNU built-in, and `-std=c89` does not have it.
+    assert!(!signature_of(&program, "index").prototyped);
+    let (program, _) = analysed(
+        "int f(void) { return index(\"a\", 'a') != 0; }",
+        &Options::gnu(Standard::C89),
+    );
+    assert!(signature_of(&program, "index").prototyped);
+}
+
+#[test]
+fn a_later_declaration_of_an_implicit_library_function_merges() {
+    let (program, messages) = analysed(
+        "int f(char *p) { strcpy(p, \"x\"); return strcmp(p, \"x\"); }\n\
+         #include <string.h>\n\
+         char *strcpy();\n\
+         int strcmp(const char *, const char *);\n\
+         int g(char *p) { return strcmp(strcpy(p, \"y\"), \"y\"); }",
+        &Options::gnu(Standard::C89),
+    );
+    assert_eq!(
+        messages,
+        ["warning: incompatible implicit declaration of built-in function 'strcpy'"]
+    );
+    assert!(signature_of(&program, "strcpy").prototyped);
+    // A program that goes on to define one of them has its own function.
+    let (program, messages) = analysed(
+        "int f(char *p) { return strcmp(p, \"x\"); }\n\
+         int strcmp(a, b) char *a; char *b; { return *a - *b; }",
+        &Options::gnu(Standard::C89),
+    );
+    assert!(messages.is_empty(), "{messages:#?}");
+    assert!(!signature_of(&program, "strcmp").prototyped);
+}
+
+#[test]
+fn a_declaration_with_no_prototype_takes_the_library_one() {
+    let (program, messages) = analysed(
+        "char *strcpy(); int strcmp(); char *malloc();\n\
+         int f(char *p) { return strcmp(strcpy(p, \"x\"), \"x\"); }",
+        &Options::new(Standard::C99),
+    );
+    assert!(messages.is_empty(), "{messages:#?}");
+    assert!(signature_of(&program, "strcpy").prototyped);
+    assert!(signature_of(&program, "strcmp").prototyped);
+    // `void *malloc(size_t)` is not what this says, so it stays as written.
+    assert!(!signature_of(&program, "malloc").prototyped);
+    // Nor does a prototype of the program's own change.
+    let (program, messages) = analysed(
+        "int strcmp(char *, char *); int strcmp();\n\
+         int f(char *p) { return strcmp(p, p); }",
+        &Options::new(Standard::C99),
+    );
+    assert!(messages.is_empty(), "{messages:#?}");
+    let strcmp = signature_of(&program, "strcmp");
+    assert!(strcmp.prototyped && !program.types.points_to_const(strcmp.params[0]));
+}
+
+#[test]
+fn an_implicit_library_function_is_still_an_error_in_c99() {
+    assert_eq!(
+        errors("int f(char *p) { return strcmp(p, \"x\"); }"),
+        ["implicit declaration of function 'strcmp' is invalid in C99"]
+    );
+    assert_eq!(
+        errors_with(
+            "int f(char *p) { return strcmp(p, \"x\"); }",
+            &Options::gnu(Standard::C11)
+        ),
+        ["implicit declaration of function 'strcmp' is invalid in C99"]
+    );
+}

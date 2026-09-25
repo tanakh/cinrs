@@ -1,0 +1,43 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: out
+---
+mod __cinrs_unit_dd2b0c7f {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "strcpy"]
+        pub fn strcpy(
+            _: *mut ::core::ffi::c_char,
+            _: *const ::core::ffi::c_char,
+        ) -> *mut ::core::ffi::c_char;
+        #[link_name = "strcmp"]
+        pub fn strcmp(
+            _: *const ::core::ffi::c_char,
+            _: *const ::core::ffi::c_char,
+        ) -> ::core::ffi::c_int;
+    }
+    pub static mut Str_1: [::core::ffi::c_char; 31] = [0; 31];
+    pub unsafe extern "C" fn f(mut s: *mut ::core::ffi::c_char) -> ::core::ffi::c_int {
+        unsafe {
+            strcpy(
+                (&raw mut Str_1).cast::<::core::ffi::c_char>(),
+                b"DHRYSTONE PROGRAM, 1'ST STRING\0"
+                    .as_ptr()
+                    .cast::<::core::ffi::c_char>()
+                    .cast_mut() as *const ::core::ffi::c_char,
+            );
+            if strcmp(
+                (&raw mut Str_1).cast::<::core::ffi::c_char>()
+                    as *const ::core::ffi::c_char,
+                s as *const ::core::ffi::c_char,
+            ) > 0
+            {
+                return 1;
+            }
+            return 0;
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_dd2b0c7f::*;

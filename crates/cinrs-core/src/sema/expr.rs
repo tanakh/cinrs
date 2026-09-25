@@ -2386,21 +2386,48 @@ impl Sema<'_> {
     /// error. Having no body makes it an `extern` declaration like any other,
     /// so `abort()` in a program that never declared it links against the C
     /// library.
+    ///
+    /// A name that is one of the C library functions GCC has a built-in for
+    /// is the exception, as it is in GCC: the declaration is the library's
+    /// own prototype, so `strcpy(buf, "x")` converts its arguments and
+    /// returns `char *`, and the call is one the optimiser recognises. See
+    /// [`Sema::implicit_library_signature`].
     fn implicit_function(&mut self, name: &ast::Ident) -> FuncId {
+        let implicit = Signature {
+            ret: Ty::Int,
+            params: Vec::new(),
+            variadic: false,
+            prototyped: false,
+        };
+        let library = self.implicit_library_signature(&name.name);
+        if let Some(library) = &library
+            && self.composite_signature(&implicit, library).is_none()
+        {
+            self.diags.warning(
+                name.range,
+                format!(
+                    "incompatible implicit declaration of built-in function '{}'",
+                    name.name
+                ),
+            );
+        }
+        let noreturn =
+            library.is_some() && matches!(name.name.as_str(), "abort" | "exit" | "_Exit");
+        let from_library = library.is_some();
+        let sig = library.unwrap_or(implicit);
+        let param_names = vec![None; sig.params.len()];
         let id = FuncId(self.program.functions.len() as u32);
+        if from_library {
+            self.library_prototyped.insert(id);
+        }
         self.program.functions.push(Function {
             name: name.name.clone(),
-            sig: Signature {
-                ret: Ty::Int,
-                params: Vec::new(),
-                variadic: false,
-                prototyped: false,
-            },
+            sig,
             params: Vec::new(),
-            param_names: Vec::new(),
+            param_names,
             is_static: false,
             is_inline: false,
-            noreturn: false,
+            noreturn,
             inline_hint: None,
             cold: false,
             deprecated: None,

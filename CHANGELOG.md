@@ -423,6 +423,22 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **An implicitly declared C library function has the library's prototype.**
+  Dhrystone is K&R C that never includes `<string.h>`, so its `strcpy` and
+  `strcmp` were declared by being called — `int strcpy()` — and each call went
+  through a `transmute` of that `int ()` to the argument types. It worked by
+  the grace of the x86-64 ABI, and LLVM could not see a library call in it: no
+  `strcmp` of known strings folded, and the kernel ran at 2.5× clang's time
+  with 97 % of it in libc's `strcmp`. Now, as in GCC, a call to an undeclared
+  function that is one of GCC's built-in library functions — or a declaration
+  of one with no prototype, `char *strcpy();` — declares it with the real
+  prototype (the table `__builtin_strcpy` already used): the arguments are
+  converted, `strcpy` returns `char *` (with GCC's "incompatible implicit
+  declaration of built-in function" warning), and the call is a direct, typed
+  call of the `extern` item. A later `#include <string.h>` merges with it; a
+  program that defines the function itself keeps its own. Any other name is
+  still `int f()`, and C99 and later still refuse an implicit declaration.
+
 * **`__builtin_prefetch` prefetches.** It was evaluated for its operands and
   dropped, which left xxHash's streaming `XXH3_64bits_update` in 4 KiB pieces
   at 1.45× the time of gcc's and clang's builds: its accumulate loop prefetches
