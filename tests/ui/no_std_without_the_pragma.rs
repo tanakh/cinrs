@@ -2,8 +2,8 @@
 //! A variable length array in a `#![no_std]` crate that did not say so.
 //!
 //! Nothing in the C says which kind of crate the expansion is going into, and
-//! a procedural macro cannot ask, so the `Vec` behind a variable length array
-//! is spelled `::std::vec::Vec` unless `#pragma cinrs no_std` says otherwise.
+//! a procedural macro cannot ask, so the arena behind a variable length array
+//! is made of `::std::vec::Vec`s unless `#pragma cinrs no_std` says otherwise.
 //! What the user then sees is `rustc`'s own "unresolved crate `std`", with the
 //! caret on the C declaration that needed it — which is what this test is
 //! blessing. The fix is the pragma above plus `extern crate alloc;`; see

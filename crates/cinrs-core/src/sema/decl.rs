@@ -874,8 +874,9 @@ impl Sema<'_> {
     /// Declares an object of variably modified type: `T a[n];`, `T a[n][m];`
     /// (C99 6.7.5.2).
     ///
-    /// The elements live in one hidden `Vec` — however many dimensions there
-    /// are — and the object itself is a pointer into it; see [`ir::VlaDef`].
+    /// The elements are one allocation off the function's bump arena —
+    /// however many dimensions there are — and the object itself is a pointer
+    /// to it; see [`ir::VlaDef`].
     /// `bounds` are the statements that bind the hidden length objects the
     /// type carries, which have to run before the allocation does. Everything
     /// C forbids about such a declaration is reported here, because a
@@ -935,12 +936,13 @@ impl Sema<'_> {
         self.refuse_float128_object(&name.name, ty, name.range);
         let object = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
         self.insert(&name.name, Entry::Object(object));
-        // The `Vec` is not an object of the C program; its type is what is
-        // left under the variable dimensions, and code generation knows to
-        // spell the binding `Vec<T>`.
+        // The frame is not an object of the C program; its type is what is
+        // left under the variable dimensions — the type the arena hands out —
+        // and code generation knows to spell the binding as the arena's frame.
         let elem = self.types().vm_step_ty(ty);
+        self.func_uses_arena = true;
         let storage = self.new_object(
-            &format!("__cinrs_vla_{}", name.name),
+            &format!("__cinrs_vla_frame_{}", name.name),
             elem,
             Storage::Automatic,
             false,
@@ -2406,7 +2408,7 @@ impl Sema<'_> {
                     intrinsic,
                     safe: attrs.safe,
                     locals: Vec::new(),
-                    uses_alloca: false,
+                    uses_arena: false,
                     body: None,
                     item_name,
                     env: Vec::new(),
@@ -2757,7 +2759,7 @@ impl Sema<'_> {
         self.switch_vla_depths.clear();
         self.goto_scopes.clear();
         self.label_vla_scopes.clear();
-        self.func_uses_alloca = false;
+        self.func_uses_arena = false;
         self.next_loop = 0;
         self.next_switch = 0;
         // `next_label` is *not* reset: a label's identity is unique across the
@@ -3033,7 +3035,7 @@ impl Sema<'_> {
         let entry = &mut self.program.functions[id.0 as usize];
         entry.params = params;
         entry.locals = locals;
-        entry.uses_alloca = self.func_uses_alloca;
+        entry.uses_arena = self.func_uses_arena;
         entry.body = Some(body);
         self.nest.pop();
         if let Some(saved) = saved {
@@ -3059,7 +3061,7 @@ impl Sema<'_> {
             label_vla_scopes: std::mem::take(&mut self.label_vla_scopes),
             goto_scopes: std::mem::take(&mut self.goto_scopes),
             switch_vla_depths: std::mem::take(&mut self.switch_vla_depths),
-            func_uses_alloca: self.func_uses_alloca,
+            func_uses_arena: self.func_uses_arena,
             // A `cleanup` owed by the enclosing block is not owed by the
             // nested function's `return`.
             cleanup_depth: std::mem::take(&mut self.cleanup_depth),
@@ -3084,7 +3086,7 @@ impl Sema<'_> {
         self.label_vla_scopes = saved.label_vla_scopes;
         self.goto_scopes = saved.goto_scopes;
         self.switch_vla_depths = saved.switch_vla_depths;
-        self.func_uses_alloca = saved.func_uses_alloca;
+        self.func_uses_arena = saved.func_uses_arena;
         self.cleanup_depth = saved.cleanup_depth;
         self.next_loop = saved.next_loop;
         self.next_switch = saved.next_switch;

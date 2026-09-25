@@ -2441,7 +2441,7 @@ impl Sema<'_> {
             intrinsic: None,
             safe: None,
             locals: Vec::new(),
-            uses_alloca: false,
+            uses_arena: false,
             body: None,
             item_name: None,
             env: Vec::new(),

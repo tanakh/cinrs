@@ -486,7 +486,7 @@ impl Sema<'_> {
     /// `__builtin_alloca(size)` and `__builtin_alloca_with_align(size, bits)`.
     ///
     /// The memory is taken from a per-function arena — see
-    /// [`ir::Function::uses_alloca`] — which is dropped by the `return`. That
+    /// [`ir::Function::uses_arena`] — which is dropped by the `return`. That
     /// is exactly `alloca`'s lifetime: its memory belongs to the *function*,
     /// not to the block the call was written in, and a pointer to it returned
     /// to the caller dangles in C too.
@@ -545,7 +545,7 @@ impl Sema<'_> {
         }
         let size_ty = self.size_ty();
         let size = self.convert(size, size_ty);
-        self.func_uses_alloca = true;
+        self.func_uses_arena = true;
         let void_ptr = self.ptr_to(Ty::Void, false);
         Some(Expr::new(
             ExprKind::Builtin {
@@ -1166,7 +1166,7 @@ impl Sema<'_> {
             intrinsic: None,
             safe: None,
             locals: Vec::new(),
-            uses_alloca: false,
+            uses_arena: false,
             body: None,
             item_name: None,
             env: Vec::new(),

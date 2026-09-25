@@ -2132,13 +2132,17 @@ fn write_interpretation(
            repacks an IP header a hundred million times over, so every one of those is a call \
            that has to be inlined and folded back into a shift and a mask before it can keep \
            up. It does.\n\
-         * **A variable length array is a `Vec`.** Rust cannot move the stack pointer by an \
-           amount chosen at run time, so a VLA and `alloca` are emulated on the heap. `vla` \
-           makes one per iteration and `vla-hoisted` does the same work with one `malloc` \
-           outside the loop; the difference between those two rows is exactly what the \
-           emulation costs, and it is an allocation per declaration rather than a stack \
-           adjustment. A VLA declared once and used in a loop — which is what \
-           `spectral-norm` and `fannkuch-redux` do — costs nothing.\n\
+         * **A variable length array is a bump off an arena.** Rust cannot move the stack \
+           pointer by an amount chosen at run time, so a VLA and `alloca` are emulated on the \
+           heap: each call of a function that has one gets a bump arena, an array is a bump \
+           off it, and the end of the block moves the arena back down. `vla` makes one per \
+           iteration and `vla-hoisted` does the same work with one `malloc` outside the loop; \
+           the difference between those two rows is exactly what the emulation costs, and it \
+           is a pointer bump and a `memset` of the zeroed elements per declaration where a \
+           native compiler adjusts the stack — about what the `vla` row's own work costs, \
+           where an allocation and a free per iteration were a quarter of the time. A VLA \
+           declared once and used in a loop — which is what `spectral-norm` and \
+           `fannkuch-redux` do — costs nothing.\n\
          * **A `goto` keeps the shape its C had.** A jump forwards to a label later in a block \
            it stands in becomes `break 'done`, and one backwards to a label that block begins \
            with becomes `continue 'retry`, so the function keeps the shape its C had — hot \

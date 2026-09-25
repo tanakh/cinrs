@@ -592,7 +592,7 @@ struct SavedFunc {
     label_vla_scopes: HashMap<ir::LabelId, Vec<ObjectId>>,
     goto_scopes: Vec<(SourceRange, ir::LabelId, Vec<ObjectId>)>,
     switch_vla_depths: Vec<usize>,
-    func_uses_alloca: bool,
+    func_uses_arena: bool,
     cleanup_depth: usize,
     next_loop: u32,
     next_switch: u32,
@@ -830,8 +830,9 @@ struct Sema<'a> {
     /// The depth [`Sema::vla_scopes`] had when each enclosing `switch` began,
     /// which is what a `case` label deeper than that would jump past.
     switch_vla_depths: Vec<usize>,
-    /// Whether the function being checked calls `alloca`.
-    func_uses_alloca: bool,
+    /// Whether the function being checked declares a variable length array
+    /// or calls `alloca`, and so needs the bump arena both allocate from.
+    func_uses_arena: bool,
     /// Operands of the atomic builtin being checked whose value is not used
     /// but which C still evaluates: a memory order that was not a constant
     /// expression, and a `__sync_*` builtin's trailing arguments.
@@ -988,7 +989,7 @@ impl<'a> Sema<'a> {
             label_vla_scopes: HashMap::new(),
             goto_scopes: Vec::new(),
             switch_vla_depths: Vec::new(),
-            func_uses_alloca: false,
+            func_uses_arena: false,
             pending_discard: Vec::new(),
             cleanup_depth: 0,
             static_literals: HashMap::new(),

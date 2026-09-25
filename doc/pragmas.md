@@ -37,7 +37,7 @@ to the last two, for a reason its own section gives.
 | [`link "<name>"`](#link-name) | `#[link(name = "…")]` on an `extern` block of its own | the whole unit |
 | [`export`](#export) | gives everything with external linkage a real C symbol | the whole unit |
 | [`safe f g h`](#safe-f-g-h) | generates those functions without `unsafe` | the whole unit |
-| [`no_std`](#no_std) | takes the `Vec` a VLA or `alloca` needs from `alloc` | the whole unit |
+| [`no_std`](#no_std) | takes the `Vec`s a VLA or `alloca` needs from `alloc` | the whole unit |
 | [`crate "<path>"`](#crate-path) | says where the `cinrs` facade crate is | the whole unit |
 
 An option that is not one of those eight is an error that lists them:
@@ -270,8 +270,8 @@ int sum(int n) { int a[n]; int t = 0; for (int i = 0; i < n; i++) { a[i] = i; t 
 
 Says the expansion goes into a `#![no_std]` crate. Everything cinrs generates
 names `core` alone except the storage a variable length array or `alloca`
-needs, which is a `Vec`; this decides whether that `Vec` is spelled
-`::std::vec::Vec` or `::alloc::vec::Vec`. A unit that uses neither construct
+needs, which is a bump arena made of `Vec`s; this decides whether they are
+spelled `::std::vec::Vec` or `::alloc::vec::Vec`. A unit that uses neither construct
 needs neither the pragma nor an allocator. See
 [`no_std`](no-std.md).
 

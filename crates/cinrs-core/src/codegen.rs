@@ -217,6 +217,10 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     if cg.uses_cleanup.get() {
         items.extend(cg.cleanup_guard_item(Span::call_site()));
     }
+    if cg.uses_arena.get() {
+        let span = cg.arena_span.get().unwrap_or_else(Span::call_site);
+        items.extend(cg.arena_items(span));
+    }
     // The shims the unit needs for the intrinsics whose address it took; see
     // [`Codegen::address_taken`]. Collected while the bodies were generated,
     // so this has to come after them.
@@ -918,6 +922,18 @@ fn cleanup_guard_ty() -> Ident {
     Ident::new("__cinrs_cleanup", Span::mixed_site())
 }
 
+/// The name of a unit's bump arena type, in the same hygiene; see
+/// [`Codegen::arena_items`].
+fn arena_ty() -> Ident {
+    Ident::new("__cinrs_vla_arena", Span::mixed_site())
+}
+
+/// The name of a [CFG-mode](crate::cfg) function's array of arena marks, one
+/// slot per variable length array it declares; see [`Codegen::vla_def`].
+fn vla_marks_ident() -> Ident {
+    Ident::new("__cinrs_vla_marks", Span::mixed_site())
+}
+
 // ---------------------------------------------------------------------------
 // the generator
 // ---------------------------------------------------------------------------
@@ -1097,6 +1113,19 @@ struct Codegen<'a> {
     uses_complex: Cell<bool>,
     /// Whether anything in the unit needs the `cleanup` drop guard item.
     uses_cleanup: Cell<bool>,
+    /// Whether any function of the unit opens with the bump arena variable
+    /// length arrays and `alloca` allocate from, so that the unit needs the
+    /// arena's type; see [`Codegen::arena_items`].
+    uses_arena: Cell<bool>,
+    /// Where the unit's first variable length array or `alloca` was written,
+    /// which is what the arena's items are spanned with: in a `#![no_std]`
+    /// crate that did not say `#pragma cinrs no_std`, `rustc`'s "cannot find
+    /// `std`" then points at the C that needed it.
+    arena_span: Cell<Option<Span>>,
+    /// In a [CFG-mode](crate::cfg) function, the slot of the function's array
+    /// of arena marks each variable length array's hidden frame object is;
+    /// see [`Codegen::vla_def`].
+    vla_slots: HashMap<ir::ObjectId, usize>,
     /// Every [x86 intrinsic](crate::x86) whose *address* the unit took, in the
     /// order it first did.
     ///
@@ -1193,6 +1222,9 @@ impl<'a> Codegen<'a> {
             uses_int128: Cell::new(false),
             uses_complex: Cell::new(false),
             uses_cleanup: Cell::new(false),
+            uses_arena: Cell::new(false),
+            arena_span: Cell::new(None),
+            vla_slots: HashMap::new(),
             address_taken: RefCell::new(Vec::new()),
             label_states,
             region_names: HashMap::new(),
@@ -1389,8 +1421,8 @@ impl<'a> Codegen<'a> {
             }
             Ty::Array(id) => {
                 // A variably modified array's object *is* a pointer to its
-                // first element: the elements themselves live in one hidden
-                // `Vec`, however many dimensions there are, and nothing in the
+                // first element: the elements themselves are one bump off the
+                // function's arena, however many dimensions there are, and nothing in the
                 // generated code ever names the array as a value. See
                 // [`ir::VlaDef`].
                 if self.program.types.is_vm(ty) {
@@ -1485,10 +1517,10 @@ impl<'a> Codegen<'a> {
 
     // -- the heap the emulated automatic storage comes from -------------------
 
-    /// The crate the `Vec` behind a variable length array and `alloca` comes
-    /// from.
+    /// The crate the `Vec`s behind the bump arena of variable length arrays
+    /// and `alloca` come from.
     ///
-    /// Everything else the expansion generates is `core`-only; these two need
+    /// Everything else the expansion generates is `core`-only; the arena needs
     /// an allocator, which is `std` in an ordinary crate and `alloc` in one
     /// that said `#pragma cinrs no_std` (and therefore wrote
     /// `extern crate alloc;` itself, since a procedural macro cannot add one).
@@ -2714,9 +2746,13 @@ impl<'a> Codegen<'a> {
         };
         // `alloca`'s memory belongs to the function, not to the block the call
         // was written in, so the arena is opened here and dropped by whichever
-        // `return` runs.
-        let arena = if func.uses_alloca {
-            self.alloca_arena(span)
+        // `return` runs; a variable length array only borrows space from it
+        // until its block ends.
+        let arena = if func.uses_arena {
+            self.uses_arena.set(true);
+            let name = self.arena_ident(span);
+            let ty = arena_ty();
+            quote_spanned! {span=> let #name = #ty::new(); }
         } else {
             TokenStream::new()
         };
@@ -2736,23 +2772,243 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    /// The arena `alloca` allocates out of, at the top of a function that
-    /// calls it.
-    ///
-    /// One `Vec` per call, of `u128` so that every block is 16-byte aligned —
-    /// the alignment a real `alloca` gives — and all of them freed together
-    /// when the arena is dropped, which is when the function returns.
-    fn alloca_arena(&self, span: Span) -> TokenStream {
-        let name = self.alloca_ident();
-        let block = self.vec_ty(primitive_ty("u128", span), span);
-        let arena = self.vec_ty(block, span);
-        let empty = self.vec_new(span);
-        quote_spanned! {span=> let mut #name: #arena = #empty; }
+    /// The name of the bump arena a function that declares a variable length
+    /// array or calls `alloca` opens with, in this crate's own hygiene, for a
+    /// use of it written at `span`.
+    fn arena_ident(&self, span: Span) -> Ident {
+        if self.arena_span.get().is_none() {
+            self.arena_span.set(Some(span));
+        }
+        Ident::new("__cinrs_vla", Span::mixed_site())
     }
 
-    /// The name of that arena, in this crate's own hygiene.
-    fn alloca_ident(&self) -> Ident {
-        Ident::new("__cinrs_alloca", Span::mixed_site())
+    /// The bump arena's type and its frame guard: one pair of private items
+    /// per unit that has a variable length array or an `alloca` anywhere.
+    ///
+    /// C gives both kinds of object automatic storage — a compiler bumps the
+    /// stack pointer — and the emulation is the same idea on the heap, per
+    /// function call:
+    ///
+    /// * the storage is a list of chunks that never move, each a `Vec<u128>`
+    ///   so that its base is 16-byte aligned, and the position is a chunk
+    ///   index and a byte offset in it. No chunk is allocated until the first
+    ///   allocation, and the arena, dropped by the `return`, frees them all;
+    /// * `alloc` pads the position up to the alignment — by address, so that
+    ///   `aligned(64)` works in a 16-byte-aligned chunk — bumps it, and zeroes
+    ///   what it hands out: C leaves the array indeterminate, but reading
+    ///   uninitialised bytes through a raw pointer is undefined in Rust as
+    ///   well, and zeroed memory is what the translation always gave. Only
+    ///   when the current chunk is full does it go to the next one, reusing it
+    ///   if it is big enough and otherwise dropping every chunk after the
+    ///   current one — nothing above the position is live — for a new one of
+    ///   at least twice the size;
+    /// * a variable length array's lifetime is a frame: the position before it
+    ///   was allocated, which the frame's `Drop` at the end of the block moves
+    ///   the arena back down to. The position never goes below `floor`, which
+    ///   `alloca` raises past each allocation it makes: its memory lives until
+    ///   the function returns, even out of a block whose array is given back —
+    ///   GCC's own rule;
+    /// * a [CFG-mode](crate::cfg) function has no blocks to drop frames at, so
+    ///   it keeps one mark per variable length array in an array, and
+    ///   `redefine` moves the arena back down to a declaration's previous mark
+    ///   when the declaration is reached again, forgetting every mark taken
+    ///   after it: those arrays were declared later on the path that got here,
+    ///   so jumping back over this declaration ended their lifetimes too.
+    ///
+    /// Everything is in [`Cell`]s so that any number of frames can hold a
+    /// shared borrow of the arena at once. The methods are safe: the only
+    /// memory they touch is the arena's own.
+    fn arena_items(&self, span: Span) -> TokenStream {
+        let arena = arena_ty();
+        let frame = Ident::new("__cinrs_vla_frame", Span::mixed_site());
+        let t = Ident::new("T", Span::mixed_site());
+        let usize_ty = primitive_ty("usize", span);
+        let u128_ty = primitive_ty("u128", span);
+        let u8_ty = primitive_ty("u8", span);
+        let chunk_ty = self.vec_ty(u128_ty.clone(), span);
+        let chunks_ty = self.vec_ty(chunk_ty, span);
+        let empty = self.vec_new(span);
+        let new_chunk = self.vec_of(
+            quote_spanned! {span=> 0 },
+            quote_spanned! {span=> size.div_ceil(::core::mem::size_of::<#u128_ty>()) },
+            span,
+        );
+        let void = self.pointee_ty(Ty::Void, span);
+        quote_spanned! {span=>
+            #[allow(
+                unknown_lints,
+                elided_lifetimes_in_paths,
+                missing_debug_implementations,
+                single_use_lifetimes,
+                unused_qualifications,
+                clippy::pedantic,
+                clippy::nursery
+            )]
+            struct #arena {
+                chunks: ::core::cell::UnsafeCell<#chunks_ty>,
+                cur: ::core::cell::Cell<#usize_ty>,
+                top: ::core::cell::Cell<#usize_ty>,
+                floor: ::core::cell::Cell<(#usize_ty, #usize_ty)>,
+            }
+            #[allow(
+                unknown_lints,
+                elided_lifetimes_in_paths,
+                single_use_lifetimes,
+                unused_qualifications,
+                clippy::pedantic,
+                clippy::nursery
+            )]
+            impl #arena {
+                #[inline(always)]
+                fn new() -> Self {
+                    Self {
+                        chunks: ::core::cell::UnsafeCell::new(#empty),
+                        cur: ::core::cell::Cell::new(0),
+                        top: ::core::cell::Cell::new(0),
+                        floor: ::core::cell::Cell::new((0, 0)),
+                    }
+                }
+                #[inline(always)]
+                fn mark(&self) -> (#usize_ty, #usize_ty) {
+                    (self.cur.get(), self.top.get())
+                }
+                #[inline(always)]
+                fn frame(&self) -> #frame<'_> {
+                    #frame(self, self.mark())
+                }
+                /// Moves the position back down to `mark`, but never below
+                /// `floor` and never up.
+                #[inline(always)]
+                fn release(&self, mark: (#usize_ty, #usize_ty)) {
+                    let floor = self.floor.get();
+                    let to = if mark > floor { mark } else { floor };
+                    if to < self.mark() {
+                        self.cur.set(to.0);
+                        self.top.set(to.1);
+                    }
+                }
+                #[inline(always)]
+                fn bytes(&self, bytes: #usize_ty, align: #usize_ty) -> *mut #u8_ty {
+                    // SAFETY: nothing else borrows the list of chunks while
+                    // this runs, and the memory written is inside a chunk.
+                    unsafe {
+                        let chunks = &mut *self.chunks.get();
+                        let top = self.top.get();
+                        if let ::core::option::Option::Some(chunk) = chunks.get_mut(self.cur.get()) {
+                            let base = chunk.as_mut_ptr().cast::<#u8_ty>();
+                            let size = chunk.len() * ::core::mem::size_of::<#u128_ty>();
+                            let start = top + (base.addr().wrapping_add(top).wrapping_neg() & (align - 1));
+                            if start <= size && bytes <= size - start {
+                                self.top.set(start + bytes);
+                                let first = base.add(start);
+                                ::core::ptr::write_bytes(first, 0, bytes);
+                                return first;
+                            }
+                        }
+                    }
+                    self.grow(bytes, align)
+                }
+                #[cold]
+                #[inline(never)]
+                fn grow(&self, bytes: #usize_ty, align: #usize_ty) -> *mut #u8_ty {
+                    let need = bytes
+                        .checked_add(align)
+                        .expect("a variable length array or alloca is larger than the address space");
+                    {
+                        // SAFETY: as in `bytes`; the chunks dropped are above
+                        // the position, where nothing is live.
+                        let chunks = unsafe { &mut *self.chunks.get() };
+                        let next = if chunks.is_empty() { 0 } else { self.cur.get() + 1 };
+                        let unit = ::core::mem::size_of::<#u128_ty>();
+                        let fits = match chunks.get(next) {
+                            ::core::option::Option::Some(chunk) => chunk.len() * unit >= need,
+                            ::core::option::Option::None => false,
+                        };
+                        if !fits {
+                            let last = match chunks.last() {
+                                ::core::option::Option::Some(chunk) => chunk.len() * unit,
+                                ::core::option::Option::None => 0,
+                            };
+                            chunks.truncate(next);
+                            let size = need.max(last.saturating_mul(2)).max(4096);
+                            chunks.push(#new_chunk);
+                        }
+                        self.cur.set(next);
+                        self.top.set(0);
+                    }
+                    self.bytes(bytes, align)
+                }
+                /// `count` zeroed elements of `T`.
+                #[inline(always)]
+                fn alloc<#t>(&self, count: #usize_ty) -> *mut #t {
+                    self.alloc_aligned::<#t>(count, 1)
+                }
+                /// `count` zeroed elements of `T`, the first at a multiple of
+                /// `align` if that is stricter than `T`'s own alignment.
+                #[inline(always)]
+                fn alloc_aligned<#t>(&self, count: #usize_ty, align: #usize_ty) -> *mut #t {
+                    let bytes = count
+                        .checked_mul(::core::mem::size_of::<#t>())
+                        .expect("a variable length array is larger than the address space");
+                    let natural = ::core::mem::align_of::<#t>();
+                    self.bytes(bytes, if align > natural { align } else { natural })
+                        .cast::<#t>()
+                }
+                /// `size` zeroed bytes, 16-byte aligned, that no frame gives
+                /// back: they live until the arena is dropped.
+                #[inline(always)]
+                fn alloca(&self, size: #usize_ty) -> *mut #void {
+                    let first = self.bytes(size, 16);
+                    self.floor.set(self.mark());
+                    first.cast::<#void>()
+                }
+                /// A CFG-mode variable length array's declaration reached:
+                /// gives back what its previous pass took, and everything
+                /// allocated after that, and records where this one starts.
+                #[inline]
+                fn redefine(
+                    &self,
+                    marks: &mut [::core::option::Option<(#usize_ty, #usize_ty)>],
+                    slot: #usize_ty,
+                ) {
+                    if let ::core::option::Option::Some(mine) = marks[slot] {
+                        // No let chain: the user's crate may be on an
+                        // edition before 2024.
+                        for mark in marks.iter_mut() {
+                            if let ::core::option::Option::Some(other) = *mark {
+                                if other >= mine {
+                                    *mark = ::core::option::Option::None;
+                                }
+                            }
+                        }
+                        self.release(mine);
+                    }
+                    marks[slot] = ::core::option::Option::Some(self.mark());
+                }
+            }
+            #[allow(
+                unknown_lints,
+                elided_lifetimes_in_paths,
+                missing_debug_implementations,
+                single_use_lifetimes,
+                clippy::pedantic,
+                clippy::nursery
+            )]
+            struct #frame<'a>(&'a #arena, (#usize_ty, #usize_ty));
+            #[allow(
+                unknown_lints,
+                elided_lifetimes_in_paths,
+                single_use_lifetimes,
+                clippy::pedantic,
+                clippy::nursery
+            )]
+            impl ::core::ops::Drop for #frame<'_> {
+                #[inline(always)]
+                fn drop(&mut self) {
+                    self.0.release(self.1);
+                }
+            }
+        }
     }
 
     fn stub_item(&mut self, func: &Function) -> TokenStream {
@@ -2785,6 +3041,7 @@ impl<'a> Codegen<'a> {
         self.shape_scopes.clear();
         self.used_labels.clear();
         self.shape_labels = 0;
+        self.vla_slots.clear();
         if let Some(Body::Structured(stmts)) = &func.body {
             self.name_regions(stmts);
         }
@@ -3085,17 +3342,23 @@ impl<'a> Codegen<'a> {
     /// The `let` bindings every local of a graph-lowered function gets.
     fn cfg_locals(&mut self, cfg: &Cfg) -> TokenStream {
         let mut out = TokenStream::new();
+        let mut slots = 0;
+        let mut slots_span = None;
         for local in &cfg.locals {
             let object = self.program.object(local.object);
             let ospan = self.sp(object.range);
+            // The hidden frame of a variable length array is a slot of one
+            // array of arena marks, which starts out empty; the declaration
+            // fills it where it was written, first giving back whatever a
+            // previous pass over it took. See [`Codegen::arena_items`].
+            if object.vla_storage {
+                self.vla_slots.insert(local.object, slots);
+                slots += 1;
+                slots_span.get_or_insert(ospan);
+                continue;
+            }
             let name = self.object_ident(local.object, ospan);
-            // The hidden `Vec` of a variable length array starts out empty and
-            // is replaced where the declaration was written, which is also
-            // what frees the storage of a previous pass over it.
-            let (ty, init) = if object.vla_storage {
-                let elem = self.ty(object.ty, ospan);
-                (self.vec_ty(elem, ospan), self.vec_new(ospan))
-            } else if object.ty.is_va_list() {
+            let (ty, init) = if object.ty.is_va_list() {
                 // A `va_list` has no zero value; it starts out as a copy of
                 // the list the function was called with, exactly as it does
                 // when the declaration stays where it was written.
@@ -3109,6 +3372,15 @@ impl<'a> Codegen<'a> {
             let ty = self.binding_ty(local.object, ty, ospan);
             let init = self.binding_init(local.object, init, ospan);
             out.extend(quote_spanned! {ospan=> let mut #name: #ty = #init; });
+        }
+        if let Some(span) = slots_span {
+            let marks = vla_marks_ident();
+            let usize_ty = primitive_ty("usize", span);
+            let len = Literal::usize_unsuffixed(slots);
+            out.extend(quote_spanned! {span=>
+                let mut #marks: [::core::option::Option<(#usize_ty, #usize_ty)>; #len] =
+                    [::core::option::Option::None; #len];
+            });
         }
         out
     }
@@ -3808,59 +4080,52 @@ impl<'a> Codegen<'a> {
 
     /// A variable length array's definition, `T a[n];`.
     ///
-    /// Three bindings: the number of elements, evaluated exactly once here; the
-    /// `Vec` that holds them, whose `Drop` at the end of the block is the
-    /// object's lifetime; and the object itself, which is a pointer to the
-    /// first element. In [CFG mode](crate::cfg) the three are already bound at
-    /// the top of the function — Rust has no way to jump over a `let` — so what
-    /// is written here is the three assignments instead.
+    /// Two bindings after the bounds' own: the frame of the function's bump
+    /// arena, whose `Drop` at the end of the block — on every way out of it —
+    /// gives the space back and is the object's lifetime; and the object
+    /// itself, a pointer to the first of the zeroed elements the arena bumps
+    /// off. The frame stands first, so Rust drops it after anything declared
+    /// with the array. See [`Codegen::arena_items`].
+    ///
+    /// In [CFG mode](crate::cfg) there are no blocks to drop a frame at, and
+    /// the pointer is already bound at the top of the function — Rust has no
+    /// way to jump over a `let` — so what is written here is the arena's
+    /// `redefine` of this array's slot in the function's array of marks, which
+    /// gives back a previous pass's space before taking the new mark, and an
+    /// assignment.
     fn vla_def(&mut self, def: &ir::VlaDef) -> TokenStream {
         let span = self.sp(def.range);
         let object = self.program.object(def.object);
-        // Whatever is left under the variable dimensions: one `Vec` holds the
-        // whole object, however many of them there are.
+        // Whatever is left under the variable dimensions: one allocation
+        // holds the whole object, however many of them there are.
         let elem = self.program.types.vm_step_ty(object.ty);
-        let store = self.object_ident(def.storage, span);
         let name = self.object_ident(def.object, span);
         let count = self.expr(&def.count).at(prec::CAST, span);
-        let zero = self.zero_tokens(elem, span);
         let elem_ty = self.ty(elem, span);
         let usize_ty = primitive_ty("usize", span);
-        // A requested alignment stricter than the element's: enough spare
-        // elements to cover the worst distance to the next multiple of it,
-        // and the array starts there. The offset is in bytes and a multiple of
-        // the element's own alignment, so every element is still aligned; the
-        // storage is plain zeroed memory, and C types need nothing dropped.
-        let (length, first) = match def.align {
+        let arena = self.arena_ident(span);
+        // A requested alignment stricter than the element's pads the arena's
+        // position up to a multiple of it before the array starts.
+        let first = match def.align {
             Some(align) => {
                 let align = Literal::usize_unsuffixed(align as usize);
-                let size = quote_spanned! {span=> ::core::mem::size_of::<#elem_ty>() };
-                let length = quote_spanned! {span=>
-                    #count as #usize_ty + (#align + #size - 1) / #size
-                };
-                let first = quote_spanned! {span=> {
-                    let __cinrs_bytes = #store.as_mut_ptr() as *mut u8;
-                    __cinrs_bytes
-                        .add((__cinrs_bytes as #usize_ty).wrapping_neg() & (#align - 1))
-                        as *mut #elem_ty
-                } };
-                (length, first)
+                quote_spanned! {span=>
+                    #arena.alloc_aligned::<#elem_ty>(#count as #usize_ty, #align)
+                }
             }
-            None => (
-                quote_spanned! {span=> #count as #usize_ty },
-                quote_spanned! {span=> #store.as_mut_ptr() },
-            ),
+            None => quote_spanned! {span=> #arena.alloc::<#elem_ty>(#count as #usize_ty) },
         };
-        let elements = self.vec_of(zero, length, span);
         if self.in_cfg {
+            let marks = vla_marks_ident();
+            let slot = Literal::usize_unsuffixed(self.vla_slots[&def.storage]);
             return quote_spanned! {span=>
-                #store = #elements;
+                #arena.redefine(&mut #marks, #slot);
                 #name = #first;
             };
         }
-        let vec_ty = self.vec_ty(elem_ty.clone(), span);
+        let frame = self.object_ident(def.storage, span);
         quote_spanned! {span=>
-            let mut #store: #vec_ty = #elements;
+            let #frame = #arena.frame();
             let mut #name: *mut #elem_ty = #first;
         }
     }
@@ -5217,32 +5482,16 @@ impl<'a> Codegen<'a> {
                 }
                 Value::new(quote_spanned! {span=> ((#test) as #int) }, prec::LOWEST)
             }
-            // One block of the function's arena per call, rounded up to a
-            // whole number of `u128`s so that the pointer is 16-byte aligned.
-            // The pointer is taken before the block is put away, since moving
-            // a `Vec` does not move the memory it owns.
+            // Sixteen-byte aligned bytes off the function's arena, which no
+            // variable length array's frame gives back: they live until the
+            // function returns. See [`Codegen::arena_items`].
             BuiltinOp::Alloca => {
-                let arena = self.alloca_ident();
+                let arena = self.arena_ident(span);
                 let size = self.expr(&args[0]).at(prec::CAST, span);
-                let block = self.temporary();
-                let pointer = self.temporary();
-                let void = self.pointee_ty(Ty::Void, span);
                 let usize_ty = primitive_ty("usize", span);
-                let elements = self.vec_of(
-                    quote_spanned! {span=> 0u128 },
-                    quote_spanned! {span=> (#size as #usize_ty).div_ceil(16) },
-                    span,
-                );
                 Value::new(
-                    quote_spanned! {span=>
-                        {
-                            let mut #block = #elements;
-                            let #pointer = #block.as_mut_ptr().cast::<#void>();
-                            #arena.push(#block);
-                            #pointer
-                        }
-                    },
-                    prec::BLOCK,
+                    quote_spanned! {span=> #arena.alloca(#size as #usize_ty) },
+                    prec::CALL,
                 )
             }
             BuiltinOp::Bswap => {

@@ -585,10 +585,13 @@ refused, in GCC's own words.
 ## Variably modified types and `alloca`
 
 **The storage is the heap, not the stack.** Rust has no way to move the stack
-pointer by an amount chosen at run time, so the elements live in a hidden `Vec`
-whose `Drop` is the end of the block — the object's lifetime — and the C object
-itself is a pointer into it. The model is one hidden `size_t` object per
-variable dimension, created where the *type* is declared and named after it:
+pointer by an amount chosen at run time, so a function that declares a variable
+length array or calls `alloca` opens with a stack of its own: a bump arena on
+the heap, dropped by the `return`. The elements are bumped off it, a hidden
+frame guard whose `Drop` at the end of the block — the object's lifetime —
+moves the arena back down to where it was, and the C object itself is a pointer
+to the first element. The model is one hidden `size_t` object per variable
+dimension, created where the *type* is declared and named after it:
 
 ```c
 unsigned long sizes(int n, int m) {
@@ -599,11 +602,12 @@ unsigned long sizes(int n, int m) {
 ```
 
 ```rust
+let __cinrs_vla = __cinrs_vla_arena::new();          // the function's first line
 let mut __cinrs_vla_len_a: c_ulong = m as c_ulong;
 let mut __cinrs_vla_len1_a: c_ulong = n as c_ulong;
-let mut __cinrs_vla_a: ::std::vec::Vec<c_double> =
-    ::std::vec::from_elem(0.0, __cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a) as usize);
-let mut a: *mut c_double = __cinrs_vla_a.as_mut_ptr();
+let __cinrs_vla_frame_a = __cinrs_vla.frame();
+let mut a: *mut c_double =
+    __cinrs_vla.alloc::<c_double>(__cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a) as usize);
 // a[1][2]      is  a.offset(1 * __cinrs_vla_len_a).offset(2)
 // sizeof a     is  __cinrs_vla_len_a * __cinrs_vla_len1_a * 8
 // sizeof a[0]  is  __cinrs_vla_len_a * 8
@@ -615,28 +619,54 @@ whole row, and `sizeof a`, `sizeof a[0]` and `sizeof *p` are products of the
 bounds. Every observation a C program can make is the one C promises; see [What
 works](features.md#variably-modified-types-and-alloca) for that half. What
 changes is where the bytes are, and that a very large one fails the way a
-`malloc` does rather than by running the stack out. A zero length allocates
-nothing, as it does in GCC; a *negative* one is undefined behaviour in C, and
-here it converts to a huge `size_t` and the allocation aborts rather than
-corrupting anything.
+`malloc` does rather than by running the stack out. A zero length takes no
+bytes, as it does in GCC, and still has an address; a *negative* one is
+undefined behaviour in C, and here it converts to a huge `size_t` and the
+allocation panics or aborts rather than corrupting anything. The elements are
+zeroed: C leaves them indeterminate, but reading uninitialised memory through a
+raw pointer is undefined in Rust too.
+
+The arena is a type of the unit's own module, `__cinrs_vla_arena`, emitted
+once for a unit that needs it. Its storage is a list of chunks that never move
+— `Vec<u128>`s, so each starts 16-byte aligned — and a position in them. No
+chunk is allocated until the first array is, and what an allocation costs from
+then on is a bump and a `memset`: a declaration in a loop takes back the place
+the previous iteration gave up. Only when the current chunk is full is there a
+call to the allocator, for a new chunk at least twice as large — or the next
+one along, if an earlier pass left one big enough. A recursive call has an
+arena of its own.
 
 A variable length array asked to be over-aligned —
-`double v[n] __attribute__((aligned(32)))` — gets enough spare elements in its
-`Vec` to reach the next multiple of the alignment, and the pointer starts
-there: `p.add((p as usize).wrapping_neg() & 31)` on the storage's bytes.
+`double v[n] __attribute__((aligned(32)))` — pads the arena's position up to the
+next multiple of the alignment *by address*, so any alignment works in a
+16-byte-aligned chunk: `__cinrs_vla.alloc_aligned::<c_double>(n as usize, 32)`.
 
-`alloca(n)` takes one 16-byte aligned block out of a per-function arena, and the
-whole arena is freed by the `return` — which is `alloca`'s own lifetime, so a
-pointer to it returned to the caller dangles here exactly as it does in C.
+`alloca(n)` bumps 16-byte aligned bytes off the same arena —
+`__cinrs_vla.alloca(n as usize)` — and raises a *floor* past them that no frame
+moves the arena below, so they are not given back at the end of a block that
+also had an array in it: they live until the `return` frees the whole arena.
+That is GCC's own rule — a variable length array's space is freed at the end of
+its scope "unless you also use `alloca` in this scope" — and `alloca`'s own
+lifetime, so a pointer to it returned to the caller dangles here exactly as it
+does in C.
 
 In a function lowered through the [control-flow graph](#control-flow-and-goto),
-where every local is hoisted to the top, the hidden `Vec` is hoisted too: it is
-created empty, filled where the declaration was written, and dropped when the
-function returns rather than when the block ends. A C program can only observe
-that as memory it expected to have been given back sooner.
+where every local is hoisted to the top, there are no blocks for a frame to be
+dropped at. The function keeps one arena mark per array instead, in
+`__cinrs_vla_marks`, and the declaration becomes
+`__cinrs_vla.redefine(&mut __cinrs_vla_marks, 0); a = __cinrs_vla.alloc::<…>(…);`.
+Reaching the declaration again moves the arena back down to where it was the
+last time — which also gives back every array declared after it on that path,
+since jumping back over this declaration ended their lifetimes too — before
+allocating afresh, so a backward `goto` over a declaration reuses its space.
+An array a `goto` left the scope of is given back the next time its
+declaration is reached, or when the function returns, rather than when the
+block ends; a C program can only observe that as memory it expected to have
+been given back sooner, and there is never more of it than one array per
+declaration.
 
-The `Vec` is `::std::vec::Vec` unless the unit writes
-[`#pragma cinrs no_std`](no-std.md), which makes it `::alloc::vec::Vec`.
+The chunks are `::std::vec::Vec`s unless the unit writes
+[`#pragma cinrs no_std`](no-std.md), which makes them `::alloc::vec::Vec`s.
 
 ## Thread-local objects
 

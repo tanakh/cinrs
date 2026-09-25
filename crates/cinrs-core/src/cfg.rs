@@ -794,14 +794,17 @@ impl Lowerer<'_> {
         )));
     }
 
-    /// Hoists the two bindings a variably modified object needs, leaving the
-    /// allocation itself where the declaration was written.
+    /// Hoists the two bindings a variably modified object needs — its frame,
+    /// which is a slot of the function's array of arena marks, and the
+    /// pointer — leaving the allocation itself where the declaration was
+    /// written.
     ///
-    /// The storage therefore lives from the top of the function to its end
-    /// rather than to the end of the block — the price of having no way to
-    /// jump over a `let` — which a C program can only observe as memory it
-    /// expected to have been given back. Re-reaching the declaration replaces
-    /// the `Vec`, which frees the old one and is the fresh object C99 6.2.4p7
+    /// The storage therefore lives until the declaration is reached again or
+    /// the function returns rather than to the end of the block — the price
+    /// of having no way to jump over a `let` — which a C program can only
+    /// observe as memory it expected to have been given back. Re-reaching the
+    /// declaration gives back the previous pass's space, and everything
+    /// allocated after it, before allocating the fresh object C99 6.2.4p7
     /// asks for.
     fn vla(&mut self, def: crate::ir::VlaDef) {
         for object in [def.storage, def.object] {

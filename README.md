@@ -240,8 +240,9 @@ The ones most likely to matter; [the full list][limitations] has the rest.
   __AVX2__` and `#ifdef __AVX512F__` are false (until a `#pragma GCC
   target("avx2")` defines them, as GCC's does) and
   `__builtin_cpu_supports("avx2")` is the question to ask. No MMX.
-* Variable length arrays and `alloca` live on the heap (Rust cannot move the
-  stack pointer); what the C can observe is unchanged.
+* Variable length arrays and `alloca` live on the heap, in a bump arena per
+  function call (Rust cannot move the stack pointer); what the C can observe is
+  unchanged.
 * `va_arg` of a `struct` works for records up to sixteen bytes on x86-64
   System V only.
 * Each invocation is its own translation unit: two blocks that include one

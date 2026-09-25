@@ -458,6 +458,25 @@ follows [Semantic Versioning][semver].
   inline the four products and the NaN test and call a `#[cold]` function
   for the rest; the quotients do the same with theirs. The row is now 1.06×
   gcc and 0.96× clang, and the results are the same bits as before.
+* **A variable length array in a loop is a pointer bump, not an
+  allocation.** Each one was a hidden `Vec` of its own, so `int tmp[n];`
+  inside a loop was a `calloc` and a `free` per iteration, where GCC and
+  Clang move the stack pointer: in the `vla` benchmark that was 28 % of the
+  time, and the row was 1.28× gcc's and 1.24× clang's. A function that
+  declares a variable length array or calls `alloca` now opens with a bump
+  arena of its own — a private type of the unit, built on `Vec` so that
+  `#pragma cinrs no_std` still takes it from `alloc` — whose chunks never
+  move and are only allocated when one fills up. An array is a bump and a
+  `memset` of its zeroed elements, and a frame guard whose `Drop` at the end
+  of the block moves the arena back down, on every way out of it; the next
+  iteration gets the same place. `aligned(N)` pads the position by address,
+  `alloca` shares the arena and raises a floor no array's end of scope goes
+  below (GCC's rule: its memory lives until the function returns), and a
+  function lowered through the control-flow graph keeps one mark per array
+  and gives a declaration's space back when a `goto` reaches it again. The
+  `vla` row is now 1.00× gcc and 0.97× clang (0.542 s → 0.422 s), level with
+  `vla-hoisted`, and `matmul-vla`, `spectral-norm` and `fannkuch-redux`, which
+  declare theirs once, are unchanged.
 * **A stringified macro argument is spaced the way GCC and Clang space it.**
   brotli stringifies `BROTLI_MAKE_VERSION(__GNUC__, __GNUC_MINOR__,
   __GNUC_PATCHLEVEL__)` through two macros, and with `#define V(a,b)

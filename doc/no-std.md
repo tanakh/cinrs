@@ -15,15 +15,15 @@ re-export of `cinrs-rt` — and `cinrs-rt` is itself `#![no_std]`, so it changes
 nothing here. `default-features = false` drops it, and `_Complex` with it.
 
 Three constructs are the exception. Two of them are variable length arrays and
-`alloca`, whose storage is a `Vec`. Nothing in the C says which kind of crate
-the expansion is going into, so that `Vec` is `::std::vec::Vec` unless the unit
-says otherwise:
+`alloca`, whose storage is a bump arena made of `Vec`s. Nothing in the C says
+which kind of crate the expansion is going into, so those are `::std::vec::Vec`s
+unless the unit says otherwise:
 
 ```c
 #pragma cinrs no_std
 ```
 
-which makes it `::alloc::vec::Vec` instead. The crate then has to contain
+which makes them `::alloc::vec::Vec`s instead. The crate then has to contain
 `extern crate alloc;` itself — an expansion is items, and a crate-level
 directive is not one of them. Without the pragma, a variable length array in a
 `#![no_std]` crate is `rustc`'s own "cannot find `std`", with the caret on the

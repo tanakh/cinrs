@@ -1031,8 +1031,8 @@ impl Types {
     /// addresses: what is left after every dimension with a run-time size is
     /// taken off.
     ///
-    /// It is the element type of the hidden `Vec` a [`Stmt::Vla`] allocates
-    /// and the pointee of the generated Rust pointer — `double a[n][m]` is a
+    /// It is the element type a [`Stmt::Vla`] allocates off the function's
+    /// arena and the pointee of the generated Rust pointer — `double a[n][m]` is a
     /// `*mut c_double` over `n * m` of them, and `double a[n][3]` a
     /// `*mut [c_double; 3]` over `n`. Everything else about a variably
     /// modified type is arithmetic on top of that: see [`Types::vm_dims`].
@@ -1941,13 +1941,16 @@ pub struct Object {
     /// array declared `register` can be the operand of. WG14 DR116 is that
     /// rule; `drs/dr1xx.c` is where it is checked.
     pub is_register: bool,
-    /// Set when this is the hidden `Vec` a [variable length array](Stmt::Vla)
-    /// keeps its elements in, in which case [`Object::ty`] is the *element*
-    /// type and the generated binding has type `Vec<T>`.
+    /// Set when this is the hidden frame of a
+    /// [variable length array](Stmt::Vla): the mark of the function's bump
+    /// arena taken just before the elements were allocated, in which case
+    /// [`Object::ty`] is the *element* type and the generated binding is the
+    /// arena's frame guard (a slot of the function's array of marks in
+    /// [CFG mode](crate::cfg)).
     ///
     /// It is not an object of the C program at all; it exists so that the
-    /// storage is dropped when the block ends, which is the lifetime C gives
-    /// the array.
+    /// arena moves back down to the mark when the block ends, which is the
+    /// lifetime C gives the array.
     pub vla_storage: bool,
     /// The alignment `_Alignas(N)` or `__attribute__((aligned(N)))` asked for,
     /// when it is stricter than the one the type already has.
@@ -2090,13 +2093,15 @@ pub struct Function {
     /// block, so `rustc` checks it. The range is where the request was
     /// written, which is what the diagnostics about it point at.
     pub safe: Option<SourceRange>,
-    /// Whether the body calls `alloca`, in which case the generated item opens
-    /// with the arena the emulation allocates out of.
+    /// Whether the body declares a variable length array or calls `alloca`,
+    /// in which case the generated item opens with the bump arena both
+    /// emulations allocate out of.
     ///
-    /// `alloca`'s memory lives until the function returns — not until the end
-    /// of the block it was called in — so the arena is per function and is
-    /// dropped by the `return`, which is exactly that lifetime.
-    pub uses_alloca: bool,
+    /// The arena is per function and is dropped by the `return`, which frees
+    /// everything in it: that is `alloca`'s lifetime, and a variable length
+    /// array gives its space back earlier, at the end of its block, by moving
+    /// the arena's position back down. See [`codegen`](crate::codegen).
+    pub uses_arena: bool,
     /// Every automatic object the body declared, in declaration order.
     ///
     /// Code generation needs the whole list — not only the ones a `let`
@@ -2314,8 +2319,8 @@ pub struct Program {
     /// `#![no_std]` crate.
     ///
     /// Everything generated is `core`-only except the storage a [variable
-    /// length array](Stmt::Vla) and `alloca` need, which is a `Vec`; this
-    /// decides whether that `Vec` is spelled `::std::vec::Vec` or
+    /// length array](Stmt::Vla) and `alloca` need, which is a bump arena made
+    /// of `Vec`s; this decides whether they are spelled `::std::vec::Vec` or
     /// `::alloc::vec::Vec`. Filled in after semantic analysis, for the same
     /// reason as [`Program::link_libraries`].
     pub no_std: bool,
@@ -2559,9 +2564,10 @@ pub enum BuiltinOp {
     /// `__builtin_alloca(size)`, whose one operand is the size in bytes,
     /// converted to `size_t`.
     ///
-    /// The memory comes out of the arena [`Function::uses_alloca`] puts at the
-    /// top of the function, so it is freed by the `return` — which is
-    /// `alloca`'s own lifetime.
+    /// The memory comes out of the arena [`Function::uses_arena`] puts at the
+    /// top of the function, and no variable length array's end of scope gives
+    /// it back, so it is freed by the `return` — which is `alloca`'s own
+    /// lifetime.
     Alloca,
     /// `__builtin_fabs…`: the sign bit cleared, which is what C's `fabs` is
     /// defined as and what makes it exact for a NaN and for a zero.
@@ -3651,14 +3657,15 @@ impl Stmt {
 /// the declaration is reached, and the lifetime of the block it is written in;
 /// each bound is evaluated exactly once, where the declaration stands, and
 /// lives in a hidden `size_t` object the [type](ArrayType::vla_len) points at.
-/// This crate emulates the storage on the heap — the elements live in a hidden
-/// `Vec` whose `Drop` is that lifetime — so the one definition becomes a
-/// [`Stmt::Let`] per bound followed by two more bindings:
+/// This crate emulates the storage with a per-function bump arena on the heap
+/// — the elements are bumped off it, and a hidden frame guard whose `Drop`
+/// moves the arena back down is that lifetime — so the one definition becomes
+/// a [`Stmt::Let`] per bound followed by two more bindings:
 ///
 /// ```text
 /// let __cinrs_vla_len_a: size_t = <n>;                     // one per bound
-/// let mut __cinrs_vla_a: Vec<T> = vec![<zero>; count];     // storage
-/// let mut a: *mut T = __cinrs_vla_a.as_mut_ptr();          // object
+/// let __cinrs_vla_frame_a = __cinrs_vla.frame();          // frame
+/// let mut a: *mut T = __cinrs_vla.alloc::<T>(count);       // object
 /// ```
 ///
 /// From there the object *is* a pointer to the first element: decay is the
@@ -3671,16 +3678,16 @@ pub struct VlaDef {
     /// The object the C program declared, whose type is the array type and
     /// whose generated binding is a pointer to the first element.
     pub object: ObjectId,
-    /// The hidden `Vec` the elements live in; see [`Object::vla_storage`].
+    /// The hidden frame that gives the elements back; see
+    /// [`Object::vla_storage`].
     pub storage: ObjectId,
     /// The number of elements to allocate: the product of every dimension,
     /// read out of the hidden bound objects, in units of the storage's
     /// element type.
     pub count: Expr,
     /// The alignment `_Alignas(N)` or `__attribute__((aligned(N)))` asked
-    /// for, when it is stricter than the element type's: the storage is then
-    /// over-allocated and the array starts at the first address that is a
-    /// multiple of it.
+    /// for, when it is stricter than the element type's: the arena then pads
+    /// its position to the first address that is a multiple of it.
     pub align: Option<u64>,
     /// Where the declarator was written.
     pub range: SourceRange,

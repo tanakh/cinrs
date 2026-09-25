@@ -1,8 +1,8 @@
 ---
 source: crates/cinrs-core/tests/codegen.rs
-expression: "generate(r#\"\n        void *first(unsigned long n) {\n            char *a = __builtin_alloca(n);\n            char *b = __builtin_alloca(2 * n);\n            a[0] = b[0];\n            return a;\n        }\n        \"#)"
+expression: "generate(r#\"\n        long jumpy(int n) {\n            long total = 0;\n        again:;\n            char buf[n];\n            double v[n] __attribute__((aligned(64)));\n            buf[n - 1] = (char)n;\n            v[0] = n;\n            total += buf[n - 1] + (long)v[0];\n            if (--n > 0) goto again;\n            return total;\n        }\n        \"#)"
 ---
-mod __cinrs_unit_6af487af {
+mod __cinrs_unit_58b67d2d {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
     #[allow(
@@ -203,26 +203,65 @@ mod __cinrs_unit_6af487af {
             self.0.release(self.1);
         }
     }
-    pub unsafe extern "C" fn first(
-        mut n: ::core::ffi::c_ulong,
-    ) -> *mut ::core::ffi::c_void {
+    pub unsafe extern "C" fn jumpy(mut n: ::core::ffi::c_int) -> ::core::ffi::c_long {
         unsafe {
             let __cinrs_vla = __cinrs_vla_arena::new();
-            let mut a: *mut ::core::ffi::c_char = __cinrs_vla
-                .alloca(n as ::core::primitive::usize) as *mut ::core::ffi::c_char;
-            let mut b: *mut ::core::ffi::c_char = __cinrs_vla
-                .alloca(
-                    (2 as ::core::ffi::c_ulong).wrapping_mul(n)
-                        as ::core::primitive::usize,
-                ) as *mut ::core::ffi::c_char;
-            let __cinrs_tmp0 = a.offset(0);
-            (*__cinrs_tmp0) = {
-                let __cinrs_tmp1 = b.offset(0);
-                (*__cinrs_tmp1)
-            };
-            return a as *mut ::core::ffi::c_void;
+            let mut total: ::core::ffi::c_long = 0;
+            let mut __cinrs_vla_len_buf: ::core::ffi::c_ulong = 0;
+            let mut buf: *mut ::core::ffi::c_char = ::core::ptr::null_mut::<
+                ::core::ffi::c_char,
+            >();
+            let mut __cinrs_vla_len_v: ::core::ffi::c_ulong = 0;
+            let mut v: *mut ::core::ffi::c_double = ::core::ptr::null_mut::<
+                ::core::ffi::c_double,
+            >();
+            let mut __cinrs_vla_marks: [::core::option::Option<
+                (::core::primitive::usize, ::core::primitive::usize),
+            >; 2] = [::core::option::Option::None; 2];
+            total = 0;
+            'again: loop {
+                __cinrs_vla_len_buf = n as ::core::ffi::c_ulong;
+                __cinrs_vla.redefine(&mut __cinrs_vla_marks, 0);
+                buf = __cinrs_vla
+                    .alloc::<
+                        ::core::ffi::c_char,
+                    >(__cinrs_vla_len_buf as ::core::primitive::usize);
+                __cinrs_vla_len_v = n as ::core::ffi::c_ulong;
+                __cinrs_vla.redefine(&mut __cinrs_vla_marks, 1);
+                v = __cinrs_vla
+                    .alloc_aligned::<
+                        ::core::ffi::c_double,
+                    >(__cinrs_vla_len_v as ::core::primitive::usize, 64);
+                let __cinrs_tmp0 = buf
+                    .offset(n.wrapping_sub(1) as ::core::primitive::isize);
+                (*__cinrs_tmp0) = n as ::core::ffi::c_char;
+                let __cinrs_tmp1 = v.offset(0);
+                (*__cinrs_tmp1) = n as ::core::ffi::c_double;
+                total = total
+                    .wrapping_add(
+                        (({
+                            let __cinrs_tmp2 = buf
+                                .offset(n.wrapping_sub(1) as ::core::primitive::isize);
+                            (*__cinrs_tmp2)
+                        }) as ::core::ffi::c_long)
+                            .wrapping_add(
+                                ({
+                                    let __cinrs_tmp3 = v.offset(0);
+                                    (*__cinrs_tmp3)
+                                }) as ::core::ffi::c_long,
+                            ),
+                    );
+                if !(({
+                    n = n.wrapping_sub(1);
+                    n
+                }) > 0)
+                {
+                    break 'again;
+                }
+            }
+            return total;
         }
     }
 }
 #[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
-pub use __cinrs_unit_6af487af::*;
+pub use __cinrs_unit_58b67d2d::*;

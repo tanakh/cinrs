@@ -297,8 +297,8 @@ fn an_over_aligned_object_can_still_have_a_cleanup() {
 }
 
 /// A variable length array asked to be aligned is: its storage is allocated
-/// at run time, so it is over-allocated and the array starts at the first
-/// multiple of the alignment. spectral-norm's `double v[n + 3]
+/// at run time, so the function's arena pads its position and the array
+/// starts at the first multiple of the alignment. spectral-norm's `double v[n + 3]
 /// __attribute__((aligned(32)))` read with an aligned AVX load is the shape.
 #[test]
 fn a_variable_length_array_is_aligned_where_it_asked_to_be() {

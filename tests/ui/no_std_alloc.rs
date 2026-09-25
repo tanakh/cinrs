@@ -3,7 +3,7 @@
 //! `#pragma cinrs no_std` in a `#![no_std]` crate that has an `alloc`.
 //!
 //! A variable length array and `alloca` are the only two constructs whose
-//! expansion needs more than `core`: the elements live in a `Vec`. The pragma
+//! expansion needs more than `core`: their arena is made of `Vec`s. The pragma
 //! says to take it from `alloc` rather than from `std`, and the crate has to
 //! provide `extern crate alloc;` itself, since a procedural macro cannot add
 //! one — an expansion is items, not crate-level directives.
@@ -31,7 +31,7 @@ cinrs::gnu99! {
     }
 
     /* The same thing in a function that jumps, where every local — the hidden
-       storage included — is bound at the top of the function. */
+       frame included — is bound at the top of the function. */
     long jumpy(int n) {
         long total = 0;
         char buf[n];

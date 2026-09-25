@@ -1178,13 +1178,16 @@ fn a_flexible_array_member_is_a_zero_length_tail() {
 }
 
 #[test]
-fn a_variable_length_array_lives_in_a_hidden_vec() {
+fn a_variable_length_array_is_bumped_off_the_function_arena() {
     // Three bindings: the bound, evaluated once where the declaration stands
-    // and kept in an object of its own; the `Vec` that holds the elements,
-    // whose `Drop` at the end of the block is the object's lifetime; and the
-    // object itself, which is a pointer to the first element. `sizeof a` reads
-    // the bound back, so it is a run-time value — and a declaration inside a
-    // loop allocates afresh on every pass.
+    // and kept in an object of its own; the frame of the function's bump
+    // arena, whose `Drop` at the end of the block gives the space back and is
+    // the object's lifetime; and the object itself, a pointer to the first of
+    // the zeroed elements the arena bumps off. `sizeof a` reads the bound
+    // back, so it is a run-time value — and a declaration inside a loop
+    // allocates afresh on every pass, in the place the previous pass gave
+    // back. The arena opens the function, and its type is one pair of items
+    // per unit.
     insta::assert_snapshot!(generate(
         r#"
         unsigned long sum(int n) {
@@ -1202,7 +1205,7 @@ fn a_variable_length_array_lives_in_a_hidden_vec() {
 
 #[test]
 fn a_variably_modified_type_carries_its_bounds_in_hidden_objects() {
-    // One `size_t` object per variable dimension, one `Vec` for the whole
+    // One `size_t` object per variable dimension, one allocation for the whole
     // object however many dimensions there are, and a pointer to the innermost
     // element type. Everything else follows from those: `a[i][j]` scales the
     // row index by the run-time width, `sizeof a` is the product of the
@@ -1283,8 +1286,8 @@ fn a_cleanup_attribute_in_a_cfg_body_runs_on_the_edges() {
 #[test]
 fn alloca_allocates_from_a_function_wide_arena() {
     // `alloca`'s memory belongs to the *function*, so the arena is opened at
-    // the top and dropped by the `return`; every call pushes one 16-byte
-    // aligned block onto it.
+    // the top and dropped by the `return`; every call bumps 16-byte aligned
+    // bytes off it and raises the floor no array's frame goes below.
     insta::assert_snapshot!(generate(
         r#"
         void *first(unsigned long n) {
@@ -1298,9 +1301,34 @@ fn alloca_allocates_from_a_function_wide_arena() {
 }
 
 #[test]
+fn a_variable_length_array_in_a_cfg_body_takes_a_slot_of_marks() {
+    // A function that jumps binds its locals at the top, and has no blocks to
+    // drop a frame at: each array's frame is a slot of one array of arena
+    // marks instead, and the declaration's `redefine` gives back what the
+    // previous pass over it took — and forgets every mark taken after it —
+    // before recording the new one. The pointer is an assignment. An
+    // over-aligned array asks the arena to pad its position.
+    insta::assert_snapshot!(generate(
+        r#"
+        long jumpy(int n) {
+            long total = 0;
+        again:;
+            char buf[n];
+            double v[n] __attribute__((aligned(64)));
+            buf[n - 1] = (char)n;
+            v[0] = n;
+            total += buf[n - 1] + (long)v[0];
+            if (--n > 0) goto again;
+            return total;
+        }
+        "#
+    ));
+}
+
+#[test]
 fn the_no_std_pragma_moves_the_storage_to_the_alloc_crate() {
-    // The `Vec` behind a variable length array and `alloca` is the only thing
-    // the expansion needs beyond `core`. Nothing in the C says which kind of
+    // The `Vec`s behind the bump arena of a variable length array and
+    // `alloca` are the only thing the expansion needs beyond `core`. Nothing in the C says which kind of
     // crate it is going into, so the pragma does.
     let source = r#"
         long sum(int n) {

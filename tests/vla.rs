@@ -1,14 +1,16 @@
 //! Variable length arrays (C99 6.7.5.2) and `alloca`.
 //!
 //! Both are emulated on the heap, which is the one thing about them that is
-//! not C's own model: a VLA's elements live in a hidden `Vec` whose `Drop` is
-//! the end of the block the declaration was written in, and `alloca` hands out
-//! blocks of a per-function arena that is dropped by the `return`. Everything
+//! not C's own model: each call of a function that has either gets a bump
+//! arena, dropped by the `return`; a VLA's elements are bumped off it and a
+//! hidden frame guard whose `Drop` is the end of the block the declaration was
+//! written in moves the arena back down, and `alloca`'s bytes are bumped off
+//! it past anything a block's end gives back. Everything
 //! a C program can observe is unchanged — the storage, the lifetime, the fresh
 //! object each pass through a loop makes, the run-time `sizeof` — so the tests
 //! below are about those observations rather than about where the bytes are.
 
-use cinrs::{c99, gnu99};
+use cinrs::{c99, gnu11, gnu99};
 
 // ---------------------------------------------------------------------------
 // the elements
@@ -321,6 +323,280 @@ fn a_thousand_large_arrays_do_not_grow_the_process() {
             "the process grew from {before} to {after} pages over 10 000 arrays"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// the arena
+// ---------------------------------------------------------------------------
+
+/// The size of the process in pages, where there is a procfs to ask.
+fn process_pages() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/self/statm").ok()?;
+    text.split_whitespace().next()?.parse().ok()
+}
+
+/// [`process_pages`] as a C function pointer, for a C loop to ask from inside
+/// one call — the arena lives as long as the call, so only a measurement
+/// taken inside it can see it grow. Zero where there is no procfs.
+unsafe extern "C" fn probe_pages() -> std::ffi::c_long {
+    process_pages().unwrap_or(0) as std::ffi::c_long
+}
+
+/// Asserts that a C loop's two probes, taken early and at its end, are
+/// within a hundred pages of each other.
+fn assert_bounded(pages: [std::ffi::c_long; 2], what: &str) {
+    let [early, late] = pages;
+    assert!(
+        late <= early + 100,
+        "the process grew from {early} to {late} pages over {what}"
+    );
+}
+
+/// A million passes through a block with an array, leaving it by falling off
+/// its end, by `continue` and by `break` — each of them gives the space back,
+/// so every pass gets the same address and the process does not grow inside
+/// the one call that makes them all.
+#[test]
+fn a_million_arrays_in_one_call_reuse_one_place() {
+    c99! {
+        /* `long long` for the total: on Windows a `long` is 32 bits. */
+        long long loop_of_arrays(int passes, long (*probe)(void), long pages[2]) {
+            long long total = 0;
+            int *first = 0;
+            for (int i = 0; i < passes + 1; i++) {
+                int n = 100 + i % 3;
+                int a[n];
+                if (first == 0) {
+                    first = a;
+                } else if (a != first) {
+                    return -1;
+                }
+                for (int j = 0; j < n; j++) {
+                    a[j] = i + j;
+                }
+                if (i == 1000) {
+                    pages[0] = probe();
+                }
+                if (i == passes) {
+                    break;
+                }
+                if (i % 2) {
+                    total += a[n - 1];
+                    continue;
+                }
+                total += a[0];
+            }
+            pages[1] = probe();
+            return total;
+        }
+    }
+
+    let passes = 1_000_000;
+    let mut pages = [0; 2];
+    let total = unsafe { loop_of_arrays(passes, Some(probe_pages), pages.as_mut_ptr()) };
+    // An odd pass adds a[n - 1] = i + n - 1, an even one a[0] = i.
+    let expected: i64 = (0..i64::from(passes))
+        .map(|i| if i % 2 == 1 { i + 100 + i % 3 - 1 } else { i })
+        .sum();
+    assert_eq!(total, expected);
+    assert_bounded(pages, "a million arrays");
+}
+
+/// An array whose size doubles every pass, inside the scope of one that
+/// stays: the arena runs out of room again and again while the outer array is
+/// live, and the new room must never be where the outer array is.
+#[test]
+fn a_growing_inner_array_leaves_the_outer_one_where_it_is() {
+    c99! {
+        int nested_growth(int outer_len, int doublings) {
+            int outer[outer_len];
+            for (int i = 0; i < outer_len; i++) {
+                outer[i] = 7 * i + 1;
+            }
+            int *saved = outer;
+            for (int k = 0, n = 1; k < doublings; k++, n *= 2) {
+                int inner[n];
+                for (int j = 0; j < n; j++) {
+                    inner[j] = -j;
+                }
+                if (inner[n - 1] != -(n - 1)) {
+                    return -1;
+                }
+                if (inner < outer + outer_len && outer < inner + n) {
+                    return -2;
+                }
+            }
+            if (saved != outer) {
+                return -3;
+            }
+            for (int i = 0; i < outer_len; i++) {
+                if (outer[i] != 7 * i + 1) {
+                    return -4;
+                }
+            }
+            return 1;
+        }
+    }
+
+    unsafe {
+        // Up to 2^20 ints — four mebibytes — from a first chunk of four
+        // kibibytes.
+        assert_eq!(nested_growth(100, 21), 1);
+        assert_eq!(nested_growth(2000, 16), 1);
+    }
+}
+
+/// `alloca` in a block that also has an array: the block's end gives the
+/// array back, but not the `alloca`'d bytes above it, which live until the
+/// function returns — so a later array must not be put on top of them.
+#[test]
+fn alloca_in_a_block_with_an_array_outlives_the_block() {
+    gnu99! {
+        #include <alloca.h>
+
+        int alloca_survives(int n) {
+            unsigned char *kept;
+            {
+                int a[n];
+                for (int i = 0; i < n; i++) {
+                    a[i] = i;
+                }
+                kept = alloca(256);
+                for (int i = 0; i < 256; i++) {
+                    kept[i] = (unsigned char)(i ^ 0x5a);
+                }
+                if (a[n - 1] != n - 1) {
+                    return -1;
+                }
+            }
+            {
+                int b[4 * n];
+                for (int i = 0; i < 4 * n; i++) {
+                    b[i] = -1;
+                }
+                if (b[0] != -1) {
+                    return -2;
+                }
+            }
+            for (int i = 0; i < 256; i++) {
+                if (kept[i] != (unsigned char)(i ^ 0x5a)) {
+                    return -3;
+                }
+            }
+            return 1;
+        }
+    }
+
+    unsafe {
+        assert_eq!(alloca_survives(10), 1);
+        // Large enough that the second array needs a chunk of its own.
+        assert_eq!(alloca_survives(5000), 1);
+    }
+}
+
+/// Every call has an arena of its own, so a recursive function's arrays —
+/// one per activation, each a different size — stay apart.
+#[test]
+fn each_activation_of_a_recursive_function_has_its_own_arrays() {
+    c99! {
+        long descend(int depth, int n) {
+            long a[n];
+            for (int i = 0; i < n; i++) {
+                a[i] = depth;
+            }
+            long below = depth > 0 ? descend(depth - 1, n + 3) : 0;
+            if (below < 0) {
+                return below;
+            }
+            long total = 0;
+            for (int i = 0; i < n; i++) {
+                if (a[i] != depth) {
+                    return -1;
+                }
+                total += a[i];
+            }
+            return below + total;
+        }
+    }
+
+    unsafe {
+        // The activation at depth d has n = 5 + 3 * (20 - d) elements of d.
+        let expected: std::ffi::c_long = (0..=20)
+            .map(|d: std::ffi::c_long| d * (5 + 3 * (20 - d)))
+            .sum();
+        assert_eq!(descend(20, 5), expected);
+    }
+}
+
+/// `aligned(64)` in a loop, behind a small array that leaves the arena's
+/// position anywhere: the padding is by address, so every pass is aligned.
+#[test]
+fn an_over_aligned_array_in_a_loop_is_aligned_every_pass() {
+    gnu11! {
+        #include <stdint.h>
+
+        int aligned_every_pass(int passes) {
+            int ok = 1;
+            for (int i = 1; i <= passes; i++) {
+                char before[i % 13 + 1];
+                double v[i] __attribute__((aligned(64)));
+                before[0] = 1;
+                v[i - 1] = i;
+                ok &= (uintptr_t)v % 64 == 0 && v[i - 1] == i && before[0] == 1;
+            }
+            return ok;
+        }
+    }
+
+    unsafe {
+        assert_eq!(aligned_every_pass(2000), 1);
+    }
+}
+
+/// A function that jumps backwards over two declarations, many times, with
+/// the first array a different size every pass: each declaration reached
+/// again gives back what the previous pass took — and forgets the second
+/// array's old place, which is inside the first one now that it has grown.
+#[test]
+fn arrays_a_goto_declares_again_stay_apart_and_bounded() {
+    c99! {
+        long long redeclared(int passes, long (*probe)(void), long pages[2]) {
+            long long total = 0;
+            int i = 0;
+        again:;
+            int n = 10 + (i * 7) % 90;
+            int m = 20;
+            int a[n];
+            int b[m];
+            for (int j = 0; j < n; j++) {
+                a[j] = i;
+            }
+            for (int j = 0; j < m; j++) {
+                b[j] = -i;
+            }
+            for (int j = 0; j < n; j++) {
+                if (a[j] != i) {
+                    return -1;
+                }
+            }
+            total += a[n - 1] - b[19];
+            if (i == 1000) {
+                pages[0] = probe();
+            }
+            if (++i < passes) {
+                goto again;
+            }
+            pages[1] = probe();
+            return total;
+        }
+    }
+
+    let passes = 200_000;
+    let mut pages = [0; 2];
+    let total = unsafe { redeclared(passes, Some(probe_pages), pages.as_mut_ptr()) };
+    let expected: i64 = (0..i64::from(passes)).map(|i| 2 * i).sum();
+    assert_eq!(total, expected);
+    assert_bounded(pages, "arrays a goto declared again");
 }
 
 // ---------------------------------------------------------------------------

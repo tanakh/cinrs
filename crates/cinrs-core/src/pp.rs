@@ -98,7 +98,7 @@
 //! everything with external linkage a real C symbol, so that another unit can
 //! link to it; `safe` generates those functions without `unsafe`, so that
 //! `rustc` checks them (see [`crate::sema::check_safe`]); `no_std` takes the
-//! `Vec` a variable length array or `alloca` needs from `alloc` rather than
+//! `Vec`s a variable length array or `alloca` needs from `alloc` rather than
 //! from `std`; and `crate` says where the `cinrs` facade crate is, for the
 //! generated code that names the runtime. Being
 //! directives rather than attributes or macro arguments is what makes them
@@ -3228,8 +3228,8 @@ impl Pp<'_> {
             "safe" => self.safe_pragma(&rest[1..], option.range),
             "system_include" => self.system_include_pragma(&rest[1..], option.range),
             // Unit-wide and argument-less: everything with external linkage
-            // becomes a real C symbol, and the `Vec` a variable length array
-            // or `alloca` needs comes from `alloc` rather than from `std`.
+            // becomes a real C symbol, and the `Vec`s a variable length array
+            // or `alloca` needs come from `alloc` rather than from `std`.
             "export" | "no_std" => {
                 if let Some(extra) = rest.get(1) {
                     self.diags.error(

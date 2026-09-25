@@ -5,19 +5,220 @@ expression: "generate(r#\"\n        double corner(int n, int m) {\n            d
 mod __cinrs_unit_514a36ce {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    #[allow(
+        unknown_lints,
+        elided_lifetimes_in_paths,
+        missing_debug_implementations,
+        single_use_lifetimes,
+        unused_qualifications,
+        clippy::pedantic,
+        clippy::nursery
+    )]
+    struct __cinrs_vla_arena {
+        chunks: ::core::cell::UnsafeCell<
+            ::std::vec::Vec<::std::vec::Vec<::core::primitive::u128>>,
+        >,
+        cur: ::core::cell::Cell<::core::primitive::usize>,
+        top: ::core::cell::Cell<::core::primitive::usize>,
+        floor: ::core::cell::Cell<(::core::primitive::usize, ::core::primitive::usize)>,
+    }
+    #[allow(
+        unknown_lints,
+        elided_lifetimes_in_paths,
+        single_use_lifetimes,
+        unused_qualifications,
+        clippy::pedantic,
+        clippy::nursery
+    )]
+    impl __cinrs_vla_arena {
+        #[inline(always)]
+        fn new() -> Self {
+            Self {
+                chunks: ::core::cell::UnsafeCell::new(::std::vec::Vec::new()),
+                cur: ::core::cell::Cell::new(0),
+                top: ::core::cell::Cell::new(0),
+                floor: ::core::cell::Cell::new((0, 0)),
+            }
+        }
+        #[inline(always)]
+        fn mark(&self) -> (::core::primitive::usize, ::core::primitive::usize) {
+            (self.cur.get(), self.top.get())
+        }
+        #[inline(always)]
+        fn frame(&self) -> __cinrs_vla_frame<'_> {
+            __cinrs_vla_frame(self, self.mark())
+        }
+        /// Moves the position back down to `mark`, but never below
+        /// `floor` and never up.
+        #[inline(always)]
+        fn release(&self, mark: (::core::primitive::usize, ::core::primitive::usize)) {
+            let floor = self.floor.get();
+            let to = if mark > floor { mark } else { floor };
+            if to < self.mark() {
+                self.cur.set(to.0);
+                self.top.set(to.1);
+            }
+        }
+        #[inline(always)]
+        fn bytes(
+            &self,
+            bytes: ::core::primitive::usize,
+            align: ::core::primitive::usize,
+        ) -> *mut ::core::primitive::u8 {
+            unsafe {
+                let chunks = &mut *self.chunks.get();
+                let top = self.top.get();
+                if let ::core::option::Option::Some(chunk) = chunks
+                    .get_mut(self.cur.get())
+                {
+                    let base = chunk.as_mut_ptr().cast::<::core::primitive::u8>();
+                    let size = chunk.len()
+                        * ::core::mem::size_of::<::core::primitive::u128>();
+                    let start = top
+                        + (base.addr().wrapping_add(top).wrapping_neg() & (align - 1));
+                    if start <= size && bytes <= size - start {
+                        self.top.set(start + bytes);
+                        let first = base.add(start);
+                        ::core::ptr::write_bytes(first, 0, bytes);
+                        return first;
+                    }
+                }
+            }
+            self.grow(bytes, align)
+        }
+        #[cold]
+        #[inline(never)]
+        fn grow(
+            &self,
+            bytes: ::core::primitive::usize,
+            align: ::core::primitive::usize,
+        ) -> *mut ::core::primitive::u8 {
+            let need = bytes
+                .checked_add(align)
+                .expect(
+                    "a variable length array or alloca is larger than the address space",
+                );
+            {
+                let chunks = unsafe { &mut *self.chunks.get() };
+                let next = if chunks.is_empty() { 0 } else { self.cur.get() + 1 };
+                let unit = ::core::mem::size_of::<::core::primitive::u128>();
+                let fits = match chunks.get(next) {
+                    ::core::option::Option::Some(chunk) => chunk.len() * unit >= need,
+                    ::core::option::Option::None => false,
+                };
+                if !fits {
+                    let last = match chunks.last() {
+                        ::core::option::Option::Some(chunk) => chunk.len() * unit,
+                        ::core::option::Option::None => 0,
+                    };
+                    chunks.truncate(next);
+                    let size = need.max(last.saturating_mul(2)).max(4096);
+                    chunks
+                        .push(
+                            ::std::vec::from_elem(
+                                0,
+                                size
+                                    .div_ceil(::core::mem::size_of::<::core::primitive::u128>()),
+                            ),
+                        );
+                }
+                self.cur.set(next);
+                self.top.set(0);
+            }
+            self.bytes(bytes, align)
+        }
+        /// `count` zeroed elements of `T`.
+        #[inline(always)]
+        fn alloc<T>(&self, count: ::core::primitive::usize) -> *mut T {
+            self.alloc_aligned::<T>(count, 1)
+        }
+        /// `count` zeroed elements of `T`, the first at a multiple of
+        /// `align` if that is stricter than `T`'s own alignment.
+        #[inline(always)]
+        fn alloc_aligned<T>(
+            &self,
+            count: ::core::primitive::usize,
+            align: ::core::primitive::usize,
+        ) -> *mut T {
+            let bytes = count
+                .checked_mul(::core::mem::size_of::<T>())
+                .expect("a variable length array is larger than the address space");
+            let natural = ::core::mem::align_of::<T>();
+            self.bytes(bytes, if align > natural { align } else { natural }).cast::<T>()
+        }
+        /// `size` zeroed bytes, 16-byte aligned, that no frame gives
+        /// back: they live until the arena is dropped.
+        #[inline(always)]
+        fn alloca(&self, size: ::core::primitive::usize) -> *mut ::core::ffi::c_void {
+            let first = self.bytes(size, 16);
+            self.floor.set(self.mark());
+            first.cast::<::core::ffi::c_void>()
+        }
+        /// A CFG-mode variable length array's declaration reached:
+        /// gives back what its previous pass took, and everything
+        /// allocated after that, and records where this one starts.
+        #[inline]
+        fn redefine(
+            &self,
+            marks: &mut [::core::option::Option<
+                (::core::primitive::usize, ::core::primitive::usize),
+            >],
+            slot: ::core::primitive::usize,
+        ) {
+            if let ::core::option::Option::Some(mine) = marks[slot] {
+                for mark in marks.iter_mut() {
+                    if let ::core::option::Option::Some(other) = *mark {
+                        if other >= mine {
+                            *mark = ::core::option::Option::None;
+                        }
+                    }
+                }
+                self.release(mine);
+            }
+            marks[slot] = ::core::option::Option::Some(self.mark());
+        }
+    }
+    #[allow(
+        unknown_lints,
+        elided_lifetimes_in_paths,
+        missing_debug_implementations,
+        single_use_lifetimes,
+        clippy::pedantic,
+        clippy::nursery
+    )]
+    struct __cinrs_vla_frame<'a>(
+        &'a __cinrs_vla_arena,
+        (::core::primitive::usize, ::core::primitive::usize),
+    );
+    #[allow(
+        unknown_lints,
+        elided_lifetimes_in_paths,
+        single_use_lifetimes,
+        clippy::pedantic,
+        clippy::nursery
+    )]
+    impl ::core::ops::Drop for __cinrs_vla_frame<'_> {
+        #[inline(always)]
+        fn drop(&mut self) {
+            self.0.release(self.1);
+        }
+    }
     pub unsafe extern "C" fn corner(
         mut n: ::core::ffi::c_int,
         mut m: ::core::ffi::c_int,
     ) -> ::core::ffi::c_double {
         unsafe {
+            let __cinrs_vla = __cinrs_vla_arena::new();
             let mut __cinrs_vla_len_a: ::core::ffi::c_ulong = m as ::core::ffi::c_ulong;
             let mut __cinrs_vla_len1_a: ::core::ffi::c_ulong = n as ::core::ffi::c_ulong;
-            let mut __cinrs_vla_a: ::std::vec::Vec<::core::ffi::c_double> = ::std::vec::from_elem(
-                0.0,
-                __cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a)
-                    as ::core::primitive::usize,
-            );
-            let mut a: *mut ::core::ffi::c_double = __cinrs_vla_a.as_mut_ptr();
+            let __cinrs_vla_frame_a = __cinrs_vla.frame();
+            let mut a: *mut ::core::ffi::c_double = __cinrs_vla
+                .alloc::<
+                    ::core::ffi::c_double,
+                >(
+                    __cinrs_vla_len_a.wrapping_mul(__cinrs_vla_len1_a)
+                        as ::core::primitive::usize,
+                );
             let __cinrs_tmp0 = (a
                 .offset(
                     (1 as ::core::primitive::isize)
