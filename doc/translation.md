@@ -373,7 +373,15 @@ be an `i32` whatever the C said. Register clobbers follow the operands as
 
 `+`, `-`, `*` and the shifts **wrap** rather than panic: unsigned wrap-around
 is defined in C, and wrapping is the predictable choice for the signed overflow
-C leaves undefined. `/` and `%` are Rust's, which truncate towards zero and
+C leaves undefined. That makes `cinrs` `gcc -fwrapv` rather than `gcc`, and it
+is a choice with a price: a compiler that may assume signed arithmetic never
+overflows can halve `(i + j) * (i + j + 1)` with a shift and widen an `int`
+counter to 64 bits once, where this expansion keeps a signed division and a
+sign extension at every use. It shows only where such an index computation is
+the hot loop (`spectral-norm-sse2` in [Benchmarks](benchmarks.md), where
+`gcc -fwrapv` takes the same time), and a program that relies on wrap-around —
+a hash written in `int` — keeps working, which is what a translation into
+Rust should do. `/` and `%` are Rust's, which truncate towards zero and
 take the sign of the dividend, exactly as C99 says — so what C leaves undefined
 there (a zero divisor, `INT_MIN / -1`) is a Rust panic, and a panic cannot
 cross an `extern "C"` frame, so the program aborts.

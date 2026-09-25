@@ -2117,7 +2117,15 @@ fn write_interpretation(
            Those are `#[inline]` intrinsics that lower to the bare instruction, and `prng` — a \
            loop that is nothing but a multiply, an add and three shifts — and `wrapping`, which \
            does the same at every width C has, are the measurement: both land on `gcc`. If they \
-           did not, every arithmetic row in the table would be paying for it.\n\
+           did not, every arithmetic row in the table would be paying for it. *Signed* \
+           arithmetic wraps too, by choice: C leaves its overflow undefined, and `cinrs` is \
+           `gcc -fwrapv` rather than `gcc`, because a translation into Rust should do one \
+           definite thing. That has a price where an `int` index or a signed division is on \
+           the hot path, since a back end that may assume no overflow can prove \
+           `(i + j) * (i + j + 1)` non-negative and halve it with a shift, and can widen an \
+           `int` counter to 64 bits once instead of sign-extending it at every use. \
+           `spectral-norm-sse2` is that row: `gcc` and `clang` built with `-fwrapv` take the \
+           time `cinrs` takes, and nothing else in the table is affected.\n\
          * **There are no bounds checks.** A C array is a raw pointer and a subscript is \
            `.offset()`, which is plain address arithmetic with no check in it — `sieve`, \
            `matmul`, `life`, `crc32` and `binsearch` are where that shows, and none of them has \
