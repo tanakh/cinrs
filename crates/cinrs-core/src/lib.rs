@@ -375,6 +375,13 @@ pub struct Options {
     /// Macros defined and undefined on the command line, in the order given,
     /// before the first line of the unit — GCC's `-D` and `-U`.
     pub macros: Vec<CommandLineMacro>,
+    /// Instruction sets enabled for the whole unit, in GCC's spelling and
+    /// order — `avx2`, `no-avx512f` — as the command line's `-m` switches and
+    /// `-march=` enable them. Only their feature macros come from here
+    /// (`__AVX2__` and what it implies); the code is compiled for them by
+    /// whoever runs `rustc`, with `-C target-feature`. A `#pragma GCC target`
+    /// adds to them rather than replacing them, as in GCC. x86 only.
+    pub target_features: Vec<String>,
 }
 
 /// One `-D` or `-U` of a command line; see [`Options::macros`].
@@ -418,6 +425,7 @@ impl Options {
             complex: COMPLEX_SUPPORTED,
             export: false,
             macros: Vec::new(),
+            target_features: Vec::new(),
         }
     }
 
@@ -1094,6 +1102,9 @@ pub struct FileTranslation {
     pub diagnostics: Diagnostics,
     /// The unit's source map: the file itself and every header it read.
     pub map: SourceMap,
+    /// Whether the items call the runtime, `::cinrs::rt` — which they do for
+    /// the complex types, and for nothing else.
+    pub uses_runtime: bool,
 }
 
 /// Translates the C file at `path`.
@@ -1104,6 +1115,11 @@ pub struct FileTranslation {
 /// `compile_error!`, and nothing is emitted to make a Cargo build depend on
 /// the headers it read: the caller renders the diagnostics itself.
 ///
+/// Every generated token carries the line of the C it came from, in its
+/// span's `start().line` — see [`capture::capture_c_file_by_line`] — so a
+/// caller that prints the Rust line for line can make `rustc`'s positions,
+/// and a panic's, name the C.
+///
 /// # Errors
 ///
 /// A file that cannot be read, with the reason.
@@ -1112,23 +1128,24 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         include::Error::Unreadable { path, error } => format!("cannot read '{path}': {error}"),
         include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
     })?;
-    let source = capture::capture_c_file(found.name, found.text, Span::call_site());
+    let source = capture::capture_c_file_by_line(found.name, found.text);
     let Lowered {
         source,
         program,
         diagnostics,
         options,
     } = lower(analyze_source(source, options, Diagnostics::new()));
+    let mut uses_runtime = false;
     let items = (!diagnostics.has_errors()).then(|| {
-        in_module(
-            codegen::generate(&program, &source.map, &options),
-            source.unit_id(),
-        )
+        let (items, runtime) = codegen::generate_unit(&program, &source.map, &options);
+        uses_runtime = runtime;
+        in_module(items, source.unit_id())
     });
     Ok(FileTranslation {
         items,
         diagnostics,
         map: source.map,
+        uses_runtime,
     })
 }
 

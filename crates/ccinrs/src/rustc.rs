@@ -22,6 +22,9 @@ pub struct Rustc {
     pub release: String,
     /// `host:`, the triple it compiles for when not told otherwise.
     pub host: String,
+    /// `commit-hash:` — what tells two builds of one release apart, which
+    /// mangle the standard library's symbols differently.
+    pub commit: String,
 }
 
 impl Rustc {
@@ -53,6 +56,7 @@ impl Rustc {
         };
         let release = field("release:").ok_or_else(|| format!("'{shown} -vV' names no release"))?;
         let host = field("host:").ok_or_else(|| format!("'{shown} -vV' names no host"))?;
+        let commit = field("commit-hash:").unwrap_or_else(|| "unknown".to_owned());
         let version = parse_version(&release)
             .ok_or_else(|| format!("'{shown}' reports a release ccinrs cannot read: {release}"))?;
         if version < MINIMUM {
@@ -65,12 +69,28 @@ impl Rustc {
             program,
             release,
             host,
+            commit,
         })
     }
 
     /// A command running this `rustc`.
     pub fn command(&self) -> Command {
         Command::new(&self.program)
+    }
+
+    /// Whether the standard library for `triple` is installed, which is what
+    /// compiling for it needs: `rustc --print target-libdir` names the
+    /// directory whether or not it is there, so it is looked at.
+    pub fn has_target(&self, triple: &str) -> bool {
+        let Ok(output) = self
+            .command()
+            .args(["--print", "target-libdir", "--target", triple])
+            .output()
+        else {
+            return false;
+        };
+        let dir = String::from_utf8_lossy(&output.stdout);
+        output.status.success() && std::path::Path::new(dir.trim()).is_dir()
     }
 }
 

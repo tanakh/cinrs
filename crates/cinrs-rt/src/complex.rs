@@ -74,7 +74,9 @@
 //! arithmetic implementation-defined (Annex G.6), so this is a quality gap and
 //! not a conformance one; `doc/gcc-torture.md` records it.
 
-use crate::Complex;
+// `super`, not `crate`: `ccinrs` compiles this file's text as a module of a
+// crate of its own, beside a `Complex` of its own.
+use super::Complex;
 
 /// Generates the whole module for one floating format.
 ///

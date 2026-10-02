@@ -30,10 +30,11 @@ impl Scratch {
         std::fs::write(path, text).expect("the file");
     }
 
-    /// Runs `ccinrs` in the directory.
+    /// Runs `ccinrs` in the directory, with a runtime cache of the tests' own.
     fn ccinrs(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_ccinrs"))
             .args(args)
+            .env("CCINRS_CACHE_DIR", cache_dir())
             .current_dir(&self.dir)
             .output()
             .expect("ccinrs runs")
@@ -58,6 +59,11 @@ impl Scratch {
             .output()
             .expect("the program runs")
     }
+}
+
+/// Where the tests' `ccinrs` keeps the runtime it compiles.
+fn cache_dir() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("ccinrs-cache")
 }
 
 fn stdout(out: &Output) -> String {
@@ -122,6 +128,74 @@ int main(void) {
     );
     s.compile(&["counter.c", "main.c", "-o", "units"]);
     assert_eq!(stdout(&s.run("units", &[])), "12 22 22 1001\n");
+}
+
+/// `-c` makes one object per file, named as GCC names it, and a later run
+/// links them; an object from another `rustc` is refused by name.
+#[test]
+fn separate_compilation() {
+    let s = Scratch::new("separate");
+    s.write("lib.c", "int twice(int x) { return 2 * x; }\n");
+    s.write(
+        "main.c",
+        "#include <stdio.h>\nint twice(int);\nint main(void) { printf(\"%d\\n\", twice(21)); return 0; }\n",
+    );
+    s.compile(&["-O2", "-c", "lib.c"]);
+    s.compile(&["-c", "main.c", "-o", "m.o"]);
+    assert!(s.dir.join("lib.o").is_file() && s.dir.join("m.o").is_file());
+    s.compile(&["lib.o", "m.o", "-o", "prog"]);
+    assert_eq!(stdout(&s.run("prog", &[])), "42\n");
+
+    let out = s.ccinrs(&["-c", "lib.c", "main.c", "-o", "both.o"]);
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: cannot specify '-o' with '-c' and more than one C file\n"
+    );
+
+    // What a `.o` from another build of rustc carries.
+    std::fs::write(
+        s.dir.join("old.o"),
+        b"\x7fELF...ccinrs object: rustc 1.99.0 (0123456789) for x86_64-unknown-linux-gnu\0...",
+    )
+    .expect("the file");
+    let out = s.ccinrs(&["m.o", "old.o", "-o", "prog"]);
+    assert!(
+        stderr(&out).starts_with(
+            "ccinrs: error: old.o was compiled by ccinrs with rustc 1.99.0 (0123456789) for \
+             x86_64-unknown-linux-gnu, and this link uses rustc "
+        ),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// `-S` writes the Rust a C file becomes — `<stem>.rs`, or standard output
+/// for `-o -` — which `rustc` alone builds into the same program.
+#[test]
+fn the_rust_a_file_becomes() {
+    let s = Scratch::new("emit-rust");
+    s.write(
+        "hello.c",
+        "#include <stdio.h>\nstatic int twice(int x) { return 2 * x; }\nint main(void) { printf(\"%d\\n\", twice(21)); return 0; }\n",
+    );
+    s.compile(&["-S", "hello.c"]);
+    let rust = std::fs::read_to_string(s.dir.join("hello.rs")).expect("hello.rs");
+    assert!(rust.starts_with("//! Translated by ccinrs "), "{rust}");
+    assert!(
+        rust.contains("fn twice(mut x: ::core::ffi::c_int)"),
+        "{rust}"
+    );
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let out = Command::new(rustc)
+        .args(["--edition", "2024", "hello.rs", "-o", "hello"])
+        .current_dir(&s.dir)
+        .output()
+        .expect("rustc runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&s.run("hello", &[])), "42\n");
+
+    let out = s.ccinrs(&["-S", "hello.c", "-o", "-"]);
+    assert_eq!(stdout(&out), rust);
 }
 
 #[test]
@@ -224,10 +298,56 @@ int main(int argc, char **argv) {
         "{}",
         stderr(&out)
     );
+    // Where it happened is a line of the C: the generated Rust keeps the C's
+    // lines, and `rustc` is told to call it by the C file's name. (The column
+    // is the Rust's, which is longer than the C.)
+    assert!(
+        stderr(&out).contains("panicked at align.c:7:"),
+        "{}",
+        stderr(&out)
+    );
     s.compile(&["-O2", "-fno-cinrs-checks", "align.c", "-o", "unchecked"]);
     let out = s.run("unchecked", &[]);
     assert!(out.status.success());
     assert_eq!(stdout(&out), "16843009\n");
+}
+
+/// A function with a `goto` is generated as a graph, whose locals are all
+/// declared at its top — and a panic in it still names its own C line.
+#[test]
+fn a_panic_names_its_line_in_a_function_with_goto() {
+    let s = Scratch::new("goto");
+    s.write(
+        "goto.c",
+        r#"#include <stdio.h>
+int average(int n, int count) {
+    int total = 0;
+    if (n < 0)
+        goto fail;
+    for (int i = 0; i < n; i++) {
+        int step = i * 2;
+        total += step;
+    }
+    int mean = total / count;
+    return mean;
+fail:
+    return -1;
+}
+int main(int argc, char **argv) {
+    (void)argv;
+    printf("%d\n", average(4, argc - 1));
+    return 0;
+}
+"#,
+    );
+    s.compile(&["goto.c", "-o", "goto"]);
+    assert_eq!(stdout(&s.run("goto", &["x"])), "12\n");
+    let out = s.run("goto", &[]);
+    assert!(
+        stderr(&out).contains("panicked at goto.c:10:"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// A file that is not UTF-8 compiles, and the bytes of a string literal come
@@ -305,4 +425,217 @@ fn the_command_line_is_checked() {
         stderr(&out),
         "ccinrs: error: x.cpp: ccinrs compiles C, not this language\n"
     );
+    let out = s.ccinrs(&["--target=foo-bar", "x.c"]);
+    assert!(
+        stderr(&out).starts_with("ccinrs: error: unknown architecture 'foo'"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// The complex types call the runtime, which `ccinrs` compiles the first time
+/// and keeps: Annex G's product, an object made by `-c` that needs it, and
+/// `-S`, whose file carries the runtime itself.
+#[test]
+fn the_complex_types_bring_the_runtime() {
+    let s = Scratch::new("complex");
+    s.write(
+        "main.c",
+        "#include <complex.h>\n#include <math.h>\n#include <stdio.h>\ndouble _Complex rotate(double _Complex z);\nint main(void) {\n    double _Complex z = 1.0 + 2.0 * I, w = 3.0 - 4.0 * I;\n    double _Complex p = z * w, q = z / w, r = (INFINITY + 0.0 * I) * w;\n    float _Complex f = (1.5f + 0.5f * I) * (1.5f + 0.5f * I);\n    double _Complex t = rotate(z) + z - -z;\n    printf(\"%g%+gi %g%+gi %g%+gi %g%+gi %g%+gi\\n\", creal(p), cimag(p), creal(q), cimag(q),\n           creal(r), cimag(r), crealf(f), cimagf(f), creal(t), cimag(t));\n    return 0;\n}\n",
+    );
+    s.write(
+        "rotate.c",
+        "double _Complex rotate(double _Complex z) { return z * __builtin_complex(0.0, 1.0); }\n",
+    );
+    let expected = "11+2i -0.2+0.4i inf-infi 2+1.5i 0+5i\n";
+    s.compile(&["main.c", "rotate.c", "-o", "together"]);
+    assert_eq!(stdout(&s.run("together", &[])), expected);
+    s.compile(&["-c", "rotate.c"]);
+    s.compile(&["main.c", "rotate.o", "-o", "apart"]);
+    assert_eq!(stdout(&s.run("apart", &[])), expected);
+    s.compile(&["-S", "rotate.c"]);
+    let rust = std::fs::read_to_string(s.dir.join("rotate.rs")).expect("the .rs");
+    assert!(rust.contains("extern crate self as cinrs;"), "{rust}");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let out = Command::new(rustc)
+        .args(["--edition", "2024", "--crate-type", "lib", "rotate.rs"])
+        .current_dir(&s.dir)
+        .output()
+        .expect("rustc runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+}
+
+/// `-march=` and the `-m` switches reach `rustc` as `target-cpu` and
+/// `target-feature`, and the preprocessor as GCC's feature macros.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn the_instruction_sets_are_the_command_lines() {
+    let s = Scratch::new("march");
+    s.write(
+        "f.c",
+        "#include <stdio.h>\n#include <immintrin.h>\nint main(void) {\n#ifdef __AVX2__\n    int out[8];\n    _mm256_storeu_si256((__m256i *)out, _mm256_add_epi32(_mm256_set1_epi32(3), _mm256_set1_epi32(4)));\n    printf(\"avx2 %d\\n\", out[5]);\n#endif\n#ifdef __FMA__\n    puts(\"fma\");\n#endif\n#ifdef __SSE4_2__\n    puts(\"sse4.2\");\n#endif\n    puts(\"done\");\n    return 0;\n}\n",
+    );
+    s.compile(&["f.c", "-o", "plain"]);
+    assert_eq!(stdout(&s.run("plain", &[])), "done\n");
+    s.compile(&["-march=x86-64-v2", "f.c", "-o", "v2"]);
+    s.compile(&["-mavx2", "f.c", "-o", "avx2"]);
+    s.compile(&["-march=haswell", "f.c", "-o", "haswell"]);
+    s.compile(&["-march=haswell", "-mno-avx2", "f.c", "-o", "not"]);
+    // The programs run only where the processor has what they were built for.
+    if std::arch::is_x86_feature_detected!("sse4.2") {
+        assert_eq!(stdout(&s.run("v2", &[])), "sse4.2\ndone\n");
+    }
+    if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma") {
+        assert_eq!(stdout(&s.run("avx2", &[])), "avx2 7\nsse4.2\ndone\n");
+        assert_eq!(
+            stdout(&s.run("haswell", &[])),
+            "avx2 7\nfma\nsse4.2\ndone\n"
+        );
+        assert_eq!(stdout(&s.run("not", &[])), "fma\nsse4.2\ndone\n");
+    }
+    let out = s.ccinrs(&["-march=frobnicator", "f.c"]);
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: '-march=frobnicator': rustc does not know that processor; \
+         `rustc --print target-cpus` lists those it does\n"
+    );
+    let out = s.ccinrs(&["-mfrobnicate", "f.c"]);
+    assert!(
+        stderr(&out).starts_with("ccinrs: error: '-mfrobnicate' is not supported"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WebAssembly
+// ---------------------------------------------------------------------------
+
+/// A `wasmtime` to run `target`'s programs with, or `None` — with the reason
+/// printed — when there is none or the target's standard library is not
+/// installed, in which case the test passes without running anything.
+/// `WASMTIME` names one; otherwise `PATH`, then `~/.wasmtime/bin`, where its
+/// installer puts it.
+fn wasmtime_for(target: &str) -> Option<PathBuf> {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let libdir = Command::new(rustc)
+        .args(["--print", "target-libdir", "--target", target])
+        .output()
+        .ok()?;
+    if !Path::new(String::from_utf8_lossy(&libdir.stdout).trim()).is_dir() {
+        eprintln!("skipped: the {target} standard library is not installed");
+        return None;
+    }
+    let found = std::env::var_os("WASMTIME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|dir| dir.join("wasmtime"))
+                .find(|path| path.is_file())
+        })
+        .or_else(|| {
+            let path = Path::new(&std::env::var_os("HOME")?).join(".wasmtime/bin/wasmtime");
+            path.is_file().then_some(path)
+        });
+    if found.is_none() {
+        eprintln!("skipped: no wasmtime to run {target} programs with");
+    }
+    found
+}
+
+const WASI_PROGRAM: &str = r#"#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+int twice(int x);
+int main(int argc, char **argv) {
+    char *p = malloc(16);
+    strcpy(p, argc > 1 ? argv[1] : "nobody");
+    errno = 0;
+    FILE *f = fopen("/nowhere", "r");
+    printf("hello %s %d; ENOENT=%d errno=%d %s; time_t %zu bytes\n", p, twice(21), ENOENT,
+           errno, f ? "opened" : strerror(errno), sizeof(time_t));
+    free(p);
+    return 3;
+}
+"#;
+
+/// The C library is wasi-libc, which Rust ships with the target: `printf`,
+/// `malloc`, `errno` at WASI's own numbers, a 64-bit `time_t`, two units, and
+/// `main` with its arguments and its exit status. The second unit doubles
+/// through the complex types, so the runtime is compiled for the target too.
+#[test]
+fn a_program_for_wasm32_wasip1() {
+    let Some(wasmtime) = wasmtime_for("wasm32-wasip1") else {
+        return;
+    };
+    let s = Scratch::new("wasip1");
+    s.write("main.c", WASI_PROGRAM);
+    s.write(
+        "twice.c",
+        "#include <complex.h>\nint twice(int x) { return creal(x * (1.0 + I) * (1.0 - I)); }\n",
+    );
+    s.compile(&[
+        "--target=wasm32-wasip1",
+        "-O2",
+        "main.c",
+        "twice.c",
+        "-o",
+        "prog.wasm",
+    ]);
+    let out = run_wasm(&wasmtime, &s);
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+}
+
+/// Runs `prog.wasm` with one argument, asserting what [`WASI_PROGRAM`]
+/// prints.
+#[track_caller]
+fn run_wasm(wasmtime: &Path, s: &Scratch) -> Output {
+    // wasmtime reserves four gigabytes of address space per linear memory by
+    // default, which the address-space ceiling every test here runs under
+    // (see scripts/ci.sh) refuses; these programs need a few megabytes.
+    let out = Command::new(wasmtime)
+        .args([
+            "run",
+            "-O",
+            "memory-reservation=0",
+            "-O",
+            "memory-guard-size=0",
+            "prog.wasm",
+            "wasi",
+        ])
+        .current_dir(&s.dir)
+        .output()
+        .expect("wasmtime runs");
+    assert_eq!(
+        stdout(&out),
+        "hello wasi 42; ENOENT=44 errno=44 No such file or directory; time_t 8 bytes\n",
+        "{}",
+        stderr(&out)
+    );
+    out
+}
+
+/// The same for WASI 0.2, whose programs are components. The exit status is
+/// only success or failure there: wasi-libc ends a run with `wasi:cli/exit`,
+/// whose status-code form is still unstable.
+#[test]
+fn a_program_for_wasm32_wasip2() {
+    let Some(wasmtime) = wasmtime_for("wasm32-wasip2") else {
+        return;
+    };
+    let s = Scratch::new("wasip2");
+    s.write("main.c", WASI_PROGRAM);
+    s.write("twice.c", "int twice(int x) { return 2 * x; }\n");
+    s.compile(&[
+        "--target",
+        "wasm32-wasip2",
+        "main.c",
+        "twice.c",
+        "-o",
+        "prog.wasm",
+    ]);
+    let out = run_wasm(&wasmtime, &s);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
 }

@@ -120,7 +120,11 @@ name = "ccinrs"
 version = "0.2.0"
 dependencies = [
  "cinrs-core",
+ "cinrs-rt",
+ "prettyplease",
  "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

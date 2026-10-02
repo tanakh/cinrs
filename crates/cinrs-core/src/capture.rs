@@ -88,6 +88,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::str::FromStr;
 
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::locate;
@@ -528,6 +529,11 @@ impl SourceFile {
 pub struct SourceMap {
     files: Vec<SourceFile>,
     next_base: Pos,
+    /// Whether the unit was captured by [`capture_c_file_by_line`], for a
+    /// caller that prints the code on the C's lines: a header's positions
+    /// then resolve to no line at all rather than to the `#include` that read
+    /// it.
+    by_line: bool,
 }
 
 impl Default for SourceMap {
@@ -542,7 +548,14 @@ impl SourceMap {
         Self {
             files: Vec::new(),
             next_base: 0,
+            by_line: false,
         }
+    }
+
+    /// Whether the code is to be printed on the C's lines; see
+    /// [`capture_c_file_by_line`].
+    pub fn by_line(&self) -> bool {
+        self.by_line
     }
 
     /// Adds a file whose positions cannot be resolved better than
@@ -610,11 +623,16 @@ impl SourceMap {
         text: String,
         directive_span: Span,
     ) -> FileId {
+        let fallback_span = if self.by_line {
+            Span::call_site()
+        } else {
+            directive_span
+        };
         self.add_file(FileSpec {
             name: name.into(),
             text,
             anchors: Vec::new(),
-            fallback_span: directive_span,
+            fallback_span,
             precise: false,
             mode: InputMode::Included,
             rust_path: None,
@@ -1035,13 +1053,55 @@ pub fn invocation_directory(
 /// machines — and is also what `__FILE__` expands to and what the file's own
 /// `#include "…"` searches beside.
 pub fn capture_c_file(name: String, text: String, span: Span) -> Source {
+    c_file_source(name, text, span, Vec::new())
+}
+
+/// [`capture_c_file`] for a C compiler rather than a macro: every line of the
+/// file anchored to a span on the same line, and at the same indentation, of a
+/// synthetic source made for the purpose.
+///
+/// Outside a procedural macro there is no `.rs` file to point into, but a
+/// span still carries a line and a column. So each token generated from a
+/// line of the C carries that line's number, and a printer that lays the
+/// generated Rust out by them (`ccinrs` does) puts the Rust for C line 12 on
+/// line 12 of the `.rs` — and what `rustc` reports about that `.rs`, a panic's
+/// location included, names the C line.
+///
+/// What a header generates names no line at all — not the line of the
+/// `#include`, which would pile every declaration `<stdio.h>` makes onto it —
+/// so that a printer can put it where it does not displace the file's own
+/// lines.
+pub fn capture_c_file_by_line(name: String, text: String) -> Source {
+    let mut synthetic = String::new();
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for line in text.split_inclusive('\n') {
+        let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+        synthetic.extend(std::iter::repeat_n(' ', indent));
+        synthetic.push_str("_\n");
+        lines.push((start, start + line.len()));
+        start += line.len();
+    }
+    let tokens = TokenStream::from_str(&synthetic).expect("a line of `_`s lexes");
+    let anchors = lines
+        .into_iter()
+        .zip(tokens)
+        .map(|((start, end), token)| (start as u32, end as u32, token.span()))
+        .collect();
+    let mut source = c_file_source(name, text, Span::call_site(), anchors);
+    source.map.by_line = true;
+    source
+}
+
+/// The [`Source`] of a `.c` file: the map's root, named by its path.
+fn c_file_source(name: String, text: String, span: Span, anchors: AnchorList) -> Source {
     let mut map = SourceMap::new();
     let unit_id = unit_id_of(rust_path_of(span).as_deref(), span.start(), &text);
     let root = map.add_file(FileSpec {
         rust_path: Some(name.clone()),
         name,
         text,
-        anchors: Vec::new(),
+        anchors,
         fallback_span: span,
         precise: false,
         precise_spans: None,

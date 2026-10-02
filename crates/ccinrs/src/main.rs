@@ -8,6 +8,8 @@
 mod args;
 mod diag;
 mod driver;
+mod print;
+mod runtime;
 mod rustc;
 
 use std::process::ExitCode;

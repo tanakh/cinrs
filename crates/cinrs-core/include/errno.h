@@ -11,7 +11,9 @@
  * ABI facts and are taken from the real headers: Linux's from the kernel's
  * `asm-generic/errno{,-base}.h`, which glibc and musl both use unchanged;
  * Apple's from xnu's `bsd/sys/errno.h`; Windows' from the Universal CRT's own
- * `<errno.h>`.
+ * `<errno.h>`; WASI's from its own `errno` enumeration, which wasi-libc uses
+ * as it stands — numbered alphabetically, so that `EDOM` is 18 and `ERANGE`
+ * 68 there.
  *
  * `_WIN32` and `__APPLE__` here are the *target's*, predefined from the model
  * cinrs was told to translate for — `CINRS_TARGET`, `#pragma cinrs target`, or
@@ -52,12 +54,15 @@ int *__errno_location(void);
 #endif
 #endif
 
-/* The three ISO C requires, which happen to agree on every platform here. */
+/* Two of the three ISO C requires, which happen to agree on every platform
+ * here but WASI, whose numbering is its own; see its branch below. */
+#if !defined(__wasi__)
 #ifndef EDOM
 #define EDOM 33
 #endif
 #ifndef ERANGE
 #define ERANGE 34
+#endif
 #endif
 
 #if defined(_WIN32)
@@ -240,6 +245,92 @@ int *__errno_location(void);
 #define EOPNOTSUPP 102
 #define ENOTRECOVERABLE 104
 #define EOWNERDEAD 105
+
+#elif defined(__wasi__)
+/* ---------------------------------------------------------------------------
+ * WASI (wasi-libc): the `errno` enumeration of WASI itself, which numbers the
+ * POSIX names alphabetically from `E2BIG` 1 to `ENOTCAPABLE` 76 — a capability
+ * the sandbox withheld, WASI's own addition. `EOPNOTSUPP` and `EWOULDBLOCK`
+ * are aliases, as wasi-libc writes them.
+ * ------------------------------------------------------------------------- */
+#define E2BIG 1
+#define EACCES 2
+#define EADDRINUSE 3
+#define EADDRNOTAVAIL 4
+#define EAFNOSUPPORT 5
+#define EAGAIN 6
+#define EALREADY 7
+#define EBADF 8
+#define EBADMSG 9
+#define EBUSY 10
+#define ECANCELED 11
+#define ECHILD 12
+#define ECONNABORTED 13
+#define ECONNREFUSED 14
+#define ECONNRESET 15
+#define EDEADLK 16
+#define EDESTADDRREQ 17
+#define EDOM 18
+#define EDQUOT 19
+#define EEXIST 20
+#define EFAULT 21
+#define EFBIG 22
+#define EHOSTUNREACH 23
+#define EIDRM 24
+#define EILSEQ 25
+#define EINPROGRESS 26
+#define EINTR 27
+#define EINVAL 28
+#define EIO 29
+#define EISCONN 30
+#define EISDIR 31
+#define ELOOP 32
+#define EMFILE 33
+#define EMLINK 34
+#define EMSGSIZE 35
+#define EMULTIHOP 36
+#define ENAMETOOLONG 37
+#define ENETDOWN 38
+#define ENETRESET 39
+#define ENETUNREACH 40
+#define ENFILE 41
+#define ENOBUFS 42
+#define ENODEV 43
+#define ENOENT 44
+#define ENOEXEC 45
+#define ENOLCK 46
+#define ENOLINK 47
+#define ENOMEM 48
+#define ENOMSG 49
+#define ENOPROTOOPT 50
+#define ENOSPC 51
+#define ENOSYS 52
+#define ENOTCONN 53
+#define ENOTDIR 54
+#define ENOTEMPTY 55
+#define ENOTRECOVERABLE 56
+#define ENOTSOCK 57
+#define ENOTSUP 58
+#define ENOTTY 59
+#define ENXIO 60
+#define EOVERFLOW 61
+#define EOWNERDEAD 62
+#define EPERM 63
+#define EPIPE 64
+#define EPROTO 65
+#define EPROTONOSUPPORT 66
+#define EPROTOTYPE 67
+#define ERANGE 68
+#define EROFS 69
+#define ESPIPE 70
+#define ESRCH 71
+#define ESTALE 72
+#define ETIMEDOUT 73
+#define ETXTBSY 74
+#define EXDEV 75
+#define ENOTCAPABLE 76
+#define EOPNOTSUPP ENOTSUP
+#define EWOULDBLOCK EAGAIN
 
 #elif defined(__mips__) || defined(__mips)
 /* ---------------------------------------------------------------------------

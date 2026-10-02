@@ -27,6 +27,9 @@ pub enum Stage {
     Link,
     /// `-c`: one object file per C file, and no link.
     Compile,
+    /// `-S`: one `.rs` file per C file — Rust being what `ccinrs` compiles C
+    /// to, as assembly is what GCC does.
+    Rust,
 }
 
 /// One file named on the command line.
@@ -79,6 +82,18 @@ pub struct Invocation {
     pub char_signed: Option<bool>,
     /// The pointer width `-m32` or `-m64` asked for, checked the same way.
     pub pointer_bits: Option<u32>,
+    /// `--target=<triple>`, Clang's spelling: what to compile for, when it is
+    /// not the machine `rustc` runs on.
+    pub target: Option<String>,
+    /// `--sysroot=<dir>`: where the target's own headers are, as
+    /// `<dir>/include` and `<dir>/usr/include`.
+    pub sysroot: Option<PathBuf>,
+    /// `-march=` (or `-mcpu=`): the processor to compile for, which is
+    /// `rustc`'s `-C target-cpu` — `native` included.
+    pub cpu: Option<String>,
+    /// `-mavx2`, `-mno-avx512f` and the like, in order, in GCC's spelling
+    /// (`avx2`, `no-avx512f`).
+    pub features: Vec<String>,
     /// `-L`, in order.
     pub lib_dirs: Vec<PathBuf>,
     /// `-l`, in order (and `pthread` for `-pthread`).
@@ -113,6 +128,10 @@ impl Default for Invocation {
             dollars: true,
             char_signed: None,
             pointer_bits: None,
+            target: None,
+            sysroot: None,
+            cpu: None,
+            features: Vec::new(),
             lib_dirs: Vec::new(),
             libs: Vec::new(),
             linker_args: Vec::new(),
@@ -128,7 +147,6 @@ impl Default for Invocation {
 /// that says so rather than "unknown option".
 const NOT_YET: &[&str] = &[
     "-E",
-    "-S",
     "-M",
     "-MM",
     "-MD",
@@ -363,6 +381,29 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             inv.output = Some(PathBuf::from(path));
             continue;
         }
+        // `--target=T` or `--target T`, Clang's older `-target T`, and
+        // `--sysroot` the same way.
+        let mut long = None;
+        for name in ["--target", "-target", "--sysroot"] {
+            if let Some(v) = value(name)? {
+                long = Some((
+                    name,
+                    v.strip_prefix('=').map_or_else(|| v.clone(), str::to_owned),
+                ));
+                break;
+            }
+        }
+        match long {
+            Some(("--sysroot", dir)) => {
+                inv.sysroot = Some(PathBuf::from(dir));
+                continue;
+            }
+            Some((_, triple)) => {
+                inv.target = Some(triple);
+                continue;
+            }
+            None => {}
+        }
         if let Some(lang) = value("-x")? {
             force_c = match lang.as_str() {
                 "c" => true,
@@ -409,6 +450,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
         }
         match arg.as_str() {
             "-c" => inv.stage = Stage::Compile,
+            "-S" => inv.stage = Stage::Rust,
             "-w" => inv.warnings = false,
             "-v" => inv.verbose = true,
             "-s" => inv.strip = true,
@@ -454,9 +496,30 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
                 }
             }
             _ if arg.starts_with("-f") => flag(&mut inv, &arg)?,
-            _ if arg.starts_with("-mtune=") => {}
+            // Tuning changes no meaning, and SSE arithmetic is what x86-64
+            // does anyway.
+            _ if arg.starts_with("-mtune=") || arg == "-mfpmath=sse" => {}
+            _ if arg.starts_with("-march=") || arg.starts_with("-mcpu=") => {
+                let (_, cpu) = arg.split_once('=').expect("the prefix has one");
+                inv.cpu = Some(cpu.to_owned());
+            }
             _ if arg.starts_with("-m") => {
-                return Err(format!("'{arg}' is not supported yet"));
+                let name = &arg[2..];
+                let set = name.strip_prefix("no-").unwrap_or(name);
+                if let Some(why) = cinrs_core::x86::unsupported_feature(set) {
+                    // `-mno-mmx` asks for what ccinrs does anyway.
+                    if name.starts_with("no-") {
+                        continue;
+                    }
+                    return Err(format!("'{arg}' is not supported: {why}"));
+                }
+                if cinrs_core::x86::feature_row(set).is_none() {
+                    return Err(format!(
+                        "'{arg}' is not supported: ccinrs takes -march=, -mcpu= and the \
+                         instruction-set switches (-mavx2, -mno-avx512f, …)"
+                    ));
+                }
+                inv.features.push(name.to_owned());
             }
             _ if arg.starts_with('-') => {
                 return Err(format!("unrecognized command-line option '{arg}'"));
@@ -567,6 +630,26 @@ mod tests {
         assert_eq!(inv.opt_level, "0");
         assert!(inv.checks && inv.system_include && inv.warnings);
         assert_eq!(inv.stage, Stage::Link);
+    }
+
+    #[test]
+    fn processors_and_instruction_sets() {
+        let inv = parse_all(&[
+            "-march=haswell",
+            "-mtune=generic",
+            "-mno-avx2",
+            "-msse4_1",
+            "-mno-mmx",
+            "a.c",
+        ])
+        .unwrap();
+        assert_eq!(inv.cpu.as_deref(), Some("haswell"));
+        assert_eq!(inv.features, ["no-avx2", "sse4_1"]);
+        let error = parse_all(&["-mmmx", "a.c"]).unwrap_err();
+        assert!(
+            error.starts_with("'-mmmx' is not supported: Rust's core::arch has no MMX"),
+            "{error}"
+        );
     }
 
     #[test]

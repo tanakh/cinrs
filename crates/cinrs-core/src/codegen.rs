@@ -189,6 +189,12 @@ use crate::reloop;
 
 /// Generates the Rust items for a fully checked program.
 pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenStream {
+    generate_unit(program, map, options).0
+}
+
+/// [`generate`], and whether the items call the runtime — the `rt` module of
+/// the crate path, which the complex types and nothing else need.
+pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> (TokenStream, bool) {
     let mut cg = Codegen::new(program, map, options);
     let mut out = cg.type_items();
     out.extend(cg.extern_block());
@@ -211,7 +217,7 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     if out.is_empty() {
         // A unit that declares nothing expands to nothing at all — not even a
         // module — and there is no code for the data model to be wrong about.
-        return out;
+        return (out, false);
     }
     let mut items = cg.data_model_check();
     if cg.uses_cleanup.get() {
@@ -226,7 +232,7 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     // so this has to come after them.
     items.extend(cg.intrinsic_shim_items());
     items.extend(out);
-    items
+    (items, cg.uses_complex.get())
 }
 
 /// Generates signature-only items for a program that did not type check.
@@ -1248,6 +1254,23 @@ impl<'a> Codegen<'a> {
             }
             _ => false,
         }
+    }
+
+    /// The symbol an exported definition takes: its C name — except C's
+    /// `main` on WebAssembly, which takes the name clang gives it there and
+    /// the C library's start-up code calls: `__main_argc_argv` when it has
+    /// parameters, `__main_void` when it has none. wasi-libc's `_start` calls
+    /// `__main_void`, whose own fallback reads the arguments and calls
+    /// `__main_argc_argv`, so either shape is reached and nothing else is.
+    fn entry_symbol<'f>(&self, func: &'f Function) -> &'f str {
+        if func.name == "main" && self.options.target.arch == crate::Arch::Wasm32 {
+            return if func.sig.params.is_empty() {
+                "__main_void"
+            } else {
+                "__main_argc_argv"
+            };
+        }
+        &func.name
     }
 
     fn sp(&self, range: SourceRange) -> Span {
@@ -2550,7 +2573,10 @@ impl<'a> Codegen<'a> {
             quote_spanned! {span=> pub }
         };
         let export = if exported {
-            let symbol = func.asm_label.as_deref().unwrap_or(&func.name);
+            let symbol = func
+                .asm_label
+                .as_deref()
+                .unwrap_or_else(|| self.entry_symbol(func));
             export_attr(symbol, &name, span)
         } else {
             TokenStream::new()
@@ -3314,7 +3340,7 @@ impl<'a> Codegen<'a> {
     /// — and then either the structured shapes [the relooper](crate::reloop)
     /// recovered, or, for a graph it gave up on, the state machine.
     fn cfg_body(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
-        let mut out = self.cfg_locals(cfg);
+        let mut out = self.cfg_locals(cfg, span);
         match &cfg.shape {
             Some(plan) => {
                 out.extend(self.shape_seq(cfg, &plan.body, &reloop::Exit::nowhere(), span))
@@ -3325,13 +3351,20 @@ impl<'a> Codegen<'a> {
     }
 
     /// The `let` bindings every local of a graph-lowered function gets.
-    fn cfg_locals(&mut self, cfg: &Cfg) -> TokenStream {
+    ///
+    /// They carry the span of the function, `span`, and not each one that of
+    /// its own declaration: they are made at the function's start, and a
+    /// declaration's span would put a binding of the function's last line
+    /// ahead of everything else — where it moves every line after it down
+    /// in a caller that prints the code on the C's lines (`ccinrs`, whose
+    /// panics name those lines).
+    fn cfg_locals(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
         let mut out = TokenStream::new();
         let mut slots = 0;
         let mut slots_span = None;
         for local in &cfg.locals {
             let object = self.program.object(local.object);
-            let ospan = self.sp(object.range);
+            let ospan = span;
             // The hidden frame of a variable length array is a slot of one
             // array of arena marks, which starts out empty; the declaration
             // fills it where it was written, first giving back whatever a
@@ -3407,15 +3440,21 @@ impl<'a> Codegen<'a> {
     /// Where a block's tokens are attributed to: the first thing in it that
     /// came from the C source.
     fn block_span(&self, block: &BasicBlock, fallback: Span) -> Span {
+        self.block_range(block)
+            .map_or(fallback, |range| self.sp(range))
+    }
+
+    /// The first range in a block that came from the C source.
+    fn block_range(&self, block: &BasicBlock) -> Option<SourceRange> {
         if let Some(range) = block.stmts.iter().find_map(|s| self.stmt_range(s)) {
-            return self.sp(range);
+            return Some(range);
         }
         match &block.term {
             Terminator::Jump { range, .. }
             | Terminator::Switch { range, .. }
-            | Terminator::Return { range, .. } => self.sp(*range),
-            Terminator::Branch { cond, .. } => self.sp(cond.range),
-            Terminator::Unreachable | Terminator::InvalidTarget => fallback,
+            | Terminator::Return { range, .. } => Some(*range),
+            Terminator::Branch { cond, .. } => Some(cond.range),
+            Terminator::Unreachable | Terminator::InvalidTarget => None,
         }
     }
 
@@ -3765,6 +3804,23 @@ impl<'a> Codegen<'a> {
             // with nothing in it.
             let test = self.condition(cond).at(prec::UNARY, span);
             return quote_spanned! {span=> if !#test { #else_tokens } };
+        }
+        // `if (failed) goto out;` branches to code written further down. For
+        // a caller that prints the code on the C's lines, the arms come in the
+        // order the C wrote them — the test inverted when that is the other
+        // way round — since an arm printed first that was written later
+        // pushes every line after it down. Otherwise the early exit stays
+        // first, which reads better.
+        let start = |block: BlockId| {
+            self.block_range(&cfg.blocks[block.index()])
+                .map(|range| range.start)
+        };
+        if self.map.by_line()
+            && let (Some(then_at), Some(else_at)) = (start(then_blk), start(else_blk))
+            && else_at < then_at
+        {
+            let test = self.condition(cond).at(prec::UNARY, span);
+            return quote_spanned! {span=> if !#test { #else_tokens } else { #then_tokens } };
         }
         let test = self.condition(cond).at_condition(span);
         quote_spanned! {span=> if #test { #then_tokens } else { #else_tokens } }

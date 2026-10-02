@@ -1333,6 +1333,10 @@ struct Pp<'a> {
     /// The instruction sets `#pragma GCC target` is currently asking for, in
     /// GCC's spelling and with the range of the directive that named each.
     target_features: Vec<(String, SourceRange)>,
+    /// The instruction sets the command line enabled for the whole unit —
+    /// `-mavx2`, `-march=` — which every set the pragma asks for adds to;
+    /// see [`Options::target_features`].
+    command_line_features: Vec<String>,
     /// What `#pragma GCC push_options` saved.
     target_stack: Vec<Vec<(String, SourceRange)>>,
     /// Every change of that list, by the index in `out` it takes effect at.
@@ -1426,6 +1430,7 @@ impl<'a> Pp<'a> {
             pack_stack: Vec::new(),
             pack_events: Vec::new(),
             target_features: Vec::new(),
+            command_line_features: options.target_features.clone(),
             target_stack: Vec::new(),
             target_events: Vec::new(),
             base_file: ctx.file_name.clone(),
@@ -1443,6 +1448,7 @@ impl<'a> Pp<'a> {
             model_observed: false,
         };
         pp.define_predefined(options);
+        pp.define_command_line_features();
         pp.define_command_line(&options.macros);
         // The crate-wide switch, which `#pragma cinrs system_include` in the
         // unit turns on again with the mode it wants. Reported against the
@@ -3050,16 +3056,26 @@ impl Pp<'_> {
     /// `__attribute__((target))` on a function does not come here: GCC does
     /// not change the macros for one function either.
     fn sync_target_macros(&mut self, names: &[(String, SourceRange)]) {
-        let baseline: &[&'static str] = match self.target.arch {
+        let architecture: &[&'static str] = match self.target.arch {
             Arch::X86_64 => &["__SSE__", "__SSE2__"],
             Arch::X86 => &[],
             _ => return,
         };
+        // What the command line enabled is in force whatever the pragma says,
+        // as GCC's `-m` switches are.
+        let command_line: Vec<&str> = self
+            .command_line_features
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let baseline: Vec<&'static str> = crate::x86::target_macros(architecture, &command_line)
+            .into_iter()
+            .collect();
         fn spelled(list: &[(String, SourceRange)]) -> Vec<&str> {
             list.iter().map(|(n, _)| n.as_str()).collect()
         }
-        let old = crate::x86::target_macros(baseline, &spelled(&self.target_features));
-        let new = crate::x86::target_macros(baseline, &spelled(names));
+        let old = crate::x86::target_macros(&baseline, &spelled(&self.target_features));
+        let new = crate::x86::target_macros(&baseline, &spelled(names));
         for gone in old.difference(&new) {
             self.macros.remove(*gone);
         }
@@ -5284,6 +5300,27 @@ impl Pp<'_> {
         self.define_function("__builtin_FUNCTION", "__func__");
         for (name, value) in target_macros(&options.target) {
             self.define_object(name, &value);
+        }
+    }
+
+    /// The feature macros of the instruction sets the command line enabled —
+    /// `__AVX2__` and everything AVX2 implies for `-mavx2` — as GCC defines
+    /// them; see [`Options::target_features`].
+    fn define_command_line_features(&mut self) {
+        let architecture: &[&'static str] = match self.target.arch {
+            Arch::X86_64 => &["__SSE__", "__SSE2__"],
+            Arch::X86 => &[],
+            _ => return,
+        };
+        let names: Vec<&str> = self
+            .command_line_features
+            .iter()
+            .map(String::as_str)
+            .collect();
+        for name in crate::x86::target_macros(architecture, &names) {
+            if !self.macros.contains_key(name) {
+                self.define_object(name, "1");
+            }
         }
     }
 

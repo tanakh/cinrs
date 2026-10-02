@@ -53,3 +53,13 @@ pub mod complex;
 /// is its `double _Complex` (and its `long double _Complex`, which `cinrs`
 /// maps onto `double` exactly as it maps `long double`).
 pub use num_complex::Complex;
+
+/// The source of [`complex`], for `ccinrs`.
+///
+/// A C compiler cannot hand its user a Cargo dependency, so `ccinrs` compiles
+/// this text itself, with the `rustc` it runs, into a library its programs
+/// link against — beside a `#[repr(C)]` pair of its own in place of
+/// `num-complex`'s, which is all the module asks of [`Complex`]. Not an
+/// interface: it changes with every release.
+#[doc(hidden)]
+pub const COMPLEX_SOURCE: &str = include_str!("complex.rs");

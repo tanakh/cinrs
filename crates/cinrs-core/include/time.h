@@ -9,7 +9,8 @@
  * `_WIN32` is the *target's*, from the model cinrs was told to translate for.
  * `time_t` is `long` on the Unix platforms, which makes it 32 bits wide on a
  * 32-bit target — glibc's own default without `_TIME_BITS=64` — and `long
- * long` on Windows.
+ * long` on Windows and on WASI, where `clock_t` is `long long` too and
+ * `clock()` counts nanoseconds.
  *
  * `struct timespec` (C11 7.27.1) is `{ time_t; long; }` on all three, which is
  * eight bytes on a 32-bit Unix and sixteen everywhere else. It is here rather
@@ -54,7 +55,7 @@
 /* ---- time_t, clock_t --------------------------------------------------- */
 #if !defined(__time_t_defined) && !defined(__DEFINED_time_t) \
     && !defined(_TIME_T_DEFINED)
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__wasi__)
 /* `__extension__`: `long long` is C99's, and a header may use it whatever the
  * entry point is. */
 __extension__ typedef long long time_t;
@@ -68,7 +69,11 @@ typedef long time_t;
 
 #if !defined(__clock_t_defined) && !defined(__DEFINED_clock_t) \
     && !defined(_CLOCK_T_DEFINED)
+#if defined(__wasi__)
+__extension__ typedef long long clock_t;
+#else
 typedef long clock_t;
+#endif
 #define __clock_t_defined 1
 #define __DEFINED_clock_t 1
 #define _CLOCK_T_DEFINED 1
@@ -76,6 +81,8 @@ typedef long clock_t;
 
 #if defined(_WIN32)
 #define CLOCKS_PER_SEC 1000
+#elif defined(__wasi__)
+#define CLOCKS_PER_SEC ((clock_t)1000000000)
 #else
 #define CLOCKS_PER_SEC 1000000
 #endif
