@@ -822,8 +822,8 @@ pub enum Error {
         /// check them.
         searched: Vec<String>,
     },
-    /// A file of that name is there, but could not be read: no permission, not
-    /// UTF-8, gone between the test and the read.
+    /// A file of that name is there, but could not be read: no permission,
+    /// gone between the test and the read.
     Unreadable {
         /// The file that could not be read.
         path: String,
@@ -1128,10 +1128,12 @@ fn read_file(path: &Path) -> Result<Option<Resolved>, Error> {
         // A directory of that name, or nothing at all: keep looking.
         _ => return Ok(None),
     }
-    let text = std::fs::read_to_string(path).map_err(|error| Error::Unreadable {
+    let bytes = std::fs::read(path).map_err(|error| Error::Unreadable {
         path: display_path(path),
         error: error.to_string(),
     })?;
+    // Not necessarily UTF-8; see `decode_source`.
+    let text = crate::lex::decode_source(bytes);
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let key = std::fs::canonicalize(path)
         .unwrap_or_else(|_| absolute.clone())

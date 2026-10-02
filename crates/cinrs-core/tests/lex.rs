@@ -587,6 +587,37 @@ fn string_literals() {
     assert_eq!(string("L\"\u{3042}\""), (StrKind::Wide, vec![0x3042]));
 }
 
+/// A file that is not UTF-8: a narrow literal keeps the byte, a wide one reads
+/// it as Latin-1, a comment ignores it, and anywhere else it is a stray byte.
+#[test]
+fn bytes_that_are_not_utf8() {
+    let text =
+        cinrs_core::lex::decode_source(b"/* caf\xe9 */ \"\xe9t\xe9\" L\"\xe9\" '\xff'".to_vec());
+    let (tokens, errors) = lex(&text);
+    assert_eq!(errors, Vec::<String>::new());
+    let kinds: Vec<_> = tokens.into_iter().map(|t| t.kind).collect();
+    match &kinds[..] {
+        [
+            TokenKind::Str(narrow),
+            TokenKind::Str(wide),
+            TokenKind::Char(ch),
+        ] => {
+            assert_eq!(narrow.values, [0xe9, b't'.into(), 0xe9]);
+            assert_eq!(wide.values, [0xe9]);
+            assert_eq!(ch.value & 0xff, 0xff);
+        }
+        other => panic!("{other:?}"),
+    }
+    // UTF-8 text around the bytes is untouched, and so is its column count.
+    let text = cinrs_core::lex::decode_source("\u{3042}\"\u{e9}\"x\u{1}".as_bytes().to_vec());
+    assert_eq!(text, "\u{3042}\"\u{e9}\"x\u{1}");
+    let text = cinrs_core::lex::decode_source(b"x \xe9".to_vec());
+    assert_eq!(
+        lex(&text).1,
+        ["unexpected byte 0xE9 in program (the file is not UTF-8)"]
+    );
+}
+
 #[test]
 fn the_unicode_string_prefixes() {
     let c11 = LexOptions::new(Standard::C11);

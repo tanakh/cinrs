@@ -955,6 +955,57 @@ pub fn lex(source: &Source, options: &Options) -> Vec<Token> {
 /// of a file.
 const BYTE_ORDER_MARK: char = '\u{feff}';
 
+/// The character a byte numbered `0x80 + n` that is not part of any UTF-8
+/// sequence is read as: `RAW_BYTE_BASE + 0x80 + n`, in plane 16's private-use
+/// area, which no source file spells.
+const RAW_BYTE_BASE: u32 = 0x10_FF00;
+
+/// A C file's bytes as the text the lexer reads.
+///
+/// C does not ask for UTF-8: GCC passes the bytes of a string literal through
+/// as they are and ignores what a comment holds, and an old file with a
+/// Latin-1 name in a comment is common. So a file that is not UTF-8 is not
+/// refused; each byte of it that does not belong to a UTF-8 sequence becomes
+/// one character of a private-use range no source file spells, `U+10FF80` to
+/// `U+10FFFF` (see [`raw_byte`]), which a comment ignores like any other, a narrow string or character constant turns
+/// back into the byte it was, and anywhere else is the stray character the
+/// byte would be. Every other character, and every column, is the file's own.
+pub fn decode_source(bytes: Vec<u8>) -> String {
+    let bytes = match String::from_utf8(bytes) {
+        Ok(text) => return text,
+        Err(error) => error.into_bytes(),
+    };
+    let mut text = String::with_capacity(bytes.len() + bytes.len() / 2);
+    let mut rest = &bytes[..];
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let (valid, after) = rest.split_at(error.valid_up_to());
+                text.push_str(std::str::from_utf8(valid).expect("checked up to here"));
+                let bad = error.error_len().unwrap_or(after.len());
+                for &byte in &after[..bad] {
+                    // Every byte below 0x80 is UTF-8 on its own, so these are
+                    // all 0x80 and up, and the character exists.
+                    let ch = char::from_u32(RAW_BYTE_BASE + u32::from(byte));
+                    text.push(ch.expect("U+10FF80 to U+10FFFF are characters"));
+                }
+                rest = &after[bad..];
+            }
+        }
+    }
+    text
+}
+
+/// The byte a character [`decode_source`] made stands for, if it is one.
+pub fn raw_byte(ch: char) -> Option<u8> {
+    let offset = (ch as u32).checked_sub(RAW_BYTE_BASE)?;
+    u8::try_from(offset).ok().filter(|byte| *byte >= 0x80)
+}
+
 /// Lexes the whole of a file's `text` — a unit's own or an `#include`d one —
 /// whose first byte lives at global offset `base`.
 ///
@@ -1313,10 +1364,13 @@ impl<'a> Lexer<'a> {
             }
         };
         let range = self.range(start, self.pos);
-        self.error(
-            range,
-            format!("unexpected character '{}' in program", ch.escape_debug()),
-        );
+        let message = match raw_byte(ch) {
+            Some(byte) => {
+                format!("unexpected byte 0x{byte:02X} in program (the file is not UTF-8)")
+            }
+            None => format!("unexpected character '{}' in program", ch.escape_debug()),
+        };
+        self.error(range, message);
         TokenKind::Error(ch.to_string())
     }
 
@@ -2036,14 +2090,30 @@ impl<'a> Lexer<'a> {
                 None if kind.is_bytes() => {
                     // A narrow or UTF-8 literal keeps the raw
                     // execution-charset bytes, so UTF-8 text in one survives
-                    // byte for byte.
-                    self.pos += 1;
-                    out.push(self.bytes[start] as u32);
+                    // byte for byte — and so does a byte of a file that was
+                    // not UTF-8 at all, which `decode_source` made the
+                    // four-byte character this turns back into it.
+                    let raw = (self.bytes[start] == 0xF4)
+                        .then(|| self.text[start..].chars().next().and_then(raw_byte))
+                        .flatten();
+                    match raw {
+                        Some(byte) => {
+                            self.pos += 4;
+                            out.push(u32::from(byte));
+                        }
+                        None => {
+                            self.pos += 1;
+                            out.push(self.bytes[start] as u32);
+                        }
+                    }
                 }
                 None => {
                     let ch = self.text[start..].chars().next().unwrap_or('\u{fffd}');
                     self.pos += ch.len_utf8();
-                    push_character(ch as u32, kind, self.options.wchar_bits, out);
+                    // A wide literal has to make a character of a stray byte;
+                    // it is the Latin-1 one, which is what the byte's value is.
+                    let value = raw_byte(ch).map_or(ch as u32, u32::from);
+                    push_character(value, kind, self.options.wchar_bits, out);
                 }
             }
             return;

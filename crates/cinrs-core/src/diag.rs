@@ -170,6 +170,12 @@ impl Diagnostics {
         }
     }
 
+    /// The unrecoverable problem with the input itself, if there was one;
+    /// see [`Diagnostics::fatal`].
+    pub fn fatal_message(&self) -> Option<&str> {
+        self.fatal.as_deref()
+    }
+
     /// All recorded diagnostics, in the order they were found.
     pub fn items(&self) -> &[Diagnostic] {
         &self.items

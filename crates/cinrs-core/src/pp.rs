@@ -204,7 +204,7 @@ use crate::lex::{
     self, IntLit, Keyword, LexOptions, LongKind, NumBase, Punct, StrKind, StrLit, TokenKind,
 };
 use crate::target::{Arch, Env, Os, TargetModel, TargetSource};
-use crate::{Dialect, Gating, Options, Standard};
+use crate::{CommandLineMacro, Dialect, Gating, Options, Standard};
 
 // ---------------------------------------------------------------------------
 // the tokens the parser sees
@@ -1443,6 +1443,7 @@ impl<'a> Pp<'a> {
             model_observed: false,
         };
         pp.define_predefined(options);
+        pp.define_command_line(&options.macros);
         // The crate-wide switch, which `#pragma cinrs system_include` in the
         // unit turns on again with the mode it wants. Reported against the
         // whole unit, there being nothing in the C to point at — the same
@@ -5283,6 +5284,35 @@ impl Pp<'_> {
         self.define_function("__builtin_FUNCTION", "__func__");
         for (name, value) in target_macros(&options.target) {
             self.define_object(name, &value);
+        }
+    }
+
+    /// The command line's `-D` and `-U`, in the order given, after the
+    /// predefined macros and before the unit's first line — where GCC puts
+    /// them.
+    ///
+    /// Each definition is read as the `#define` it stands for: `NAME=VALUE` is
+    /// `#define NAME VALUE`, a bare `NAME` is `#define NAME 1`, and
+    /// `F(x)=VALUE` is function-like. There is no line of C to point at, so a
+    /// malformed one is reported at the start of the unit.
+    fn define_command_line(&mut self, macros: &[CommandLineMacro]) {
+        let range = SourceRange::at(self.base);
+        for item in macros {
+            match item {
+                CommandLineMacro::Define(operand) => {
+                    let (head, value) = operand.split_once('=').unwrap_or((operand, "1"));
+                    let text = format!("{head} {value}");
+                    let rest: Vec<PTok> = lex::lex_text(&text, self.base, &self.lex_options)
+                        .iter()
+                        .filter(|t| !matches!(t.kind, TokenKind::Eof))
+                        .map(PTok::from_lexed)
+                        .collect();
+                    self.define(&rest, range);
+                }
+                CommandLineMacro::Undefine(name) => {
+                    self.macros.remove(name.as_str());
+                }
+            }
         }
     }
 

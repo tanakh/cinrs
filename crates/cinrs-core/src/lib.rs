@@ -363,6 +363,28 @@ pub struct Options {
     /// needs more than `core`. The front end carries the support either way, so
     /// a test may set this in either direction.
     pub complex: bool,
+    /// Whether every function and object with external linkage is a symbol
+    /// under its C name, as `#pragma cinrs export` asks.
+    ///
+    /// **Off by default**: a block inside a Rust crate is usually called from
+    /// Rust, and an unexported unit cannot collide with a C library at link
+    /// time. The pragma turns it on for one unit, and the command-line driver
+    /// turns it on for all of them, because to a C compiler every non-`static`
+    /// definition is a symbol another object may name.
+    pub export: bool,
+    /// Macros defined and undefined on the command line, in the order given,
+    /// before the first line of the unit — GCC's `-D` and `-U`.
+    pub macros: Vec<CommandLineMacro>,
+}
+
+/// One `-D` or `-U` of a command line; see [`Options::macros`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommandLineMacro {
+    /// `-D` with its operand as GCC takes it: `NAME` defines `NAME` as `1`,
+    /// `NAME=VALUE` as `VALUE`, and `F(x)=VALUE` a function-like macro.
+    Define(String),
+    /// `-U NAME`.
+    Undefine(String),
 }
 
 impl Default for Options {
@@ -394,6 +416,8 @@ impl Options {
             target: TargetModel::host(),
             target_source: TargetSource::Host,
             complex: COMPLEX_SUPPORTED,
+            export: false,
+            macros: Vec::new(),
         }
     }
 
@@ -1038,13 +1062,93 @@ pub fn expand_with(input: TokenStream, options: &Options, origin: &Origin) -> To
 /// preprocessor did not read itself — the `.c` file [`expand_include`] was
 /// pointed at, which is the unit's own text rather than a header of it.
 fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream {
+    // Emitted whether or not the unit compiled: a header that is being fixed
+    // is exactly the one whose next edit has to trigger a rebuild.
+    let mut tracked = extra_tracking.to_vec();
+    tracked.extend(analysis.user_headers.iter().cloned());
+    let mut out = rebuild_tracking(&tracked, &analysis.embedded_files);
+    let Lowered {
+        source,
+        program,
+        diagnostics,
+        options,
+    } = lower(analysis);
+    if diagnostics.has_errors() {
+        out.extend(diagnostics.to_token_stream(&source.map));
+        out.extend(codegen::generate_stubs(&program, &source.map, &options));
+    } else {
+        out.extend(codegen::generate(&program, &source.map, &options));
+    }
+    in_module(out, source.unit_id())
+}
+
+/// One `.c` file translated outside a procedural macro: what the `ccinrs`
+/// command-line driver does with each file it is given.
+pub struct FileTranslation {
+    /// The generated Rust — the unit's private module and its glob re-export,
+    /// as [`expand`] makes them — or `None` when the unit has an error, which
+    /// [`FileTranslation::diagnostics`] then holds.
+    pub items: Option<TokenStream>,
+    /// Every error and warning, in the positions [`FileTranslation::map`]
+    /// resolves.
+    pub diagnostics: Diagnostics,
+    /// The unit's source map: the file itself and every header it read.
+    pub map: SourceMap,
+}
+
+/// Translates the C file at `path`.
+///
+/// The file is read and analysed as [`expand_include`] reads one — its own
+/// directory is where its `#include "…"` looks first, and diagnostics and
+/// `__FILE__` name it by `path` as given — but nothing becomes a
+/// `compile_error!`, and nothing is emitted to make a Cargo build depend on
+/// the headers it read: the caller renders the diagnostics itself.
+///
+/// # Errors
+///
+/// A file that cannot be read, with the reason.
+pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation, String> {
+    let found = include::read_source(path).map_err(|error| match error {
+        include::Error::Unreadable { path, error } => format!("cannot read '{path}': {error}"),
+        include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
+    })?;
+    let source = capture::capture_c_file(found.name, found.text, Span::call_site());
+    let Lowered {
+        source,
+        program,
+        diagnostics,
+        options,
+    } = lower(analyze_source(source, options, Diagnostics::new()));
+    let items = (!diagnostics.has_errors()).then(|| {
+        in_module(
+            codegen::generate(&program, &source.map, &options),
+            source.unit_id(),
+        )
+    });
+    Ok(FileTranslation {
+        items,
+        diagnostics,
+        map: source.map,
+    })
+}
+
+/// A unit through semantic analysis: what code generation reads.
+struct Lowered {
+    source: Source,
+    program: Program,
+    /// Every diagnostic of every pass.
+    diagnostics: Diagnostics,
+    /// The options with the target model resolved; see [`Analysis::options`].
+    options: Options,
+}
+
+/// Semantic analysis and the pragma checks over a finished [`Analysis`].
+fn lower(analysis: Analysis) -> Lowered {
     let Analysis {
         source,
         unit,
         mut diagnostics,
         expansions,
-        user_headers,
-        embedded_files,
         link_libraries,
         safe_functions,
         export,
@@ -1056,7 +1160,6 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
         options,
         ..
     } = analysis;
-    let options = &options;
 
     let unit_id = source.unit_id();
     let (mut program, mut sema_diagnostics) = on_large_stack(
@@ -1066,7 +1169,7 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
     expansions.annotate(&mut sema_diagnostics);
     diagnostics.extend(sema_diagnostics);
     program.link_libraries = link_libraries;
-    program.export = export;
+    program.export = export || options.export;
     program.no_std = no_std;
     if let Some(path) = crate_path {
         program.crate_path = path;
@@ -1079,19 +1182,12 @@ fn generate_unit(analysis: Analysis, extra_tracking: &[PathBuf]) -> TokenStream 
     pragma_diagnostics.extend(sema::check_safe(&mut program, &safe_functions));
     expansions.annotate(&mut pragma_diagnostics);
     diagnostics.extend(pragma_diagnostics);
-
-    // Emitted whether or not the unit compiled: a header that is being fixed
-    // is exactly the one whose next edit has to trigger a rebuild.
-    let mut tracked = extra_tracking.to_vec();
-    tracked.extend(user_headers);
-    let mut out = rebuild_tracking(&tracked, &embedded_files);
-    if diagnostics.has_errors() {
-        out.extend(diagnostics.to_token_stream(&source.map));
-        out.extend(codegen::generate_stubs(&program, &source.map, options));
-    } else {
-        out.extend(codegen::generate(&program, &source.map, options));
+    Lowered {
+        source,
+        program,
+        diagnostics,
+        options,
     }
-    in_module(out, unit_id)
 }
 
 /// Wraps an expansion in a private module of its own, re-exported by a glob.

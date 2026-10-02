@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use cinrs_core::diag::Level;
 use cinrs_core::lex::{LexOptions, lex_text};
 use cinrs_core::pp::{Context, Preprocessed, preprocess};
-use cinrs_core::{Options, Standard};
+use cinrs_core::{CommandLineMacro, Options, Standard};
 
 fn lex_options() -> LexOptions {
     LexOptions::new(Standard::C99)
@@ -1790,16 +1790,41 @@ fn a_conditional_left_open_by_a_header_is_reported_against_it() {
 fn a_header_that_cannot_be_read_is_a_diagnostic_rather_than_a_panic() {
     let dir = std::env::temp_dir().join(format!("cinrs-pp-unreadable-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("the temporary directory must be creatable");
-    // Not UTF-8, which is the failure a real header can plausibly have.
+    // Not UTF-8: read all the same, as GCC reads it, and each byte that is
+    // not a C character is reported where it stands.
     std::fs::write(dir.join("binary.h"), [0xffu8, 0xfe, 0x00, 0x41]).expect("writable");
     // A *directory* of the right name is not a header either, and must not
     // stop the search.
     std::fs::create_dir_all(dir.join("shadow.h")).expect("creatable");
 
     let path = dir.display().to_string();
-    let (_, errors, _) = run_including("#include <binary.h>", &[&path]);
-    assert_eq!(errors.len(), 1, "{errors:#?}");
-    assert!(errors[0].starts_with("cannot read '"), "{errors:#?}");
+    let (tokens, errors, _) = run_including("#include <binary.h>", &[&path]);
+    assert_eq!(tokens, ["A"]);
+    assert_eq!(
+        errors,
+        [
+            "unexpected byte 0xFF in program (the file is not UTF-8)",
+            "unexpected byte 0xFE in program (the file is not UTF-8)",
+            "unexpected character '\\0' in program",
+        ]
+    );
+
+    // A file that is there and cannot be opened at all. Unix only, and only
+    // where the permission means something: root reads it anyway.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = dir.join("locked.h");
+        std::fs::write(&locked, "int x;\n").expect("writable");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("the permissions can be changed");
+        if std::fs::read(&locked).is_err() {
+            let (_, errors, _) = run_including("#include <locked.h>", &[&path]);
+            assert_eq!(errors.len(), 1, "{errors:#?}");
+            assert!(errors[0].starts_with("cannot read '"), "{errors:#?}");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).ok();
+    }
 
     let (_, errors, _) = run_including("#include <shadow.h>", &[&path]);
     assert_eq!(errors.len(), 1, "{errors:#?}");
@@ -2315,4 +2340,80 @@ fn embed_is_gated_before_c23() {
         .map(|t| t.kind.spelling().to_owned())
         .collect();
     assert_eq!(spellings, ["137"]);
+}
+
+// ---------------------------------------------------------------------------
+// -D and -U
+// ---------------------------------------------------------------------------
+
+/// The spellings `src` preprocesses to with `macros` on the command line, and
+/// the errors.
+fn run_with_macros(src: &str, macros: &[CommandLineMacro]) -> (String, Vec<String>) {
+    let mut options = Options::new(Standard::C99);
+    options.macros = macros.to_vec();
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &lex_options());
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    let spellings: Vec<String> = out
+        .tokens
+        .iter()
+        .filter(|t| !t.is_eof())
+        .map(|t| t.kind.spelling().to_owned())
+        .collect();
+    let errors = diags
+        .items()
+        .iter()
+        .filter(|d| d.level == Level::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    (spellings.join(" "), errors)
+}
+
+#[test]
+fn command_line_definitions_are_gccs() {
+    use CommandLineMacro::{Define, Undefine};
+    let def = |s: &str| Define(s.to_owned());
+    // A bare name is `1`, `=` gives the value, and an empty value is empty.
+    assert_eq!(
+        run_with_macros("A B C", &[def("A"), def("B=2 + 3"), def("C=")]),
+        ("1 2 + 3".to_owned(), vec![])
+    );
+    // `F(x)=…` is function-like, and the parameter is one.
+    assert_eq!(
+        run_with_macros("SQ(7) SQ", &[def("SQ(x)=((x)*(x))")]),
+        ("( ( 7 ) * ( 7 ) ) SQ".to_owned(), vec![])
+    );
+    // In order: a later `-U` undoes an earlier `-D`, and a later `-D` wins.
+    assert_eq!(
+        run_with_macros(
+            "#ifdef GONE\ngone\n#endif\nV",
+            &[
+                def("GONE"),
+                Undefine("GONE".to_owned()),
+                def("V=1"),
+                Undefine("V".to_owned()),
+                def("V=2")
+            ]
+        ),
+        ("2".to_owned(), vec![])
+    );
+    // A predefined macro can be undefined, and redefined.
+    assert_eq!(
+        run_with_macros(
+            "__STDC_VERSION__ __STRICT_ANSI__",
+            &[
+                Undefine("__STRICT_ANSI__".to_owned()),
+                def("__STDC_VERSION__=1L")
+            ]
+        ),
+        ("1L __STRICT_ANSI__".to_owned(), vec![])
+    );
+    // A malformed one is the error a `#define` would be.
+    let (_, errors) = run_with_macros("x", &[def("1X=2")]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("macro name must be an identifier"),
+        "{errors:?}"
+    );
 }
