@@ -769,6 +769,18 @@ fn multiarch_tuples(target: &TargetModel) -> Vec<String> {
     tuples
 }
 
+/// Whose a header is: what a dependency list (GCC's `-M`, `-MM`) asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderKind {
+    /// The program's own: found in its directories or beside the file that
+    /// included it.
+    User,
+    /// One of the platform's own directories'.
+    System,
+    /// One of cinrs's [bundled headers](BUNDLED), which are not files at all.
+    Bundled,
+}
+
 /// A header that was found.
 #[derive(Clone, Debug)]
 pub struct Resolved {
@@ -797,6 +809,17 @@ pub struct Resolved {
 }
 
 impl Resolved {
+    /// Whose header it is.
+    pub fn kind(&self) -> HeaderKind {
+        if self.system {
+            HeaderKind::System
+        } else if matches!(self.origin, Origin::Bundled) {
+            HeaderKind::Bundled
+        } else {
+            HeaderKind::User
+        }
+    }
+
     /// Marks a header as one of the platform's own.
     ///
     /// Two things follow, and they are the whole of what "system header" means

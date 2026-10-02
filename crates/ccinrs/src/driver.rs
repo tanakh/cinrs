@@ -15,10 +15,10 @@ use std::process::Command;
 use cinrs_core::include::System;
 use cinrs_core::{Arch, Options, TargetModel, TargetSource};
 
-use crate::args::{Input, Invocation, Stage};
+use crate::args::{Input, Invocation, Query, Stage};
 use crate::runtime::{self, Runtime};
 use crate::rustc::Rustc;
-use crate::{diag, print};
+use crate::{deps, diag, preprocess, print};
 
 /// Why a run stopped.
 pub enum Failure {
@@ -41,7 +41,15 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
             eprintln!("ccinrs: warning: {note}");
         }
     }
+    if let Some(query) = inv.query {
+        return answer(inv, query);
+    }
     if inv.inputs.is_empty() {
+        // `gcc -v` on its own says what it is, and that is all.
+        if inv.verbose {
+            eprint!("{}", version_text());
+            return Ok(());
+        }
         return Err("no input files".to_owned().into());
     }
     let rustc = Rustc::locate()?;
@@ -68,10 +76,16 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
     };
 
     match inv.stage {
-        Stage::Compile => return run.compile_only(),
+        Stage::Preprocess => return run.preprocess(),
         Stage::Rust => return run.emit_rust(),
+        Stage::Compile => return run.compile_only(),
         Stage::Link => {}
     }
+    let output = inv
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(default_output()));
+    check_output(&output)?;
     let mut objects = Vec::new();
     let mut uses_runtime = false;
     let mut failed = false;
@@ -79,7 +93,8 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
         match input {
             Input::C(path) => {
                 let object = run.work.path(&format!("{}.o", run.work.stem(index, path)));
-                match run.compile(index, path, &object)? {
+                let deps = run.deps_beside(path, None);
+                match run.compile(index, path, &object, deps)? {
                     Some(runtime) => {
                         objects.push(object);
                         uses_runtime |= runtime;
@@ -96,12 +111,73 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
     if failed {
         return Err(Failure::Reported);
     }
-    let output = inv
-        .output
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(default_output()));
     run.link(&objects, uses_runtime, &output)
 }
+
+/// Answers `--version`, `-dumpmachine` and the like.
+fn answer(inv: &Invocation, query: Query) -> Result<(), Failure> {
+    let (major, minor, patch) = cinrs_core::GCC_VERSION;
+    match query {
+        Query::Version => print!("{}", version_text()),
+        // What `__GNUC__` says, which is what a build that asks compares.
+        Query::DumpVersion => println!("{major}"),
+        Query::DumpFullVersion => println!("{major}.{minor}.{patch}"),
+        Query::DumpMachine => match &inv.target {
+            Some(triple) => println!("{triple}"),
+            None => println!("{}", Rustc::locate()?.host),
+        },
+        Query::Help => print!("{HELP}"),
+    }
+    Ok(())
+}
+
+/// What `--version` prints: ccinrs's own version, and the `rustc` it would
+/// compile with, or why there is none.
+fn version_text() -> String {
+    let rustc = match Rustc::locate() {
+        Ok(rustc) => format!(
+            "rustc {} ({}) for {}",
+            rustc.release, rustc.commit, rustc.host
+        ),
+        Err(error) => format!("no rustc: {error}"),
+    };
+    let (major, minor, patch) = cinrs_core::GCC_VERSION;
+    format!(
+        "ccinrs {} — C to Rust with cinrs, compiled and linked by rustc\n{rustc}\n\
+         The C it compiles sees GCC {major}.{minor}.{patch} (__GNUC__ is {major}).\n",
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
+/// What `--help` prints.
+const HELP: &str = "\
+Usage: ccinrs [options] file...
+
+ccinrs compiles C with GCC's command line: each file becomes Rust through
+cinrs, and rustc (RUSTC, or the one on PATH) compiles and links it.
+
+  -o <file>            Write the output to <file>
+  -c                   Compile to an object file, and do not link
+  -S                   Write the Rust each C file becomes (<file>.rs)
+  -E                   Preprocess only; -P leaves out the line markers
+  -M, -MM              Write a Makefile rule of the headers instead
+  -MD, -MMD            Write that rule to a .d file while compiling
+  -MF <file>, -MT <target>, -MQ <target>, -MP
+                       Where the rule goes, what it is for, phony headers
+  -I <dir>, -D <name>[=<value>], -U <name>
+                       Include directories and macros
+  -std=<standard>      c89 … c23, gnu89 … gnu23 (gnu17 by default)
+  -O<level>, -g        Optimisation and debug information, as rustc's
+  -march=<cpu>, -m<feature>
+                       The processor and instruction sets
+  --target=<triple>    Compile for another machine (wasm32-wasip1, …)
+  -l <lib>, -L <dir>, -Wl,<args>
+                       Libraries and linker arguments
+  -fno-cinrs-checks    Leave out Rust's run-time checks (on by default)
+  -w                   Print no warnings
+  -v                   Print the commands run
+  --version, -dumpversion, -dumpmachine
+";
 
 /// One command line, with what every file of it is compiled with.
 struct Run<'a> {
@@ -217,7 +293,8 @@ impl Run<'_> {
     fn compile_only(&self) -> Result<(), Failure> {
         let mut failed = false;
         for (index, path, object) in outputs_each(self.inv, "-c", "o")? {
-            if self.compile(index, path, &object)?.is_none() {
+            let deps = self.deps_beside(path, Some(&object));
+            if self.compile(index, path, &object, deps)?.is_none() {
                 failed = true;
             }
         }
@@ -234,6 +311,9 @@ impl Run<'_> {
     fn emit_rust(&self) -> Result<(), Failure> {
         let mut failed = false;
         for (_, path, output) in outputs_each(self.inv, "-S", "rs")? {
+            if output.as_os_str() != "-" {
+                check_output(&output)?;
+            }
             let translation = cinrs_core::translate_file(path, &self.options)?;
             let (text, _) = diag::render(
                 &translation.map,
@@ -267,6 +347,18 @@ impl Run<'_> {
                 std::fs::write(&output, rust)
                     .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
             }
+            if let Some((target, file)) = self.deps_beside(path, Some(&output)) {
+                write_rule(
+                    &file,
+                    &deps::rule(
+                        &self.inv.deps,
+                        &target,
+                        path,
+                        &translation.headers,
+                        &translation.embedded,
+                    ),
+                )?;
+            }
         }
         if failed {
             Err(Failure::Reported)
@@ -274,6 +366,111 @@ impl Run<'_> {
             Ok(())
         }
     }
+
+    /// `-E`, `-M` and `-MM`: the preprocessed text of every C file, or the
+    /// rule naming what each one read, to `-o` or to standard output. Under
+    /// `-MD` the rule goes to its `.d` file as well.
+    fn preprocess(&self) -> Result<(), Failure> {
+        let inv = self.inv;
+        let mut out = Vec::new();
+        let mut failed = false;
+        for input in &inv.inputs {
+            let path = match input {
+                Input::C(path) => path,
+                Input::Linker(path) => {
+                    if inv.warnings {
+                        eprintln!(
+                            "ccinrs: warning: {}: linker input file unused because linking not done",
+                            path.display()
+                        );
+                    }
+                    continue;
+                }
+            };
+            let pre = cinrs_core::preprocess_file(path, &self.options)?;
+            let (text, tally) = diag::render(&pre.map, &pre.diagnostics, inv.warnings);
+            eprint!("{text}");
+            if tally.errors > 0 {
+                failed = true;
+                continue;
+            }
+            let rule =
+                |target: &str| deps::rule(&inv.deps, target, path, &pre.headers, &pre.embedded);
+            if inv.deps.only {
+                // `-M` makes the rule the output, which `-MF` sends elsewhere.
+                let rule = rule(&deps::object_name(path));
+                match &inv.deps.file {
+                    Some(file) => write_rule(file, &rule)?,
+                    None => out.extend_from_slice(rule.as_bytes()),
+                }
+                continue;
+            }
+            out.extend(preprocess::render(&pre, inv.line_markers));
+            if let Some((target, file)) = self.deps_beside(path, None) {
+                write_rule(&file, &rule(&target))?;
+            }
+        }
+        match &inv.output {
+            Some(file) if file.as_os_str() != "-" => std::fs::write(file, &out)
+                .map_err(|error| format!("cannot write {}: {error}", file.display()))?,
+            _ => {
+                use std::io::Write;
+                std::io::stdout()
+                    .write_all(&out)
+                    .map_err(|error| format!("cannot write the output: {error}"))?;
+            }
+        }
+        if failed {
+            Err(Failure::Reported)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Under `-MD` or `-MMD`, the target and the file of the rule for the C
+    /// file at `source`, which this command line makes into `made` (an
+    /// object for `-c`, a `.rs` for `-S`) or into a program. GCC's names: the
+    /// `.d` beside what is made, or for a program `<program>-<stem>.d`, or
+    /// `<stem>.d` in the working directory — unless `-MF` names it.
+    fn deps_beside(&self, source: &Path, made: Option<&Path>) -> Option<(String, PathBuf)> {
+        let deps = &self.inv.deps;
+        if !deps.beside {
+            return None;
+        }
+        let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+        let (target, beside) = match made {
+            Some(made) => (made.display().to_string(), made.with_extension("d")),
+            None => {
+                let beside = match (&self.inv.output, self.inv.stage) {
+                    (Some(program), Stage::Link) => {
+                        PathBuf::from(format!("{}-{stem}.d", program.display()))
+                    }
+                    _ => PathBuf::from(format!("{stem}.d")),
+                };
+                (deps::object_name(source), beside)
+            }
+        };
+        Some((target, deps.file.clone().unwrap_or(beside)))
+    }
+}
+
+/// Refuses an output whose directory is not there, in GCC's words, before
+/// any work goes into making it — `rustc` would say it with a temporary
+/// directory's name.
+fn check_output(path: &Path) -> Result<(), String> {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() && !dir.is_dir() => Err(format!(
+            "cannot open output file {}: the directory '{}' does not exist",
+            path.display(),
+            dir.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Writes a dependency rule.
+fn write_rule(file: &Path, rule: &str) -> Result<(), String> {
+    std::fs::write(file, rule).map_err(|error| format!("cannot write {}: {error}", file.display()))
 }
 
 /// The C files of a command line that stops before the link (`flag` is `-c`
@@ -324,9 +521,17 @@ fn outputs_each<'a>(
 impl Run<'_> {
     /// Translates and compiles one C file into `object`, answering whether
     /// the object calls the runtime — or prints why it could not and answers
-    /// `None`.
-    fn compile(&self, index: usize, path: &Path, object: &Path) -> Result<Option<bool>, Failure> {
+    /// `None`. `deps` is the target and the file of a dependency rule to
+    /// write once it has compiled; see [`Run::deps_beside`].
+    fn compile(
+        &self,
+        index: usize,
+        path: &Path,
+        object: &Path,
+        deps: Option<(String, PathBuf)>,
+    ) -> Result<Option<bool>, Failure> {
         let inv = self.inv;
+        check_output(object)?;
         let translation = cinrs_core::translate_file(path, &self.options)?;
         let (text, tally) = diag::render(&translation.map, &translation.diagnostics, inv.warnings);
         eprint!("{text}");
@@ -375,6 +580,16 @@ impl Run<'_> {
                 rust.display()
             )
         })?;
+        if let Some((target, file)) = deps {
+            let rule = deps::rule(
+                &inv.deps,
+                &target,
+                path,
+                &translation.headers,
+                &translation.embedded,
+            );
+            write_rule(&file, &rule)?;
+        }
         Ok(Some(translation.uses_runtime))
     }
 

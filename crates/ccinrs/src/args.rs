@@ -20,16 +20,57 @@ use std::path::PathBuf;
 
 use cinrs_core::{CommandLineMacro, Dialect, Standard};
 
-/// What to stop after.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What to stop after. The earlier stage wins when a command line names two,
+/// as in GCC: `-E` over `-S` over `-c`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
-    /// Compile every C file and link the program: the default.
-    Link,
-    /// `-c`: one object file per C file, and no link.
-    Compile,
+    /// `-E` (and `-M`, `-MM`): the preprocessed text, or the dependencies.
+    Preprocess,
     /// `-S`: one `.rs` file per C file — Rust being what `ccinrs` compiles C
     /// to, as assembly is what GCC does.
     Rust,
+    /// `-c`: one object file per C file, and no link.
+    Compile,
+    /// Compile every C file and link the program: the default.
+    Link,
+}
+
+/// `-M` and its relatives: a Makefile rule saying which files an object
+/// depends on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Deps {
+    /// `-M` or `-MM`: the rule is the output, in place of the preprocessed
+    /// text, and nothing is compiled.
+    pub only: bool,
+    /// `-MD` or `-MMD`: the rule is written to a `.d` file beside what the
+    /// command line makes.
+    pub beside: bool,
+    /// Whether the platform's headers are listed: `-M` and `-MD` list them,
+    /// `-MM` and `-MMD` do not.
+    pub system: bool,
+    /// `-MF`: the file the rule goes to.
+    pub file: Option<PathBuf>,
+    /// `-MT` and `-MQ` (quoted for `make` already), in order; the object's
+    /// name when there are none.
+    pub targets: Vec<String>,
+    /// `-MP`: an empty rule for every header, so that a header deleted does
+    /// not stop `make`.
+    pub phony: bool,
+}
+
+/// What a command line asks that is not a compilation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Query {
+    /// `--version`.
+    Version,
+    /// `-dumpversion`: the GCC release cinrs presents itself as.
+    DumpVersion,
+    /// `-dumpfullversion`.
+    DumpFullVersion,
+    /// `-dumpmachine`: the target triple.
+    DumpMachine,
+    /// `--help`.
+    Help,
 }
 
 /// One file named on the command line.
@@ -106,6 +147,12 @@ pub struct Invocation {
     pub verbose: bool,
     /// `-save-temps`: keep the generated `.rs` files and the objects.
     pub save_temps: bool,
+    /// `-P` turns off the line markers in `-E`'s output.
+    pub line_markers: bool,
+    /// `-M`, `-MD` and the rest.
+    pub deps: Deps,
+    /// `--version` and the like, answered instead of compiling.
+    pub query: Option<Query>,
     /// Warnings about the command line itself, printed before anything runs.
     pub notes: Vec<String>,
 }
@@ -138,31 +185,24 @@ impl Default for Invocation {
             strip: false,
             verbose: false,
             save_temps: false,
+            line_markers: true,
+            deps: Deps::default(),
+            query: None,
             notes: Vec::new(),
         }
     }
 }
 
+impl Invocation {
+    /// Stops at `stage`, unless an earlier one is already asked for.
+    fn stop_at(&mut self, stage: Stage) {
+        self.stage = self.stage.min(stage);
+    }
+}
+
 /// The options GCC has that this version of `ccinrs` does not, yet: an error
 /// that says so rather than "unknown option".
-const NOT_YET: &[&str] = &[
-    "-E",
-    "-M",
-    "-MM",
-    "-MD",
-    "-MMD",
-    "-MF",
-    "-MT",
-    "-MQ",
-    "-MP",
-    "-include",
-    "-shared",
-    "-static",
-    "-rdynamic",
-    "--version",
-    "-dumpversion",
-    "-dumpmachine",
-];
+const NOT_YET: &[&str] = &["-include", "-shared", "-static", "-rdynamic", "-dM", "-MG"];
 
 /// `-W` options that only choose which warnings GCC prints, accepted without
 /// a word: the names themselves, or a prefix ending in `-` or `=`.
@@ -416,8 +456,20 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             };
             continue;
         }
-        if NOT_YET.contains(&arg.as_str()) || arg.starts_with("-M") {
+        if NOT_YET.contains(&arg.as_str()) {
             return Err(format!("'{arg}' is not supported yet"));
+        }
+        if let Some(file) = value("-MF")? {
+            inv.deps.file = Some(PathBuf::from(file));
+            continue;
+        }
+        if let Some(target) = value("-MT")? {
+            inv.deps.targets.push(target);
+            continue;
+        }
+        if let Some(target) = value("-MQ")? {
+            inv.deps.targets.push(make_quoted(&target));
+            continue;
         }
         // `-isystem`, `-iquote` and `-idirafter` before `-I`, of which they
         // are not spellings.
@@ -449,13 +501,39 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             continue;
         }
         match arg.as_str() {
-            "-c" => inv.stage = Stage::Compile,
-            "-S" => inv.stage = Stage::Rust,
+            "-c" => inv.stop_at(Stage::Compile),
+            "-S" => inv.stop_at(Stage::Rust),
+            "-E" => inv.stop_at(Stage::Preprocess),
+            "-P" => inv.line_markers = false,
+            "-C" | "-CC" => inv.notes.push(format!(
+                "ignoring '{arg}': the preprocessed output keeps no comments"
+            )),
+            // `-M` and `-MM` are `-E` with the dependencies for output.
+            "-M" | "-MM" => {
+                inv.stop_at(Stage::Preprocess);
+                inv.deps.only = true;
+                inv.deps.system = arg == "-M";
+            }
+            "-MD" | "-MMD" => {
+                inv.deps.beside = true;
+                inv.deps.system = arg == "-MD";
+            }
+            "-MP" => inv.deps.phony = true,
+            "--version" => inv.query = Some(Query::Version),
+            "--help" => inv.query = Some(Query::Help),
+            "-dumpversion" => inv.query = Some(Query::DumpVersion),
+            "-dumpfullversion" => inv.query = Some(Query::DumpFullVersion),
+            "-dumpmachine" => inv.query = Some(Query::DumpMachine),
             "-w" => inv.warnings = false,
             "-v" => inv.verbose = true,
             "-s" => inv.strip = true,
             "-pipe" => {}
-            "-pthread" => inv.libs.push("pthread".to_owned()),
+            // GCC's `-pthread` is the library and the macro.
+            "-pthread" => {
+                inv.libs.push("pthread".to_owned());
+                inv.macros
+                    .push(CommandLineMacro::Define("_REENTRANT".to_owned()));
+            }
             "-nostdinc" => inv.system_include = false,
             "-ansi" => (inv.standard, inv.dialect) = (Standard::C89, Dialect::Iso),
             "-m64" => inv.pointer_bits = Some(64),
@@ -581,6 +659,24 @@ fn input(path: PathBuf, force_c: bool) -> Result<Input, String> {
     }
 }
 
+/// A name as `make` reads it in a rule: `$` doubled, and a space or a `#`
+/// escaped with a backslash — what `-MQ` does to its target, and what a
+/// dependency's name gets.
+pub fn make_quoted(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            '$' => out.push_str("$$"),
+            ' ' | '\t' | '#' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// A `-std=` value.
 fn standard(name: &str) -> Option<(Standard, Dialect)> {
     Some(match name {
@@ -630,6 +726,50 @@ mod tests {
         assert_eq!(inv.opt_level, "0");
         assert!(inv.checks && inv.system_include && inv.warnings);
         assert_eq!(inv.stage, Stage::Link);
+    }
+
+    #[test]
+    fn the_earliest_stage_wins() {
+        assert_eq!(parse_all(&["-S", "-c", "a.c"]).unwrap().stage, Stage::Rust);
+        assert_eq!(
+            parse_all(&["-c", "-E", "a.c"]).unwrap().stage,
+            Stage::Preprocess
+        );
+        let inv = parse_all(&["-MM", "-c", "a.c"]).unwrap();
+        assert_eq!(inv.stage, Stage::Preprocess);
+        assert!(inv.deps.only && !inv.deps.system);
+    }
+
+    #[test]
+    fn dependency_options() {
+        let inv = parse_all(&[
+            "-MD",
+            "-MP",
+            "-MF",
+            "x.d",
+            "-MT",
+            "a.o",
+            "-MQ",
+            "$(OBJ) b.o",
+            "-c",
+            "a.c",
+        ])
+        .unwrap();
+        assert_eq!(
+            inv.deps,
+            Deps {
+                only: false,
+                beside: true,
+                system: true,
+                file: Some(PathBuf::from("x.d")),
+                targets: vec!["a.o".to_owned(), "$$(OBJ)\\ b.o".to_owned()],
+                phony: true,
+            }
+        );
+        assert_eq!(inv.stage, Stage::Compile);
+        let inv = parse_all(&["-MMD", "-MFy.d", "a.c"]).unwrap();
+        assert!(inv.deps.beside && !inv.deps.system);
+        assert_eq!(inv.deps.file, Some(PathBuf::from("y.d")));
     }
 
     #[test]

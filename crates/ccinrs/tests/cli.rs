@@ -508,6 +508,107 @@ fn the_instruction_sets_are_the_command_lines() {
 }
 
 // ---------------------------------------------------------------------------
+// The preprocessor, and what make asks
+// ---------------------------------------------------------------------------
+
+const UTIL_H: &str = "#ifndef UTIL_H\n#define UTIL_H\n#define SQUARE(x) ((x) * (x))\n#pragma pack(push, 1)\nstruct packed { char c; int i; };\n#pragma pack(pop)\nint util(int);\n#endif\n";
+
+const MAIN_C: &str = "#include <stdio.h>\n#include \"util.h\"\n#include \"util.h\"\n\nint main(int argc, char **argv) {\n    int y = SQUARE(argc + 1);\n    printf(\"%d %zu\\n\", y, sizeof(struct packed));\n    return util(y);\n}\n";
+
+/// `-E` prints the preprocessed C with GCC's line markers — the pragmas that
+/// change what follows them kept — and the result compiles as a `.i` file;
+/// `-P` leaves the markers out.
+#[test]
+fn the_preprocessor_on_its_own() {
+    let s = Scratch::new("preprocess");
+    s.write("inc/util.h", UTIL_H);
+    s.write("main.c", MAIN_C);
+    s.write("util.c", "int util(int x) { return x - 4; }\n");
+    let out = s.ccinrs(&["-E", "-Iinc", "main.c"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("# 1 \"main.c\"\n"), "{text}");
+    for expected in [
+        "#pragma pack(1)\n# 5 \"inc/util.h\" 1\nstruct packed { char c; int i; };\n\
+         #pragma pack()\n# 7 \"inc/util.h\"\nint util(int);\n",
+        "# 5 \"main.c\" 2\nint main(int argc, char **argv) {\n    int y = ( ( argc + 1 ) * ( argc + 1 ) ) ;\n",
+    ] {
+        assert!(text.contains(expected), "{expected:?} in:\n{text}");
+    }
+    let out = s.ccinrs(&["-E", "-P", "-Iinc", "main.c", "-o", "main.i"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = std::fs::read_to_string(s.dir.join("main.i")).expect("main.i");
+    assert!(!text.lines().any(|line| line.starts_with("# ")), "{text}");
+    s.compile(&["main.i", "util.c", "-o", "prog"]);
+    let out = s.run("prog", &[]);
+    assert_eq!(stdout(&out), "4 5\n");
+    assert_eq!(out.status.code(), Some(0));
+}
+
+/// `-MM` and `-MMD` write the rule `make` includes; `-MP` adds an empty rule
+/// per header, `-MT` and `-MQ` name the target, `-MF` the file. A header of
+/// the program's own is listed once however often it was included, and the
+/// platform's only by `-M`.
+#[test]
+fn dependency_rules_for_make() {
+    let s = Scratch::new("deps");
+    s.write("inc/util.h", UTIL_H);
+    s.write("main.c", MAIN_C);
+    s.write("util.c", "int util(int x) { return x - 4; }\n");
+    let out = s.ccinrs(&["-MM", "-MP", "-Iinc", "main.c"]);
+    assert_eq!(
+        stdout(&out),
+        "main.o: main.c inc/util.h\n\ninc/util.h:\n",
+        "{}",
+        stderr(&out)
+    );
+    let out = s.ccinrs(&["-M", "-Iinc", "main.c"]);
+    assert!(stdout(&out).contains("stdio.h"), "{}", stdout(&out));
+    // As in GCC, the directory an output goes to has to be there.
+    let out = s.ccinrs(&["-c", "-Iinc", "main.c", "-o", "obj/main.o"]);
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: cannot open output file obj/main.o: the directory 'obj' does not exist\n"
+    );
+    std::fs::create_dir(s.dir.join("obj")).expect("obj/");
+    s.compile(&["-MMD", "-c", "-Iinc", "main.c", "-o", "obj/main.o"]);
+    assert_eq!(
+        std::fs::read_to_string(s.dir.join("obj/main.d")).expect("obj/main.d"),
+        "obj/main.o: main.c inc/util.h\n"
+    );
+    s.compile(&[
+        "-MMD", "-MF", "custom.d", "-MT", "a.o", "-MQ", "$(B)", "-c", "-Iinc", "main.c",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(s.dir.join("custom.d")).expect("custom.d"),
+        "a.o $$(B): main.c inc/util.h\n"
+    );
+    s.compile(&["-MMD", "-Iinc", "main.c", "util.c", "-o", "prog"]);
+    assert_eq!(
+        std::fs::read_to_string(s.dir.join("prog-util.d")).expect("prog-util.d"),
+        "util.o: util.c\n"
+    );
+}
+
+/// What a build asks a compiler about itself.
+#[test]
+fn the_compiler_says_what_it_is() {
+    let s = Scratch::new("version");
+    let out = s.ccinrs(&["--version"]);
+    assert!(out.status.success());
+    assert!(stdout(&out).starts_with("ccinrs "), "{}", stdout(&out));
+    assert_eq!(stdout(&s.ccinrs(&["-dumpversion"])), "14\n");
+    assert_eq!(stdout(&s.ccinrs(&["-dumpfullversion"])), "14.2.0\n");
+    assert_eq!(
+        stdout(&s.ccinrs(&["--target=wasm32-wasip1", "-dumpmachine"])),
+        "wasm32-wasip1\n"
+    );
+    let out = s.ccinrs(&["-v"]);
+    assert!(out.status.success());
+    assert!(stderr(&out).starts_with("ccinrs "), "{}", stderr(&out));
+}
+
+// ---------------------------------------------------------------------------
 // WebAssembly
 // ---------------------------------------------------------------------------
 

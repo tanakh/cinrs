@@ -6,8 +6,10 @@
 //! See `doc/ccinrs.md` for what it takes and what it does not.
 
 mod args;
+mod deps;
 mod diag;
 mod driver;
+mod preprocess;
 mod print;
 mod runtime;
 mod rustc;

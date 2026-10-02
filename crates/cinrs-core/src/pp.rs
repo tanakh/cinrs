@@ -794,6 +794,8 @@ pub struct IncludedFile {
     /// The `#include` directive that pulled it in, which is where a diagnostic
     /// inside it points.
     pub directive: SourceRange,
+    /// Whose header it is.
+    pub kind: include::HeaderKind,
 }
 
 /// What `#embed`'s parameters asked for (C23 6.10.3.2–6.10.3.5).
@@ -3872,20 +3874,20 @@ impl Pp<'_> {
         if let Some(guard) = detect_include_guard(&input) {
             self.guards.insert(found.key.clone(), guard);
         }
+        let kind = found.kind();
         self.included.push(IncludedFile {
             name: found.name.clone(),
             text: found.text.clone(),
             base,
             directive,
+            kind,
         });
         self.files
             .push(FileEntry::new(found.text, base, 1, found.name));
-        let site = if found.system {
-            DefSite::Platform
-        } else if matches!(found.origin, include::Origin::Bundled) {
-            DefSite::Bundled
-        } else {
-            DefSite::Program
+        let site = match kind {
+            include::HeaderKind::System => DefSite::Platform,
+            include::HeaderKind::Bundled => DefSite::Bundled,
+            include::HeaderKind::User => DefSite::Program,
         };
         self.open.push(OpenFile {
             input,
@@ -5245,12 +5247,16 @@ impl Pp<'_> {
         // things, GCC's number first because that is what a program parsing
         // it looks for, and `__CINRS__` below is the identity a program asks
         // for when it wants to know who really compiled it.
-        self.define_object("__GNUC__", "14");
-        self.define_object("__GNUC_MINOR__", "2");
-        self.define_object("__GNUC_PATCHLEVEL__", "0");
+        let (major, minor, patch) = crate::GCC_VERSION;
+        self.define_object("__GNUC__", &major.to_string());
+        self.define_object("__GNUC_MINOR__", &minor.to_string());
+        self.define_object("__GNUC_PATCHLEVEL__", &patch.to_string());
         self.define_string(
             "__VERSION__",
-            &format!("14.2.0 (cinrs {})", env!("CARGO_PKG_VERSION")),
+            &format!(
+                "{major}.{minor}.{patch} (cinrs {})",
+                env!("CARGO_PKG_VERSION")
+            ),
         );
         self.define_object("__cinrs__", "1");
         self.define_object("__CINRS__", "1");

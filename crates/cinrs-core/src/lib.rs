@@ -291,6 +291,11 @@ impl Dialect {
 /// [`Options::complex`]; the front end itself is compiled either way.
 pub const COMPLEX_SUPPORTED: bool = cfg!(feature = "complex");
 
+/// The GCC release cinrs presents itself as — `__GNUC__`, `__GNUC_MINOR__`
+/// and `__GNUC_PATCHLEVEL__` — and why it is that one is in the preprocessor,
+/// where they are defined.
+pub const GCC_VERSION: (u32, u32, u32) = (14, 2, 0);
+
 /// What every diagnostic about a complex type says when
 /// [`Options::complex`] is off.
 ///
@@ -578,6 +583,8 @@ pub struct Analysis {
     pub unit: TranslationUnit,
     /// Everything that went wrong.
     pub diagnostics: Diagnostics,
+    /// Every header the unit read, in the order it read them.
+    pub headers: Vec<Header>,
     /// The macro invocations the preprocessor replaced, which later passes'
     /// diagnostics are annotated from.
     pub expansions: pp::Expansions,
@@ -693,6 +700,28 @@ struct FrontEndOutput {
     options: Options,
 }
 
+/// Lexes and preprocesses one translation unit: the half of [`front_end`]
+/// that [`preprocess_file`] stops after.
+fn preprocess_unit(
+    ctx: &mut pp::Context,
+    options: &mut Options,
+    diagnostics: &mut Diagnostics,
+) -> pp::Preprocessed {
+    let mut raw = lex::lex_file(&ctx.text, ctx.base, &(&*options).into());
+    // `#pragma cinrs target` has to be answered before anything else looks at
+    // the model: the predefined macros are built from it, so it cannot be a
+    // pragma like the others, handled where it stands. The scan is lexical and
+    // over the unit's own text only; see [`pp::scan_target_pragma`]. A pragma
+    // that really did change the model means the text has to be lexed again,
+    // because how wide `wchar_t` is decides what `L'…'` may hold.
+    let (target_pragmas, relex) = pp::scan_target_pragma(&raw, options, diagnostics);
+    ctx.target_pragmas = target_pragmas;
+    if relex {
+        raw = lex::lex_file(&ctx.text, ctx.base, &(&*options).into());
+    }
+    pp::preprocess(&raw, ctx, options, diagnostics)
+}
+
 /// Lexes, preprocesses and parses one translation unit.
 fn front_end(input: FrontEndInput) -> FrontEndOutput {
     let FrontEndInput {
@@ -701,18 +730,6 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         mut options,
     } = input;
     let mut diagnostics = Diagnostics::new();
-    let mut raw = lex::lex_file(&ctx.text, ctx.base, &(&options).into());
-    // `#pragma cinrs target` has to be answered before anything else looks at
-    // the model: the predefined macros are built from it, so it cannot be a
-    // pragma like the others, handled where it stands. The scan is lexical and
-    // over the unit's own text only; see [`pp::scan_target_pragma`]. A pragma
-    // that really did change the model means the text has to be lexed again,
-    // because how wide `wchar_t` is decides what `L'…'` may hold.
-    let (target_pragmas, relex) = pp::scan_target_pragma(&raw, &mut options, &mut diagnostics);
-    ctx.target_pragmas = target_pragmas;
-    if relex {
-        raw = lex::lex_file(&ctx.text, ctx.base, &(&options).into());
-    }
     let pp::Preprocessed {
         tokens,
         expansions,
@@ -726,7 +743,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         crate_path,
         pack_events,
         target_events,
-    } = pp::preprocess(&raw, &ctx, &options, &mut diagnostics);
+    } = preprocess_unit(&mut ctx, &mut options, &mut diagnostics);
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);
     let unit = parse::parse(
@@ -790,38 +807,13 @@ fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagno
     let mut options = options.clone();
     apply_env_target(&mut options, source.root_range(), &mut diagnostics);
     apply_env_system_include(&mut options, source.root_range(), &mut diagnostics);
-    let file = source.map.file(source.root);
     let arg = FrontEndInput {
-        ctx: pp::Context {
-            text: file.text().to_owned(),
-            base: file.base(),
-            file_name: file.rust_path().unwrap_or(pp::DEFAULT_FILE_NAME).to_owned(),
-            first_line: file.first_line(),
-            dir: including_directory(file.rust_path()),
-            next_base: source.map.next_base(),
-            // Filled in by `front_end`, which is where the scan runs.
-            target_pragmas: pp::TargetPragmas::default(),
-        },
+        ctx: unit_context(&source),
         unit_range: source.root_range(),
         options,
     };
     let out = on_large_stack(arg, front_end);
-    // The preprocessor allocated the offsets; the map hands out the spans for
-    // them. Adding the files in the order they were opened is what makes a
-    // diagnostic inside a nested header point at the outermost `#include`,
-    // since the file each directive is written in is already in the map.
-    for header in &out.included {
-        let span = source.map.span(header.directive);
-        let id = source
-            .map
-            .add_included_file(header.name.clone(), header.text.clone(), span);
-        debug_assert_eq!(
-            source.map.file(id).base(),
-            header.base,
-            "the preprocessor and the source map disagree about where '{}' starts",
-            header.name
-        );
-    }
+    let headers = add_headers(&mut source.map, &out.included);
     diagnostics.extend(out.diagnostics);
 
     Analysis {
@@ -829,6 +821,7 @@ fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagno
         tokens: out.tokens,
         unit: out.unit,
         diagnostics,
+        headers,
         expansions: out.expansions,
         user_headers: out.user_headers,
         embedded_files: out.embedded_files,
@@ -839,6 +832,64 @@ fn analyze_source(mut source: Source, options: &Options, mut diagnostics: Diagno
         crate_path: out.crate_path,
         options: out.options,
     }
+}
+
+/// What the preprocessor is told about the unit's own file.
+fn unit_context(source: &Source) -> pp::Context {
+    let file = source.map.file(source.root);
+    pp::Context {
+        text: file.text().to_owned(),
+        base: file.base(),
+        file_name: file.rust_path().unwrap_or(pp::DEFAULT_FILE_NAME).to_owned(),
+        first_line: file.first_line(),
+        dir: including_directory(file.rust_path()),
+        next_base: source.map.next_base(),
+        // Filled in by `preprocess_unit`, which is where the scan runs.
+        target_pragmas: pp::TargetPragmas::default(),
+    }
+}
+
+/// Adds the headers the preprocessor read to the source map, answering what
+/// each one is.
+///
+/// The preprocessor allocated the offsets; the map hands out the spans for
+/// them. Adding the files in the order they were opened is what makes a
+/// diagnostic inside a nested header point at the outermost `#include`, since
+/// the file each directive is written in is already in the map.
+fn add_headers(map: &mut SourceMap, included: &[pp::IncludedFile]) -> Vec<Header> {
+    let mut headers = Vec::with_capacity(included.len());
+    for header in included {
+        let span = map.span(header.directive);
+        let included_from = map.file_of(header.directive.start);
+        let file = map.add_included_file(header.name.clone(), header.text.clone(), span);
+        debug_assert_eq!(
+            map.file(file).base(),
+            header.base,
+            "the preprocessor and the source map disagree about where '{}' starts",
+            header.name
+        );
+        headers.push(Header {
+            name: header.name.clone(),
+            kind: header.kind,
+            file,
+            included_from,
+        });
+    }
+    headers
+}
+
+/// One header a unit read: what a dependency list (GCC's `-M`) is made of.
+#[derive(Clone, Debug)]
+pub struct Header {
+    /// What diagnostics call it: the path it was found at, as the search
+    /// spelled it, or `<cinrs>/stdio.h` for a bundled header.
+    pub name: String,
+    /// Whose header it is.
+    pub kind: include::HeaderKind,
+    /// Its file in the unit's [`SourceMap`].
+    pub file: FileId,
+    /// The file whose `#include` read it.
+    pub included_from: FileId,
 }
 
 /// Resolves [`TARGET_ENV_VAR`] into `options`, reporting a triple that names
@@ -1105,6 +1156,10 @@ pub struct FileTranslation {
     /// Whether the items call the runtime, `::cinrs::rt` — which they do for
     /// the complex types, and for nothing else.
     pub uses_runtime: bool,
+    /// Every header the unit read, in the order it read them.
+    pub headers: Vec<Header>,
+    /// The absolute paths of the resources `#embed` read.
+    pub embedded: Vec<PathBuf>,
 }
 
 /// Translates the C file at `path`.
@@ -1129,12 +1184,15 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
     })?;
     let source = capture::capture_c_file_by_line(found.name, found.text);
+    let mut analysis = analyze_source(source, options, Diagnostics::new());
+    let headers = std::mem::take(&mut analysis.headers);
+    let embedded = std::mem::take(&mut analysis.embedded_files);
     let Lowered {
         source,
         program,
         diagnostics,
         options,
-    } = lower(analyze_source(source, options, Diagnostics::new()));
+    } = lower(analysis);
     let mut uses_runtime = false;
     let items = (!diagnostics.has_errors()).then(|| {
         let (items, runtime) = codegen::generate_unit(&program, &source.map, &options);
@@ -1146,6 +1204,86 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         diagnostics,
         map: source.map,
         uses_runtime,
+        headers,
+        embedded,
+    })
+}
+
+/// A C file through the preprocessor alone: what GCC's `-E` prints, and
+/// what its `-M` lists.
+pub struct FilePreprocessing {
+    /// The tokens, ending with [`lex::TokenKind::Eof`]. Each one's range is
+    /// where it was written, or the macro invocation it came out of.
+    pub tokens: Vec<Token>,
+    /// Every error and warning, in the positions [`FilePreprocessing::map`]
+    /// resolves.
+    pub diagnostics: Diagnostics,
+    /// The unit's source map: the file itself and every header it read.
+    pub map: SourceMap,
+    /// Every header the unit read, in the order it read them.
+    pub headers: Vec<Header>,
+    /// The absolute paths of the resources `#embed` read.
+    pub embedded: Vec<PathBuf>,
+    /// The pragmas that change what the tokens after them mean, as
+    /// `(token index, text after "#pragma ")`: `#pragma pack` and `#pragma GCC
+    /// target`, each spelled as the state it left — `pack(4)`, `pack()` —
+    /// rather than as written, since a `push` or a `pop` is only meaningful
+    /// against the ones before it. The other pragmas did their work in the
+    /// preprocessor, or are ones cinrs does nothing with.
+    pub pragmas: Vec<(usize, String)>,
+}
+
+/// Preprocesses the C file at `path`, as [`translate_file`] reads it, and
+/// stops there.
+///
+/// # Errors
+///
+/// A file that cannot be read, with the reason.
+pub fn preprocess_file(path: &Path, options: &Options) -> Result<FilePreprocessing, String> {
+    let found = include::read_source(path).map_err(|error| match error {
+        include::Error::Unreadable { path, error } => format!("cannot read '{path}': {error}"),
+        include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
+    })?;
+    let mut source = capture::capture_c_file_by_line(found.name, found.text);
+    let mut diagnostics = Diagnostics::new();
+    let mut options = options.clone();
+    apply_env_target(&mut options, source.root_range(), &mut diagnostics);
+    apply_env_system_include(&mut options, source.root_range(), &mut diagnostics);
+    let (out, pp_diagnostics) = on_large_stack(
+        (unit_context(&source), options),
+        |(mut ctx, mut options)| {
+            let mut diagnostics = Diagnostics::new();
+            let out = preprocess_unit(&mut ctx, &mut options, &mut diagnostics);
+            (out, diagnostics)
+        },
+    );
+    let headers = add_headers(&mut source.map, &out.included);
+    diagnostics.extend(pp_diagnostics);
+    out.expansions.annotate(&mut diagnostics);
+    let mut pragmas = Vec::new();
+    for (index, alignment) in out.pack_events {
+        let text = match alignment {
+            Some(n) => format!("pack({n})"),
+            None => "pack()".to_owned(),
+        };
+        pragmas.push((index, text));
+    }
+    for (index, names) in out.target_events {
+        pragmas.push((index, "GCC reset_options".to_owned()));
+        if !names.is_empty() {
+            let names: Vec<&str> = names.iter().map(|(name, _)| name.as_str()).collect();
+            pragmas.push((index, format!("GCC target(\"{}\")", names.join(","))));
+        }
+    }
+    // Stable: the two pragmas of one `target` event stay in their order.
+    pragmas.sort_by_key(|(index, _)| *index);
+    Ok(FilePreprocessing {
+        tokens: out.tokens,
+        diagnostics,
+        map: source.map,
+        headers,
+        embedded: out.embedded_files,
+        pragmas,
     })
 }
 
