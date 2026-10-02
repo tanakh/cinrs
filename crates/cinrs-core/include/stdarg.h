@@ -5,10 +5,6 @@
  * it here, exactly as GCC's own <stdarg.h> does, so `va_list` and friends are
  * ordinary identifiers in a translation unit that does not include this
  * header.
- *
- * Note that *defining* a variadic function needs Rust 1.99 or later, which is
- * where `c_variadic` was stabilised; declaring and calling one has always
- * worked.
  */
 #ifndef _CINRS_STDARG_H
 #define _CINRS_STDARG_H

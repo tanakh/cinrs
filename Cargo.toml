@@ -4,13 +4,10 @@ members = ["benches/cinrs-bench", "crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Verified: `cargo +1.98.1 check -p cinrs` and the facade's behavioural tests
-# pass on 1.98.1, whose `core::arch` source the bundled x86 intrinsics headers
-# are generated from (AVX-512 is stable from 1.89; `Span::local_file`, the call
-# that finds the `.rs` file an invocation is written in, from 1.88). Defining a
-# variadic function additionally needs 1.99 (`c_variadic`); below that it is a
-# located error rather than a build failure. See the README.
-rust-version = "1.98"
+# 1.99 is where `c_variadic` — a variadic function *definition* and
+# `core::ffi::VaList` — became stable, and the release whose `core::arch` source
+# the bundled x86 intrinsics headers are generated from. See the README.
+rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/tanakh/cinrs"
 description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
@@ -30,7 +27,6 @@ num-complex = { version = "0.4.6", default-features = false }
 # `.rs` file an invocation is written in — within reach.
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 quote = "1.0.47"
-rustversion = "1.0.23"
 unicode-ident = "1.0.26"
 unicode-normalization = { version = "0.1.25", default-features = false }
 
@@ -93,7 +89,6 @@ cinrs-macros.workspace = true
 cinrs-rt = { workspace = true, optional = true }
 
 [dev-dependencies]
-rustversion.workspace = true
 ui_test = "0.30.7"
 # `tests/clang_c.rs` runs the front end in-process: the Clang suite's reject
 # cases are checked against the diagnostics and their byte ranges rather than

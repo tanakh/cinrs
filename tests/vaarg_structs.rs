@@ -45,8 +45,7 @@
 //!
 //! Without a C compiler on `PATH` there is nothing to compare against, and the
 //! test prints why and passes. `CINRS_VAARG_CC` names the compiler, `CC` is
-//! consulted next, and `cc` is the default. The half that runs the translated C
-//! needs Rust 1.99, where a variadic *definition* can be generated at all.
+//! consulted next, and `cc` is the default.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -654,9 +653,7 @@ fn check_generated_layout() {
 
 /// The `main` handed to the host compiler.
 ///
-/// Only the half that has something to compare against uses it, and that half
-/// needs a toolchain that can generate a variadic definition at all.
-#[rustversion::since(1.99)]
+/// Only the half that has something to compare against uses it.
 const MAIN_C: &str = r#"#include <stdio.h>
 #include "vaarg_corpus.h"
 
@@ -712,8 +709,6 @@ fn the_committed_corpus_is_what_the_generator_produces() {
 // the differential test
 // ---------------------------------------------------------------------------
 
-/// Everything here needs a variadic *definition*, which is Rust 1.99.
-#[rustversion::since(1.99)]
 mod differential {
     use std::path::Path;
     use std::process::Command;

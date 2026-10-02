@@ -688,8 +688,6 @@ fn stdarg_declares_the_v_functions() {
     assert_eq!(&buf[..n as usize], b"x=7");
 }
 
-/// Defining one needs Rust's `c_variadic`, stable since 1.99.
-#[rustversion::since(1.99)]
 mod variadic_definitions {
     #[test]
     fn a_variadic_function_reads_its_arguments() {

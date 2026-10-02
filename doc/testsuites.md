@@ -5,8 +5,8 @@ questions, which is why there are three of them and not one:
 
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
-| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.2 %** (`c99!`), 98.6 % (`c23!`) | 4: 3 unimplemented, 1 toolchain |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **89.4 %** (`gnu11!`), 89.0 % (`gnu89!`); 92.8 % / 92.4 % on `beta` | 188: 0 bug, 3 unimplemented, 123 not planned, 62 toolchain |
+| [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.6 %** (`c99!`), 99.1 % (`c23!`) | 3: 3 unimplemented |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **92.9 %** (`gnu11!`), 92.5 % (`gnu89!`) | 126: 0 bug, 3 unimplemented, 123 not planned |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -24,14 +24,13 @@ as unimplemented or not planned, case by case.
 
 * **[c-testsuite](https://github.com/c-testsuite/c-testsuite)** — whole
   programs with the output each must produce. Of the 220 in its `single-exec`
-  suite, **214 of the 218 that `c99!` is eligible for are correct (98.2 %)**,
-  216 of 220 under `c11!` and 217 of 220 under `c23!` and every GNU dialect.
+  suite, **215 of the 218 that `c99!` is eligible for are correct (98.6 %)**,
+  217 of 220 under `c11!` and 218 of 220 under `c23!` and every GNU dialect.
   **Not one error in this corpus is a bug**: two are constructs `cinrs` has not
   implemented — a `goto` out of a statement expression, and a `va_arg` of a
-  `struct` too large for the argument registers — one is C23's empty
-  initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in, and the
-  last needs a newer Rust than 1.98. Strict
-  `c89!` is 173 of the 175 it selects, because 22 of the cases it takes — the
+  `struct` too large for the argument registers — and the third is C23's empty
+  initialiser `{}` in a block a strict `c99!` or `c11!` refuses it in. Strict
+  `c89!` is 174 of the 175 it selects, because 22 of the cases it takes — the
   corpus tags them for portability rather than for strict C90 — use something
   C99 or C11 added, and a strict C89 entry point is required to refuse them.
   The corpus is a git submodule, so a fresh checkout skips the suite
@@ -39,18 +38,16 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,581 of the 1,769 run are correct (89.4 %)** under
-  `gnu11!` — 1,477 passing and 104 refused as C99 requires — and 1,574
-  (89.0 %) under `gnu89!`, which is the language these C89-era programs were
-  written in and refuses none of them; on `beta`, where a variadic definition
-  compiles, the same runs are 1,642 (92.8 %) and 1,635 (92.4 %). **Not one of
-  the 188 errors is a bug**; they are the memory operands and x87 registers of
+  exit status zero. **1,643 of the 1,769 run are correct (92.9 %)** under
+  `gnu11!` — 1,538 passing and 105 refused as C99 requires — and 1,636
+  (92.5 %) under `gnu89!`, which is the language these C89-era programs were
+  written in and refuses only the one that uses C23's `va_start`. **Not one of
+  the 126 errors is a bug**; they are the memory operands and x87 registers of
   inline assembly, the vector extensions, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
-  implement, the definitions and `va_list`s that need Rust 1.99, and five
-  programs that built and then did the wrong thing, which the document names
-  one by one.
+  implement, and five programs that built and then did the wrong thing, which
+  the document names one by one.
 * **[Clang's C conformance tests](clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
   which lines must be diagnosed. **167 of the 203 revisions run are correct
@@ -223,14 +220,14 @@ report breaks its error count down into them, in this order:
 | **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
 | **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
 | **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the memory operands and x87 registers of inline assembly, which `asm!` has no operand for, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
-| **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. Today that is `c_variadic`, stable in 1.99 — a variadic *definition*, a `va_list` object, or a `va_list *`. |
+| **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. No list has one today: the last were the variadic *definitions* and `va_list` objects that needed `c_variadic`, which became stable in 1.99 — now the minimum supported version. |
 
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1581/1769 correct (89.4%) — 1477 passed, 104 rejected as the standard requires
-  errors: 188 — bug 0, unimplemented 3, not planned 123, toolchain 62
-  (7 not generated) — 4 m 14 s
+gcc.c-torture/execute through `gnu11!`: 1643/1769 correct (92.9%) — 1538 passed, 105 rejected as the standard requires
+  errors: 126 — bug 0, unimplemented 3, not planned 123, toolchain 0
+  (7 not generated) — 4 m 17 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.
@@ -242,7 +239,7 @@ One id per line: a marker, the id, a category tag and a note.
 ```
 execute/20061220-1  [not-planned]    compile error: the constraint "m" asks for a memory operand, …
 00213               [unimplemented]  unsupported: a `goto` out of a statement expression
-?00140                               variadic function definition; needs Rust 1.99
+?NNNNN                               needs a newer Rust than the minimum supported one
 !00200                               error: "'long long' requires C99 or later"  conforming: …
 ```
 
@@ -301,15 +298,12 @@ out of it, which becomes a control-flow graph and is relooped back into a
 `match` inside a `loop`), tables of function pointers
 (`sqlite3_vfs`, `sqlite3_io_methods`), twenty variadic *definitions*
 (`sqlite3_mprintf`, `sqlite3_snprintf`, `sqlite3_log`, `sqlite3_config` and the
-rest — the one thing that needs **Rust 1.99** and `c_variadic`), `va_list`
-forwarding, bit-fields in `Expr` and `Table`, `union`
+rest), `va_list` forwarding, bit-fields in `Expr` and `Table`, `union`
 initialisers, `__builtin_expect`, address constants into other objects, atomic
 stores through a function pointer, and the platform's POSIX headers through
 `#pragma cinrs system_include`.
 
-It is in `scripts/ci.sh --full` only, because it needs the network, and it skips
-itself with a note — successfully, like a harness without its corpus — on a
-toolchain older than 1.99.
+It is in `scripts/ci.sh --full` only, because it needs the network.
 
 ### BLAKE3
 
@@ -338,8 +332,7 @@ a processor with AVX-512 the dispatcher chooses it — `blake3_simd_degree()`
 is 16 — so the vectors run through the AVX-512 code there, and through
 whatever the machine has elsewhere.
 
-It is in `scripts/ci.sh --full` only, because it needs the network; it needs
-no particular toolchain.
+It is in `scripts/ci.sh --full` only, because it needs the network.
 
 ### xxHash
 
@@ -375,8 +368,7 @@ of reading unaligned input under GCC, had been a silent aligned read — a panic
 in a debug build — and is now `read_unaligned`, which the debug build of the
 fixture checks on every hash.
 
-It is in `scripts/ci.sh --full` only, because it needs the network; it needs no
-particular toolchain.
+It is in `scripts/ci.sh --full` only, because it needs the network.
 
 ### Against gcc and clang: `--bench`
 

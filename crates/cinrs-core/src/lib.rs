@@ -281,21 +281,6 @@ impl Dialect {
     }
 }
 
-/// Whether the compiler supports C-variadic definitions and
-/// [`core::ffi::VaList`], which Rust stabilised in 1.99.
-///
-/// This crate is compiled by the very toolchain that will compile the code it
-/// generates, so the answer is exact rather than a guess: a `c99!` invocation
-/// that defines a variadic function, or that declares a `va_list` object, is
-/// diagnosed as needing a newer Rust instead of producing an expansion the
-/// compiler rejects with `E0658`.
-#[rustversion::since(1.99)]
-pub const C_VARIADIC_SUPPORTED: bool = true;
-/// Whether the compiler supports C-variadic definitions and
-/// [`core::ffi::VaList`], which Rust stabilised in 1.99.
-#[rustversion::before(1.99)]
-pub const C_VARIADIC_SUPPORTED: bool = false;
-
 /// Whether the complex types are available, which is this crate's `complex`
 /// feature.
 ///
@@ -369,13 +354,6 @@ pub struct Options {
     pub target: TargetModel,
     /// Where [`Options::target`] came from, which the diagnostics name.
     pub target_source: TargetSource,
-    /// Whether `va_list` and variadic *definitions* may be generated.
-    ///
-    /// Defaults to [`C_VARIADIC_SUPPORTED`], which is exactly what the
-    /// compiling toolchain can do; a test that wants to see the diagnostics an
-    /// older toolchain produces — or the code a newer one would generate — can
-    /// set it either way.
-    pub c_variadic: bool,
     /// Whether the complex types are available.
     ///
     /// Defaults to [`COMPLEX_SUPPORTED`], which is this crate's `complex`
@@ -415,7 +393,6 @@ impl Options {
             system_include: include::System::Off,
             target: TargetModel::host(),
             target_source: TargetSource::Host,
-            c_variadic: C_VARIADIC_SUPPORTED,
             complex: COMPLEX_SUPPORTED,
         }
     }

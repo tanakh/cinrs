@@ -129,7 +129,6 @@ dependencies = [
  "cinrs-macros",
  "cinrs-rt",
  "proc-macro2",
- "rustversion",
  "ui_test",
 ]
 
@@ -148,7 +147,6 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn 3.0.6",
  "unicode-ident",
  "unicode-normalization",

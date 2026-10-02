@@ -45,7 +45,6 @@
 !00084                   error: "a variadic macro requires C99 or later"  conforming: a variadic macro is C99, so strict C89 is required to refuse it; write `c99!`
 !00097                   error: "a variadic macro requires C99 or later"  conforming: a variadic macro is C99, so strict C89 is required to refuse it; write `c99!`
 !00129                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
-?00140                   variadic function definition; needs Rust 1.99, so it passes there and not before
 !00154                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`
 !00170                   error: "a trailing comma in an enumerator list requires C99 or later"  conforming: a trailing comma in an enumerator list is C99, so strict C89 is required to refuse it; write `c99!`
 !00173                   error: "a declaration after a statement requires C99 or later"  conforming: mixed declarations and code are C99, so strict C89 is required to refuse them; write `c99!`

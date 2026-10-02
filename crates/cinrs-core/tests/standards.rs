@@ -21,8 +21,7 @@ fn errors(standard: Standard, source: &str) -> Vec<String> {
     // refuses (`1'000'000`, `##`, `L"…"`).
     let literal = format!("r#####\"{source}\"#####");
     let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
-    let mut options = Options::new(standard);
-    options.c_variadic = true;
+    let options = Options::new(standard);
     let analysis = analyze(input, &options);
     let mut messages: Vec<(cinrs_core::Pos, String)> = analysis
         .diagnostics

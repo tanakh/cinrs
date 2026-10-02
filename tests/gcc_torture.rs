@@ -833,24 +833,12 @@ fn list_path(standard: Standard) -> PathBuf {
 
 /// What this run says the list should hold, before it is merged with the file.
 ///
-/// Two adjustments, both of which only matter when the list is being written.
-///
-/// * A note keeps the *message* and drops the ` (at line …)` every `cinrs`
-///   diagnostic ends with in string-literal input. The position is of the
-///   generated file, which the prelude has shifted, so it says nothing a
-///   reader of this list can use.
-/// * A case whose diagnostic ends `(this toolchain is older)` — a variadic
-///   definition or a `va_list` object, both of which need Rust 1.99 — becomes
-///   a `?` line instead of a plain one, because that is exactly what `?`
-///   means: it passes on a newer compiler and fails on an older one, and
-///   neither answer says the list is wrong. Doing it here rather than by hand
-///   keeps it true after a regeneration, and keeps `cargo +beta test` quiet.
-fn list_inputs(
-    results: &BTreeMap<String, Outcome>,
-    previous: &BTreeMap<String, Entry>,
-) -> (BTreeMap<String, Outcome>, BTreeMap<String, Entry>) {
+/// A note keeps the *message* and drops the ` (at line …)` every `cinrs`
+/// diagnostic ends with in string-literal input. The position is of the
+/// generated file, which the prelude has shifted, so it says nothing a reader
+/// of this list can use.
+fn list_inputs(results: &BTreeMap<String, Outcome>) -> BTreeMap<String, Outcome> {
     let mut tidied = BTreeMap::new();
-    let mut entries = previous.clone();
     for (id, outcome) in results {
         let Outcome::Failed {
             classification,
@@ -861,17 +849,6 @@ fn list_inputs(
             continue;
         };
         let note = conformance::strip_position(classification).to_owned();
-        // The exact phrase both of sema's toolchain gates end with — the one
-        // for a variadic *definition* and the one for a `va_list` object.
-        if detail.contains("(this toolchain is older)") && !entries.contains_key(id) {
-            entries.insert(
-                id.clone(),
-                Entry {
-                    kind: EntryKind::ToolchainDependent,
-                    note: note.clone(),
-                },
-            );
-        }
         tidied.insert(
             id.clone(),
             Outcome::Failed {
@@ -881,7 +858,7 @@ fn list_inputs(
             },
         );
     }
-    (tidied, entries)
+    tidied
 }
 
 /// The comment block written above the list.
@@ -1350,8 +1327,13 @@ fn report(run: &Run<'_>, update: bool) -> Result<()> {
                 );
             }
         }
-        let (tidied, entries) = list_inputs(&results, &run.expected_failures);
-        let written = write_list(&run.list, &list_header(run.standard), &tidied, &entries)?;
+        let tidied = list_inputs(&results);
+        let written = write_list(
+            &run.list,
+            &list_header(run.standard),
+            &tidied,
+            &run.expected_failures,
+        )?;
         println!(
             "gcc-torture: wrote {written} expected failures to {}",
             run.list.display()

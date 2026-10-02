@@ -197,7 +197,7 @@ pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenS
     }
     let mut initialisers = TokenStream::new();
     for func in &program.functions {
-        if func.body.is_some() && !cg.beyond_toolchain(func) {
+        if func.body.is_some() {
             out.extend(cg.function_item(func));
             if let Some(kind) = func.init_kind {
                 initialisers.extend(cg.init_array_item(func, kind));
@@ -243,7 +243,7 @@ pub fn generate_stubs(program: &Program, map: &SourceMap, options: &Options) -> 
         out.extend(cg.static_item(var));
     }
     for func in &program.functions {
-        if !func.is_extern() && !cg.beyond_toolchain(func) {
+        if !func.is_extern() {
             out.extend(cg.stub_item(func));
         }
     }
@@ -1236,21 +1236,6 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    /// Whether a function's signature needs more than the compiling toolchain
-    /// can do, in which case no item is generated for it at all.
-    ///
-    /// Sema has already reported it — see [`crate::C_VARIADIC_SUPPORTED`] — and
-    /// emitting the item anyway would add `rustc`'s own `E0658` on top of a
-    /// diagnostic that already says what to do.
-    fn beyond_toolchain(&self, func: &Function) -> bool {
-        if self.options.c_variadic {
-            return false;
-        }
-        (func.sig.variadic && !func.is_extern())
-            || self.uses_va_list(func.sig.ret)
-            || func.sig.params.iter().any(|ty| self.uses_va_list(*ty))
-    }
-
     /// Whether `va_list` appears anywhere in a type.
     fn uses_va_list(&self, ty: Ty) -> bool {
         match ty {
@@ -2180,7 +2165,7 @@ impl<'a> Codegen<'a> {
             items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
         }
         for func in &self.program.functions {
-            if !func.is_extern() || self.beyond_toolchain(func) {
+            if !func.is_extern() {
                 continue;
             }
             // An [x86 intrinsic](crate::x86) has no symbol: a call to it is

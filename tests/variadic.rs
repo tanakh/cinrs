@@ -1,13 +1,8 @@
 //! Integration tests that *run* translated C defining variadic functions.
 //!
-//! Defining one needs Rust's `c_variadic`, stable since 1.99, so the whole file
-//! is skipped on an older toolchain — where the crate refuses the definition
-//! with a diagnostic saying exactly that, rather than emitting code the
-//! compiler would reject. Declaring and calling a variadic function needs
-//! nothing new and is covered by the other integration tests.
+//! Declaring and calling a variadic function is covered by the other
+//! integration tests.
 
-/// Everything here needs `core::ffi::VaList` and `...` in a definition.
-#[rustversion::since(1.99)]
 mod definitions {
     use cinrs::c99;
 

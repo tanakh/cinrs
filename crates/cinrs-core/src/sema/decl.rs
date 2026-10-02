@@ -275,7 +275,6 @@ impl Sema<'_> {
                 decl,
                 name,
                 func,
-                declarator.ty.range,
                 &attrs,
                 declarator.asm_label.as_ref(),
                 None,
@@ -581,11 +580,7 @@ impl Sema<'_> {
         }
         // A `va_list` has no zero value: it starts out as a copy of the list
         // the function was called with, which is also what `va_start` puts
-        // back into it. A `va_list *` local has one — a null pointer — but its
-        // type still names `core::ffi::VaList`.
-        if self.mentions_va_list(ty) {
-            self.gate_va_list(declarator.range);
-        }
+        // back into it. (A `va_list *` local has one — a null pointer.)
         if ty.is_va_list() && init.is_none() {
             let Some(init) = self.va_list_init(declarator.range) else {
                 // The name stays declared, but as something already reported,
@@ -2041,7 +2036,6 @@ impl Sema<'_> {
         decl: &ast::Decl,
         name: &ast::Ident,
         func: &ast::FunctionType,
-        range: SourceRange,
         attrs: &ast::Attributes,
         asm_label: Option<&ast::Spanned<String>>,
         definition: Option<&ast::FunctionDef>,
@@ -2100,17 +2094,6 @@ impl Sema<'_> {
             );
             return None;
         }
-        // Declaring and *calling* a variadic function is ordinary stable Rust;
-        // only defining one needs `c_variadic`, which Rust stabilised in 1.99.
-        if func.variadic && definition.is_some() && !self.c_variadic {
-            let at = func.ellipsis.unwrap_or(range);
-            self.gate(
-                at,
-                "variadic function definitions require Rust 1.99 or later \
-                 (this toolchain is older)",
-            );
-        }
-
         let ret = self.ty_of(&func.ret)?;
         if self.reject_va_list(ret, func.ret.range) {
             return None;
@@ -2721,7 +2704,6 @@ impl Sema<'_> {
             &decl,
             &def.name,
             func,
-            def.ty.range,
             &attrs,
             def.asm_label.as_ref(),
             Some(def),
@@ -2854,11 +2836,6 @@ impl Sema<'_> {
                 name.range,
             );
             self.insert(&name.name, Entry::Object(object));
-            // A parameter of a *definition*: the generated signature has to
-            // name `core::ffi::VaList`, whether by value or through a pointer.
-            if self.mentions_va_list(ty) {
-                self.gate_va_list(name.range);
-            }
             // Either spelling is a list this function may copy: a `va_list`
             // parameter holds the caller's list, and a `va_list *` points at
             // it, so `va_list x;` inside has something to start from.

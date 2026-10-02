@@ -91,12 +91,6 @@
 //! thing. Every function whose *signature* is well formed reaches the IR even
 //! when its body does not, which is what lets codegen emit stub items and keep
 //! a Rust call site from producing a second, meaningless error.
-//!
-//! One kind of diagnostic is held back: what the *compiling toolchain* cannot
-//! do — see [`crate::C_VARIADIC_SUPPORTED`] — is only reported for a program
-//! that is otherwise well formed, so that a C error and a "you need a newer
-//! Rust" error never compete for the same construct, and so that a broken
-//! program is diagnosed identically on every toolchain.
 
 mod asm;
 mod atomics;
@@ -144,22 +138,7 @@ pub fn analyze(
 ) -> (Program, Diagnostics) {
     let mut sema = Sema::new(unit, options, unit_id);
     sema.run(unit);
-    let Sema {
-        mut diags,
-        gate_diags,
-        program,
-        ..
-    } = sema;
-    // What the toolchain cannot compile is only worth saying about a program
-    // that is otherwise right: a C error and a "you need a newer Rust" error
-    // for the same construct would be two ways of saying the same thing, and
-    // the first one is the one the author can act on. Holding them back also
-    // keeps the diagnostics of a broken program identical on every toolchain.
-    if !diags.has_errors() {
-        for diag in gate_diags {
-            diags.push(diag);
-        }
-    }
+    let Sema { diags, program, .. } = sema;
     (program, diags)
 }
 
@@ -629,21 +608,12 @@ struct Sema<'a> {
     /// are looked up in; see [`ast::RecordSpecId`].
     unit: &'a ast::TranslationUnit,
     diags: Diagnostics,
-    /// Diagnostics about what the compiling toolchain cannot do, which are
-    /// only reported when the program is otherwise well formed; see
-    /// [`analyze`].
-    gate_diags: Vec<Diagnostic>,
-    /// Whether the toolchain supports `va_list` and variadic definitions.
-    c_variadic: bool,
     /// Whether the complex types are available; see [`crate::Options::complex`].
     complex: bool,
     /// Which revision the block is written in, and whether the GNU extensions
     /// are on; an identifier another entry point would have made a keyword is
     /// reported against it.
     gating: crate::Gating,
-    /// Whether the `va_list` gate has already been reported once. One mention
-    /// of the type is enough to make the point.
-    va_list_gate_reported: bool,
     target: TargetModel,
     program: Program,
     scopes: Vec<Scope>,
@@ -941,11 +911,8 @@ impl<'a> Sema<'a> {
         let mut sema = Self {
             unit,
             diags: Diagnostics::new(),
-            gate_diags: Vec::new(),
-            c_variadic: options.c_variadic,
             complex: options.complex,
             gating: options.gating(),
-            va_list_gate_reported: false,
             target: options.target,
             program: Program {
                 unit_id,
@@ -1175,30 +1142,6 @@ impl<'a> Sema<'a> {
             "GCC accepts this with a warning; write {} for the same leniency",
             self.gating.standard.macro_name_in(crate::Dialect::Gnu)
         )
-    }
-
-    /// Records that the program needs a toolchain this one is not.
-    ///
-    /// The diagnostic is held back until the end of the unit; see [`analyze`].
-    fn gate(&mut self, range: SourceRange, message: impl Into<String>) {
-        self.gate_diags.push(Diagnostic::error(range, message));
-    }
-
-    /// Reports, once, that having a `va_list` object needs Rust 1.99.
-    ///
-    /// It is the *object* that needs `core::ffi::VaList`, not the name: a unit
-    /// that includes `<stdarg.h>` and only calls `printf` generates nothing
-    /// the older toolchain cannot compile, and code generation drops the
-    /// declarations that mention the type (see `beyond_toolchain`).
-    fn gate_va_list(&mut self, range: SourceRange) {
-        if self.c_variadic || self.va_list_gate_reported {
-            return;
-        }
-        self.va_list_gate_reported = true;
-        self.gate(
-            range,
-            "'va_list' requires Rust 1.99 or later (this toolchain is older)",
-        );
     }
 
     /// The gate diagnostic for a name a newer standard would have made a

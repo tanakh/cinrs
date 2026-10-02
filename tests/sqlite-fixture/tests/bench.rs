@@ -7,7 +7,7 @@
 //! --bench` runs it all three ways and prints one table; run alone it is
 //!
 //! ```text
-//! cargo +beta test --release --test bench -- --ignored --nocapture
+//! cargo test --release --test bench -- --ignored --nocapture
 //! ```
 //!
 //! (`#[ignore]`d so that the check's plain `cargo test` does not time it.)

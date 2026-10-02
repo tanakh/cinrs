@@ -43,7 +43,7 @@ running.
 
 The amalgamation, 269,649 lines in one file, public domain, `SQLITE_THREADSAFE=1`;
 what it exercises is in [`doc/testsuites.md`](testsuites.md#one-real-program-sqlite).
-Needs Rust 1.99 for its twenty variadic definitions. An in-memory database,
+An in-memory database,
 `PRAGMA journal_mode=MEMORY`, everything through
 `sqlite3_prepare_v2`/`bind`/`step`/`reset`:
 
@@ -125,7 +125,7 @@ The compressed-bitmap library, as its amalgamated `roaring.c` and `roaring.h`
 per-function-group `_Pragma(STRINGIFY(GCC target(T)))` regions, `_pext_u64` and
 the other BMI2 intrinsics, `_Static_assert`, flexible array members, `_Atomic`
 reference counts, `restrict`, copy-on-write, and one variadic definition
-(`roaring_bitmap_of`), which is why it needs Rust 1.99.
+(`roaring_bitmap_of`).
 
 **Correctness.** A differential test against a `BTreeSet<u32>` reference:
 4,000 seeded operations (`add`, `add_many`, `add_range`, `remove_range`,
@@ -279,7 +279,7 @@ three.
 The two single-header libraries (public domain), one unit with both
 `*_IMPLEMENTATION` macros: the SSE2 JPEG IDCT and YCbCr paths (live, because
 `__SSE2__` is predefined), `aligned(16)` tables, `_Thread_local` state, and a
-variadic definition (`stbiw__writef`), which is why it needs Rust 1.99.
+variadic definition (`stbiw__writef`).
 Compiled unedited on the first try, with no diagnostic and no warning.
 
 **Correctness.** 50 generated images (gradients, noise, an alpha
@@ -326,7 +326,7 @@ with `va_list`, `format` attributes, `open_memstream`, `fork`/`execvp`/`wait`,
 program rather than a library, so the fixture is a binary crate with
 `#![no_main]`, the exported C `main` being the entry point (rustc otherwise
 says the entry symbol is declared twice; see [Pragmas](pragmas.md#export)).
-Compiled unedited with no diagnostic and no warning; needs Rust 1.99.
+Compiled unedited with no diagnostic and no warning.
 
 **Correctness.** chibicc's own test suite, run exactly as its Makefile runs
 it (each `test/*.c` compiled by the chibicc under test, linked with gcc,
@@ -448,7 +448,7 @@ one unit each under `#pragma cinrs export` and `system_include first`,
 with the `NDEBUG` its `configure` chooses and a hand-written `build.h`.
 Macros that generate whole families of functions (`stack.h`, `vector.h`,
 `heap.h`), `__builtin_clz`/`prefetch`, `popen`, `getrusage`, `sysconf`, and
-variadic message functions, which is why it needs Rust 1.99.
+variadic message functions.
 
 **What it took.** Two refusals of valid C, both fixed with ui tests
 (`tests/ui/incomplete_prototypes.rs`, `tests/ui/typedef_shadowed_by_declarator.rs`):
@@ -489,8 +489,7 @@ about 12,000 lines in one unit, the nine files' statics never colliding):
 a bytecode interpreter loop written with **computed `goto`** through a
 272-entry `static void *dispatchTable[]` of `&&label`s, NaN-boxed values
 punned through unions, a mark-sweep collector, a single-pass compiler driven
-by a table of function pointers, and three variadic definitions, which is
-why it needs Rust 1.99. Upstream's `test/api/*.c` — seventeen files of
+by a table of function pointers, and three variadic definitions. Upstream's `test/api/*.c` — seventeen files of
 foreign-function bindings — are translated too, so only the VM changes
 between the builds under test.
 

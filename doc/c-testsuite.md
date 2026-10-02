@@ -154,9 +154,9 @@ there is no escape, so it cannot itself contain a `"`.
 | **report** | counted as an error of its category, listed under it | counted as a `toolchain` error when it fails here | counted as **correct**, under `rejected as the standard requires` |
 | **update** | kept, tag and note and all; a *new* failure is written in as `[bug]  classify me: …` | kept as it stands | kept as it stands; never downgraded to a plain failure, and a case that stopped being refused is warned about rather than deleted |
 
-`00140` is the `?` entry: it defines a variadic function, which needs Rust
-1.99, so it passes on a new enough compiler and not on an older one. The `!`
-entries are `00209` under `c23!` and `gnu23!`, `00219` under `c99!` — and 22
+No list has a `?` entry now. The last was `00140`, which defines a variadic
+function and so needed Rust 1.99 while that was newer than the minimum
+supported version; it passes everywhere. The `!` entries are `00209` under `c23!` and `gnu23!`, `00219` under `c99!` — and 22
 more under `c89!`, which is [the row](#the-c89-row-which-is-the-corpuss-own-tag-being-generous)
 where a strict C89 entry point refuses what C99 added.
 
@@ -265,7 +265,7 @@ same reason the other two must be:
 
 ## Baseline
 
-Measured on `rustc 1.98.1` (stable), x86_64-unknown-linux-gnu, at the pinned
+Measured on `rustc 1.99.0` (stable), x86_64-unknown-linux-gnu, at the pinned
 corpus revision.
 
 **Correct** is passed plus rejected-as-required; see
@@ -275,23 +275,23 @@ are.
 
 | entry point | selected | correct | rate | passed | rejected | errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `c89!` | 175 | **173** | **98.9 %** | 151 | 22 | 2 |
-| `c99!` | 218 | **214** | **98.2 %** | 213 | 1 | 4 |
-| `c11!` | 220 | **216** | **98.2 %** | 216 | — | 4 |
-| `c23!` | 220 | **217** | **98.6 %** | 216 | 1 | 3 |
-| `gnu89!` | 220 | **217** | **98.6 %** | 217 | — | 3 |
-| `gnu99!` | 220 | **217** | **98.6 %** | 217 | — | 3 |
-| `gnu11!` | 220 | **217** | **98.6 %** | 217 | — | 3 |
-| `gnu23!` | 220 | **217** | **98.6 %** | 216 | 1 | 3 |
+| `c89!` | 175 | **174** | **99.4 %** | 152 | 22 | 1 |
+| `c99!` | 218 | **215** | **98.6 %** | 214 | 1 | 3 |
+| `c11!` | 220 | **217** | **98.6 %** | 217 | — | 3 |
+| `c23!` | 220 | **218** | **99.1 %** | 217 | 1 | 2 |
+| `gnu89!` | 220 | **218** | **99.1 %** | 218 | — | 2 |
+| `gnu99!` | 220 | **218** | **99.1 %** | 218 | — | 2 |
+| `gnu11!` | 220 | **218** | **99.1 %** | 218 | — | 2 |
+| `gnu23!` | 220 | **218** | **99.1 %** | 217 | 1 | 2 |
 
 **There is not a single `bug` or `not planned` error in this corpus, under any
-entry point.** Every error is one of the same four cases:
+entry point.** Every error is one of the same three cases:
 
-| entry point | bug | unimplemented | not planned | toolchain |
-| --- | ---: | ---: | ---: | ---: |
-| `c89!` | 0 | 1 (`00213`) | 0 | 1 (`00140`) |
-| `c99!`, `c11!` | 0 | 3 (`00204`, `00213`, `00216`) | 0 | 1 (`00140`) |
-| `c23!` and the GNU dialects | 0 | 2 (`00204`, `00213`) | 0 | 1 (`00140`) |
+| entry point | bug | unimplemented | not planned |
+| --- | ---: | ---: | ---: |
+| `c89!` | 0 | 1 (`00213`) | 0 |
+| `c99!`, `c11!` | 0 | 3 (`00204`, `00213`, `00216`) | 0 |
+| `c23!` and the GNU dialects | 0 | 2 (`00204`, `00213`) | 0 |
 
 *rejected* is the `!` category: a case this entry point is *required* to
 refuse. It stays in the denominator — it is one of the cases the run looked
@@ -299,25 +299,25 @@ at — and it counts as correct, because refusing it is the right answer. The
 report mode summary line says the same thing:
 
 ```
-c-testsuite / single-exec through `c23!`: 217/220 correct (98.6%) — 216 passed, 1 rejected as the standard requires
-  errors: 3 — bug 0, unimplemented 2, not planned 0, toolchain 1
+c-testsuite / single-exec through `c23!`: 218/220 correct (99.1%) — 217 passed, 1 rejected as the standard requires
+  errors: 2 — bug 0, unimplemented 2, not planned 0, toolchain 0
 ```
 
 Per tag, under `c23!` (a run that selects everything and has a rejection in
 it):
 
-| tag | correct | rate | unimplemented | toolchain |
-| --- | ---: | ---: | ---: | ---: |
-| `portable` | 217/220 | 98.6 % | 2 | 1 |
-| `c89` | 172/174 | 98.9 % | 1 | 1 |
-| `c99` | 42/43 | 97.7 % | 1 | — |
-| `c11` | 2/2 | 100 % | — | — |
-| `needs-cpp` | 97/98 | 99.0 % | 1 | — |
-| `needs-libc` | 62/63 | 98.4 % | 1 | — |
+| tag | correct | rate | unimplemented |
+| --- | ---: | ---: | ---: |
+| `portable` | 218/220 | 99.1 % | 2 |
+| `c89` | 173/174 | 99.4 % | 1 |
+| `c99` | 42/43 | 97.7 % | 1 |
+| `c11` | 2/2 | 100 % | — |
+| `needs-cpp` | 97/98 | 99.0 % | 1 |
+| `needs-libc` | 62/63 | 98.4 % | 1 |
 
 ### The `c89!` row, which is the corpus's own tag being generous
 
-`c89!` is the entry point that *refuses* the most, and **22 of its 24
+`c89!` is the entry point that *refuses* the most, and **22 of its 23
 non-passes are cases that use something a later revision added** — twenty-one
 of them tagged `c89`, and the twenty-second (`00216`) tagged with no revision
 at all: nine mix declarations and code, four write `long long`, three end an
@@ -330,20 +330,19 @@ difference — which is the useful thing this row measures.
 Every one of those 22 is an `!` line naming the diagnostic it has to be
 refused with, so guard mode asserts the refusal rather than tolerating a
 failure, and they count as **correct**: a strict C89 entry point that accepted
-`long long` would be the news. That is why the row reads 173/175 (98.9 %)
+`long long` would be the news. That is why the row reads 174/175 (99.4 %)
 rather than the 151/175 (86.3 %) it did when a conforming refusal was filed
-next to a gap. The two errors that are left are `00140` (the Rust 1.99
-variadic gap) and `00213`, which every entry point fails.
+next to a gap. The one error that is left is `00213`, which every entry point
+fails.
 
 `gnu89!` is the same corpus with those gates switched off, and it passes
-216/220 — exactly what `gnu99!` and `gnu11!` pass. That is the point of the
+218/220 — exactly what `gnu99!` and `gnu11!` pass. That is the point of the
 dialect: `gcc -std=gnu89` takes all of the above as extensions too.
 
-`00140` is the one case whose result depends on the compiler: it *defines* a
-variadic function, which needs Rust 1.99, so it passes on beta and nightly and
-fails on 1.98.1. The tables above count it as a `toolchain` error; on 1.99 it
-is a pass, and every row goes up by one — 174/175 (99.4 %) for `c89!`, 215/218
-(98.6 %) for `c99!` and 217/220 (98.6 %) for the other six.
+`00140`, which *defines* a variadic function, used to be the one case whose
+result depended on the compiler: it needed Rust 1.99, and was a `toolchain`
+error until 1.99 became the minimum supported version. Every row went up by
+one with it.
 
 The GNU dialects select all 220 cases and pass the same ones as their ISO
 counterparts: nothing in the corpus needs a *plain*-spelled GNU keyword, so
@@ -352,9 +351,9 @@ switching the dialect on buys eligibility rather than passes — except for
 
 ### The errors, by category
 
-Four errors under `c99!` and `c11!` and three under `c23!` and the GNU
-dialects, all of them at compile time, and **none of them a `cinrs` bug**: two
-or three are unimplemented and one is the toolchain. The earlier measurements'
+Three errors under `c99!` and `c11!` and two under `c23!` and the GNU
+dialects, all of them at compile time, and **none of them a `cinrs` bug**:
+every one is unimplemented. The earlier measurements'
 failures — `00110`, `00149`, `00150`,
 `00152`, `00159`, `00200`, `00207`, `00209`, `00218`, `00219` and `00220` —
 are fixed and have regression tests of their own, and so are the six the GNU
@@ -371,10 +370,8 @@ translated (`tests/vla.rs` covers the same shape).
 | `00213` | a `goto` out of a statement expression. Whether a function is lowered through a [control-flow graph](../crates/cinrs-core/src/cfg.rs) is decided from its *statements*, so a jump buried in an expression is refused rather than dropped. The other thing this case writes — a `?:` one of whose operands is `void` — now works; see [`doc/gnu-extensions.md`](gnu-extensions.md). |
 | `00216` | the C23 empty initialiser `{}`, which the case writes as `(empty_s){}` — so it fails under `c99!` and `c11!` and **passes** under `c23!` and every GNU dialect. Its *other* gap, initialising a flexible array member, is closed: GCC allows it for an object with static storage duration and so does this now; see [`doc/gnu-extensions.md`](gnu-extensions.md). |
 
-**`[toolchain]` (1).** `00140` defines a variadic function, which needs Rust
-1.99.
-
-**`[bug]` (0), `[not-planned]` (0).** Nothing in this corpus is either.
+**`[bug]` (0), `[not-planned]` (0), `?` (0).** Nothing in this corpus is any
+of them.
 
 The cases that want a *later entry point* — `00219`'s `_Generic` under `c99!`,
 and twenty-one more under `c89!` — are not errors at all: refusing them is what

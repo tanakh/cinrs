@@ -1,8 +1,8 @@
 //! The rules `va_list` and the `<stdarg.h>` builtins are held to.
 //!
-//! These diagnose the *program*, so they are identical on every toolchain:
-//! what an older Rust cannot compile is only reported for a program that has
-//! nothing else wrong with it.
+//! Each is a rule of C or of what Rust's `VaList` can be — it lives in the
+//! frame of the function whose arguments it walks — and is reported at the
+//! C token that breaks it.
 
 cinrs::c99! {
     #include <stdarg.h>

@@ -5,10 +5,6 @@
 //! an argument back out of the list is a promise about what the caller passed
 //! that no signature can carry. So the request is refused with that reason
 //! rather than becoming an item `rustc` would reject in words about `...`.
-//!
-//! The test lives in this suite because a variadic *definition* needs Rust
-//! 1.99, and an older toolchain says so as well — one message on a toolchain
-//! that can compile the shape at all.
 
 cinrs::c99! {
     #include <stdarg.h>

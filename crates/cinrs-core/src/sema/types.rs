@@ -457,11 +457,6 @@ impl Sema<'_> {
             )),
             ast::TypeKind::Typedef(name) => match self.lookup_typedef(name) {
                 Some(entry) => match &entry.resolved {
-                    // Naming `va_list` is not what needs `core::ffi::VaList`:
-                    // the `typedef` <stdarg.h> writes and the declaration of a
-                    // `vprintf` nobody calls both name it, and neither
-                    // generates anything. The gate is on declaring an *object*
-                    // of the type; see `Sema::gate_va_list`.
                     Ok(ty) => Ok(*ty),
                     Err(message) => Err(TypeError {
                         range: name.range,

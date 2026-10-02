@@ -10,12 +10,11 @@ use proc_macro2::TokenStream;
 
 /// Analyses `source` and returns every error message, in source order.
 ///
-/// `c_variadic` and `complex` are forced on: what the *language* rules say
-/// must not depend on which toolchain or which cargo feature the test was
-/// built with, and both switched off have tests of their own.
+/// `complex` is forced on: what the *language* rules say must not depend on
+/// which cargo feature the test was built with, and switched off it has tests
+/// of its own.
 fn errors(source: &str) -> Vec<String> {
     let mut options = Options::new(Standard::C99);
-    options.c_variadic = true;
     options.complex = true;
     errors_with(source, &options)
 }
@@ -317,8 +316,7 @@ fn bit_fields_are_checked_against_their_type() {
     );
     // A bit-field has no address, so there is nothing for an alignment to
     // apply to; GCC says the same.
-    let mut c11 = Options::new(Standard::C11);
-    c11.c_variadic = true;
+    let c11 = Options::new(Standard::C11);
     assert_eq!(
         errors_with("struct S { _Alignas(4) int a : 3; };", &c11),
         ["'_Alignas' cannot be applied to a bit-field"]
@@ -373,7 +371,6 @@ fn constructs_that_are_still_out_of_reach_are_named() {
 #[test]
 fn a_repeated_tag_definition_is_c23s_same_type() {
     let mut c23 = Options::new(Standard::C23);
-    c23.c_variadic = true;
     c23.complex = true;
     let accepted_c23 = |source: &str| {
         let found = errors_with(source, &c23);
@@ -962,8 +959,7 @@ fn a_call_without_a_prototype_takes_any_arguments() {
     // is still legal C — the callee never looks at it.
     accepted("int f() { return 1; } int g(void) { return f(2); }");
     // C23 removed the form; there the empty list is `(void)`.
-    let mut c23 = Options::new(Standard::C23);
-    c23.c_variadic = true;
+    let c23 = Options::new(Standard::C23);
     assert_eq!(
         errors_with("int f(); int g(void) { return f(1); }", &c23),
         ["too many arguments to function call, expected 0, have 1"]
@@ -1003,8 +999,7 @@ fn compatibility_with_an_empty_parameter_list_follows_the_promotions() {
     );
     // C11 6.5.1.1p2 puts `_Generic` on compatibility as well, so two
     // associations that differ only in the prototype are a duplicate pair.
-    let mut c11 = Options::new(Standard::C11);
-    c11.c_variadic = true;
+    let c11 = Options::new(Standard::C11);
     assert!(
         errors_with(
             "int p(int); int k(void) { int (*a)() = p; \
@@ -1468,7 +1463,6 @@ fn va_arg_of_a_record_is_x86_64_system_v_only() {
     ] {
         let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
         let mut options = Options::new(Standard::C99).for_target(target);
-        options.c_variadic = true;
         options.complex = true;
         let found = errors_with(&format!("{STDARG}{SOURCE}"), &options);
         assert_eq!(
@@ -1581,54 +1575,6 @@ fn the_va_builtins_are_checked() {
     va_rejected(
         "int f(int n, ...) { va_list ap; va_list c; va_start(ap, n); va_copy(c, n); return 0; }",
         &["the second argument of 'va_copy' must have type 'va_list', not 'int'"],
-    );
-}
-
-#[test]
-fn an_older_toolchain_is_told_what_it_needs() {
-    // The check is exact — this crate is compiled by the toolchain that
-    // compiles the expansion — so the diagnostics an older one produces are
-    // tested by asking for one rather than by having one.
-    let mut options = Options::new(Standard::C99);
-    options.c_variadic = false;
-    assert_eq!(
-        errors_with("int f(int n, ...) { return n; }", &options),
-        ["variadic function definitions require Rust 1.99 or later (this toolchain is older)"]
-    );
-    assert_eq!(
-        errors_with(
-            &format!("{STDARG}int vsum(int n, va_list ap) {{ return va_arg(ap, int); }}"),
-            &options
-        ),
-        ["'va_list' requires Rust 1.99 or later (this toolchain is older)"]
-    );
-    // One mention is enough to make the point.
-    assert_eq!(
-        errors_with(
-            &format!(
-                "{STDARG}int f(int n, va_list a) {{ return 0; }} \
-                 int g(int n, va_list b) {{ return 0; }}"
-            ),
-            &options
-        ),
-        ["'va_list' requires Rust 1.99 or later (this toolchain is older)"]
-    );
-    // Naming the type is not using it: `<stdarg.h>` itself, and the
-    // declaration of a `vprintf` nobody calls, generate nothing at all.
-    assert!(errors_with(STDARG, &options).is_empty());
-    assert!(errors_with(&format!("{STDARG}int vsum(int n, va_list ap);"), &options).is_empty());
-    // Declaring and calling a variadic function needs nothing new.
-    assert!(
-        errors_with(
-            "int printf(const char *, ...); int f(void) { return printf(\"hi\"); }",
-            &options
-        )
-        .is_empty()
-    );
-    // A program that is wrong for other reasons hears about those instead.
-    assert_eq!(
-        errors_with("int f(int n, ...) { return missing(n); }", &options),
-        ["implicit declaration of function 'missing' is invalid in C99"]
     );
 }
 
@@ -2067,8 +2013,7 @@ fn what_asm_cannot_express_is_refused_by_name() {
 #[test]
 fn asm_is_refused_where_it_cannot_be_had() {
     // A safe function has no `unsafe` block to hold an `asm!`.
-    let mut options = Options::gnu(Standard::C23);
-    options.c_variadic = true;
+    let options = Options::gnu(Standard::C23);
     assert_eq!(
         asm_errors_with(
             &format!("{X86_64}[[cinrs::safe]] void f(void) {{ asm(\"nop\"); }}"),
@@ -2291,8 +2236,7 @@ fn an_aligned_typedef_of_a_scalar_has_that_alignment() {
 /// `_Alignas` on a `typedef` stays the constraint violation it is (C11 6.7.5p2).
 #[test]
 fn what_an_aligned_typedef_cannot_do_is_refused() {
-    let mut c11 = Options::new(Standard::C11);
-    c11.c_variadic = true;
+    let c11 = Options::new(Standard::C11);
     assert_eq!(
         errors_with("typedef _Alignas(8) int T;", &c11),
         ["an alignment specifier is not allowed on a 'typedef'"]
@@ -2330,7 +2274,6 @@ fn what_an_aligned_typedef_cannot_do_is_refused() {
 fn options_for(triple: &str) -> Options {
     let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
     let mut options = Options::new(Standard::C99).for_target(target);
-    options.c_variadic = true;
     options.complex = true;
     options
 }

@@ -1099,8 +1099,8 @@ fn the_product_and_quotient_agree_with_cc() {
 // reading one back out of an argument list
 // ---------------------------------------------------------------------------
 
-/// `va_arg` of a complex type, which needs a variadic *definition* (Rust 1.99)
-/// and, like every other aggregate, the x86-64 System V classification.
+/// `va_arg` of a complex type, which, like every other aggregate, follows the
+/// x86-64 System V classification.
 ///
 /// A complex value is a pair of components side by side, and that is exactly
 /// how the ABI sees it: `float _Complex` is eight bytes and one SSE eightbyte
@@ -1108,7 +1108,6 @@ fn the_product_and_quotient_agree_with_cc() {
 /// back the way a `struct` is — one `next_arg` per eightbyte — rather than at
 /// its own type, which `VaArgSafe` has nothing to say about. See
 /// `tests/vaarg_structs.rs`.
-#[rustversion::since(1.99)]
 mod variadic {
     use cinrs::c11;
     use cinrs::rt::Complex;

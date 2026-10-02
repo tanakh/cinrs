@@ -438,7 +438,7 @@ source* by `crates/cinrs-core/tests/x86_intrinsics.rs`, which writes both the
 header and the table that drives the mapping, so a declaration and the function
 it resolves to cannot drift apart — and a test that needs no toolchain checks
 the two committed files against each other on every run. The source read is
-that of Rust 1.98, the minimum supported version, so nothing is declared that
+that of Rust 1.99, the minimum supported version, so nothing is declared that
 the oldest supported compiler lacks; AVX-512 has been stable in `core::arch`
 since 1.89.
 
@@ -1149,9 +1149,7 @@ once, on the `#`, until the file is saved.
 
 ## Variadic functions
 
-Declaring and calling one — `printf` and friends — works on any supported
-toolchain; *defining* one needs Rust 1.99's `c_variadic`, and is a clear error
-before that rather than an expansion the compiler would reject.
+Declaring and calling one — `printf` and friends — and defining one both work.
 
 `va_list` is `core::ffi::VaList`, so a list passes straight to `vprintf`. The
 names come from the bundled `<stdarg.h>`, which defines them in terms of the

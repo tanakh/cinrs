@@ -478,7 +478,6 @@ fn static_objects_and_constant_expressions() {
 /// A 128-bit value *passes* through `...` like anything else — that is the
 /// call site, and the ABI. Reading one back out with `va_arg` is the part
 /// stable Rust cannot do; `tests/ui/gnu_int128_errors.rs` has the diagnostic.
-#[rustversion::since(1.99)]
 #[test]
 fn a_128_bit_argument_passes_through_an_ellipsis() {
     c99! {

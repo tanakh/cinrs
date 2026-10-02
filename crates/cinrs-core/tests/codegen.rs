@@ -39,12 +39,8 @@ fn generate_for_target(standard: Standard, triple: &str, source: &str) -> String
     generate_with(Options::new(standard).for_target(target), source)
 }
 
-fn generate_with(mut options: Options, source: &str) -> String {
+fn generate_with(options: Options, source: &str) -> String {
     let input = TokenStream::from_str(source).expect("the C must lex as Rust tokens");
-    // Variadic definitions are generated whatever the toolchain: this test only
-    // ever reads the text back, and the snapshots have to be the same
-    // everywhere.
-    options.c_variadic = true;
     // Whether the C checked out is asked of the front end rather than of the
     // expansion's text: the expansion may hold a `compile_error!` of its own —
     // the one a `constructor` puts behind a `cfg` for a target with no

@@ -23,8 +23,7 @@ use proc_macro2::TokenStream;
 
 /// Analyses `source`, which must be free of errors.
 fn program(source: &str) -> Program {
-    let mut options = Options::new(Standard::C99);
-    options.c_variadic = true;
+    let options = Options::new(Standard::C99);
     let literal = format!("r#####\"{source}\"#####");
     let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
     let analysis = analyze(input, &options);
@@ -107,8 +106,7 @@ fn tier_of(source: &str, name: &str) -> Option<Tier> {
 fn lowered(source: &str, name: &str) -> String {
     let literal = format!("r#####\"{source}\"#####");
     let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
-    let mut options = Options::new(Standard::C99);
-    options.c_variadic = true;
+    let options = Options::new(Standard::C99);
     let output = expand(input, &options);
     let text = output.to_string();
     let file: syn::File = match syn::parse2(output) {

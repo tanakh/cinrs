@@ -21,13 +21,6 @@
 # once with `SQLITE_THREADSAFE=1` (SQLite's own default, which on a Unix means
 # pthreads) and once with `SQLITE_THREADSAFE=0`.
 #
-# Defining a variadic function needs **Rust 1.99** (`c_variadic`), and SQLite
-# defines twenty of them — `sqlite3_mprintf`, `sqlite3_snprintf`, `sqlite3_log`,
-# `sqlite3_config`, `sqlite3_str_appendf` and the rest. Below 1.99 the front end
-# reports each as a located error rather than mistranslating it, so this script
-# looks for a toolchain that is new enough and says which one it used.
-# `CINRS_SQLITE_TOOLCHAIN` names one explicitly (`beta`, `nightly`, `1.99.0`, …).
-#
 # When the platform's own `libsqlite3` is on the machine, the identical query loop
 # is run against it too, so that there is a number to compare. It is not a
 # benchmark — one loop in one process, and the platform's library is a different
@@ -44,7 +37,7 @@
 # Like every other step of this project's verification it runs under a ceiling on
 # the address space and one on the clock: `CINRS_SQLITE_ULIMIT_V` (kilobytes,
 # 8000000 by default, `0` to switch it off) and `CINRS_SQLITE_TIMEOUT` (seconds
-# per step).
+# per step). `CINRS_SQLITE_TOOLCHAIN` names a rustup toolchain (`beta`, …).
 
 set -euo pipefail
 
@@ -100,57 +93,8 @@ for arg in "$@"; do
     esac
 done
 
-# ---------------------------------------------------------------------------
-# the toolchain
-# ---------------------------------------------------------------------------
-
-# The first of these that is installed and is 1.99 or newer, since a variadic
-# *definition* needs `c_variadic`. An explicit `CINRS_SQLITE_TOOLCHAIN` is taken
-# as given and is not second-guessed.
-pick_toolchain() {
-    if [ -n "${CINRS_SQLITE_TOOLCHAIN:-}" ]; then
-        printf '%s\n' "$CINRS_SQLITE_TOOLCHAIN"
-        return 0
-    fi
-    local candidate version major minor
-    for candidate in "" beta nightly; do
-        if [ -z "$candidate" ]; then
-            version=$(cargo --version 2>/dev/null) || continue
-        else
-            version=$(cargo "+$candidate" --version 2>/dev/null) || continue
-        fi
-        # "cargo 1.99.0-beta.6 (…)" → 1 99
-        version=${version#cargo }
-        major=${version%%.*}
-        minor=${version#*.}
-        minor=${minor%%.*}
-        case $major$minor in
-        *[!0-9]*) continue ;;
-        esac
-        if [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 99 ]; }; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-    return 1
-}
-
-if ! TOOLCHAIN=$(pick_toolchain); then
-    say "check-sqlite: skipped: no Rust 1.99 or newer toolchain is installed."
-    say ""
-    say "    SQLite *defines* twenty variadic functions — sqlite3_mprintf,"
-    say "    sqlite3_snprintf, sqlite3_log and the rest — and defining one needs"
-    say "    c_variadic, stable since 1.99. Below that the front end reports each"
-    say "    as a located error rather than mistranslating it, so there is nothing"
-    say "    this script could usefully run. Install one:"
-    say ""
-    say "        rustup toolchain install beta"
-    say ""
-    say "    or name one with CINRS_SQLITE_TOOLCHAIN."
-    exit 0
-fi
-if [ -n "$TOOLCHAIN" ]; then
-    CARGO=(cargo "+$TOOLCHAIN")
+if [ -n "${CINRS_SQLITE_TOOLCHAIN:-}" ]; then
+    CARGO=(cargo "+$CINRS_SQLITE_TOOLCHAIN")
 else
     CARGO=(cargo)
 fi

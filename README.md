@@ -101,9 +101,8 @@ That is `examples/readme.rs`: `cargo run --example readme`.
 cargo add cinrs
 ```
 
-Rust **1.98** or later. One thing needs a newer compiler: *defining* a variadic
-function needs Rust 1.99's `c_variadic` and is a clear error before that —
-declaring and calling one, `printf` included, works everywhere.
+Rust **1.99** or later — the release that made `c_variadic` stable, which is
+what a variadic function *definition* is translated to.
 
 **Linux, macOS and Windows.** Linux (x86-64) is where `cinrs` is developed and
 where the whole test suite and the conformance corpora run; macOS (arm64) and
@@ -253,14 +252,14 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 
 | Corpus | Correct | Entry point |
 | --- | --- | --- |
-| [c-testsuite] — whole programs with expected output | **214 of 218 (98.2 %)** | `c99!` |
-| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,581 of 1,769 (89.4 %)**, 92.8 % on Rust 1.99 | `gnu11!` |
+| [c-testsuite] — whole programs with expected output | **215 of 218 (98.6 %)** | `c99!` |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,643 of 1,769 (92.9 %)** | `gnu11!` |
 | [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **167 of 203 (82.3 %)** | per test |
 | glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
 
 "Correct" means the case passed, or the entry point is required to refuse it
-and did. Every remaining case is listed by name as unimplemented, not planned
-or needing a newer toolchain — **not one is tagged as a bug**.
+and did. Every remaining case is listed by name as unimplemented or not
+planned — **not one is tagged as a bug**.
 [The conformance suites][testsuites] says how they are run.
 
 [Benchmarks][benchmarks]: 48 whole C programs — the single-threaded C entries

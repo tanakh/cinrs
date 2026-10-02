@@ -220,9 +220,8 @@ follows [Semantic Versioning][semver].
   configurations, with an in-memory database, a `CREATE TABLE`, three inserts, a
   `SELECT` through `sqlite3_prepare_v2`/`step`/`column_int` and a Rust
   `extern "C"` function called from SQL. The 9 MB is not committed and the check
-  is in `scripts/ci.sh --full` only, since it needs the network; it needs Rust
-  1.99 as well, because the amalgamation *defines* twenty variadic functions.
-  It is the largest single C translation unit anyone ships, and what it
+  is in `scripts/ci.sh --full` only, since it needs the network. It is the
+  largest single C translation unit anyone ships, and what it
   exercises that no small program does — and what it costs — is in
   [`doc/testsuites.md`](doc/testsuites.md).
 
@@ -305,21 +304,34 @@ follows [Semantic Versioning][semver].
   `__GCC_ASM_FLAG_OUTPUTS__` (flag outputs are refused), `__SIZEOF_FLOAT128__`,
   `__OPTIMIZE__`, `__NO_INLINE__` and `__PRAGMA_REDEFINE_EXTNAME`. glibc's
   `<tgmath.h>`, the one platform header that did not go through, now does.
-* **The minimum supported Rust version is 1.98**, up from 1.88. The bundled
+* **The minimum supported Rust version is 1.99**, up from 1.88. 1.99 is the
+  release that made `c_variadic` stable, so a variadic function *definition*,
+  a `va_list` object and a `va_list *` — which below it were refused with
+  "requires Rust 1.99 or later (this toolchain is older)" — are now always
+  translated, and the `?` lines the conformance lists kept for them are gone.
+  `cinrs_core::C_VARIADIC_SUPPORTED` and `cinrs_core::Options::c_variadic`,
+  which only said whether the compiling toolchain had the feature, are
+  removed, and `cinrs-core` no longer depends on `rustversion`. The bundled
   intrinsics headers are generated from the oldest supported compiler's
   `core::arch`, so that nothing is declared that it lacks, and AVX-512 is
-  stable there from 1.89; 1.98 is the release they were generated from. The
-  0.2.0 release will need 1.99, for `c_variadic`.
+  stable there from 1.89; regenerated from 1.99's, they are unchanged.
 * **`register int x asm("eax")` says what to write instead.** An `asm` label on
   a local variable — GCC's register variable — is still refused, and the
   message now says to write the register as a constraint of the `asm` that
   uses it: `"a"(x)`.
-* **GCC's C torture tests: 1,581 of 1,769 correct (89.4 %)** under `gnu11!`,
-  up from 1,516, and 1,574 (89.0 %) under `gnu89!`, up from 1,509; 1,642
-  (92.8 %) and 1,635 (92.4 %) on Rust 1.99. Sixty cases that were refused on
-  their inline assembly now run, and `execute/bitfld-5` with them, and the
-  four `_FloatN` `issignaling` cases with the keywords. See
+* **GCC's C torture tests: 1,643 of 1,769 correct (92.9 %)** under `gnu11!`,
+  up from 1,516 (1,573 on a toolchain with `c_variadic`), and 1,636 (92.5 %)
+  under `gnu89!`, up from 1,509. Sixty cases that were refused on their inline
+  assembly now run, and `execute/bitfld-5` with them, the four `_FloatN`
+  `issignaling` cases with the keywords, and the sixty-one that needed only
+  `c_variadic` with the new minimum Rust. `execute/pr117432`, which calls C23's
+  one-argument `va_start`, is counted as the conforming refusal it is under
+  both — `gcc -std=gnu11` refuses it in the same words. See
   [`doc/gcc-torture.md`](doc/gcc-torture.md).
+* **c-testsuite: 215 of 218 correct (98.6 %)** under `c99!`, up from 214, and
+  218 of 220 under `c23!` and every GNU dialect: `00140` defines a variadic
+  function, and passes with the new minimum Rust. See
+  [`doc/c-testsuite.md`](doc/c-testsuite.md).
 
 * **A `goto` no longer costs the loop it was written in.** The functions whose
   jumps Rust cannot make directly are still lowered into a control-flow graph,

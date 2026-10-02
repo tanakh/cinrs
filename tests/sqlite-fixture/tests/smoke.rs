@@ -186,8 +186,8 @@ fn a_whole_session_through_the_c_api() {
         assert_eq!(sqlite3_finalize(stmt), OK);
 
         // -- and one that takes and returns text, through sqlite3_mprintf --
-        // `sqlite3_mprintf` is a *variadic definition*, which is the one thing
-        // in the amalgamation that needs Rust 1.99.
+        // `sqlite3_mprintf` is a *variadic definition*: `...` in a Rust `fn`
+        // and a `VaList` read inside it.
         let fmt = cs("%d rows, %s");
         let word = cs("ok");
         let message = sqlite3_mprintf(fmt.as_ptr(), 3, word.as_ptr());

@@ -45,7 +45,6 @@
 # every tag away, so everything comes back as `[bug]  classify me:`.
 
 !execute/20000412-3                                    error: "implicit declaration of function"  C89's implicit function declaration, which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/20000519-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 !execute/20000717-3                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20000822-1                    [not-planned]    compile error: the address of the nested function 'f2' cannot be taken: it uses the enclosing function's 'i', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'f2' to file scope and pass what it uses as parameters
 execute/20010122-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
@@ -56,15 +55,12 @@ execute/20021127-1                    [not-planned]    runtime: killed by signal
 execute/20030125-1                    [not-planned]    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
 execute/20030323-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030811-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-?execute/20030914-2                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/20031211-2                                    error: "implicit declaration of function"  C89's implicit function declaration, which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20040308-1                    [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/20040423-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 !execute/20041019-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/20041113-1                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/20041124-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20041201-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-?execute/20041214-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/20041218-2                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20050121-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20050316-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -75,11 +71,9 @@ execute/20050607-1                    [not-planned]    compile error: 'vector_si
 execute/20060420-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20061220-1                    [not-planned]    compile error: the constraint "m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 execute/20070919-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
-?execute/20071213-1                                    compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/20101011-1                    [not-planned]    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
 !execute/20120427-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/20120427-2                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/20180921-1                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/20210505-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. gnu89! accepts the implicit 'int' and stops later in the same case
 execute/20230630-2                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/20230630-4                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
@@ -92,20 +86,16 @@ execute/920302-1                      [not-planned]    compile error: passing 's
 !execute/920429-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920501-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920501-7                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. gnu89! accepts the implicit 'int' and stops at a nonlocal goto out of a nested function instead
-?execute/920501-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/920501-9                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920520-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920603-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/920625-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/920721-2                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920721-3                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/920721-4                      [not-planned]    compile error: '&&lab1' names a label of the enclosing function; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
-?execute/920726-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/920728-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920730-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920731-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920812-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/920908-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/920908-2                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/920909-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/921013-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -141,13 +131,6 @@ execute/930406-1                      [unimplemented]  compile error: a label ca
 !execute/930921-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/930929-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/930930-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/931004-10                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-12                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-14                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-4                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-6                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/931004-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/931009-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/931012-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/931017-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -171,13 +154,9 @@ execute/930406-1                      [unimplemented]  compile error: a label ca
 !execute/960402-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/960830-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/961112-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/980205                                        compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/980608-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/980716-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/990106-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/990413-2                      [not-planned]    compile error: the constraint "t" (an x87 stack register) is not supported: 'asm!' has no operand on the x87 register stack
 execute/991014-1                      [not-planned]    compile error: values of the type `[i16; 4611686018427387648]` are too big for the target architecture — the case asks only for `sizeof` of a quarter-of-the-address-space array, and `rustc` will not name the type at all
-?execute/991216-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/alias-2                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
 execute/alias-3                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
 execute/alias-4                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
@@ -194,7 +173,6 @@ execute/complex-6                     [not-planned]    compile error: a complex 
 !execute/dbra-1                                        error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/divmod-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/eeprof-1                      [not-planned]    runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
-?execute/fprintf-chk-1                                 compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/frame-address                 [not-planned]    compile error: '__builtin_frame_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 !execute/inst-check                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/int-compare                                   error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
@@ -206,8 +184,6 @@ execute/loop-2g                       [not-planned]    compile error: <sys/mman.
 !execute/loop-3b                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-3c                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/mod-1                                         error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/multi-ix                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/nest-stdar-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older) — the nested function is variadic, which is the only thing in the case's way
 execute/nestfunc-3                    [not-planned]    compile error: the address of the nested function 'nested_2' cannot be taken: it uses the enclosing function's 'sum', which GCC reaches through a trampoline written onto the stack and cinrs cannot generate. Move 'nested_2' to file scope and pass what it uses as parameters
 execute/nestfunc-5                    [not-planned]    compile error: 'goto l1' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/nestfunc-6                    [not-planned]    compile error: 'goto nonlocal' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
@@ -223,8 +199,7 @@ execute/pr109986                      [not-planned]    compile error: "../../gcc
 execute/pr110817-1                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-2                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr110817-3                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-?execute/pr117432                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/pr120630                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
+!execute/pr117432                                      error: "macro 'va_start' requires 2 arguments"  C23's one-argument va_start, in a function with nothing before its '...'; gcc -std=gnu11 refuses it too, with the same message
 execute/pr121957                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr123625                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr123625-2                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -241,28 +216,21 @@ execute/pr28865                       [unimplemented]  compile error: initializa
 execute/pr30314                       [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
 execute/pr38151                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/pr40657                       [not-planned]    compile error: the constraint "=m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
-?execute/pr41239                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr41935                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
-?execute/pr44575                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/pr44942                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr47237                       [not-planned]    compile error: '__builtin_apply' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr51447                       [not-planned]    compile error: 'goto nonlocal_lab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/pr53645                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr53645-2                     [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 !execute/pr55875                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/pr56205                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr56837                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 !execute/pr56982                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. gnu89! accepts the implicit 'int' and stops later in the same case
 execute/pr60003                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr60960                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr64242                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-?execute/pr64979                                       compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/pr65427                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-?execute/pr68390                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr70903                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-2                     [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-?execute/pr80421                                       compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/pr80692                       [not-planned]    compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
 execute/pr82210                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/pr84521                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
@@ -279,7 +247,6 @@ execute/pr94524-1                     [not-planned]    compile error: '__vector_
 execute/pr94524-2                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr94591                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr98304-2                     [not-planned]    compile error: "../../gcc.dg/pr98304-1.c" file not found; searched: target/gcc-torture/gnu11/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-?execute/printf-chk-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/scal-to-vec1                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/scal-to-vec2                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/scal-to-vec3                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
@@ -291,43 +258,15 @@ execute/simd-6                        [not-planned]    compile error: 'vector_si
 execute/stdarg-1                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-2                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-3                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
-?execute/stdarg-4                                      compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/stkalign                      [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 !execute/strct-pack-3                                  error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/strct-stdarg-1                                compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/strct-varg-1                                  compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 !execute/tstdi-1                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
-?execute/user-printf                                   compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-1                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-10                                     compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-11                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-12                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
 execute/va-arg-13                     [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/va-arg-14                     [not-planned]    compile error: va_list is only supported as a local variable or parameter
-?execute/va-arg-15                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-16                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-17                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-18                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-19                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-2                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-20                                     compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/va-arg-21                     [not-planned]    compile error: invalid application of 'sizeof' to 'va_list' — the case `malloc`s a `va_list` and keeps the pointers in an array, and Rust's `VaList` is a value with a lifetime rather than a size. The `va_list *` half of it works
 execute/va-arg-22                     [unimplemented]  compile error: va_arg with 'struct A31' is not supported: it is 31 bytes, and the x86-64 System V ABI passes a struct larger than 16 bytes on the stack, where Rust's 'va_list' cannot reach it
-?execute/va-arg-23                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-24                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-26                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-4                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-5                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-6                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-7                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-8                                      compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/va-arg-9                                      compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 execute/va-arg-pack-1                 [not-planned]    compile error: '__builtin_va_arg_pack' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/va-arg-trap-1                 [not-planned]    compile error: va_list is only supported as a local variable or parameter
-?execute/vfprintf-1                                    compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/vfprintf-chk-1                                compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
-?execute/vprintf-1                                     compile error: variadic function definitions require Rust 1.99 or later (this toolchain is older)
-?execute/vprintf-chk-1                                 compile error: 'va_list' requires Rust 1.99 or later (this toolchain is older)
 ieee/bfloat16-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16b' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/cdivchkd                         [not-planned]    runtime: killed by signal 6 — GCC's own accuracy check for `double _Complex` division, four quotients whose operands' exponents are hundreds apart. Two of the four are within what `cinrs_rt::complex::div_f64` gives; the other two need libgcc's power-of-two prescaling of both operands, which is beyond Smith's algorithm. C leaves the accuracy of complex arithmetic implementation-defined (Annex G.6). `ieee/cdivchkf` and `ieee/cdivchkld` pass
 ieee/float128-builtin-issignaling-1   [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
