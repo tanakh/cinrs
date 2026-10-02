@@ -654,6 +654,7 @@ fn check_generated_layout() {
 /// The `main` handed to the host compiler.
 ///
 /// Only the half that has something to compare against uses it.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 const MAIN_C: &str = r#"#include <stdio.h>
 #include "vaarg_corpus.h"
 
@@ -709,6 +710,10 @@ fn the_committed_corpus_is_what_the_generator_produces() {
 // the differential test
 // ---------------------------------------------------------------------------
 
+/// Only on x86-64 System V, the one ABI whose classification `va_arg` of a
+/// record follows; every other target refuses it by name, which
+/// `tests/ui/va_arg_struct_errors.rs` covers.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 mod differential {
     use std::path::Path;
     use std::process::Command;

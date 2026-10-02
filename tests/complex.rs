@@ -1107,7 +1107,8 @@ fn the_product_and_quotient_agree_with_cc() {
 /// holding both halves, `double _Complex` is sixteen and two. So it is read
 /// back the way a `struct` is — one `next_arg` per eightbyte — rather than at
 /// its own type, which `VaArgSafe` has nothing to say about. See
-/// `tests/vaarg_structs.rs`.
+/// `tests/vaarg_structs.rs`. Every other target refuses it by name.
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 mod variadic {
     use cinrs::c11;
     use cinrs::rt::Complex;

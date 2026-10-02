@@ -483,12 +483,18 @@ fn a_128_bit_argument_passes_through_an_ellipsis() {
     c99! {
         #include <stdarg.h>
 
-        /* Read back as two `unsigned long long` halves, which is what a
-           program without `va_arg(ap, __int128)` has to do anyway. */
+        /* Read back the way the platform passed it, which is what a program
+           without `va_arg(ap, __int128)` has to do anyway: as two `unsigned
+           long long` halves, or — the Microsoft x64 ABI passes anything wider
+           than eight bytes by reference — through the pointer. */
         unsigned long long low_half(int n, ...) {
             va_list ap;
             va_start(ap, n);
+        #ifdef _WIN64
+            unsigned long long v = *va_arg(ap, unsigned long long *);
+        #else
             unsigned long long v = va_arg(ap, unsigned long long);
+        #endif
             va_end(ap);
             return v;
         }
