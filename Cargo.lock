@@ -116,6 +116,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccinrs"
+version = "0.2.0"
+dependencies = [
+ "cinrs-core",
+ "proc-macro2",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

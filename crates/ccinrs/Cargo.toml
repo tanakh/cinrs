@@ -1,0 +1,31 @@
+[package]
+name = "ccinrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A C compiler with gcc's command line, built on cinrs: the C becomes Rust, which rustc compiles and links"
+readme = "README.md"
+keywords = ["c", "compiler", "gcc", "cinrs", "transpiler"]
+categories = ["command-line-utilities", "compilers", "development-tools"]
+
+include = [
+    "/src/**/*.rs",
+    "/README.md",
+    "/LICENSE",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
+
+[[bin]]
+name = "ccinrs"
+path = "src/main.rs"
+
+[dependencies]
+# The front end, used as a library: `translate_file` reads a `.c` file and
+# hands back the Rust and the diagnostics, which this crate renders itself.
+cinrs-core.workspace = true
+# The token stream `translate_file` returns; printing it is the `.rs` file
+# `rustc` is given.
+proc-macro2.workspace = true
