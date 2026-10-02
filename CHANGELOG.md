@@ -8,34 +8,62 @@ follows [Semantic Versioning][semver].
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## Unreleased
+## 0.2.0 — 2026-10-02
+
+Rust 1.99 made `c_variadic` stable, and this release is built on it: a
+variadic function *definition* is translated on every supported compiler, and
+1.99 is the minimum. The rest is what real C asked for — the x86 SIMD
+intrinsics up to AVX-512, GCC's inline assembly, a relooper that gives
+`goto`-heavy code its loops back, and cinrs presenting itself as GCC 14.2 —
+measured against SQLite, BLAKE3 and xxHash in the repository and ten more
+programs outside it.
+
+### Upgrading from 0.1
+
+* **Rust 1.99 or later** is required.
+* **`<unistd.h>`, `<fcntl.h>`, `<strings.h>` and `<sys/types.h>` are no longer
+  bundled.** A unit that includes one needs `#pragma cinrs system_include` (or
+  `CINRS_SYSTEM_INCLUDE=1`), which brings the platform's complete headers; see
+  [Changed](#changed).
+* **`__GNUC__` is 14**, up from Clang's 4.2.1, so code that tests the
+  compiler's version takes GCC 14's branches; `__CINRS__` is what says it is
+  cinrs.
+* For direct users of `cinrs-core`: `C_VARIADIC_SUPPORTED` and
+  `Options::c_variadic` are gone, since every supported compiler has the
+  feature.
+
+### Conformance and speed, as measured for this release
+
+* c-testsuite: **215 of the 218 cases `c99!` is eligible for are correct
+  (98.6 %)**, 218 of 220 under `c23!` and every GNU dialect — up from 214 and
+  217, because `00140`, which defines a variadic function, passes on every
+  supported compiler now. See [`doc/c-testsuite.md`](doc/c-testsuite.md).
+* GCC's C torture tests: **1,643 of the 1,769 run are correct (92.9 %)** under
+  `gnu11!`, up from 1,515, and 1,636 (92.5 %) under `gnu89!`. Sixty cases that
+  were refused on their inline assembly now run, `execute/bitfld-5` with them,
+  the four `_FloatN` `issignaling` cases with the keywords, and the sixty-one
+  that needed only `c_variadic` with the new minimum Rust; `execute/pr117432`,
+  which calls C23's one-argument `va_start`, passes under `gnu23!` and is the
+  conforming refusal it is under `gnu11!` and `gnu89!`. See
+  [`doc/gcc-torture.md`](doc/gcc-torture.md).
+* Clang's C conformance tests: **167 of the 203 revisions run are correct
+  (82.3 %)**, and 557 of the 620 `expected-error` lines land on the right line,
+  as in 0.1.0.
+* **Not one case in any of the three is tagged `[bug]`.**
+* 48 whole C programs, up from 39, built as `gcc -O2`, `clang -O2` and a
+  `cinrs` block: median `cinrs`/`gcc -O2` ratio **1.01×**, 42 of 48 within 10 %
+  of `gcc -O2` or faster, every program's output identical across the three
+  builds ([`doc/benchmarks.md`](doc/benchmarks.md), measured on Rust 1.98.1).
+  The one row slower than both compilers, `spectral-norm-sse2`, is the price of
+  signed arithmetic that wraps, which is a decision rather than a gap; see
+  [`doc/translation.md`](doc/translation.md).
+* Real programs: SQLite 3.53.4, BLAKE3 1.8.7 and xxHash 0.8.4 build, run and
+  pass their own checks under `scripts/check-*.sh`, and CRoaring, lz4, cJSON,
+  libdeflate, stb_image, chibicc, cmark, brotli, Kissat and Wren were compiled
+  unedited outside the repository; each has its gcc and clang timings in
+  [`doc/real-programs.md`](doc/real-programs.md).
 
 ### Added
-
-* **C23's `va_start` (N2975).** In `c23!` and `gnu23!` the bundled
-  `<stdarg.h>` defines `va_start(...)` as GCC 15 does, over
-  `__builtin_c23_va_start`: the list alone is enough, so a function with
-  nothing before its `...` — `long long first(...)` — can read its arguments,
-  and whatever follows the list is not evaluated, so `va_start(ap, n)` still
-  works. Below C23 the macro is the two-argument one it was, and the
-  one-argument form is refused as GCC refuses it. GCC's `execute/pr117432`
-  passes under `gnu23!`.
-
-* **TS 18661-3's `_FloatN` types, as keywords.** glibc uses them as the
-  compiler's own from GCC 7 on, and declares `strtof32`, `sinf64`,
-  `csqrtf32x` … under `_GNU_SOURCE`. `_Float32` is `float`, `_Float64` and
-  `_Float32x` are `double`, and `_Float64x` is `long double` — `double`
-  here, across the platform boundary as `long double` is: `strtof64x` and the
-  `f64x` twins of the ISO `l` functions link to their `double` siblings, and
-  another declared-only function taking one is refused at its call. Each takes
-  `_Complex`. `_Float128` and `__float128` can be *named* — prototypes,
-  `typedef`s, pointers, `sizeof`, `_Generic` — but no value of them is
-  accepted: an object, a cast and a call of a function whose prototype
-  mentions one are refused with the reason. A `_Generic` that lists both
-  `float` and `_Float32` (glibc's `__MATH_TG`) keeps the first. The
-  builtins glibc's `HUGE_VAL_F32`, `SNANF64` and their relatives expand to
-  (`__builtin_huge_valf32`, `__builtin_inff64x`, `__builtin_nansf32x`, …) are
-  there for the four types that have one.
 
 * **The x86 SIMD intrinsics.** `#include <immintrin.h>` and write Intel's
   intrinsics the way real C does: `__m128`, `__m128i`, `__m128d`, `__m256`,
@@ -149,19 +177,6 @@ follows [Semantic Versioning][semver].
   starts at the first multiple of the alignment, which is what an aligned AVX
   load of it needs. An `_Alignas` weaker than the element type's is still the
   error it is on any object.
-* **A byte order mark** opening a file — the unit's own text or an
-  `#include`d header — is skipped, as GCC and Clang skip it, with every
-  column still counted from the start of the file. One anywhere else is still
-  a stray character.
-* **The Benchmarks Game's SIMD programs in the benchmark suite.**
-  `fannkuch-redux-ssse3`, `n-body-sse`, `n-body-avx`, `mandelbrot-sse2`,
-  `spectral-norm-sse2`, `spectral-norm-sse41`, `spectral-norm-avx` and
-  `spectral-norm-avx2` are vendored under
-  `benches/cinrs-bench/programs/benchmarksgame/`, and all eight print, byte
-  for byte, what the `gcc -O2` and `clang -O2` builds print; the timings are
-  in [doc/benchmarks.md](doc/benchmarks.md). A program's row can now name the
-  instruction sets it is written for, which become `-mNAME` for the native
-  compilers and `-C target-feature=+NAME` for the `cinrs` build.
 
 * **`__attribute__((target("avx2")))` and `#pragma GCC target`.** GCC's way of
   telling one function which instruction sets it may use becomes
@@ -262,6 +277,46 @@ follows [Semantic Versioning][semver].
   (see Fixed). It is in `scripts/ci.sh --full` only, since it needs the
   network.
 
+* **The Benchmarks Game's SIMD programs in the benchmark suite.**
+  `fannkuch-redux-ssse3`, `n-body-sse`, `n-body-avx`, `mandelbrot-sse2`,
+  `spectral-norm-sse2`, `spectral-norm-sse41`, `spectral-norm-avx` and
+  `spectral-norm-avx2` are vendored under
+  `benches/cinrs-bench/programs/benchmarksgame/`, and all eight print, byte
+  for byte, what the `gcc -O2` and `clang -O2` builds print; the timings are
+  in [doc/benchmarks.md](doc/benchmarks.md). A program's row can now name the
+  instruction sets it is written for, which become `-mNAME` for the native
+  compilers and `-C target-feature=+NAME` for the `cinrs` build.
+
+* **C23's `va_start` (N2975).** In `c23!` and `gnu23!` the bundled
+  `<stdarg.h>` defines `va_start(...)` as GCC 15 does, over
+  `__builtin_c23_va_start`: the list alone is enough, so a function with
+  nothing before its `...` — `long long first(...)` — can read its arguments,
+  and whatever follows the list is not evaluated, so `va_start(ap, n)` still
+  works. Below C23 the macro is the two-argument one it was, and the
+  one-argument form is refused as GCC refuses it.
+
+* **TS 18661-3's `_FloatN` types, as keywords.** glibc uses them as the
+  compiler's own from GCC 7 on, and declares `strtof32`, `sinf64`,
+  `csqrtf32x` … under `_GNU_SOURCE`. `_Float32` is `float`, `_Float64` and
+  `_Float32x` are `double`, and `_Float64x` is `long double` — `double`
+  here, across the platform boundary as `long double` is: `strtof64x` and the
+  `f64x` twins of the ISO `l` functions link to their `double` siblings, and
+  another declared-only function taking one is refused at its call. Each takes
+  `_Complex`. `_Float128` and `__float128` can be *named* — prototypes,
+  `typedef`s, pointers, `sizeof`, `_Generic` — but no value of them is
+  accepted: an object, a cast and a call of a function whose prototype
+  mentions one are refused with the reason. A `_Generic` that lists both
+  `float` and `_Float32` (glibc's `__MATH_TG`) keeps the first. The
+  builtins glibc's `HUGE_VAL_F32`, `SNANF64` and their relatives expand to
+  (`__builtin_huge_valf32`, `__builtin_inff64x`, `__builtin_nansf32x`, …) are
+  there for the four types that have one. A `typedef` of one of the names —
+  `typedef float _Float32;`, which glibc's `bits/floatn-common.h` writes for a
+  compiler without the keywords — is accepted too; in 0.1.0 those names were
+  refused outright, which cost 1,671 errors on one `#include <math.h>` under
+  `_GNU_SOURCE`. `doc/system-headers.md` now measures the platform's headers
+  with `_GNU_SOURCE` as well as without: sixty-six of the sixty-seven go
+  through either way.
+
 * **Atomic operations on a function pointer.** Loading, storing, exchanging and
   compare-exchanging an object of function-pointer type — `_Atomic(void (*)
   (void))`, `<stdatomic.h>`'s `atomic_store` on one, and the `__atomic_*`,
@@ -274,25 +329,24 @@ follows [Semantic Versioning][semver].
   and friends) is still refused, because C has none on a function pointer
   either. See `tests/atomics.rs`.
 
+* **A byte order mark** opening a file — the unit's own text or an
+  `#include`d header — is skipped, as GCC and Clang skip it, with every
+  column still counted from the start of the file. One anywhere else is still
+  a stray character.
+
 ### Changed
 
-* **A computed goto is a switch over the labels whose address is taken.**
-  That is GCC's own lowering: `&&label` is the label's number among them,
-  from 1 (so never a null pointer), and every `goto *e` of a function stores
-  `e` and goes to one shared `match` on it, whose `default` is
-  `unreachable!()`. The graph then holds only ordinary jumps, so the relooper
-  reads it like any other, and the whole-function state machine is left only
-  for a graph nested deeper than `rustc` parses. A dispatch table — a
-  `static` or an automatic array of distinct label addresses — that is only
-  ever read is folded away: its labels are numbered in its
-  order, so `goto *table[op]` is a `match` on `op`. An invalid target panics
-  in a build with debug assertions and is `unreachable_unchecked` otherwise,
-  as in GCC. Wren's interpreter, whose `DISPATCH()` is
-  `goto *dispatchTable[*ip++]` at the end of every handler, went through the
-  central `match` twice per opcode on the machine and ran its benchmarks at
-  1.3–5.6× of gcc (8.6 G instructions on `fib`); it now runs at 0.89–1.28×
-  of gcc and 0.93–1.09× of its own `switch` build (2.37 G instructions,
-  against 2.34 G and gcc's 2.08 G).
+* **The minimum supported Rust version is 1.99**, up from 1.88. 1.99 is the
+  release that made `c_variadic` stable, so a variadic function *definition*,
+  a `va_list` object and a `va_list *` — which below it were refused with
+  "requires Rust 1.99 or later (this toolchain is older)" — are now always
+  translated, and the `?` lines the conformance lists kept for them are gone.
+  `cinrs_core::C_VARIADIC_SUPPORTED` and `cinrs_core::Options::c_variadic`,
+  which only said whether the compiling toolchain had the feature, are
+  removed, and `cinrs-core` no longer depends on `rustversion`. The bundled
+  intrinsics headers are generated from the oldest supported compiler's
+  `core::arch`, so that nothing is declared that it lacks, and AVX-512 is
+  stable there from 1.89; regenerated from 1.99's, they are unchanged.
 
 * **cinrs presents itself as GCC 14.2, and as `__CINRS__`.** `__GNUC__`,
   `__GNUC_MINOR__` and `__GNUC_PATCHLEVEL__` are 14, 2 and 0, up from Clang's
@@ -313,34 +367,6 @@ follows [Semantic Versioning][semver].
   `__GCC_ASM_FLAG_OUTPUTS__` (flag outputs are refused), `__SIZEOF_FLOAT128__`,
   `__OPTIMIZE__`, `__NO_INLINE__` and `__PRAGMA_REDEFINE_EXTNAME`. glibc's
   `<tgmath.h>`, the one platform header that did not go through, now does.
-* **The minimum supported Rust version is 1.99**, up from 1.88. 1.99 is the
-  release that made `c_variadic` stable, so a variadic function *definition*,
-  a `va_list` object and a `va_list *` — which below it were refused with
-  "requires Rust 1.99 or later (this toolchain is older)" — are now always
-  translated, and the `?` lines the conformance lists kept for them are gone.
-  `cinrs_core::C_VARIADIC_SUPPORTED` and `cinrs_core::Options::c_variadic`,
-  which only said whether the compiling toolchain had the feature, are
-  removed, and `cinrs-core` no longer depends on `rustversion`. The bundled
-  intrinsics headers are generated from the oldest supported compiler's
-  `core::arch`, so that nothing is declared that it lacks, and AVX-512 is
-  stable there from 1.89; regenerated from 1.99's, they are unchanged.
-* **`register int x asm("eax")` says what to write instead.** An `asm` label on
-  a local variable — GCC's register variable — is still refused, and the
-  message now says to write the register as a constraint of the `asm` that
-  uses it: `"a"(x)`.
-* **GCC's C torture tests: 1,643 of 1,769 correct (92.9 %)** under `gnu11!`,
-  up from 1,516 (1,573 on a toolchain with `c_variadic`), and 1,636 (92.5 %)
-  under `gnu89!`, up from 1,509. Sixty cases that were refused on their inline
-  assembly now run, and `execute/bitfld-5` with them, the four `_FloatN`
-  `issignaling` cases with the keywords, and the sixty-one that needed only
-  `c_variadic` with the new minimum Rust. `execute/pr117432`, which calls C23's
-  one-argument `va_start`, is counted as the conforming refusal it is under
-  both — `gcc -std=gnu11` refuses it in the same words. See
-  [`doc/gcc-torture.md`](doc/gcc-torture.md).
-* **c-testsuite: 215 of 218 correct (98.6 %)** under `c99!`, up from 214, and
-  218 of 220 under `c23!` and every GNU dialect: `00140` defines a variadic
-  function, and passes with the new minimum Rust. See
-  [`doc/c-testsuite.md`](doc/c-testsuite.md).
 
 * **A `goto` no longer costs the loop it was written in.** The functions whose
   jumps Rust cannot make directly are still lowered into a control-flow graph,
@@ -354,7 +380,7 @@ follows [Semantic Versioning][semver].
   irreducible — a cycle with two heads, which is what a `goto` into a loop body,
   Duff's device and two loops that jump into each other's bodies each make —
   and it is one `u32` per such region rather than one per function. A computed
-  `goto` keeps the old machine, whole, because `&&label` *is* a block's number.
+  `goto` is the next entry.
 
   What it is worth, measured on one machine:
 
@@ -368,12 +394,27 @@ follows [Semantic Versioning][semver].
   and none is now: 12 are relooped outright and `sqlite3VdbeExec` has one
   irreducible region, `abort_due_to_error`, which the progress-callback loop at
   `vdbe_return` jumps back to. Over the GCC torture corpus 44 functions needed
-  the machine and 19 do — every one of them a computed `goto`. `execute/medce-1`,
-  which asks the optimiser to delete a call to an undefined `link_error()`
-  inside `if (0)`, now compiles and passes. [`doc/benchmarks.md`](doc/benchmarks.md)
-  was regenerated after the change: `statemachine` is at 0.99×, 32 of the 40
-  programs (the SIMD kernel below included) are within 10 % of `gcc -O2` or
-  faster, and every output still matches.
+  the machine, and 25 came out relooped at once; the other 19 were every one a
+  computed `goto`. `execute/medce-1`, which asks the optimiser to delete a call
+  to an undefined `link_error()` inside `if (0)`, now compiles and passes.
+
+* **A computed goto is a switch over the labels whose address is taken.**
+  That is GCC's own lowering: `&&label` is the label's number among them,
+  from 1 (so never a null pointer), and every `goto *e` of a function stores
+  `e` and goes to one shared `match` on it, whose `default` is
+  `unreachable!()`. The graph then holds only ordinary jumps, so the relooper
+  reads it like any other, and the whole-function state machine is left only
+  for a graph nested deeper than `rustc` parses. A dispatch table — a
+  `static` or an automatic array of distinct label addresses — that is only
+  ever read is folded away: its labels are numbered in its
+  order, so `goto *table[op]` is a `match` on `op`. An invalid target panics
+  in a build with debug assertions and is `unreachable_unchecked` otherwise,
+  as in GCC. Wren's interpreter, whose `DISPATCH()` is
+  `goto *dispatchTable[*ip++]` at the end of every handler, went through the
+  central `match` twice per opcode on the machine and ran its benchmarks at
+  1.3–5.6× of gcc (8.6 G instructions on `fib`); it now runs at 0.89–1.28×
+  of gcc and 0.93–1.09× of its own `switch` build (2.37 G instructions,
+  against 2.34 G and gcc's 2.08 G).
 
 * **The bundled headers are ISO C; POSIX comes from the platform.** `<unistd.h>`,
   `<fcntl.h>`, `<strings.h>` and `<sys/types.h>` are no longer bundled. They were
@@ -441,6 +482,11 @@ follows [Semantic Versioning][semver].
   match token for token exactly as an unsaved buffer's does. `cargo build` never
   went near any of this: it has the positions. See
   `crates/cinrs-core/src/locate.rs`.
+
+* **`register int x asm("eax")` says what to write instead.** An `asm` label on
+  a local variable — GCC's register variable — is still refused, and the
+  message now says to write the register as a constraint of the `asm` that
+  uses it: `"a"(x)`.
 
 ### Fixed
 
@@ -553,7 +599,7 @@ follows [Semantic Versioning][semver].
   macros are left out of strict `c89!`, where the names are the program's.
 * **The `long double` boundary check no longer fires in code that cannot
   run.** Under `#pragma cinrs system_include first`, glibc's `isnan(x)` for
-  a compiler claiming GCC 4.2 is `__MATH_TG`, a `sizeof` chain naming
+  a compiler claiming GCC 4.2, as cinrs then did, is `__MATH_TG`, a `sizeof` chain naming
   `__isnanf`, `__isnan` and `__isnanl`; the `__isnanl` arm is dead for a
   `double`, but it was refused as a call across the boundary — Wren's VM
   again. An operand a constant condition excludes — of `?:` (and GNU's
@@ -662,19 +708,6 @@ follows [Semantic Versioning][semver].
   failed to *link*, the worst kind of wrong. It bit every program that reached
   glibc's `<fcntl.h>` or `<sys/stat.h>` with `#pragma cinrs system_include`.
 
-* **`_Float32` and its relatives may be defined by a `typedef`.** TS 18661-3
-  lets an implementation either make `_Float32` a keyword or leave it to the
-  library, and glibc does the second: with `_GNU_SOURCE` its
-  `bits/floatn-common.h` writes `typedef float _Float32;` for a compiler that
-  has no such keyword, and `<math.h>` then declares the `f32`/`f64`/`f32x`
-  function families in terms of it. Those names were refused outright, which
-  cost **1,671 errors on one `#include <math.h>`** under `_GNU_SOURCE` and made
-  `#pragma cinrs system_include first` unusable for any program that defines it —
-  SQLite does. A name a `typedef` has defined is now an ordinary `typedef` name;
-  only the *keyword* use, with nothing having defined it, is still refused with
-  the reason. `doc/system-headers.md`'s table is re-measured with `_GNU_SOURCE`
-  as well as without: sixty-six of the sixty-seven platform headers either way.
-
 * **An address constant may be offset by an *expression*.** C99 6.6p9 lets the
   integer a static initialiser's address constant is offset by be any integer
   constant expression, not only a literal; only a literal was recognised, so
@@ -684,6 +717,15 @@ follows [Semantic Versioning][semver].
   integer parts of such an initialiser are now folded before the check, which
   also keeps the arithmetic out of the generated `static`. See
   `tests/address_constants.rs`.
+
+### Toolchain and platforms
+
+Rust **1.99** or later, tested on 1.99.0; CI builds on stable only.
+
+As in 0.1.0, developed and fully tested on x86-64 Linux, with the examples and
+the portable tests built, linked and run in CI on macOS (arm64) and Windows
+(x86-64, MSVC); other targets are compile-checked. The SIMD intrinsics and
+inline assembly are x86 and x86-64 only, and refused by name elsewhere.
 
 ## 0.1.0 — 2026-09-22
 

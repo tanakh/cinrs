@@ -198,7 +198,7 @@ cinrs does what they promise (`__GNUC_STDC_INLINE__`, or
 `__NO_INLINE__` are absent on purpose. Nothing claims to be Clang. And cinrs
 says who it really is: `__CINRS__` (and `__cinrs__`) is `1`, and
 `__CINRS_MAJOR__`, `__CINRS_MINOR__` and `__CINRS_PATCH__` are its version,
-while `__VERSION__` says both — `"14.2.0 (cinrs 0.1.0)"` for this version.
+while `__VERSION__` says both — `"14.2.0 (cinrs 0.2.0)"` for this version.
 `__has_include`, `__has_include_next`, `__has_attribute`, `__has_c_attribute`,
 `__has_builtin`, `__has_feature` and `__has_extension` are answered from cinrs's
 own tables, so a program that guards a construct with one is told the truth about
