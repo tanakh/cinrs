@@ -22,9 +22,20 @@ include = [
 [lib]
 name = "cinrs_rt"
 
+[features]
+default = ["num-complex", "sources"]
+# `SOURCES`: this crate's own source as text, which `ccinrs` compiles. A
+# feature because the copy `ccinrs` compiles must not include its own files
+# again — the Rust file `ccinrs -S` writes carries the crate without them.
+sources = []
+
 [dependencies]
 # The complex number type. `default-features = false` drops `std`, which is
 # what keeps this crate `no_std`; `Complex<T>` is `#[repr(C)]` and `Copy`, so
 # `Complex<f64>` has exactly the layout and the calling convention of C's
 # `double _Complex` on every ABI this crate targets.
-num-complex.workspace = true
+#
+# Optional only for `ccinrs`, which compiles this crate's source with no
+# Cargo and so with no dependencies; without it the crate has a `Complex`
+# of its own, with the same layout (see `src/standalone.rs`).
+num-complex = { workspace = true, optional = true }

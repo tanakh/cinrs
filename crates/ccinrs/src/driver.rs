@@ -365,8 +365,7 @@ impl Run<'_> {
                 path.display()
             ));
         if translation.uses_runtime {
-            cmd.arg("--extern")
-                .arg(format!("cinrs={}", self.runtime()?.display()));
+            cmd.args(runtime::extern_args(self.runtime()?));
         }
         cmd.arg("-o").arg(object).arg(&rust);
         run_rustc(inv, cmd, || {
@@ -482,8 +481,7 @@ impl Run<'_> {
         .args(codegen_flags(inv))
         .args(["--cap-lints", "allow"]);
         if uses_runtime {
-            cmd.arg("--extern")
-                .arg(format!("cinrs={}", self.runtime()?.display()));
+            cmd.args(runtime::extern_args(self.runtime()?));
         }
         // The objects go in as `-l static:+verbatim`, which puts them on the
         // link line ahead of the standard library they refer to — and of the

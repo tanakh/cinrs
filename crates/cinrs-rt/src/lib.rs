@@ -40,11 +40,31 @@
 //! let w = Complex::new(3.0f64, -4.0);
 //! assert_eq!(mul_f64(z, w), Complex::new(11.0, 2.0));
 //! ```
+//!
+//! # Without Cargo
+//!
+//! `ccinrs`, the C compiler built on cinrs, cannot hand its user a Cargo
+//! dependency, so it carries this crate's source ([`SOURCES`]) and compiles
+//! it with the `rustc` it runs. That is why the crate keeps to three rules:
+//!
+//! * **`core` and nothing else.** No dependency is reachable without Cargo,
+//!   which is why `num-complex` is an optional (default) feature: without it,
+//!   [`Complex`] is a type of this crate's own with the same layout and the
+//!   same componentwise `+`, `-` and unary `-`, which is all the generated
+//!   code asks of it.
+//! * **Every file in [`SOURCES`]**, which a test checks. (It is there under
+//!   the default `sources` feature, which the copy `ccinrs` compiles goes
+//!   without.)
+//! * **Paths relative to the module, not to the crate** (`super::Complex`,
+//!   never `crate::Complex`): the Rust file `ccinrs -S` writes carries the
+//!   crate as a module of its own.
 
 #![no_std]
 #![warn(missing_docs)]
 
 pub mod complex;
+#[cfg(not(feature = "num-complex"))]
+mod standalone;
 
 /// The complex number type the generated code uses.
 ///
@@ -52,14 +72,56 @@ pub mod complex;
 /// real part first: `Complex<f32>` is C's `float _Complex` and `Complex<f64>`
 /// is its `double _Complex` (and its `long double _Complex`, which `cinrs`
 /// maps onto `double` exactly as it maps `long double`).
+#[cfg(feature = "num-complex")]
 pub use num_complex::Complex;
+#[cfg(not(feature = "num-complex"))]
+pub use standalone::Complex;
 
-/// The source of [`complex`], for `ccinrs`.
-///
-/// A C compiler cannot hand its user a Cargo dependency, so `ccinrs` compiles
-/// this text itself, with the `rustc` it runs, into a library its programs
-/// link against — beside a `#[repr(C)]` pair of its own in place of
-/// `num-complex`'s, which is all the module asks of [`Complex`]. Not an
-/// interface: it changes with every release.
+/// This crate's source, file by file, by its path under `src/`, for `ccinrs`;
+/// see [Without Cargo](self#without-cargo). Not an interface: it changes with
+/// every release.
+#[cfg(feature = "sources")]
 #[doc(hidden)]
-pub const COMPLEX_SOURCE: &str = include_str!("complex.rs");
+pub const SOURCES: &[(&str, &str)] = &[
+    ("lib.rs", include_str!("lib.rs")),
+    ("complex.rs", include_str!("complex.rs")),
+    ("standalone.rs", include_str!("standalone.rs")),
+];
+
+#[cfg(all(test, feature = "sources"))]
+mod tests {
+    extern crate std;
+
+    use std::string::String;
+    use std::vec::Vec;
+
+    /// [`super::SOURCES`] is every file under `src/`, as it is.
+    #[test]
+    fn the_sources_are_all_here() {
+        fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("src/ reads") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let relative = path.strip_prefix(root).expect("under src/");
+                    out.push(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &root, &mut files);
+        files.sort();
+        let mut listed: Vec<String> = super::SOURCES
+            .iter()
+            .map(|(name, _)| String::from(*name))
+            .collect();
+        listed.sort();
+        assert_eq!(listed, files, "SOURCES in src/lib.rs must list every file");
+        for (name, text) in super::SOURCES {
+            let on_disk = std::fs::read_to_string(root.join(name)).expect("the file");
+            assert_eq!(*text, on_disk, "{name}");
+        }
+    }
+}

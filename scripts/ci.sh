@@ -106,6 +106,10 @@ step 2400 "cargo test --workspace" \
 step 1200 "cargo test -p cinrs --no-default-features" \
     cargo test -q -p cinrs --no-default-features --locked -- --test-threads=2
 
+# The runtime as `ccinrs` compiles it: no `num-complex`, a `Complex` of its own.
+step 600 "cargo test -p cinrs-rt --no-default-features" \
+    cargo test -q -p cinrs-rt --no-default-features --locked -- --test-threads=2
+
 step 600 "cargo doc --no-deps" \
     env RUSTDOCFLAGS="-D warnings" \
     cargo doc --no-deps --locked -p cinrs -p cinrs-core -p cinrs-macros -p cinrs-rt

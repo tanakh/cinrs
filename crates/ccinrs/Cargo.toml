@@ -28,7 +28,7 @@ path = "src/main.rs"
 cinrs-core.workspace = true
 # Only for its source text, which `ccinrs` compiles with the user's `rustc`
 # for the programs that use the complex types; see `runtime`.
-cinrs-rt.workspace = true
+cinrs-rt = { workspace = true, features = ["sources"] }
 # The token stream `translate_file` returns; printing it is the `.rs` file
 # `rustc` is given.
 proc-macro2.workspace = true
