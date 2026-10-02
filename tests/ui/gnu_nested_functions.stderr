@@ -47,7 +47,7 @@ error: a nested function cannot use 'cells': it is a variable length array, whos
 
 error: a nested function cannot use 'ap': a 'va_list' belongs to the function whose arguments it walks, and cinrs does not capture one yet. Read the arguments in the enclosing function and pass the values
        note: 'ap' is declared here at line 106
-       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:16
+       note: in expansion of macro 'va_arg', defined in <cinrs>/stdarg.h:24
    --> tests/ui/gnu_nested_functions.rs:108:40
     |
 108 |         int take(void) { return va_arg(ap, int); }

@@ -12,6 +12,15 @@ follows [Semantic Versioning][semver].
 
 ### Added
 
+* **C23's `va_start` (N2975).** In `c23!` and `gnu23!` the bundled
+  `<stdarg.h>` defines `va_start(...)` as GCC 15 does, over
+  `__builtin_c23_va_start`: the list alone is enough, so a function with
+  nothing before its `...` — `long long first(...)` — can read its arguments,
+  and whatever follows the list is not evaluated, so `va_start(ap, n)` still
+  works. Below C23 the macro is the two-argument one it was, and the
+  one-argument form is refused as GCC refuses it. GCC's `execute/pr117432`
+  passes under `gnu23!`.
+
 * **TS 18661-3's `_FloatN` types, as keywords.** glibc uses them as the
   compiler's own from GCC 7 on, and declares `strtof32`, `sinf64`,
   `csqrtf32x` … under `_GNU_SOURCE`. `_Float32` is `float`, `_Float64` and

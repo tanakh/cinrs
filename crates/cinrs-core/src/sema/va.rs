@@ -92,6 +92,10 @@ const MAX_EIGHTBYTES: u64 = 2;
 pub(super) enum VaBuiltin {
     /// `va_start(ap, last)`
     Start,
+    /// C23's `va_start(ap, ...)`, which is GCC 15's `__builtin_c23_va_start`:
+    /// the arguments after the list are not evaluated (C23 7.16.1.4), so a
+    /// function with nothing before its `...` can start its list too.
+    C23Start,
     /// `va_end(ap)`
     End,
     /// `va_copy(dst, src)`
@@ -108,6 +112,7 @@ impl VaBuiltin {
     pub(super) fn from_name(name: &str) -> Option<Self> {
         Some(match name.strip_prefix("__builtin_")? {
             "va_start" => VaBuiltin::Start,
+            "c23_va_start" => VaBuiltin::C23Start,
             "va_end" => VaBuiltin::End,
             "va_copy" => VaBuiltin::Copy,
             _ => return None,
@@ -116,17 +121,24 @@ impl VaBuiltin {
 
     fn spelling(self) -> &'static str {
         match self {
-            VaBuiltin::Start => "va_start",
+            VaBuiltin::Start | VaBuiltin::C23Start => "va_start",
             VaBuiltin::End => "va_end",
             VaBuiltin::Copy => "va_copy",
         }
     }
 
-    fn arity(self) -> usize {
-        match self {
+    /// Why `count` arguments are the wrong number, if they are.
+    fn arity_error(self, count: usize) -> Option<String> {
+        let spelling = self.spelling();
+        let arity = match self {
+            VaBuiltin::C23Start if count == 0 => {
+                return Some(format!("'{spelling}' expects at least 1 argument, have 0"));
+            }
+            VaBuiltin::C23Start => return None,
             VaBuiltin::End => 1,
             VaBuiltin::Start | VaBuiltin::Copy => 2,
-        }
+        };
+        (count != arity).then(|| format!("'{spelling}' expects {arity} arguments, have {count}"))
     }
 }
 
@@ -141,26 +153,23 @@ impl Sema<'_> {
         args: &[ast::Expr],
         range: SourceRange,
     ) -> Option<Expr> {
-        if args.len() != builtin.arity() {
-            self.error(
-                range,
-                format!(
-                    "'{}' expects {} arguments, have {}",
-                    builtin.spelling(),
-                    builtin.arity(),
-                    args.len()
-                ),
-            );
+        if let Some(message) = builtin.arity_error(args.len()) {
+            self.error(range, message);
             return None;
         }
         match builtin {
-            VaBuiltin::Start => {
+            VaBuiltin::Start | VaBuiltin::C23Start => {
                 let ap = self.va_list_lvalue(&args[0])?;
                 if !self.func_variadic {
                     self.error(range, "'va_start' used in a function with fixed arguments");
                     return None;
                 }
-                self.check_va_start_parameter(&args[1]);
+                // C23's form evaluates nothing after the list — GCC only warns
+                // when what follows is not the last parameter's name — so it
+                // is not even looked at.
+                if builtin == VaBuiltin::Start {
+                    self.check_va_start_parameter(&args[1]);
+                }
                 let value = Expr::new(ExprKind::VaListPristine, Ty::VaList, range);
                 Some(assign(ap, value, range))
             }

@@ -384,4 +384,51 @@ mod definitions {
 
         assert_eq!(unsafe { twice_over(3, 1, 2, 3) }, 6006);
     }
+
+    /// C23's `va_start` (N2975): the list alone, so a function with nothing
+    /// before its `...` can read its arguments too; and whatever follows the
+    /// list is not evaluated, so an old two-argument call still works and
+    /// a name that is not even declared costs nothing.
+    #[test]
+    fn c23_va_start_takes_the_list_alone() {
+        cinrs::c23! {
+            #include <stdarg.h>
+
+            long long first(...) {
+                va_list ap;
+                va_start(ap);
+                long long value = va_arg(ap, long long);
+                va_end(ap);
+                return value;
+            }
+
+            int sum(int n, ...) {
+                va_list ap;
+                int total = 0;
+                va_start(ap);
+                for (int i = 0; i < n; i++) total += va_arg(ap, int);
+                va_end(ap);
+                /* The two-argument spelling, and one whose extra arguments
+                   would not even compile if they were evaluated. */
+                va_start(ap, n);
+                total += va_arg(ap, int);
+                va_end(ap);
+                va_start(ap, never_declared, 1 / 0);
+                total += va_arg(ap, int);
+                va_end(ap);
+                return total;
+            }
+
+            long long from_c(void) {
+                return first(40LL) + sum(3, 1, 2, 3);
+            }
+        }
+
+        unsafe {
+            assert_eq!(first(7i64), 7);
+            // 1 + 2 + 3, then the first argument twice more.
+            assert_eq!(sum(3, 1, 2, 3), 8);
+            assert_eq!(from_c(), 48);
+        }
+    }
 }

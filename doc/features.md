@@ -1150,6 +1150,8 @@ once, on the `#`, until the file is saved.
 ## Variadic functions
 
 Declaring and calling one — `printf` and friends — and defining one both work.
+In `c23!` and `gnu23!`, `va_start` takes the list alone, as C23 says, so even
+`int f(...)` — nothing before the `...` — can read its arguments.
 
 `va_list` is `core::ffi::VaList`, so a list passes straight to `vprintf`. The
 names come from the bundled `<stdarg.h>`, which defines them in terms of the

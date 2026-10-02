@@ -221,9 +221,10 @@ the whole of the difference: 1635 = 1538 + 97, and 1643 = 1538 + 104 + 1.
 
 The `+ 1` is `execute/pr117432`, which both entry points refuse and count as
 correct: it defines `qux (...)` with nothing before the `...` and calls
-`va_start (ap)` with one argument, which is C23's form, and the bundled
-`<stdarg.h>`'s `va_start` takes two — as GCC's own does, which refuses the case
-with the same message under `-std=gnu89` and `-std=gnu11`.
+`va_start (ap)` with one argument, which is C23's form, and before C23 the
+bundled `<stdarg.h>`'s `va_start` takes two — as GCC's own does, which refuses
+the case with the same message under `-std=gnu89` and `-std=gnu11`. Under
+`gnu23!` it passes.
 
 7 cases are not generated at all under either: five want the effective target
 `run_expensive_tests`, one holds a carriage return (which a Rust raw string

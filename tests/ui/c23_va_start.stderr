@@ -1,0 +1,29 @@
+error: a 'va_list' variable can only be declared in a variadic function or in one that takes a 'va_list' parameter
+  --> tests/ui/c23_va_start.rs:11:17
+   |
+11 |         va_list ap;
+   |                 ^^
+
+error: 'va_start' expects at least 1 argument, have 0
+       note: in expansion of macro 'va_start', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/c23_va_start.rs:17:9
+   |
+17 |         va_start();
+   |         ^^^^^^^^
+
+error: 'va_start' used in a function with fixed arguments
+       note: in expansion of macro 'va_start', defined in <cinrs>/stdarg.h:20
+  --> tests/ui/c23_va_start.rs:24:9
+   |
+24 |         va_start(*p);
+   |         ^^^^^^^^
+
+error: macro 'va_start' requires 2 arguments, but only 1 given
+       note: macro 'va_start' defined in <cinrs>/stdarg.h:22
+  --> tests/ui/c23_va_start.rs:34:9
+   |
+34 |         va_start(ap);
+   |         ^^^^^^^^
+
+error: aborting due to 4 previous errors
+
