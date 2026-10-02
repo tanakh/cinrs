@@ -23,19 +23,18 @@ jobs:
     #
     # gcc and clang are on ubuntu-latest already; the tests that compile and run
     # C for comparison need them.
-    name: ${{ matrix.rust }}
+    #
+    # Stable only: the one toolchain feature the crate waited for, `c_variadic`,
+    # is stable from 1.99, which is also the minimum supported version.
+    name: stable
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [stable, beta]
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: stable
           components: rustfmt, clippy
       - name: Versions
         run: |
@@ -51,13 +50,11 @@ jobs:
       # it ever cannot be had the check below skips itself and says so rather
       # than failing, which is why this step cannot break the job.
       #
-      # Only on `stable`, because the question is about the host rather than
-      # about the toolchain; and a step of its own rather than through
-      # `scripts/ci.sh --full`, which would turn the conformance harnesses on
-      # as well.
-      - if: ${{ !cancelled() && matrix.rust == 'stable' }}
+      # A step of its own rather than through `scripts/ci.sh --full`, which
+      # would turn the conformance harnesses on as well.
+      - if: ${{ !cancelled() }}
         run: rustup component add rust-analyzer || echo "no rust-analyzer component here"
-      - if: ${{ !cancelled() && matrix.rust == 'stable' }}
+      - if: ${{ !cancelled() }}
         run: scripts/check-rust-analyzer.sh
 
   portability:
