@@ -24,8 +24,10 @@ follows [Semantic Versioning][semver].
     lines.
   * `-c` objects carry the `rustc` that made them, and a link with another
     refuses them in one sentence; `-S` writes the Rust; `-E` prints the
-    preprocessed C with GCC's line markers; `-M`, `-MM`, `-MD`, `-MMD`, `-MF`,
-    `-MT`, `-MQ` and `-MP` write Makefile rules under GCC's names.
+    preprocessed C with GCC's line markers, and `-dM` the macros; `-M`,
+    `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write Makefile rules
+    under GCC's names; `-include` and standard input (`-`) are read as GCC
+    reads them.
   * `--target=` for another machine, `wasm32-wasip1` and `wasm32-wasip2`
     among them with nothing to install but the Rust target; `-march=` and
     `-m<feature>` as `rustc`'s target CPU and features, with the feature
@@ -34,9 +36,12 @@ follows [Semantic Versioning][semver].
     `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`.
   * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`
     the first time a program needs it and kept in a cache directory.
-  * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark and brotli with their
-    own build systems and runs their tests, and runs c-testsuite through the
-    command line (218 of 220).
+  * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark, brotli, zlib and
+    expat with their own build systems — Makefiles, CMake, zlib's `configure`,
+    autoconf and libtool — and runs their tests, and runs c-testsuite through
+    the command line (218 of 220). `-v` ends with GCC's `gcc version …` line,
+    which is what a `configure` script reads to decide that a compiler takes
+    GCC's options.
 * **A `long double` through a literal `printf` or `scanf` format.**
   `printf("%.2Lf", x)` and `sscanf(s, "%Le", &x)` used to be refused where the
   platform's `long double` is wider than cinrs's (x87's, on x86-64 Linux and
@@ -44,10 +49,12 @@ follows [Semantic Versioning][semver].
   argument with `L`, the `L`s become `l` — `%lf` is `%f` to `printf` and a
   `double *` to `scanf` — and the platform reads the `double` it is given. Any
   other way of passing one is refused as before.
-* `cinrs-core`, for a command-line driver: `translate_file`, which hands back
-  the Rust, the diagnostics, the headers read and the symbols defined;
-  `preprocess_file`, the preprocessor alone; `Options::export` (every unit
-  under `#pragma cinrs export`), `Options::macros` (`-D` and `-U`) and
+* `cinrs-core`, for a command-line driver: `translate_file` and
+  `translate_source`, which hand back the Rust, the diagnostics, the headers
+  read and the symbols defined; `preprocess_file` and `preprocess_source`,
+  the preprocessor alone, with the macros defined at the end;
+  `Options::export` (every unit under `#pragma cinrs export`),
+  `Options::macros` (`-D` and `-U`), `Options::includes` (`-include`) and
   `Options::target_features` (`-m<feature>`); `GCC_VERSION`.
 * `cinrs-rt` can be compiled without Cargo: `num-complex` is an optional
   (default) feature, without which the crate has a `#[repr(C)] Complex` of its
@@ -60,6 +67,13 @@ follows [Semantic Versioning][semver].
   narrow string literal as the byte it was, read as Latin-1 in a wide one and
   ignored in a comment, as GCC does; anywhere else it is "unexpected byte 0xE9
   in program (the file is not UTF-8)". Such a file used to be "cannot read".
+
+### Fixed
+
+* A function declared through a `typedef` of a function type — `typedef int
+  handler(int); static handler f, g;` — is a function. It was read as an
+  object of an incomplete type and refused; expat declares its parser's state
+  handlers that way.
 
 ## 0.2.0 — 2026-10-02
 

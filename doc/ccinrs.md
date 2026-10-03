@@ -67,6 +67,9 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | --- | --- |
 | `-o`, `-c`, `-S`, `-E` | the output, and where to stop (`-S` writes Rust); the earliest stage named wins |
 | `-P` | `-E` without line markers |
+| `-dM` | `-E` printing the macros defined at the end instead — `ccinrs -dM -E - </dev/null` lists the predefined ones |
+| `-` | standard input, under `-x c` or `-E` (`<stdin>` to `__FILE__`) |
+| `-include` | a file read before the first line, as if `#include "file"` were written there |
 | `-I`, `-iquote`, `-isystem`, `-idirafter` | include directories, searched in the order given (cinrs has one list) |
 | `-D`, `-U`, `-std=`, `-ansi`, `-x c`, `-nostdinc` | as GCC's; `-std=` takes `c89` to `c23` and `gnu89` to `gnu23` with their aliases |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | Makefile dependency rules, as GCC writes them and under GCC's names (`-c -o obj/x.o -MD` writes `obj/x.d`); the bundled headers are not listed |
@@ -79,7 +82,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
-| `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says |
+| `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
 
 A `-W` option, a common `-f` code-generation option (`-fPIC`,
 `-fno-strict-aliasing`, `-fvisibility=hidden`, …), `-pedantic` and `-pipe`
@@ -87,8 +90,7 @@ change nothing here and are accepted; an unknown `-W` or `-f` option is too,
 with a warning. An option that would change what a program means and that
 cinrs cannot follow — `-fshort-enums`, `-fpack-struct`, `-fopenmp`,
 `-fsanitize=` — is an error, never a silent difference, and so is anything
-unknown. Not yet: `-include`, `-dM`, `-MG`, and reading a program from
-standard input.
+unknown. Not yet: `-imacros`, `-dD`, `-MG`.
 
 ## Targets
 
@@ -115,7 +117,9 @@ rest pass through, so a Makefile's or CMake's shared library builds as it is.
 What to know:
 
 * Every definition that is not `static` is exported, whatever
-  `-fvisibility=hidden` or a `visibility` attribute says.
+  `-fvisibility=hidden` or a `visibility` attribute says — unless the build
+  gives its own version script (`-Wl,--version-script,…`), which then decides
+  for every symbol it names, as with GCC; what it does not name is exported.
 * A variable the library exports is shared with programs `ccinrs` links. A
   program another compiler links copies it into itself (a copy relocation),
   and the library goes on using its own copy, because the Rust in it refers to
@@ -125,7 +129,7 @@ What to know:
 
 ## What it has built
 
-`scripts/check-ccinrs.sh` fetches four projects at pinned releases, builds them
+`scripts/check-ccinrs.sh` fetches six projects at pinned releases, builds them
 with their own build systems and `CC=ccinrs` — run-time checks on — and runs
 their own tests; it also runs c-testsuite through the command line.
 
@@ -135,6 +139,8 @@ their own tests; it also runs c-testsuite through the command line.
 | cJSON 1.7.19 | `make`: both libraries, static and shared, and the test program | the 21 Unity unit tests (built by hand, see below) |
 | cmark 0.31.2 | CMake | the CommonMark spec (652 examples), regressions (23), smart punctuation (16) |
 | brotli 1.2.0 | CMake, shared libraries | ctest (12); the output is byte for byte `gcc`'s at every quality tried |
+| zlib 1.3.1 | its own `configure` and `make`; the shared library with zlib's version script | `make test`: static, shared and 64-bit; the library exports what `gcc`'s does, with the same versions |
+| expat 2.7.3 | autoconf's `configure`, libtool, `make`: static and shared | `xmlwf` (its own tests need `setjmp`) |
 | c-testsuite | `ccinrs case.c` | 218 of 220; the two are on [the list](c-testsuite.md) |
 
 SQLite's amalgamation goes through `-E` and back: the preprocessed `.i`
@@ -161,7 +167,6 @@ C project meets first:
   `ccinrs`'s, but `ccinrs`'s objects need Rust's standard library, so another
   compiler's driver — `c++` linking a C++ program, say — cannot link them.
 * Developed and tested on Linux x86-64, and for `wasm32-wasip1` and `-p2`;
-  macOS and Windows are not tried yet. Builds driven by `./configure`
-  (autoconf) are not tried yet either.
+  macOS and Windows are not tried yet.
 * A program is bigger than GCC's: it carries Rust's standard library, and
   the run-time checks.

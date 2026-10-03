@@ -4,14 +4,15 @@
 #
 #   scripts/check-ccinrs.sh                 everything below
 #   scripts/check-ccinrs.sh lz4 cmark       only the ones named (lz4, cjson,
-#                                           cmark, brotli, c-testsuite)
+#                                           cmark, brotli, zlib, expat,
+#                                           c-testsuite)
 #   scripts/check-ccinrs.sh --keep          keep the downloaded tarballs
 #
 # ccinrs is meant to be dropped in where a build expects GCC: `make CC=ccinrs`,
-# or CMake told it is the C compiler. This builds four projects that way, from
-# pinned release tarballs checked against their SHA-256, with ccinrs's
-# run-time checks on as they are by default, and runs each project's own
-# tests:
+# `./configure CC=ccinrs`, or CMake told it is the C compiler. This builds six
+# projects that way, from pinned release tarballs checked against their
+# SHA-256, with ccinrs's run-time checks on as they are by default, and runs
+# each project's own tests:
 #
 #   lz4 1.10.0    `make`: the library, static and shared, and the `lz4`
 #                 command; the frame and fuzz tests, and the command's tests
@@ -26,6 +27,12 @@
 #                 `api_test` is not built: it has C++ in it, which CMake links
 #                 with `c++`, and only `rustc` can link ccinrs's objects
 #   brotli 1.2.0  CMake, the shared libraries and the command; ctest
+#   zlib 1.3.1    its own `configure` (which takes ccinrs for GCC by its `-v`)
+#                 and `make`: the shared library, linked with zlib's version
+#                 script; `make test`, static, shared and 64-bit
+#   expat 2.7.3   autoconf's `configure` and libtool: the library, static and
+#                 shared, and `xmlwf`, run on a document with an entity and on
+#                 a malformed one. expat's own tests need setjmp and longjmp
 #
 # and c-testsuite (the third_party/c-testsuite submodule) through the command
 # line, `ccinrs case.c -o case && ./case`, whose failures must all be on
@@ -59,10 +66,10 @@ for arg in "$@"; do
     case $arg in
     -k | --keep) KEEP=1 ;;
     -h | --help)
-        sed -n '3,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,49p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
-    lz4 | cjson | cmark | brotli | c-testsuite) ONLY+=("$arg") ;;
+    lz4 | cjson | cmark | brotli | zlib | expat | c-testsuite) ONLY+=("$arg") ;;
     *)
         printf 'check-ccinrs: unknown argument %s (try --help)\n' "$arg" >&2
         exit 2
@@ -274,6 +281,56 @@ check_brotli() {
 }
 
 # ---------------------------------------------------------------------------
+# zlib
+# ---------------------------------------------------------------------------
+
+check_zlib() {
+    local src
+    src=$(unpack zlib \
+        https://zlib.net/fossils/zlib-1.3.1.tar.gz \
+        9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23 \
+        zlib-1.3.1) || {
+        FAILED+=("zlib: fetch")
+        return
+    }
+    # `configure` gives the shared library its soname and version script
+    # only when it takes the compiler for GCC; it must.
+    step "zlib: configure and make" sh -c "
+        cd '$src' && CC='$CCINRS' ./configure > configure.out &&
+        grep -q 'LDSHARED=.*-soname' Makefile && make -j$JOBS"
+    step "zlib: make test" sh -c "cd '$src' && make test | grep -c 'test OK' | grep -qx 3"
+}
+
+# ---------------------------------------------------------------------------
+# expat
+# ---------------------------------------------------------------------------
+
+check_expat() {
+    local src
+    src=$(unpack expat \
+        https://github.com/libexpat/libexpat/releases/download/R_2_7_3/expat-2.7.3.tar.gz \
+        821ac9710d2c073eaf13e1b1895a9c9aa66c1157a99635c639fbff65cdbdd732 \
+        expat-2.7.3) || {
+        FAILED+=("expat: fetch")
+        return
+    }
+    step "expat: configure and make" sh -c "
+        cd '$src' && ./configure CC='$CCINRS' > configure.out && make -j$JOBS &&
+        test -f lib/.libs/libexpat.so.1"
+    # `xmlwf` is libtool's wrapper, which runs the program against the
+    # library just built.
+    step "expat: xmlwf" sh -c '
+        cd "$1"
+        printf "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"entity\">]>\n<r a=\"1\">&e; &amp; <b>x</b></r>\n" > ok.xml
+        printf "<r><unclosed></r>\n" > bad.xml
+        mkdir -p out
+        ./xmlwf/xmlwf -d out ok.xml &&
+        [ "$(cat out/ok.xml)" = "<r a=\"1\">entity &amp; <b>x</b></r>" ] &&
+        ! ./xmlwf/xmlwf bad.xml > bad.out 2>&1 &&
+        grep -q "mismatched tag" bad.out' sh "$src"
+}
+
+# ---------------------------------------------------------------------------
 # c-testsuite, through the command line
 # ---------------------------------------------------------------------------
 
@@ -325,6 +382,8 @@ wanted lz4 && check_lz4
 wanted cjson && check_cjson
 wanted cmark && check_cmark
 wanted brotli && check_brotli
+wanted zlib && check_zlib
+wanted expat && check_expat
 wanted c-testsuite && check_c_testsuite
 
 say ""
