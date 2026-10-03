@@ -28,10 +28,15 @@ follows [Semantic Versioning][semver].
     `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write Makefile rules
     under GCC's names; `-include` and standard input (`-`) are read as GCC
     reads them.
-  * `--target=` for another machine, `wasm32-wasip1` and `wasm32-wasip2`
-    among them with nothing to install but the Rust target; `-march=` and
-    `-m<feature>` as `rustc`'s target CPU and features, with the feature
+  * `--target=` for another machine, with nothing to install but the Rust
+    target: `wasm32-wasip1` and `wasm32-wasip2`; musl, linked by `rust-lld`
+    itself into a static program on a machine with no C compiler at all;
+    and `wasm32-unknown-unknown`, as a module that exports the C's functions
+    and a `malloc` family and imports what the C leaves undefined. `-march=`
+    and `-m<feature>` as `rustc`'s target CPU and features, with the feature
     macros to match.
+  * `-flto` compiles each file to an rlib and has the link optimise them as
+    one program, cinrs's runtime and Rust's standard library included.
   * `-shared` links an ELF shared library that exports the C symbols;
     `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`.
   * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`

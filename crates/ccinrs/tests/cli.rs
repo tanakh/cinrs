@@ -823,6 +823,66 @@ fn a_program_for_musl_with_no_c_compiler_anywhere() {
 // WebAssembly
 // ---------------------------------------------------------------------------
 
+/// `wasm32-unknown-unknown` has no system under it, and what is made is a
+/// module a host calls into: it exports the C's functions, its memory and a
+/// `malloc` family made of Rust's allocator, and imports from `env` what the
+/// C calls and does not define. Node drives it here, when it is installed:
+/// it writes an array into memory it `malloc`s, has the C sum it — calling
+/// back into the host — and reads a string the C `malloc`ed and `realloc`ed.
+#[test]
+fn a_module_for_wasm32_unknown_unknown() {
+    const TARGET: &str = "wasm32-unknown-unknown";
+    if !target_installed(TARGET) {
+        return;
+    }
+    if Command::new("node").arg("--version").output().is_err() {
+        eprintln!("skipped: no node to run the {TARGET} module with");
+        return;
+    }
+    let s = Scratch::new("wasm-bare");
+    s.write(
+        "lib.c",
+        "#include <stdlib.h>\n#include <string.h>\nvoid host_log(int value);\nstatic int calls;\n\
+         long sum(const int *values, int count) {\n    long total = 0;\n    for (int i = 0; i < count; i++) total += values[i];\n    calls++;\n    host_log((int) total);\n    return total;\n}\n\
+         char *greet(int n) {\n    char *s = malloc(32);\n    memcpy(s, \"hello wasm \", 11);\n    s[11] = (char) ('0' + n % 10);\n    s[12] = 0;\n    return realloc(s, 13);\n}\n\
+         int count_calls(void) { return calls; }\n",
+    );
+    s.write(
+        "run.mjs",
+        "import fs from 'node:fs';\n\
+         const module = new WebAssembly.Module(fs.readFileSync('lib.wasm'));\n\
+         console.log(WebAssembly.Module.imports(module).map(i => `${i.module}.${i.name}`).join(' '));\n\
+         console.log(WebAssembly.Module.exports(module).map(e => e.name).sort().join(' '));\n\
+         const logged = [];\n\
+         const { exports } = new WebAssembly.Instance(module, { env: { host_log: v => logged.push(v) } });\n\
+         const p = exports.malloc(16);\n\
+         new Int32Array(exports.memory.buffer, p, 4).set([1, 2, 3, 4]);\n\
+         console.log(exports.sum(p, 4), logged.join(','));\n\
+         exports.free(p);\n\
+         const s = exports.greet(7);\n\
+         const bytes = new Uint8Array(exports.memory.buffer, s, 32);\n\
+         console.log(new TextDecoder().decode(bytes.subarray(0, bytes.indexOf(0))));\n\
+         exports.free(s);\n\
+         console.log(exports.count_calls());\n",
+    );
+    s.compile(&["--target", TARGET, "-O2", "lib.c", "-o", "lib.wasm"]);
+    let out = Command::new("node")
+        .arg("run.mjs")
+        .current_dir(&s.dir)
+        .output()
+        .expect("node runs");
+    assert_eq!(
+        stdout(&out),
+        "env.host_log\n\
+         calloc count_calls free greet malloc memory realloc sum\n\
+         10 10\n\
+         hello wasm 7\n\
+         1\n",
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// A `wasmtime` to run `target`'s programs with, or `None` — with the reason
 /// printed — when there is none or the target's standard library is not
 /// installed, in which case the test passes without running anything.

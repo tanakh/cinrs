@@ -1280,13 +1280,18 @@ impl<'a> Codegen<'a> {
     }
 
     /// The symbol an exported definition takes: its C name — except C's
-    /// `main` on WebAssembly, which takes the name clang gives it there and
-    /// the C library's start-up code calls: `__main_argc_argv` when it has
+    /// `main` on WASI, which takes the name clang gives it there and the C
+    /// library's start-up code calls: `__main_argc_argv` when it has
     /// parameters, `__main_void` when it has none. wasi-libc's `_start` calls
     /// `__main_void`, whose own fallback reads the arguments and calls
     /// `__main_argc_argv`, so either shape is reached and nothing else is.
+    /// WebAssembly with no system under it has no start-up code, and its
+    /// `main` is the `main` a host calls.
     fn entry_symbol<'f>(&self, func: &'f Function) -> &'f str {
-        if func.name == "main" && self.options.target.arch == crate::Arch::Wasm32 {
+        if func.name == "main"
+            && self.options.target.arch == crate::Arch::Wasm32
+            && self.options.target.os == crate::Os::Wasi
+        {
             return if func.sig.params.is_empty() {
                 "__main_void"
             } else {

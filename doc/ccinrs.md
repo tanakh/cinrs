@@ -16,7 +16,7 @@ cmake -S . -B build -DCMAKE_C_COMPILER=ccinrs
 It needs a `rustc` of 1.99 or later — `RUSTC` names one, otherwise it is the
 one on `PATH` — and, for programs for the machine it runs on, the platform's C
 headers and C library (`libc6-dev` on Debian and Ubuntu), which `rustc` links
-anyway.
+anyway. For musl it needs nothing else at all; see [Targets](#targets).
 
 ## How a program is made
 
@@ -75,6 +75,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | Makefile dependency rules, as GCC writes them and under GCC's names (`-c -o obj/x.o -MD` writes `obj/x.d`); the bundled headers are not listed |
 | `-O0` … `-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast` | `rustc`'s `-C opt-level` (`-Ofast` is `3`, with no fast-math) |
 | `-g`, `-g0` | `rustc`'s `-C debuginfo` |
+| `-flto`, `-flto=thin` | link-time optimisation, `rustc`'s `-C lto=fat` (`thin`): see [below](#link-time-optimisation) |
 | `-march=`, `-mcpu=` | `rustc`'s `-C target-cpu`, `native` included; the feature macros (`__AVX2__`, …) follow what the processor has |
 | `-mavx2`, `-mno-avx512f`, … | `rustc`'s `-C target-feature`, in GCC's names, and the macros with them (x86) |
 | `--target=`, `--sysroot=` | another machine; see [Targets](#targets) |
@@ -99,12 +100,57 @@ standard library for it has to be installed (`rustup target add <triple>`),
 and cinrs's model of the target decides the sizes, the alignments and the
 predefined macros.
 
+**musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, …):
+Rust ships musl's `libc.a` and its start files with the target, and `ccinrs`
+links them with `rust-lld` itself, so a program builds — static — on a
+machine with no C compiler, no linker and no C library: `rustup target add`
+is all it takes, for the machine's own architecture or another. `-lm`,
+`-lpthread`, `-ldl` and the like are part of musl's `libc.a` and are dropped.
+The headers are cinrs's bundled ISO C ones; for POSIX, point `-isystem` at
+musl's own (`/usr/include/x86_64-linux-musl` from Debian's `musl-dev`). There
+is no `-shared`, Rust shipping musl only as an archive.
+
 **`wasm32-wasip1` and `wasm32-wasip2`** need nothing else: the C library is
 wasi-libc, which Rust ships with the target, and the C `main` is named as
 wasi-libc's start code calls it. A program runs under any WASI runtime
 (`wasmtime prog.wasm`); a `wasip2` program is a component, whose exit status is
 only success or failure. What wasi-libc leaves out — `clock()`, signals,
 `fork` — is left out here too.
+
+**`wasm32-unknown-unknown`** has no system and no C library under it, so what
+`ccinrs` makes of the objects is a module for a host — a browser, Node — to
+call into, `-shared` or not:
+
+* it exports every C function and object that is not `static` (`main`
+  included, under its own name), and its memory;
+* `malloc`, `calloc`, `realloc` and `free` are Rust's allocator, exported too,
+  which is how the host hands the C a buffer; `memcpy`, `memmove`, `memset`
+  and `memcmp` are Rust's;
+* everything else the C calls and does not define — `printf`, `strlen` — is an
+  import from the `env` module, for the host to provide.
+
+```js
+const { exports } = await WebAssembly.instantiate(bytes, { env: { host_log: console.log } });
+const p = exports.malloc(16);
+new Int32Array(exports.memory.buffer, p, 4).set([1, 2, 3, 4]);
+exports.sum(p, 4);
+```
+
+A panic — a run-time check that failed — traps.
+
+## Link-time optimisation
+
+Each C file is a crate of its own, so without `-flto` nothing is inlined
+from one file into another. With it, an object is an rlib — the crate's code,
+and the LLVM bitcode `rustc` optimises across crates — which a link loads as a
+crate, and a link with `-flto` optimises everything in it as one program: the
+C, cinrs's runtime and Rust's standard library. A call in a loop to a
+function in another file becomes the loop's own code, as with GCC's LTO.
+
+An object compiled with `-flto` links with one compiled without, and a link
+without `-flto` takes it as ordinary code. What it cannot do is go into an
+archive: an rlib is an archive itself, and `ar` would make an archive of
+archives — the link says so — as GCC's own LTO objects need `gcc-ar`.
 
 ## Shared libraries
 
@@ -125,7 +171,9 @@ What to know:
   and the library goes on using its own copy, because the Rust in it refers to
   its own statics directly. Functions are unaffected.
 * Each library carries its own copy of Rust's standard library.
-* ELF only, for now: not macOS, Windows or WebAssembly.
+* ELF only, for now: not macOS, Windows or WASI; and not musl.
+  (`wasm32-unknown-unknown` makes a module whatever is asked; see
+  [Targets](#targets).)
 
 ## What it has built
 

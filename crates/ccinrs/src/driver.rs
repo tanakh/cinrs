@@ -272,6 +272,10 @@ struct Target {
     /// library — so that `rust-lld` links the program alone, and the machine
     /// needs no C compiler, no linker and no C library of its own.
     self_contained: bool,
+    /// Whether it is WebAssembly with no system under it —
+    /// `wasm32-unknown-unknown` — where what is made is a module for a host
+    /// to call into; see [`Run::link`].
+    bare_wasm: bool,
 }
 
 impl Target {
@@ -293,11 +297,13 @@ impl Target {
         };
         let self_contained =
             model.env == Env::Musl && libdir.join("self-contained/libc.a").is_file();
+        let bare_wasm = model.arch == Arch::Wasm32 && model.os == Os::None;
         Ok(Self {
             cross: triple != rustc.host,
             triple,
             model,
             self_contained,
+            bare_wasm,
         })
     }
 }
@@ -629,6 +635,117 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
         }
     }
     matches(pattern.as_bytes(), name.as_bytes())
+}
+
+/// `malloc`, `calloc`, `realloc` and `free` for WebAssembly with no C library,
+/// as Rust in the module the objects are linked into: Rust's own allocator,
+/// each block with its size in a header of `max_align_t`'s sixteen bytes in
+/// front of it, which `free` and `realloc` read back. A host allocates
+/// through them too, which is how it hands the C a buffer. One the C defines
+/// itself is the C's, and is left out.
+fn bare_wasm_allocator(defined: &[String]) -> String {
+    const HELPERS: &str = "
+// `malloc` and its family: WebAssembly with no system under it has no C
+// library, and these are Rust's allocator. A block's size is kept in the
+// sixteen bytes in front of it.
+const HEADER: usize = 16;
+
+unsafe fn ccinrs_allocate(size: usize, zeroed: bool) -> *mut u8 {
+    let Some(layout) = size
+        .checked_add(HEADER)
+        .and_then(|total| std::alloc::Layout::from_size_align(total, HEADER).ok())
+    else {
+        return core::ptr::null_mut();
+    };
+    unsafe {
+        let base = if zeroed {
+            std::alloc::alloc_zeroed(layout)
+        } else {
+            std::alloc::alloc(layout)
+        };
+        if base.is_null() {
+            return base;
+        }
+        base.cast::<usize>().write(size);
+        base.add(HEADER)
+    }
+}
+
+unsafe fn ccinrs_block(ptr: *mut u8) -> (*mut u8, std::alloc::Layout) {
+    unsafe {
+        let base = ptr.sub(HEADER);
+        let size = base.cast::<usize>().read();
+        (base, std::alloc::Layout::from_size_align_unchecked(size + HEADER, HEADER))
+    }
+}
+";
+    const FUNCTIONS: [(&str, &str); 4] = [
+        (
+            "malloc",
+            "
+#[unsafe(no_mangle)]
+pub unsafe extern \"C\" fn malloc(size: usize) -> *mut u8 {
+    unsafe { ccinrs_allocate(size, false) }
+}
+",
+        ),
+        (
+            "calloc",
+            "
+#[unsafe(no_mangle)]
+pub unsafe extern \"C\" fn calloc(count: usize, size: usize) -> *mut u8 {
+    match count.checked_mul(size) {
+        Some(total) => unsafe { ccinrs_allocate(total, true) },
+        None => core::ptr::null_mut(),
+    }
+}
+",
+        ),
+        (
+            "realloc",
+            "
+#[unsafe(no_mangle)]
+pub unsafe extern \"C\" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
+    if ptr.is_null() {
+        return unsafe { ccinrs_allocate(size, false) };
+    }
+    let Some(total) = size.checked_add(HEADER) else {
+        return core::ptr::null_mut();
+    };
+    unsafe {
+        let (base, layout) = ccinrs_block(ptr);
+        let base = std::alloc::realloc(base, layout, total);
+        if base.is_null() {
+            return base;
+        }
+        base.cast::<usize>().write(size);
+        base.add(HEADER)
+    }
+}
+",
+        ),
+        (
+            "free",
+            "
+#[unsafe(no_mangle)]
+pub unsafe extern \"C\" fn free(ptr: *mut u8) {
+    if !ptr.is_null() {
+        unsafe {
+            let (base, layout) = ccinrs_block(ptr);
+            std::alloc::dealloc(base, layout);
+        }
+    }
+}
+",
+        ),
+    ];
+    let mut text = HELPERS.to_owned();
+    for (name, function) in FUNCTIONS {
+        if !defined.iter().any(|symbol| symbol == name) {
+            text.push_str(function);
+        }
+    }
+    text
 }
 
 /// The libraries a glibc program links by name that musl keeps in libc.a.
@@ -979,16 +1096,24 @@ impl Run<'_> {
         output: &Path,
     ) -> Result<(), Failure> {
         let inv = self.inv;
-        if inv.shared {
+        // WebAssembly with no system under it has no programs, only modules a
+        // host calls into, so that is what is made of the objects, `-shared`
+        // or not; see `bare_wasm_allocator`.
+        let bare = self.target.bare_wasm;
+        let library = inv.shared || bare;
+        if inv.shared && !bare {
             self.check_shared()?;
         }
         let stub = self.work.path("ccinrs_main.rs");
-        let mut text = if inv.shared {
+        let mut text = if library {
             "// A shared library of the C objects linked into it.\n"
         } else {
             "// The program's `main` is the C one, in one of the objects.\n#![no_main]\n"
         }
         .to_owned();
+        if bare {
+            text.push_str(&bare_wasm_allocator(&linked.symbols));
+        }
         // A crate is linked when it is loaded, and these load the runtime and
         // each `-flto` object, under the name `rustc` finds it by.
         if linked.uses_runtime {
@@ -1011,7 +1136,7 @@ impl Run<'_> {
             .map_err(|error| format!("cannot write {}: {error}", stub.display()))?;
         let mut cmd = self.rustc.command();
         cmd.args(["--edition", "2024", "--crate-type"])
-            .arg(if inv.shared { "cdylib" } else { "bin" })
+            .arg(if library { "cdylib" } else { "bin" })
             .args(["--crate-name", "ccinrs_main"])
             .args(codegen_flags(inv))
             .args(["--cap-lints", "allow"]);
@@ -1038,7 +1163,15 @@ impl Run<'_> {
         // whole, as it would into GCC's shared library, whether or not
         // anything in the link refers to it.
         let mut modifiers = "+verbatim";
-        if inv.shared {
+        // The module exports every C symbol, and what the C calls and no
+        // object defines is imported, from the `env` module the host gives.
+        if bare {
+            cmd.args(["-C", "link-arg=--allow-undefined"]);
+            for symbol in &linked.symbols {
+                cmd.arg("-C").arg(format!("link-arg=--export={symbol}"));
+            }
+        }
+        if inv.shared && !bare {
             modifiers = "+verbatim,+whole-archive";
             // `rustc` asks the linker to refuse a version script naming a
             // symbol the library does not define; a C compiler's linker lets
