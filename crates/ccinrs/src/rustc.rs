@@ -78,19 +78,17 @@ impl Rustc {
         Command::new(&self.program)
     }
 
-    /// Whether the standard library for `triple` is installed, which is what
-    /// compiling for it needs: `rustc --print target-libdir` names the
-    /// directory whether or not it is there, so it is looked at.
-    pub fn has_target(&self, triple: &str) -> bool {
-        let Ok(output) = self
+    /// Where the standard library for `triple` is, when it is installed,
+    /// which is what compiling for it needs: `rustc --print target-libdir`
+    /// names the directory whether or not it is there, so it is looked at.
+    pub fn target_libdir(&self, triple: &str) -> Option<std::path::PathBuf> {
+        let output = self
             .command()
             .args(["--print", "target-libdir", "--target", triple])
             .output()
-        else {
-            return false;
-        };
-        let dir = String::from_utf8_lossy(&output.stdout);
-        output.status.success() && std::path::Path::new(dir.trim()).is_dir()
+            .ok()?;
+        let dir = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        (output.status.success() && dir.is_dir()).then_some(dir)
     }
 }
 

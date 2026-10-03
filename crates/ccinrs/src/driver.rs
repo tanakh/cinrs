@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cinrs_core::include::System;
-use cinrs_core::{Arch, Options, Os, TargetModel, TargetSource};
+use cinrs_core::{Arch, Env, Options, Os, TargetModel, TargetSource};
 
 use crate::args::{Input, Invocation, Query, Stage};
 use crate::runtime::{self, Runtime};
@@ -238,30 +238,37 @@ struct Target {
     model: TargetModel,
     /// Whether it is another machine than the one `rustc` runs on.
     cross: bool,
+    /// Whether the Rust target carries its own C library and start files —
+    /// musl's, which Rust ships as `libc.a` and `crt1.o` beside the standard
+    /// library — so that `rust-lld` links the program alone, and the machine
+    /// needs no C compiler, no linker and no C library of its own.
+    self_contained: bool,
 }
 
 impl Target {
     /// `--target`, or the machine `rustc` runs on.
     fn choose(inv: &Invocation, rustc: &Rustc) -> Result<Self, String> {
-        let Some(triple) = &inv.target else {
-            return Ok(Self {
-                triple: rustc.host.clone(),
-                model: TargetModel::host(),
-                cross: false,
-            });
+        let (triple, model) = match &inv.target {
+            Some(triple) => {
+                let model = TargetModel::from_triple(triple)
+                    .map_err(|unknown| unknown.message(&TargetSource::Explicit))?;
+                (triple.clone(), model)
+            }
+            None => (rustc.host.clone(), TargetModel::host()),
         };
-        let model = TargetModel::from_triple(triple)
-            .map_err(|unknown| unknown.message(&TargetSource::Explicit))?;
-        if *triple != rustc.host && !rustc.has_target(triple) {
+        let Some(libdir) = rustc.target_libdir(&triple) else {
             return Err(format!(
                 "the Rust standard library for '{triple}' is not installed; \
                  `rustup target add {triple}` installs it"
             ));
-        }
+        };
+        let self_contained =
+            model.env == Env::Musl && libdir.join("self-contained/libc.a").is_file();
         Ok(Self {
-            triple: triple.clone(),
+            cross: triple != rustc.host,
+            triple,
             model,
-            cross: *triple != rustc.host,
+            self_contained,
         })
     }
 }
@@ -595,6 +602,11 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     matches(pattern.as_bytes(), name.as_bytes())
 }
 
+/// The libraries a glibc program links by name that musl keeps in libc.a.
+const MUSL_LIBC_PARTS: &[&str] = &[
+    "c", "m", "pthread", "dl", "rt", "util", "crypt", "xnet", "resolv",
+];
+
 /// The input name that means standard input, as GCC takes it.
 const STDIN: &str = "-";
 
@@ -759,20 +771,44 @@ impl Run<'_> {
     }
 
     /// `-shared` makes an ELF shared library: what decides what it exports is
-    /// a version script, which only an ELF linker reads.
+    /// a version script, which only an ELF linker reads. And not for musl,
+    /// whose C library Rust ships only as an archive to link in.
     fn check_shared(&self) -> Result<(), String> {
         let elf = matches!(
             self.target.model.os,
             Os::Linux | Os::FreeBsd | Os::NetBsd | Os::OpenBsd
         ) && self.target.model.arch != Arch::Wasm32;
-        if elf {
-            Ok(())
-        } else {
-            Err(format!(
+        if !elf {
+            return Err(format!(
                 "'-shared' makes ELF shared libraries, and {} is not an ELF target",
                 self.target.triple
-            ))
+            ));
         }
+        if self.target.self_contained {
+            return Err(format!(
+                "'-shared' needs a shared C library to link against, and Rust's {} \
+                 has musl only as an archive (libc.a)",
+                self.target.triple
+            ));
+        }
+        Ok(())
+    }
+
+    /// One linker argument of the command line, as `rustc` is to pass it on.
+    /// Through a C compiler, as it is; to `rust-lld` itself (musl), the
+    /// driver's spellings undone — `-Wl,a,b` is `a` and `b`, and `-rdynamic`
+    /// is `--export-dynamic`.
+    fn linker_arg(&self, arg: &str) -> Vec<String> {
+        if !self.target.self_contained {
+            return vec![arg.to_owned()];
+        }
+        if let Some(list) = arg.strip_prefix("-Wl,") {
+            return list.split(',').map(str::to_owned).collect();
+        }
+        if arg == "-rdynamic" {
+            return vec!["--export-dynamic".to_owned()];
+        }
+        vec![arg.to_owned()]
     }
 
     /// The compiled runtime, found or compiled on first asking.
@@ -832,20 +868,7 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     };
     let mark = RUNTIME_MARK.as_bytes();
     let uses_runtime = bytes.windows(mark.len()).any(|w| w == mark);
-    let mut symbols = Vec::new();
-    let prefix = SYMBOLS_PREFIX.as_bytes();
-    let mut rest = &bytes[..];
-    while let Some(at) = rest.windows(prefix.len()).position(|w| w == prefix) {
-        let list = &rest[at + prefix.len()..];
-        let end = list.iter().position(|b| *b == 0).unwrap_or(list.len());
-        symbols.extend(
-            String::from_utf8_lossy(&list[..end])
-                .split(' ')
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned),
-        );
-        rest = &list[end..];
-    }
+    let symbols = marked_names(&bytes, SYMBOLS_PREFIX);
     let prefix = STAMP_PREFIX.as_bytes();
     let mut rest = &bytes[..];
     while let Some(at) = rest.windows(prefix.len()).position(|w| w == prefix) {
@@ -871,6 +894,26 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
         uses_runtime,
         symbols,
     })
+}
+
+/// The names every `prefix` mark in `bytes` lists — separated by spaces, up
+/// to a NUL — each once.
+fn marked_names(bytes: &[u8], prefix: &str) -> Vec<String> {
+    let prefix = prefix.as_bytes();
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut rest = bytes;
+    while let Some(at) = rest.windows(prefix.len()).position(|w| w == prefix) {
+        let list = &rest[at + prefix.len()..];
+        let end = list.iter().position(|b| *b == 0).unwrap_or(list.len());
+        for name in String::from_utf8_lossy(&list[..end]).split(' ') {
+            if !name.is_empty() && seen.insert(name.to_owned()) {
+                names.push(name.to_owned());
+            }
+        }
+        rest = &list[end..];
+    }
+    names
 }
 
 impl Run<'_> {
@@ -917,6 +960,8 @@ impl Run<'_> {
             // it be, and a build's own script (zlib's `zlib.map`, given to
             // its test of whether shared libraries work) counts on that.
             cmd.args(["-C", "link-arg=-Wl,--undefined-version"]);
+            // (Only an ELF target that links through a C compiler gets here;
+            // see `check_shared`.)
             // A build that gives its own version script decides about every
             // symbol it names — zlib's gives some `ZLIB_1.2.0` and the like,
             // and hides `_*` — and naming one here too would take that away.
@@ -979,10 +1024,20 @@ impl Run<'_> {
             cmd.arg("-L").arg(format!("native={}", dir.display()));
         }
         for lib in &inv.libs {
+            // musl keeps the maths library, threads and the rest in libc.a
+            // itself, and ships no separate archives for them.
+            if self.target.self_contained && MUSL_LIBC_PARTS.contains(&lib.as_str()) {
+                continue;
+            }
             cmd.arg("-l").arg(lib);
         }
         for arg in &inv.linker_args {
-            cmd.arg("-C").arg(format!("link-arg={arg}"));
+            for arg in self.linker_arg(arg) {
+                cmd.arg("-C").arg(format!("link-arg={arg}"));
+            }
+        }
+        if self.target.self_contained {
+            cmd.args(["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld"]);
         }
         if inv.strip {
             cmd.args(["-C", "strip=symbols"]);

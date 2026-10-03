@@ -714,6 +714,75 @@ fn the_compiler_says_what_it_is() {
 }
 
 // ---------------------------------------------------------------------------
+// Other targets
+// ---------------------------------------------------------------------------
+
+/// Whether the Rust standard library for `target` is installed — printing
+/// why not, in which case the test that asks passes without running.
+fn target_installed(target: &str) -> bool {
+    let libdir = Command::new(rustc())
+        .args(["--print", "target-libdir", "--target", target])
+        .output();
+    let installed =
+        libdir.is_ok_and(|out| Path::new(String::from_utf8_lossy(&out.stdout).trim()).is_dir());
+    if !installed {
+        eprintln!("skipped: the {target} standard library is not installed");
+    }
+    installed
+}
+
+/// The `rustc` the tests run, by its full path: `RUSTC`, or the one the
+/// `rustc` on `PATH` says it is.
+fn rustc() -> PathBuf {
+    if let Some(rustc) = std::env::var_os("RUSTC") {
+        return PathBuf::from(rustc);
+    }
+    let out = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .expect("rustc runs");
+    Path::new(String::from_utf8_lossy(&out.stdout).trim()).join("bin/rustc")
+}
+
+/// `--target=x86_64-unknown-linux-musl`: Rust ships musl's C library and its
+/// start files with the target, and `rust-lld` links them, so a program
+/// builds — static — on a machine with no C compiler and no linker at all:
+/// here, with nothing on `PATH`. `-lm` is part of musl's libc.a.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn a_program_for_musl_with_no_c_compiler_anywhere() {
+    const TARGET: &str = "x86_64-unknown-linux-musl";
+    if !target_installed(TARGET) {
+        return;
+    }
+    let s = Scratch::new("musl");
+    s.write(
+        "m.c",
+        "#include <errno.h>\n#include <math.h>\n#include <stdio.h>\n#include <string.h>\nint main(int argc, char **argv) {\n    FILE *f = fopen(\"/nowhere\", \"r\");\n    printf(\"%s %.3f %s\\n\", argc > 1 ? argv[1] : \"?\", sqrt(2.0), f ? \"opened\" : strerror(errno));\n    return 0;\n}\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_ccinrs"))
+        .args(["--target", TARGET, "m.c", "-lm", "-o", "m"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .env("RUSTC", rustc())
+        .env("CCINRS_CACHE_DIR", cache_dir())
+        .current_dir(&s.dir)
+        .output()
+        .expect("ccinrs runs");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&s.run("m", &["musl"])),
+        "musl 1.414 No such file or directory\n"
+    );
+    let out = s.ccinrs(&["--target", TARGET, "-shared", "m.c", "-o", "m.so"]);
+    assert!(
+        stderr(&out).contains("has musl only as an archive"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // WebAssembly
 // ---------------------------------------------------------------------------
 
@@ -723,13 +792,7 @@ fn the_compiler_says_what_it_is() {
 /// `WASMTIME` names one; otherwise `PATH`, then `~/.wasmtime/bin`, where its
 /// installer puts it.
 fn wasmtime_for(target: &str) -> Option<PathBuf> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let libdir = Command::new(rustc)
-        .args(["--print", "target-libdir", "--target", target])
-        .output()
-        .ok()?;
-    if !Path::new(String::from_utf8_lossy(&libdir.stdout).trim()).is_dir() {
-        eprintln!("skipped: the {target} standard library is not installed");
+    if !target_installed(target) {
         return None;
     }
     let found = std::env::var_os("WASMTIME")
