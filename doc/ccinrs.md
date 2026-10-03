@@ -124,10 +124,13 @@ call into, `-shared` or not:
 * it exports every C function and object that is not `static` (`main`
   included, under its own name), and its memory;
 * `malloc`, `calloc`, `realloc` and `free` are Rust's allocator, exported too,
-  which is how the host hands the C a buffer; `memcpy`, `memmove`, `memset`
-  and `memcmp` are Rust's;
-* everything else the C calls and does not define — `printf`, `strlen` — is an
-  import from the `env` module, for the host to provide.
+  which is how the host hands the C a buffer; `memcpy`, `memmove`, `memset`,
+  `memcmp` and `strlen` are the ones Rust's own code needs and its
+  compiler-builtins supply;
+* everything else the C calls and does not define — `printf`, `strcmp`,
+  `qsort` — is an import from the `env` module, for the host to provide.
+  There is no C library here, and `ccinrs` carries none; see
+  [Limitations](#limitations).
 
 ```js
 const { exports } = await WebAssembly.instantiate(bytes, { env: { host_log: console.log } });
@@ -214,7 +217,14 @@ C project meets first:
 * **Only `rustc` links.** An object from another compiler links with
   `ccinrs`'s, but `ccinrs`'s objects need Rust's standard library, so another
   compiler's driver — `c++` linking a C++ program, say — cannot link them.
-* Developed and tested on Linux x86-64, and for `wasm32-wasip1` and `-p2`;
-  macOS and Windows are not tried yet.
+* **`wasm32-unknown-unknown` has no C library.** Beyond the `malloc` family
+  and what Rust's compiler-builtins supply, every function of the standard
+  library a program calls is an import the host has to provide, or the module
+  does not instantiate. `ccinrs` does not carry a C library of its own — a
+  partial one would be the wrong half for most programs, and a whole one is
+  not what it is for; a third-party C library for WebAssembly may be linked
+  like any other. For the standard library, `wasm32-wasip1` is the target.
+* Developed and tested on Linux x86-64 (and aarch64 musl under qemu), and for
+  `wasm32-wasip1` and `-p2`; macOS and Windows are not tried yet.
 * A program is bigger than GCC's: it carries Rust's standard library, and
   the run-time checks.

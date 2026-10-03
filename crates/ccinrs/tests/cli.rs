@@ -819,6 +819,41 @@ fn a_program_for_musl_with_no_c_compiler_anywhere() {
     );
 }
 
+/// The same for another architecture, from this one: an aarch64 program,
+/// linked with nothing but the Rust target installed, run under
+/// `qemu-aarch64` when it is there (`QEMU_AARCH64` names one). Two units, the
+/// complex runtime compiled for aarch64, and `-O2`.
+#[test]
+fn a_program_for_aarch64_musl_under_qemu() {
+    const TARGET: &str = "aarch64-unknown-linux-musl";
+    if !target_installed(TARGET) {
+        return;
+    }
+    let qemu = std::env::var_os("QEMU_AARCH64").unwrap_or_else(|| "qemu-aarch64".into());
+    if Command::new(&qemu).arg("--version").output().is_err() {
+        eprintln!("skipped: no qemu-aarch64 to run {TARGET} programs with");
+        return;
+    }
+    let s = Scratch::new("aarch64");
+    s.write(
+        "main.c",
+        "#include <complex.h>\n#include <stdio.h>\n#include <string.h>\nint twice(int x);\n\
+         int main(int argc, char **argv) {\n    double complex z = (1.0 + 2.0 * I) * (3.0 - I);\n    \
+         printf(\"%s %d %g%+gi %zu %d\\n\", argc > 1 ? argv[1] : \"?\", twice(21), creal(z), cimag(z), \
+         sizeof(long double), (int) strlen(\"aarch64\"));\n    return 7;\n}\n",
+    );
+    s.write("twice.c", "int twice(int x) { return 2 * x; }\n");
+    s.compile(&["--target", TARGET, "-O2", "main.c", "twice.c", "-o", "prog"]);
+    let out = Command::new(&qemu)
+        .args(["prog", "arm"])
+        .current_dir(&s.dir)
+        .output()
+        .expect("qemu runs");
+    // cinrs's `long double` is `double` on every target.
+    assert_eq!(stdout(&out), "arm 42 5+5i 8 7\n", "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(7));
+}
+
 // ---------------------------------------------------------------------------
 // WebAssembly
 // ---------------------------------------------------------------------------
