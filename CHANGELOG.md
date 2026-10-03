@@ -8,6 +8,59 @@ follows [Semantic Versioning][semver].
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
+## Unreleased
+
+### Added
+
+* **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
+  versioned with the other four; see [`doc/ccinrs.md`](doc/ccinrs.md). Each C
+  file is translated by cinrs and compiled by `rustc` into an ordinary object,
+  and `rustc` links the program, so `make CC=ccinrs` — or CMake told that
+  `ccinrs` is the C compiler — builds a C project with no C compiler involved.
+  * GCC's defaults: `gnu17`, GCC 14.2's predefined macros, the platform's
+    headers before the bundled ones, every non-`static` definition a symbol.
+    Rust's run-time checks are on unless `-fno-cinrs-checks` says otherwise,
+    and a panic names the C file and line: the Rust is printed on the C's
+    lines.
+  * `-c` objects carry the `rustc` that made them, and a link with another
+    refuses them in one sentence; `-S` writes the Rust; `-E` prints the
+    preprocessed C with GCC's line markers; `-M`, `-MM`, `-MD`, `-MMD`, `-MF`,
+    `-MT`, `-MQ` and `-MP` write Makefile rules under GCC's names.
+  * `--target=` for another machine, `wasm32-wasip1` and `wasm32-wasip2`
+    among them with nothing to install but the Rust target; `-march=` and
+    `-m<feature>` as `rustc`'s target CPU and features, with the feature
+    macros to match.
+  * `-shared` links an ELF shared library that exports the C symbols;
+    `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`.
+  * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`
+    the first time a program needs it and kept in a cache directory.
+  * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark and brotli with their
+    own build systems and runs their tests, and runs c-testsuite through the
+    command line (218 of 220).
+* **A `long double` through a literal `printf` or `scanf` format.**
+  `printf("%.2Lf", x)` and `sscanf(s, "%Le", &x)` used to be refused where the
+  platform's `long double` is wider than cinrs's (x87's, on x86-64 Linux and
+  macOS). When the format is a string literal that names every `long double`
+  argument with `L`, the `L`s become `l` — `%lf` is `%f` to `printf` and a
+  `double *` to `scanf` — and the platform reads the `double` it is given. Any
+  other way of passing one is refused as before.
+* `cinrs-core`, for a command-line driver: `translate_file`, which hands back
+  the Rust, the diagnostics, the headers read and the symbols defined;
+  `preprocess_file`, the preprocessor alone; `Options::export` (every unit
+  under `#pragma cinrs export`), `Options::macros` (`-D` and `-U`) and
+  `Options::target_features` (`-m<feature>`); `GCC_VERSION`.
+* `cinrs-rt` can be compiled without Cargo: `num-complex` is an optional
+  (default) feature, without which the crate has a `#[repr(C)] Complex` of its
+  own, and `SOURCES` (feature `sources`) is its source as text.
+
+### Changed
+
+* A source file — a header, an `include_c99!` file — no longer has to be
+  UTF-8. A byte that is not part of a UTF-8 sequence is passed through a
+  narrow string literal as the byte it was, read as Latin-1 in a wide one and
+  ignored in a comment, as GCC does; anywhere else it is "unexpected byte 0xE9
+  in program (the file is not UTF-8)". Such a file used to be "cannot read".
+
 ## 0.2.0 — 2026-10-02
 
 Rust 1.99 made `c_variadic` stable, and this release is built on it: a

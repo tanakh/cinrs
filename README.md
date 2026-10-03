@@ -217,6 +217,22 @@ fn main() {
 Without it a cross build fails a compile-time assertion instead of computing
 the wrong thing. [Cross-compilation][cross] has the supported targets.
 
+### As a C compiler
+
+[`ccinrs`][ccinrs] is the same front end as a command with GCC's command line:
+each C file becomes Rust, which `rustc` compiles and links, so a C project
+builds with `make CC=ccinrs` or CMake told that `ccinrs` is its C compiler —
+with Rust's run-time checks on, and a panic naming the C file and line. It
+takes `-c`, `-E`, `-M` and its relatives, `-shared`, `--target` (WebAssembly
+through `wasm32-wasip1` and `-p2` included) and `-march`; lz4, cJSON, cmark and
+brotli build with their own Makefiles and CMake files and pass their own
+tests.
+
+```text
+cargo install ccinrs
+make CC=ccinrs
+```
+
 ## What is supported
 
 [What works][features] is the tour, construct by construct.
@@ -286,6 +302,7 @@ SQLite VDBE, say — runs at the speed `gcc` gives it.
 | [System headers][system-headers] | `/usr/include` and what glibc's headers do here |
 | [Cross-compilation][cross] · [`no_std`][no-std] | targets and data models; what the expansion needs |
 | [Conformance][testsuites] · [Benchmarks][benchmarks] · [Real programs][real-programs] | how the numbers above are measured; SQLite, BLAKE3, xxHash and CRoaring against `gcc -O2` and `clang -O2` |
+| [`ccinrs`][ccinrs] | the C compiler: its options, defaults, targets and shared libraries, and the projects it has built |
 | [API documentation](https://docs.rs/cinrs) | the macro reference: `c99!` and each of its siblings |
 
 ## How it works
@@ -328,6 +345,7 @@ dual licensed as above, without any additional terms or conditions.
 [testsuites]: https://github.com/tanakh/cinrs/blob/master/doc/testsuites.md
 [benchmarks]: https://github.com/tanakh/cinrs/blob/master/doc/benchmarks.md
 [real-programs]: https://github.com/tanakh/cinrs/blob/master/doc/real-programs.md
+[ccinrs]: https://github.com/tanakh/cinrs/blob/master/doc/ccinrs.md
 [features]: https://github.com/tanakh/cinrs/blob/master/doc/features.md
 [translation]: https://github.com/tanakh/cinrs/blob/master/doc/translation.md
 [input-forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms
