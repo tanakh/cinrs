@@ -241,7 +241,22 @@ impl Sema<'_> {
         }
 
         let storage = decl.specifiers.storage.as_ref().map(|s| s.node);
-        if let ast::TypeKind::Function(func) = &declarator.ty.kind {
+        // A function is declared by a function declarator, or through a
+        // `typedef` of a function type (C11 6.9.1p2 forbids only a
+        // *definition* that way): `typedef int handler(int); static handler
+        // f, g;` declares two functions. `_Atomic` on one is the constraint
+        // violation the object path reports (C11 6.7.2.4p3).
+        let through_typedef = match &declarator.ty.kind {
+            ast::TypeKind::Typedef(name) if !declarator.ty.qualifiers.is_atomic => self
+                .lookup_typedef(name)
+                .and_then(|entry| entry.function.clone()),
+            _ => None,
+        };
+        let function: Option<&ast::FunctionType> = match &declarator.ty.kind {
+            ast::TypeKind::Function(func) => Some(func),
+            _ => through_typedef.as_deref(),
+        };
+        if let Some(func) = function {
             // C11 6.7.1p4: `_Thread_local` applies to an object, and a
             // function is not one.
             if let Some(range) = decl.specifiers.thread_local {
@@ -1755,12 +1770,22 @@ impl Sema<'_> {
                 self.check_redefinition(name);
             }
         }
+        // A function type, written here or through another `typedef`, is
+        // kept as written for the declarations that will name it.
+        let function = match &ty.kind {
+            ast::TypeKind::Function(func) => Some(std::rc::Rc::new(ast::FunctionType::clone(func))),
+            ast::TypeKind::Typedef(inner) => self
+                .lookup_typedef(inner)
+                .and_then(|entry| entry.function.clone()),
+            _ => None,
+        };
         self.insert(
             &name.name,
             Entry::Typedef(TypedefEntry {
                 resolved: resolved.clone(),
                 range: name.range,
                 align,
+                function,
             }),
         );
 

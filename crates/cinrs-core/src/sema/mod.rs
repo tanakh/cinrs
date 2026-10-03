@@ -426,6 +426,10 @@ struct TypedefEntry {
     /// scalar or pointer type, when it is not the type's own: GCC makes that a
     /// new variant of the type with alignment N. See `Sema::typedef_align`.
     align: Option<u64>,
+    /// For a `typedef` of a function type, the function type as written,
+    /// which a declaration through the name — `static handler f, g;`, as
+    /// expat declares its state handlers — declares functions with.
+    function: Option<std::rc::Rc<ast::FunctionType>>,
 }
 
 /// What a tag name refers to.
@@ -994,6 +998,7 @@ impl<'a> Sema<'a> {
                     resolved: Ok(Ty::VaList),
                     range: SourceRange::at(0),
                     align: None,
+                    function: None,
                 }),
             );
         }
@@ -1006,6 +1011,7 @@ impl<'a> Sema<'a> {
                     resolved: Ok(*ty),
                     range: SourceRange::at(0),
                     align: None,
+                    function: None,
                 }),
             );
         }
@@ -1024,6 +1030,7 @@ impl<'a> Sema<'a> {
                         resolved: Ok(*ty),
                         range: SourceRange::at(0),
                         align: None,
+                        function: None,
                     }),
                 );
             }

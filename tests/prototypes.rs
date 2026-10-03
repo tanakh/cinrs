@@ -233,6 +233,43 @@ fn compatibility_reaches_through_a_pointer_to_a_function_pointer() {
     assert_eq!(unsafe { through_two_levels(4) }, 10);
 }
 
+/// A function declared through a `typedef` of a function type.
+///
+/// C11 6.9.1p2 forbids only a *definition* that way; a declaration is an
+/// ordinary one, and expat declares the handlers of its prolog state machine
+/// so — `typedef int PTRCALL PROLOG_HANDLER(…); static PROLOG_HANDLER
+/// prolog0, prolog1, …;` — before defining each with a function declarator.
+/// A block may declare one the same way, and a `typedef` of the `typedef`
+/// declares the same functions.
+#[test]
+fn a_function_is_declared_through_a_typedef_of_a_function_type() {
+    c99! {
+        typedef int handler(int);
+        typedef handler also;
+
+        static handler twice, thrice;
+        also from_another;
+
+        int all(int x) {
+            handler external_one;
+            return twice(x) + thrice(x) + from_another(x) + external_one(x);
+        }
+
+        static int twice(int x) { return 2 * x; }
+        static int thrice(int x) { return 3 * x; }
+        int from_another(int x) { return 4 * x; }
+        int external_one(int x) { return 5 * x; }
+
+        /* The name is a function: its address is a `handler *`. */
+        handler *pick(int which) { return which ? twice : thrice; }
+    }
+
+    unsafe {
+        assert_eq!(all(1), 14);
+        assert_eq!(pick(1).expect("a function")(5), 10);
+    }
+}
+
 /// A `return` whose expression has type `void`, in a function returning void.
 ///
 /// C99 and C11 6.8.6.4p1 forbid it, C23 allows it, and GCC and Clang both take
