@@ -15,7 +15,7 @@ use std::process::Command;
 use cinrs_core::include::System;
 use cinrs_core::{Arch, Env, Options, Os, TargetModel, TargetSource};
 
-use crate::args::{Input, Invocation, Query, Stage};
+use crate::args::{Input, Invocation, Lto, Query, Stage};
 use crate::runtime::{self, Runtime};
 use crate::rustc::Rustc;
 use crate::{deps, diag, preprocess, print};
@@ -96,7 +96,10 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                 let deps = run.deps_beside(path, None);
                 match run.compile(index, path, &object, deps)? {
                     Some(info) => {
-                        objects.push(object);
+                        objects.push(LinkInput {
+                            path: object,
+                            crate_name: info.crates.first().cloned(),
+                        });
                         linked.add(info);
                     }
                     None => failed = true,
@@ -110,8 +113,23 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                 if is_archive(path) || is_shared_library(path) {
                     info.symbols.clear();
                 }
+                // An `-flto` object is an rlib, which is an archive itself,
+                // and an archive of archives is nothing a linker reads — as
+                // GCC's own LTO objects need `gcc-ar` to go into one.
+                if is_archive(path) && !info.crates.is_empty() {
+                    return Err(format!(
+                        "{} holds objects compiled with -flto, which cannot be linked from an \
+                         archive; link the objects themselves",
+                        path.display()
+                    )
+                    .into());
+                }
+                let crate_name = info.crates.first().cloned();
                 linked.add(info);
-                objects.push(run.work.link_input(index, path)?);
+                objects.push(LinkInput {
+                    path: run.work.link_input(index, path)?,
+                    crate_name,
+                });
             }
         }
     }
@@ -119,6 +137,14 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
         return Err(Failure::Reported);
     }
     run.link(&objects, &linked, &output)
+}
+
+/// One file a link takes, in the work directory.
+struct LinkInput {
+    path: PathBuf,
+    /// The crate an object compiled with `-flto` is — an rlib, which the link
+    /// loads as one; see [`Run::compile`].
+    crate_name: Option<String>,
 }
 
 /// What a link has to know about the objects in it, which each object made
@@ -129,12 +155,15 @@ struct ObjectInfo {
     uses_runtime: bool,
     /// The C symbols they define, which a shared library exports.
     symbols: Vec<String>,
+    /// The crates the `-flto` ones are.
+    crates: Vec<String>,
 }
 
 impl ObjectInfo {
     fn add(&mut self, other: ObjectInfo) {
         self.uses_runtime |= other.uses_runtime;
         self.symbols.extend(other.symbols);
+        self.crates.extend(other.crates);
     }
 }
 
@@ -729,11 +758,26 @@ impl Run<'_> {
                 &format!("{SYMBOLS_PREFIX}{}\0", translation.symbols.join(" ")),
             ));
         }
+        // Under `-flto` the object is an rlib — the crate's code, and the
+        // LLVM bitcode `rustc` optimises across crates — which a link loads
+        // as a crate, by the name it carries.
+        let name = crate_name(&stem, path);
+        if inv.lto.is_some() {
+            source.push_str(&used_bytes(
+                "CCINRS_CRATE",
+                &format!("{CRATE_PREFIX}{name}\0"),
+            ));
+        }
         std::fs::write(&rust, source)
             .map_err(|error| format!("cannot write {}: {error}", rust.display()))?;
         let mut cmd = self.rustc.command();
-        cmd.args(["--edition", "2024", "--crate-type", "lib", "--emit", "obj"])
-            .args(["--crate-name", &crate_name(&stem, path)])
+        cmd.args(["--edition", "2024"]);
+        if inv.lto.is_some() {
+            cmd.args(["--crate-type", "rlib"]);
+        } else {
+            cmd.args(["--crate-type", "lib", "--emit", "obj"]);
+        }
+        cmd.args(["--crate-name", &name])
             .args(codegen_flags(inv))
             .args(["-C", "codegen-units=1", "--cap-lints", "allow"])
             // What `rustc` says about the `.rs` — a panic's location among it
@@ -767,6 +811,7 @@ impl Run<'_> {
         Ok(Some(ObjectInfo {
             uses_runtime: translation.uses_runtime,
             symbols: translation.symbols,
+            crates: inv.lto.map(|_| name).into_iter().collect(),
         }))
     }
 
@@ -839,6 +884,10 @@ const RUNTIME_MARK: &str = "ccinrs runtime wanted\0";
 /// separated by spaces, up to a NUL.
 const SYMBOLS_PREFIX: &str = "ccinrs symbols: ";
 
+/// How an `-flto` object says which crate it is: the name follows, up to a
+/// NUL.
+const CRATE_PREFIX: &str = "ccinrs crate: ";
+
 /// What every object this run makes carries: the `rustc` that compiled it,
 /// down to the commit, and the target.
 ///
@@ -869,6 +918,7 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     let mark = RUNTIME_MARK.as_bytes();
     let uses_runtime = bytes.windows(mark.len()).any(|w| w == mark);
     let symbols = marked_names(&bytes, SYMBOLS_PREFIX);
+    let crates = marked_names(&bytes, CRATE_PREFIX);
     let prefix = STAMP_PREFIX.as_bytes();
     let mut rest = &bytes[..];
     while let Some(at) = rest.windows(prefix.len()).position(|w| w == prefix) {
@@ -893,11 +943,13 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     Ok(ObjectInfo {
         uses_runtime,
         symbols,
+        crates,
     })
 }
 
 /// The names every `prefix` mark in `bytes` lists — separated by spaces, up
-/// to a NUL — each once.
+/// to a NUL — each once: an `-flto` object carries its marks twice, in its
+/// code and in its bitcode.
 fn marked_names(bytes: &[u8], prefix: &str) -> Vec<String> {
     let prefix = prefix.as_bytes();
     let mut names: Vec<String> = Vec::new();
@@ -920,7 +972,12 @@ impl Run<'_> {
     /// Links the objects, in command-line order, into `output` — with the
     /// runtime when one of them calls it — as a program, or under `-shared`
     /// as a shared library.
-    fn link(&self, objects: &[PathBuf], linked: &ObjectInfo, output: &Path) -> Result<(), Failure> {
+    fn link(
+        &self,
+        objects: &[LinkInput],
+        linked: &ObjectInfo,
+        output: &Path,
+    ) -> Result<(), Failure> {
         let inv = self.inv;
         if inv.shared {
             self.check_shared()?;
@@ -932,9 +989,23 @@ impl Run<'_> {
             "// The program's `main` is the C one, in one of the objects.\n#![no_main]\n"
         }
         .to_owned();
+        // A crate is linked when it is loaded, and these load the runtime and
+        // each `-flto` object, under the name `rustc` finds it by.
         if linked.uses_runtime {
-            // A crate is linked when it is loaded, and this loads it.
             text.push_str("extern crate cinrs as _;\n");
+        }
+        let mut crates = Vec::new();
+        for object in objects {
+            let Some(name) = &object.crate_name else {
+                continue;
+            };
+            let rlib = self.work.path(&format!("lib{name}.rlib"));
+            if std::fs::hard_link(&object.path, &rlib).is_err() {
+                std::fs::copy(&object.path, &rlib)
+                    .map_err(|error| format!("cannot write {}: {error}", rlib.display()))?;
+            }
+            text.push_str(&format!("extern crate {name} as _;\n"));
+            crates.push(format!("{name}={}", rlib.display()));
         }
         std::fs::write(&stub, text)
             .map_err(|error| format!("cannot write {}: {error}", stub.display()))?;
@@ -946,6 +1017,20 @@ impl Run<'_> {
             .args(["--cap-lints", "allow"]);
         if linked.uses_runtime {
             cmd.args(runtime::extern_args(self.runtime()?));
+        }
+        for extern_crate in &crates {
+            cmd.arg("--extern").arg(extern_crate);
+        }
+        // `-flto` at the link is what optimises them all as one — the C, the
+        // runtime and Rust's standard library alike.
+        match inv.lto {
+            Some(Lto::Fat) => {
+                cmd.args(["-C", "lto=fat"]);
+            }
+            Some(Lto::Thin) => {
+                cmd.args(["-C", "lto=thin"]);
+            }
+            None => {}
         }
         // `rustc` gives a shared library a version script that exports what
         // the Rust in it exports, which here is nothing: a second one names
@@ -1003,6 +1088,10 @@ impl Run<'_> {
         // path.
         cmd.arg("-L").arg(self.work.dir());
         for object in objects {
+            if object.crate_name.is_some() {
+                continue;
+            }
+            let object = &object.path;
             if self.target.model.arch == Arch::Wasm32 {
                 cmd.arg("-C").arg(format!("link-arg={}", object.display()));
                 continue;

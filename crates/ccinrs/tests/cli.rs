@@ -713,6 +713,43 @@ fn the_compiler_says_what_it_is() {
     assert!(stderr(&out).starts_with("ccinrs "), "{}", stderr(&out));
 }
 
+/// `-flto` makes objects that are crates, which a link with `-flto`
+/// optimises together: in one command, or compiled apart and linked later,
+/// alongside an object compiled without it. An archive of them is refused
+/// with the reason, as one of GCC's needs `gcc-ar`.
+#[test]
+fn link_time_optimisation() {
+    let s = Scratch::new("lto");
+    s.write(
+        "step.c",
+        "unsigned step(unsigned x) { return x * 3u + 1u; }\n",
+    );
+    s.write(
+        "loop.c",
+        "#include <stdio.h>\nunsigned step(unsigned);\nint main(void) {\n    unsigned x = 1;\n    for (int i = 0; i < 1000; i++) x = step(x);\n    printf(\"%u\\n\", x);\n    return 0;\n}\n",
+    );
+    s.compile(&["-O2", "loop.c", "step.c", "-o", "plain"]);
+    let expected = stdout(&s.run("plain", &[]));
+    s.compile(&["-O2", "-flto", "loop.c", "step.c", "-o", "together"]);
+    assert_eq!(stdout(&s.run("together", &[])), expected);
+    s.compile(&["-O2", "-flto=thin", "-c", "step.c"]);
+    s.compile(&["-O2", "-c", "loop.c"]);
+    s.compile(&["-O2", "-flto", "loop.o", "step.o", "-o", "apart"]);
+    assert_eq!(stdout(&s.run("apart", &[])), expected);
+    let archived = Command::new("ar")
+        .args(["rcs", "libstep.a", "step.o"])
+        .current_dir(&s.dir)
+        .status();
+    if archived.is_ok_and(|status| status.success()) {
+        let out = s.ccinrs(&["loop.o", "libstep.a", "-o", "archived"]);
+        assert!(
+            stderr(&out).contains("compiled with -flto, which cannot be linked from an archive"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Other targets
 // ---------------------------------------------------------------------------

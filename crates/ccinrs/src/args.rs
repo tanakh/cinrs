@@ -58,6 +58,14 @@ pub struct Deps {
     pub phony: bool,
 }
 
+/// Which link-time optimisation `-flto` asks for: `rustc`'s `-C lto=fat`,
+/// or with `-flto=thin`, Clang's spelling, `-C lto=thin`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lto {
+    Fat,
+    Thin,
+}
+
 /// What a command line asks that is not a compilation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Query {
@@ -145,6 +153,9 @@ pub struct Invocation {
     pub libs: Vec<String>,
     /// `-Wl,…`, each as written, for the linker driver `rustc` runs.
     pub linker_args: Vec<String>,
+    /// `-flto`: objects that carry what `rustc` needs to optimise them
+    /// together, and a link that does.
+    pub lto: Option<Lto>,
     /// `-s`.
     pub strip: bool,
     /// `-shared`: link a shared library rather than a program.
@@ -192,6 +203,7 @@ impl Default for Invocation {
             lib_dirs: Vec::new(),
             libs: Vec::new(),
             linker_args: Vec::new(),
+            lto: None,
             strip: false,
             shared: false,
             static_link: false,
@@ -354,8 +366,10 @@ const QUIET_FLAGS: &[&str] = &[
     "cf-protection",
     "semantic-interposition",
     "no-semantic-interposition",
-    "lto",
-    "no-lto",
+    "fat-lto-objects",
+    "no-fat-lto-objects",
+    "use-linker-plugin",
+    "lto-partition=",
     "ident",
     "no-ident",
     "strict-overflow",
@@ -648,6 +662,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
 fn flag(inv: &mut Invocation, arg: &str) -> Result<(), String> {
     let name = &arg[2..];
     match name {
+        "lto" => inv.lto = Some(Lto::Fat),
+        "lto=thin" => inv.lto = Some(Lto::Thin),
+        // `-flto=auto`, `-flto=8`: how many jobs, which is `rustc`'s to say.
+        _ if name.starts_with("lto=") => inv.lto = Some(Lto::Fat),
+        "no-lto" => inv.lto = None,
         "cinrs-checks" => inv.checks = true,
         "no-cinrs-checks" => inv.checks = false,
         "dollars-in-identifiers" => inv.dollars = true,
@@ -774,6 +793,23 @@ mod tests {
         let inv = parse_all(&["-MM", "-c", "a.c"]).unwrap();
         assert_eq!(inv.stage, Stage::Preprocess);
         assert!(inv.deps.only && !inv.deps.system);
+    }
+
+    #[test]
+    fn link_time_optimisation() {
+        assert_eq!(parse_all(&["a.c"]).unwrap().lto, None);
+        assert_eq!(parse_all(&["-flto", "a.c"]).unwrap().lto, Some(Lto::Fat));
+        assert_eq!(
+            parse_all(&["-flto=auto", "a.c"]).unwrap().lto,
+            Some(Lto::Fat)
+        );
+        assert_eq!(
+            parse_all(&["-flto=thin", "a.c"]).unwrap().lto,
+            Some(Lto::Thin)
+        );
+        assert_eq!(parse_all(&["-flto", "-fno-lto", "a.c"]).unwrap().lto, None);
+        let inv = parse_all(&["-flto", "-ffat-lto-objects", "-fuse-linker-plugin", "a.c"]).unwrap();
+        assert!(inv.notes.is_empty(), "{:?}", inv.notes);
     }
 
     #[test]
