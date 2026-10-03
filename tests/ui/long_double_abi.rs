@@ -4,8 +4,9 @@
 //! defines and wrong for the platform's library wherever its `long double` is
 //! wider: x87's eighty bits on x86-64 System V. The ISO C functions whose only
 //! difference from a `double` sibling is the type (`strtold`, `powl`, …) are
-//! linked to the sibling; everything else is refused where it is *used*, with
-//! the rewrite.
+//! linked to the sibling; a literal `printf` or `scanf` format that names
+//! every `long double` argument with `L` has the `L`s made `l`; everything
+//! else is refused where it is *used*, with the rewrite.
 //!
 //! The block names its target, so the diagnostics are the same wherever the
 //! test is run.
@@ -24,11 +25,17 @@ cinrs::gnu11! {
     long double my_scale(long double x);
     void my_fill(long double *out);
 
-    double read_it(const char *s) {
+    double read_it(const char *s, const char *fmt) {
         long double x = strtold(s, 0);
-        printf("%Lf\n", x);
-        //~^ ERROR: a 'long double' cannot be passed to the platform's 'printf'
+        /* Named with `L` by a literal format: `%lf` is what the platform reads. */
+        printf("%Lf %.3Le\n", x, x);
         sscanf(s, "%Lf", &x);
+        /* A format that is not a literal, or that does not say `L`. */
+        printf(fmt, x);
+        //~^ ERROR: a 'long double' cannot be passed to the platform's 'printf'
+        printf("%f\n", x);
+        //~^ ERROR: a 'long double' cannot be passed to the platform's 'printf'
+        sscanf(s, fmt, &x);
         //~^ ERROR: a 'long double *' cannot be passed to the platform's 'sscanf'
         my_fill(&x);
         //~^ ERROR: 'my_fill' takes a 'long double *'

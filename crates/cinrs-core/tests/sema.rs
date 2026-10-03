@@ -2490,6 +2490,8 @@ fn a_platform_function_with_a_long_double_in_its_prototype_is_refused_where_used
 
 /// A `long double` handed to the variable part of a platform function is read
 /// as sixteen x87 bytes, and a pointer to one is written through as sixteen.
+/// (A format built at run time: a literal one that says `L` is rewritten
+/// instead; see the test after this one.)
 #[test]
 fn a_long_double_through_the_platforms_ellipsis_is_refused() {
     const PRINTF: &str = "a 'long double' cannot be passed to the platform's 'printf': it is \
@@ -2503,18 +2505,18 @@ fn a_long_double_through_the_platforms_ellipsis_is_refused() {
              typedef long double ld;\n\
              struct S { long double m; ld a[2]; };\n\
              long double get(void);\n\
-             void f(double d, struct S *s) {\n\
+             void f(double d, struct S *s, const char *fmt) {\n\
                long double x = d, arr[3];\n\
-               printf(\"%Lf\", x);\n\
-               printf(\"%Lf\", 2.5L);\n\
-               printf(\"%Lf\", -2.5L);\n\
-               printf(\"%Lf\", (long double)d);\n\
-               printf(\"%Lf\", x * d);\n\
-               printf(\"%Lf\", s->m);\n\
-               printf(\"%Lf\", s->a[1]);\n\
-               printf(\"%Lf\", arr[0]);\n\
-               sscanf(\"1\", \"%Lf\", &x);\n\
-               sscanf(\"1\", \"%Lf\", arr);\n\
+               printf(fmt, x);\n\
+               printf(fmt, 2.5L);\n\
+               printf(fmt, -2.5L);\n\
+               printf(fmt, (long double)d);\n\
+               printf(fmt, x * d);\n\
+               printf(fmt, s->m);\n\
+               printf(fmt, s->a[1]);\n\
+               printf(fmt, arr[0]);\n\
+               sscanf(\"1\", fmt, &x);\n\
+               sscanf(\"1\", fmt, arr);\n\
              }"
         ),
         [
@@ -2540,9 +2542,72 @@ fn a_long_double_through_the_platforms_ellipsis_is_refused() {
         errors_on(
             X86_64_LINUX,
             "#include <stdlib.h>\nint printf(const char *, ...);\n\
-             void f(void) { printf(\"%Lf\", strtold(\"1\", 0)); }"
+             void f(const char *fmt) { printf(fmt, strtold(\"1\", 0)); }"
         ),
         [PRINTF]
+    );
+}
+
+/// A literal `printf` or `scanf` format that names every `long double`
+/// argument with `L` has the `L`s made `l` — `%lf` is `%f` to `printf` and a
+/// `double *` to `scanf` — and nothing else of it changes. One that does not
+/// name them all is refused as a whole, and so is the same call to a function
+/// the unit defines itself never rewritten.
+#[test]
+fn a_literal_format_names_its_long_doubles() {
+    fn strings(source: &str) -> Vec<String> {
+        let options = options_for(X86_64_LINUX);
+        let literal = format!("r#####\"{source}\"#####");
+        let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+        let analysis = analyze(input, &options);
+        let (program, diagnostics) =
+            sema::analyze(&analysis.unit, &options, analysis.source.unit_id());
+        assert!(!diagnostics.has_errors(), "{:#?}", diagnostics.items());
+        program
+            .strings
+            .iter()
+            .map(|s| s.values.iter().map(|&v| char::from(v as u8)).collect())
+            .collect()
+    }
+    assert_eq!(
+        strings(
+            "int printf(const char *, ...);\n\
+             int snprintf(char *, unsigned long, const char *, ...);\n\
+             int sscanf(const char *, const char *, ...);\n\
+             void f(long double x, char *buf) {\n\
+               printf(\"%Lf %d %.*Le|%Ld\\n\", x, 1, 3, x, 2LL);\n\
+               snprintf(buf, 9, \"%Lg\", x);\n\
+               sscanf(\"1 2\", \"%*d %Lf\", &x);\n\
+               printf(\"%Lf\", 1.0);\n\
+             }"
+        ),
+        [
+            "%lf %d %.*le|%Ld\n",
+            "%lg",
+            "1 2",
+            "%*d %lf",
+            // `%Lf` given a `double` is the program's own mistake, left as it is.
+            "%Lf",
+        ]
+    );
+    const PRINTF: &str = "a 'long double' cannot be passed to the platform's 'printf': it is \
+                          'double' here and would be read as sixteen x87 bytes; cast it to \
+                          'double' and use '%f'";
+    assert_eq!(
+        errors_on(
+            X86_64_LINUX,
+            "int printf(const char *, ...);\n\
+             void f(long double x) { printf(\"%f %Lf\", x, x); printf(\"%2$Lf\", 1, x); }"
+        ),
+        [PRINTF, PRINTF, PRINTF]
+    );
+    assert_eq!(
+        strings(
+            "int printf(const char *, ...);\n\
+             void f(long double x) { printf(\"%Lf\", x); }\n\
+             int printf(const char *fmt, ...) { return 0; }"
+        ),
+        ["%Lf"]
     );
 }
 

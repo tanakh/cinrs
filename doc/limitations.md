@@ -57,9 +57,14 @@
   the type (`strtold`, `wcstold`, the `<math.h>` and `<complex.h>` `l` forms,
   and `nexttoward`) is linked to the sibling, `#[link_name = "strtod"]`; any
   other declared-only function with a `long double` or a `long double *` in its
-  prototype is refused where it is called or its address taken, and so is a
-  `long double` or a `long double *` handed to a declared-only function's `...`
-  (`printf("%Lf", x)`, `sscanf("%Lf", &x)`): cast to `double` and use `%f`.
+  prototype is refused where it is called or its address taken. A `long
+  double` handed to the `...` of the `printf` family, or a `long double *` to
+  the `scanf` family's, is fine when the format is a string literal that names
+  every one of them with `L` (`printf("%.2Lf", x)`, `sscanf(s, "%Le", &x)`): the
+  `L` becomes `l`, which the platform's function reads as the `double` it is
+  given. Any other `long double` or `long double *` handed to a declared-only
+  function's `...` — through a format built at run time, or to `%f` — is
+  refused: cast to `double` and use `%f`.
   Where the platform's `long double` is `double` too (MSVC, 32-bit Arm, Apple
   arm64) nothing is refused, but the twins are still linked to the sibling:
   Microsoft's C runtime has no `powl`, `sinl` or `fabsl` symbol, only

@@ -2274,7 +2274,7 @@ impl Sema<'_> {
                 }
             }
         }
-        self.note_long_double_call(&target, callee.range, &variadic_depths);
+        self.note_long_double_call(&target, callee.range, &values, &variadic_depths);
 
         let too_few = args.len() < sig.params.len();
         // A function type with no prototype says nothing about how many

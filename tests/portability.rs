@@ -80,6 +80,22 @@ int parse_fields(const char *text, int *value, double *weight, char *word) {
     return sscanf(text, "%d %lf %7s", value, weight, word);
 }
 
+/* `long double` is `double` here and the platform's may be wider — x87's
+ * eighty bits on x86-64 Linux and macOS — so a literal format's `L` is made
+ * `l` for the platform's function to read the `double` it is given: `%Lf` is
+ * printed as `%lf`, which is `%f`, and `%Le` scanned as `%le`. Where the
+ * platform's `long double` is `double` (Windows, Apple's arm64), nothing
+ * changes and nothing has to. lz4's `lz4io.c` prints sizes like this. */
+int format_long_double(char *buf, size_t n, long double size, long double small) {
+    return snprintf(buf, n, "%.2Lf%c|%*.*Lg", size, 'M', 8, 3, small);
+}
+
+int parse_long_double(const char *text, long double *value) {
+    int count = 0;
+    int got = sscanf(text, "%Le%n", value, &count);
+    return got == 1 ? count : -1;
+}
+
 /* -- <stdio.h>: the standard streams ---------------------------------- */
 
 int to_stderr(void) {
@@ -501,6 +517,18 @@ fn scanning_a_string() {
     assert_eq!(value, 42);
     assert_eq!(weight, 2.5);
     assert_eq!(&word[..6], b"cinrs\0");
+}
+
+#[test]
+fn long_double_through_a_literal_format() {
+    let mut buf = [0u8; 32];
+    let n =
+        unsafe { format_long_double(buf.as_mut_ptr().cast(), buf.len() as _, 12.3456, 0.000125) };
+    assert_eq!(&buf[..n as usize], b"12.35M|0.000125");
+    let mut value: c_double = 0.0;
+    let n = unsafe { parse_long_double(c"-6.25e3 rest".as_ptr(), &mut value) };
+    assert_eq!(n, 7);
+    assert_eq!(value, -6250.0);
 }
 
 #[test]

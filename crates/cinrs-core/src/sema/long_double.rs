@@ -53,7 +53,7 @@
 use super::Sema;
 use crate::ast;
 use crate::capture::SourceRange;
-use crate::ir::{Callee, Expr, ExprKind, FuncId, Place, PlaceKind, Ty};
+use crate::ir::{Callee, Expr, ExprKind, FuncId, Place, PlaceKind, StrId, Ty};
 use crate::target::Arch;
 
 /// The ISO C functions whose only difference from a `double` sibling is the
@@ -210,6 +210,15 @@ pub(super) enum LongDoubleUse {
         range: SourceRange,
         pointer: bool,
     },
+    /// A call to a `printf` or a `scanf` whose `long double` arguments are
+    /// each named by an `L` conversion of its literal format: the `L`s, at
+    /// these indexes of the string, become `l` if the function is the
+    /// platform's. See [`format_conversions`].
+    Format {
+        func: FuncId,
+        string: StrId,
+        at: Vec<usize>,
+    },
 }
 
 impl Sema<'_> {
@@ -358,11 +367,15 @@ impl Sema<'_> {
 
     /// Records what a call does at the boundary: the callee itself, when its
     /// prototype mentions `long double`, and each argument in the variable
-    /// part that is a `long double` or a pointer to one.
+    /// part that is a `long double` or a pointer to one — unless the call is
+    /// a `printf` or a `scanf` whose literal format names every one of them
+    /// with an `L`, which is then recorded as a format to rewrite instead.
+    /// `args` are the call's arguments, the variable part last.
     pub(super) fn note_long_double_call(
         &mut self,
         target: &Callee,
         callee_range: SourceRange,
+        args: &[Expr],
         variadic_args: &[(SourceRange, Option<u8>)],
     ) {
         let Callee::Direct(id) = target else {
@@ -373,7 +386,12 @@ impl Sema<'_> {
             return;
         }
         self.note_long_double_function_use(*id, callee_range);
-        for (range, depth) in variadic_args {
+        let format = self.format_rewrite(*id, args, variadic_args);
+        let covered: &[usize] = format.as_ref().map_or(&[], |(_, _, covered)| covered);
+        for (index, (range, depth)) in variadic_args.iter().enumerate() {
+            if covered.contains(&index) {
+                continue;
+            }
             if let Some(depth @ (0 | 1)) = depth {
                 self.long_double_uses.push(LongDoubleUse::Variadic {
                     func: *id,
@@ -382,6 +400,61 @@ impl Sema<'_> {
                 });
             }
         }
+        if let Some((string, at, _)) = format {
+            self.long_double_uses.push(LongDoubleUse::Format {
+                func: *id,
+                string,
+                at,
+            });
+        }
+    }
+
+    /// For a call to one of the [`FORMAT_FUNCTIONS`] with a literal format,
+    /// the string, the indexes of the `L`s that name its `long double`
+    /// arguments (`long double *` for a `scanf`), and which arguments of the
+    /// variable part those are. `None` when the call is anything else, or a
+    /// `long double` argument is not named that way — a format built at run
+    /// time, a `%Lf` given a `double`, an argument too many — which leaves
+    /// the call to be refused.
+    ///
+    /// The rewrite is `L` to `l`: `%lf` is `%f` to `printf` (C99 7.19.6.1p7,
+    /// "has no effect") and a `double *` to `scanf`, which with `long double`
+    /// being `double` is exactly what the argument is. The string keeps its
+    /// length, and each literal is its own `StrData`, so no other use of the
+    /// text sees it change.
+    fn format_rewrite(
+        &self,
+        id: FuncId,
+        args: &[Expr],
+        variadic_args: &[(SourceRange, Option<u8>)],
+    ) -> Option<(StrId, Vec<usize>, Vec<usize>)> {
+        let name = &self.program.function(id).name;
+        let &(_, index, scanf) = FORMAT_FUNCTIONS.iter().find(|(n, _, _)| n == name)?;
+        // The format is the last named parameter, the variable part right
+        // after it; anything else is not the function the name says.
+        if args.len() != index + 1 + variadic_args.len() {
+            return None;
+        }
+        let string = literal_string(&args[index])?;
+        let data = &self.program.strings[string.0 as usize];
+        if data.elem != Ty::Char {
+            return None;
+        }
+        let consumed = format_conversions(&data.values, scanf)?;
+        let wanted = u8::from(scanf);
+        let mut at = Vec::new();
+        let mut covered = Vec::new();
+        for (arg, (_, depth)) in variadic_args.iter().enumerate() {
+            if *depth != Some(wanted) {
+                continue;
+            }
+            let Some(Some(l)) = consumed.get(arg) else {
+                return None;
+            };
+            at.push(*l);
+            covered.push(arg);
+        }
+        (!covered.is_empty()).then_some((string, at, covered))
     }
 
     /// Records a call to, or the address of, the function `id`.
@@ -486,7 +559,186 @@ impl Sema<'_> {
                     };
                     self.error(range, message);
                 }
+                // A function of the unit's own reads its `long double`
+                // arguments as `double`, as they were passed, whatever the
+                // format says; only the platform's is told otherwise.
+                LongDoubleUse::Format { func, string, at } => {
+                    if !self.is_platform_function(func) {
+                        continue;
+                    }
+                    let values = &mut self.program.strings[string.0 as usize].values;
+                    for index in at {
+                        values[index] = u32::from(b'l');
+                    }
+                }
             }
         }
+    }
+}
+
+/// The `printf`s and `scanf`s whose literal format a `long double` argument
+/// is rewritten in: the name, the index of the format parameter, and whether
+/// it is a `scanf`. See [`Sema::format_rewrite`].
+const FORMAT_FUNCTIONS: &[(&str, usize, bool)] = &[
+    ("printf", 0, false),
+    ("fprintf", 1, false),
+    ("sprintf", 1, false),
+    ("snprintf", 2, false),
+    ("dprintf", 1, false),
+    ("asprintf", 1, false),
+    ("scanf", 0, true),
+    ("fscanf", 1, true),
+    ("sscanf", 1, true),
+];
+
+/// The string literal an argument is, through the decay and the conversion
+/// to `const char *` it went through.
+fn literal_string(expr: &Expr) -> Option<StrId> {
+    match &expr.kind {
+        ExprKind::Cast(inner) => literal_string(inner),
+        ExprKind::AddrOf(place) => match place.kind {
+            PlaceKind::Str(id) => Some(id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What a `printf` format — or with `scanf`, a `scanf` format — takes from
+/// the variable arguments, one entry per argument in order: the index of the
+/// `L` of a floating conversion written with one (`%Lf`, `%.3Lg`), and
+/// `None` for every other argument, a `*` width or precision among them.
+///
+/// `None` altogether for a format this does not follow: one that numbers its
+/// arguments (`%2$Lf`), or that ends in the middle of a conversion.
+fn format_conversions(format: &[u32], scanf: bool) -> Option<Vec<Option<usize>>> {
+    // What the function reads stops at the first NUL.
+    let format = &format[..format.iter().position(|&c| c == 0).unwrap_or(format.len())];
+    let at = |i: usize| {
+        format
+            .get(i)
+            .and_then(|&c| char::from_u32(c))
+            .unwrap_or('\0')
+    };
+    let digits = |mut i: usize| {
+        while at(i).is_ascii_digit() {
+            i += 1;
+        }
+        i
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < format.len() {
+        if at(i) != '%' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if at(i) == '%' {
+            i += 1;
+            continue;
+        }
+        if digits(i) > i && at(digits(i)) == '$' {
+            return None;
+        }
+        let mut suppressed = false;
+        if scanf {
+            if at(i) == '*' {
+                suppressed = true;
+                i += 1;
+            }
+            i = digits(i);
+        } else {
+            while "-+ #0'I".contains(at(i)) {
+                i += 1;
+            }
+            if at(i) == '*' {
+                out.push(None);
+                i += 1;
+            } else {
+                i = digits(i);
+            }
+            if at(i) == '.' {
+                i += 1;
+                if at(i) == '*' {
+                    out.push(None);
+                    i += 1;
+                } else {
+                    i = digits(i);
+                }
+            }
+        }
+        let mut l = None;
+        loop {
+            match at(i) {
+                'L' => l = Some(i),
+                'h' | 'l' | 'j' | 'z' | 't' | 'q' => {}
+                // `scanf`'s `%ms`: allocate the string.
+                'm' if scanf => {}
+                _ => break,
+            }
+            i += 1;
+        }
+        let conversion = at(i);
+        if conversion == '\0' {
+            return None;
+        }
+        i += 1;
+        if scanf && conversion == '[' {
+            if at(i) == '^' {
+                i += 1;
+            }
+            // A `]` right after the bracket is one of the set.
+            if at(i) == ']' {
+                i += 1;
+            }
+            while at(i) != ']' {
+                if at(i) == '\0' {
+                    return None;
+                }
+                i += 1;
+            }
+            i += 1;
+        }
+        // `%m` is glibc's `strerror(errno)`, and takes nothing.
+        if suppressed || (!scanf && conversion == 'm') {
+            continue;
+        }
+        out.push(l.filter(|_| "aAeEfFgG".contains(conversion)));
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_conversions;
+
+    fn conversions(format: &str, scanf: bool) -> Option<Vec<Option<usize>>> {
+        let values: Vec<u32> = format.bytes().map(u32::from).collect();
+        format_conversions(&values, scanf)
+    }
+
+    #[test]
+    fn what_a_printf_format_takes() {
+        assert_eq!(
+            conversions("%.2Lf%c %d%%", false),
+            Some(vec![Some(3), None, None])
+        );
+        assert_eq!(
+            conversions("%*.*Lg|%-08Le|%Ld", false),
+            Some(vec![None, None, Some(4), Some(11), None])
+        );
+        assert_eq!(conversions("%m %s %lf", false), Some(vec![None, None]));
+        assert_eq!(conversions("%2$Lf %1$d", false), None);
+        assert_eq!(conversions("100%", false), None);
+    }
+
+    #[test]
+    fn what_a_scanf_format_takes() {
+        assert_eq!(
+            conversions("%Lf %*d %[^]x] %5Le %ms", true),
+            Some(vec![Some(1), None, Some(17), None])
+        );
+        assert_eq!(conversions("%[abc", true), None);
     }
 }
