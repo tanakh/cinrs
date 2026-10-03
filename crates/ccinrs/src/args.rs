@@ -143,6 +143,10 @@ pub struct Invocation {
     pub linker_args: Vec<String>,
     /// `-s`.
     pub strip: bool,
+    /// `-shared`: link a shared library rather than a program.
+    pub shared: bool,
+    /// `-static`: link the C library and everything else statically.
+    pub static_link: bool,
     /// `-v`: print every command run.
     pub verbose: bool,
     /// `-save-temps`: keep the generated `.rs` files and the objects.
@@ -183,6 +187,8 @@ impl Default for Invocation {
             libs: Vec::new(),
             linker_args: Vec::new(),
             strip: false,
+            shared: false,
+            static_link: false,
             verbose: false,
             save_temps: false,
             line_markers: true,
@@ -202,7 +208,7 @@ impl Invocation {
 
 /// The options GCC has that this version of `ccinrs` does not, yet: an error
 /// that says so rather than "unknown option".
-const NOT_YET: &[&str] = &["-include", "-shared", "-static", "-rdynamic", "-dM", "-MG"];
+const NOT_YET: &[&str] = &["-include", "-dM", "-MG"];
 
 /// `-W` options that only choose which warnings GCC prints, accepted without
 /// a word: the names themselves, or a prefix ending in `-` or `=`.
@@ -221,6 +227,8 @@ const QUIET_WARNINGS: &[&str] = &[
     "missing-",
     "declaration-after-statement",
     "format",
+    "format=",
+    "format-",
     "unused",
     "cast-",
     "pointer-",
@@ -235,6 +243,7 @@ const QUIET_WARNINGS: &[&str] = &[
     "init-self",
     "float-",
     "switch",
+    "switch-",
     "uninitialized",
     "maybe-uninitialized",
     "double-promotion",
@@ -527,7 +536,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             "-w" => inv.warnings = false,
             "-v" => inv.verbose = true,
             "-s" => inv.strip = true,
-            "-pipe" => {}
+            "-shared" => inv.shared = true,
+            "-static" => inv.static_link = true,
+            // The C driver's spelling of `--export-dynamic`, which the C
+            // compiler `rustc` links with understands as it is.
+            "-rdynamic" => inv.linker_args.push(arg.clone()),
+            // `-pedantic` only adds warnings; `-pedantic-errors` makes them
+            // errors, which cinrs's own diagnostics for the standard chosen
+            // already are where it matters.
+            "-pipe" | "-pedantic" | "-pedantic-errors" => {}
             // GCC's `-pthread` is the library and the macro.
             "-pthread" => {
                 inv.libs.push("pthread".to_owned());
@@ -805,9 +822,22 @@ mod tests {
 
     #[test]
     fn warnings_and_flags() {
-        let inv =
-            parse_all(&["-Wall", "-Wextra", "-Wno-unused", "-fPIC", "-fwrapv", "a.c"]).unwrap();
+        let inv = parse_all(&[
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused",
+            "-Wformat=2",
+            "-Wswitch-enum",
+            "-pedantic",
+            "-fPIC",
+            "-fwrapv",
+            "a.c",
+        ])
+        .unwrap();
         assert!(inv.notes.is_empty(), "{:?}", inv.notes);
+        let inv = parse_all(&["-shared", "-static", "-rdynamic", "a.c"]).unwrap();
+        assert!(inv.shared && inv.static_link);
+        assert_eq!(inv.linker_args, ["-rdynamic"]);
         let inv = parse_all(&["-Wfrobnicate", "-ffrobnicate", "a.c"]).unwrap();
         assert_eq!(inv.notes.len(), 2);
         assert!(

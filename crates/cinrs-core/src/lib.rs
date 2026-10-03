@@ -1156,6 +1156,10 @@ pub struct FileTranslation {
     /// Whether the items call the runtime, `::cinrs::rt` — which they do for
     /// the complex types, and for nothing else.
     pub uses_runtime: bool,
+    /// The C symbols the items define — every function and object with
+    /// external linkage, under [`Options::export`] — which is what a shared
+    /// library made of the unit exports.
+    pub symbols: Vec<String>,
     /// Every header the unit read, in the order it read them.
     pub headers: Vec<Header>,
     /// The absolute paths of the resources `#embed` read.
@@ -1194,16 +1198,19 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         options,
     } = lower(analysis);
     let mut uses_runtime = false;
+    let mut symbols = Vec::new();
     let items = (!diagnostics.has_errors()).then(|| {
-        let (items, runtime) = codegen::generate_unit(&program, &source.map, &options);
-        uses_runtime = runtime;
-        in_module(items, source.unit_id())
+        let unit = codegen::generate_unit(&program, &source.map, &options);
+        uses_runtime = unit.uses_runtime;
+        symbols = unit.symbols;
+        in_module(unit.items, source.unit_id())
     });
     Ok(FileTranslation {
         items,
         diagnostics,
         map: source.map,
         uses_runtime,
+        symbols,
         headers,
         embedded,
     })

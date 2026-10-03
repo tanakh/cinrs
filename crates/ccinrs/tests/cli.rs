@@ -590,6 +590,58 @@ fn dependency_rules_for_make() {
     );
 }
 
+/// `-shared` makes a shared library of C — from objects or from the C itself
+/// — that exports the C's symbols and nothing of the Rust in it, and a
+/// program links against it with `-l` as it would against GCC's.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_shared_library() {
+    let s = Scratch::new("shared");
+    s.write(
+        "counter.c",
+        "int counter = 41;\nint bump(int x) { return ++counter + x; }\nstatic int one(void) { return 1; }\nint use_one(void) { return one(); }\n",
+    );
+    s.write(
+        "main.c",
+        "#include <stdio.h>\nint bump(int);\nextern int counter;\nint use_one(void);\nint main(void) {\n    printf(\"%d %d %d\\n\", bump(1), counter, use_one());\n    return 0;\n}\n",
+    );
+    let run = |program: &str| {
+        let out = Command::new(s.dir.join(program))
+            .env("LD_LIBRARY_PATH", &s.dir)
+            .output()
+            .expect("the program runs");
+        stdout(&out)
+    };
+    s.compile(&["-c", "-fPIC", "counter.c"]);
+    s.compile(&[
+        "-shared",
+        "counter.o",
+        "-Wl,-soname=libcounter.so.1",
+        "-o",
+        "libcounter.so.1",
+    ]);
+    // The name the link looks for, and the one the program then asks for.
+    std::os::unix::fs::symlink("libcounter.so.1", s.dir.join("libcounter.so")).expect("the link");
+    s.compile(&["main.c", "-L.", "-lcounter", "-o", "from-objects"]);
+    assert_eq!(run("from-objects"), "43 42 1\n");
+    s.compile(&["-shared", "-fPIC", "counter.c", "-o", "libdirect.so"]);
+    s.compile(&["main.c", "-L.", "-ldirect", "-o", "from-source"]);
+    assert_eq!(run("from-source"), "43 42 1\n");
+}
+
+/// `-static` links the C library in.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_static_program() {
+    let s = Scratch::new("static");
+    s.write(
+        "hello.c",
+        "#include <stdio.h>\nint main(void) { puts(\"static\"); return 0; }\n",
+    );
+    s.compile(&["-static", "hello.c", "-o", "hello"]);
+    assert_eq!(stdout(&s.run("hello", &[])), "static\n");
+}
+
 /// What a build asks a compiler about itself.
 #[test]
 fn the_compiler_says_what_it_is() {

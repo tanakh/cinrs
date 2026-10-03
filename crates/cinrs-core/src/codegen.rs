@@ -189,12 +189,23 @@ use crate::reloop;
 
 /// Generates the Rust items for a fully checked program.
 pub fn generate(program: &Program, map: &SourceMap, options: &Options) -> TokenStream {
-    generate_unit(program, map, options).0
+    generate_unit(program, map, options).items
 }
 
-/// [`generate`], and whether the items call the runtime — the `rt` module of
-/// the crate path, which the complex types and nothing else need.
-pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> (TokenStream, bool) {
+/// What [`generate_unit`] made of a program.
+pub struct GeneratedUnit {
+    /// The Rust items, as [`generate`] returns them.
+    pub items: TokenStream,
+    /// Whether they call the runtime — the `rt` module of the crate path,
+    /// which the complex types and nothing else need.
+    pub uses_runtime: bool,
+    /// The C symbols they define, under `#pragma cinrs export` (or
+    /// [`Options::export`]): what a shared library made of them exports.
+    pub symbols: Vec<String>,
+}
+
+/// [`generate`], and what a caller building objects needs to know besides.
+pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> GeneratedUnit {
     let mut cg = Codegen::new(program, map, options);
     let mut out = cg.type_items();
     out.extend(cg.extern_block());
@@ -217,7 +228,11 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> (
     if out.is_empty() {
         // A unit that declares nothing expands to nothing at all — not even a
         // module — and there is no code for the data model to be wrong about.
-        return (out, false);
+        return GeneratedUnit {
+            items: out,
+            uses_runtime: false,
+            symbols: Vec::new(),
+        };
     }
     let mut items = cg.data_model_check();
     if cg.uses_cleanup.get() {
@@ -232,7 +247,11 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> (
     // so this has to come after them.
     items.extend(cg.intrinsic_shim_items());
     items.extend(out);
-    (items, cg.uses_complex.get())
+    GeneratedUnit {
+        items,
+        uses_runtime: cg.uses_complex.get(),
+        symbols: cg.symbols,
+    }
 }
 
 /// Generates signature-only items for a program that did not type check.
@@ -1117,6 +1136,9 @@ struct Codegen<'a> {
     /// reason and by the same route as [`Codegen::uses_int128`]: only a unit
     /// that has one asserts the layout of `Complex<f32>` and `Complex<f64>`.
     uses_complex: Cell<bool>,
+    /// The C symbols the unit's definitions are given, in the order they are
+    /// generated; see [`GeneratedUnit::symbols`].
+    symbols: Vec<String>,
     /// Whether anything in the unit needs the `cleanup` drop guard item.
     uses_cleanup: Cell<bool>,
     /// Whether any function of the unit opens with the bump arena variable
@@ -1227,6 +1249,7 @@ impl<'a> Codegen<'a> {
             temporaries: 0,
             uses_int128: Cell::new(false),
             uses_complex: Cell::new(false),
+            symbols: Vec::new(),
             uses_cleanup: Cell::new(false),
             uses_arena: Cell::new(false),
             arena_span: Cell::new(None),
@@ -2383,6 +2406,7 @@ impl<'a> Codegen<'a> {
         let (vis, export) = if *exported {
             let export = if self.program.export {
                 let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
+                self.symbols.push(symbol.to_owned());
                 export_attr(symbol, &name, span)
             } else {
                 TokenStream::new()
@@ -2577,6 +2601,7 @@ impl<'a> Codegen<'a> {
                 .asm_label
                 .as_deref()
                 .unwrap_or_else(|| self.entry_symbol(func));
+            self.symbols.push(symbol.to_owned());
             export_attr(symbol, &name, span)
         } else {
             TokenStream::new()
