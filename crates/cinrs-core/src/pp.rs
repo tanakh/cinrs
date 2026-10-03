@@ -869,6 +869,58 @@ pub struct Preprocessed {
     /// same way: [`TargetOptionMap`] answers what was in force where a
     /// function was defined.
     pub target_events: Vec<(usize, Vec<(String, SourceRange)>)>,
+    /// The macros defined when the unit ended.
+    pub macros: MacroTable,
+}
+
+/// The macros defined at the end of a unit — what GCC's `-dM` prints.
+#[derive(Debug, Default)]
+pub struct MacroTable {
+    macros: HashMap<String, Arc<MacroDef>>,
+}
+
+impl MacroTable {
+    /// Each macro as the `#define` that makes it, sorted by name, with its
+    /// replacement list spaced where it was written. The ones computed
+    /// rather than written — `__LINE__`, `__FILE__`, `__COUNTER__` — are left
+    /// out, as GCC leaves them out, and so are `__builtin_LINE()` and its
+    /// siblings, which are GCC's built-in functions and only macros here.
+    pub fn definitions(&self) -> Vec<String> {
+        let mut names: Vec<&String> = self
+            .macros
+            .iter()
+            .filter(|(name, def)| {
+                def.builtin.is_none() && !(def.predefined && name.starts_with("__builtin_"))
+            })
+            .map(|(name, _)| name)
+            .collect();
+        names.sort();
+        names
+            .into_iter()
+            .map(|name| {
+                let def = &self.macros[name];
+                let mut text = format!("#define {name}");
+                if let Some(params) = &def.params {
+                    let mut list = params.join(", ");
+                    if def.variadic {
+                        if !list.is_empty() {
+                            list.push_str(", ");
+                        }
+                        list.push_str(def.va_name.as_deref().unwrap_or(""));
+                        list.push_str("...");
+                    }
+                    text.push_str(&format!("({list})"));
+                }
+                for (index, tok) in def.body.iter().enumerate() {
+                    if index == 0 || tok.space {
+                        text.push(' ');
+                    }
+                    text.push_str(tok.kind.spelling());
+                }
+                text
+            })
+            .collect()
+    }
 }
 
 /// What `#pragma pack` asked for, at every point of the token list.
@@ -955,6 +1007,7 @@ pub fn preprocess(
         crate_path: pp.crate_path,
         pack_events: pp.pack_events,
         target_events: pp.target_events,
+        macros: MacroTable { macros: pp.macros },
     }
 }
 
@@ -1339,6 +1392,9 @@ struct Pp<'a> {
     /// `-mavx2`, `-march=` — which every set the pragma asks for adds to;
     /// see [`Options::target_features`].
     command_line_features: Vec<String>,
+    /// The command line's `-include` files still to be read, in order; see
+    /// [`Pp::open_forced_include`].
+    forced_includes: std::collections::VecDeque<String>,
     /// What `#pragma GCC push_options` saved.
     target_stack: Vec<Vec<(String, SourceRange)>>,
     /// Every change of that list, by the index in `out` it takes effect at.
@@ -1433,6 +1489,7 @@ impl<'a> Pp<'a> {
             pack_events: Vec::new(),
             target_features: Vec::new(),
             command_line_features: options.target_features.clone(),
+            forced_includes: options.includes.iter().cloned().collect(),
             target_stack: Vec::new(),
             target_events: Vec::new(),
             base_file: ctx.file_name.clone(),
@@ -1553,6 +1610,7 @@ impl<'a> Pp<'a> {
     // -- the main loop ------------------------------------------------------
 
     fn run(&mut self) {
+        self.open_forced_include();
         loop {
             // Directives, the end of a file and skipped groups are all
             // properties of the *file*, so they are only looked at once
@@ -1561,6 +1619,7 @@ impl<'a> Pp<'a> {
                 if self.ahead().is_eof() {
                     if self.open.len() > 1 {
                         self.close_file();
+                        self.open_forced_include();
                         continue;
                     }
                     self.finish();
@@ -3505,6 +3564,46 @@ impl Pp<'_> {
     }
 
     // -- #include -----------------------------------------------------------
+
+    /// Opens the next of the command line's `-include` files, while the unit's
+    /// own file is the only one open: before its first line, and again each
+    /// time the one before has been read to its end, so that they are read
+    /// in order, each as if `#include "file"` were the unit's first line.
+    /// GCC looks for one in the working directory first and then where a
+    /// quoted `#include` looks, and so does this.
+    fn open_forced_include(&mut self) {
+        while self.open.len() == 1 {
+            let Some(name) = self.forced_includes.pop_front() else {
+                return;
+            };
+            let range = SourceRange::at(self.base);
+            let here = include::Origin::Dir(std::path::PathBuf::new());
+            match include::resolve(&name, include::Form::Quoted, &here, &self.search) {
+                Ok(found) => {
+                    self.model_observed = true;
+                    if let Some(path) = &found.path
+                        && !self.user_headers.contains(path)
+                    {
+                        self.user_headers.push(path.clone());
+                    }
+                    self.open_file(found, range);
+                }
+                Err(include::Error::Unreadable { path, error }) => {
+                    self.diags
+                        .error(range, format!("cannot read '{path}' (-include): {error}"));
+                }
+                Err(include::Error::NotFound { searched }) => {
+                    self.diags.error(
+                        range,
+                        format!(
+                            "\"{name}\" (-include) file not found; searched: {}",
+                            searched.join(", ")
+                        ),
+                    );
+                }
+            }
+        }
+    }
 
     /// `#include <name>`, `#include "name"` and `#include MACRO` — and, with
     /// `next`, GNU's `#include_next`, which is the same thing looked for from

@@ -2370,6 +2370,80 @@ fn run_with_macros(src: &str, macros: &[CommandLineMacro]) -> (String, Vec<Strin
     (spellings.join(" "), errors)
 }
 
+/// `-include`: each file is read before the unit's first line, in order, and
+/// one that is not there is an error naming the option.
+#[test]
+fn forced_includes_come_first_and_in_order() {
+    let dir = std::env::temp_dir().join(format!("cinrs-pp-forced-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("the directory");
+    std::fs::write(dir.join("a.h"), "#define A 1\n").expect("a.h");
+    std::fs::write(dir.join("b.h"), "#define B (A + 1)\n").expect("b.h");
+    let run_with = |includes: Vec<String>| {
+        let src = "B";
+        let mut options = Options::new(Standard::C99);
+        options.includes = includes;
+        let ctx = Context::new(src, 0);
+        let mut diags = cinrs_core::Diagnostics::new();
+        let tokens = lex_text(src, ctx.base, &lex_options());
+        let out = preprocess(&tokens, &ctx, &options, &mut diags);
+        let spellings: Vec<String> = out
+            .tokens
+            .iter()
+            .filter(|t| !t.is_eof())
+            .map(|t| t.kind.spelling().to_owned())
+            .collect();
+        let errors: Vec<String> = diags.items().iter().map(|d| d.message.clone()).collect();
+        (spellings.join(" "), errors)
+    };
+    let path = |name: &str| dir.join(name).display().to_string();
+    assert_eq!(
+        run_with(vec![path("a.h"), path("b.h")]),
+        ("( 1 + 1 )".to_owned(), vec![])
+    );
+    let (_, errors) = run_with(vec![path("missing.h")]);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("(-include) file not found"),
+        "{errors:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `-dM`: the macros defined at the end, each as the `#define` that makes it,
+/// spaced as it was written; one undefined is gone, and the computed ones are
+/// left out.
+#[test]
+fn the_macros_at_the_end_are_their_definitions() {
+    let src = "#define OBJ (1 +  2)\n#define F(a, b) a##b\n#define V(x, ...) x __VA_ARGS__\n\
+               #define G(fmt, args...) fmt args\n#define GONE\n#undef GONE\n";
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &lex_options());
+    let out = preprocess(&tokens, &ctx, &Options::gnu(Standard::C99), &mut diags);
+    assert!(diags.items().is_empty(), "{:?}", diags.items());
+    let definitions = out.macros.definitions();
+    let ours: Vec<&str> = definitions
+        .iter()
+        .map(String::as_str)
+        .filter(|d| {
+            ["F", "G", "OBJ", "V", "GONE"]
+                .iter()
+                .any(|n| d.starts_with(&format!("#define {n}")))
+        })
+        .collect();
+    assert_eq!(
+        ours,
+        [
+            "#define F(a, b) a##b",
+            "#define G(fmt, args...) fmt args",
+            "#define OBJ (1 + 2)",
+            "#define V(x, ...) x __VA_ARGS__",
+        ]
+    );
+    assert!(definitions.iter().any(|d| d == "#define __STDC__ 1"));
+    assert!(!definitions.iter().any(|d| d.contains("__LINE__")));
+}
+
 #[test]
 fn command_line_definitions_are_gccs() {
     use CommandLineMacro::{Define, Undefine};

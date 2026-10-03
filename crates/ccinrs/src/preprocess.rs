@@ -122,15 +122,7 @@ pub fn render(pre: &FilePreprocessing, line_markers: bool) -> Vec<u8> {
             column += 1;
         }
         let spelling = token.kind.spelling();
-        for c in spelling.chars() {
-            match cinrs_core::lex::raw_byte(c) {
-                Some(byte) => out.push(byte),
-                None => {
-                    let mut buf = [0; 4];
-                    out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-                }
-            }
-        }
+        push_source_text(spelling, &mut out);
         column += spelling.chars().count().max(1);
         last_end = written.then_some(token.range.end);
     }
@@ -138,6 +130,30 @@ pub fn render(pre: &FilePreprocessing, line_markers: bool) -> Vec<u8> {
         out.push(b'\n');
     }
     out
+}
+
+/// `-dM`: every macro defined at the end of the unit, one `#define` a line.
+pub fn render_macros(pre: &FilePreprocessing) -> Vec<u8> {
+    let mut out = Vec::new();
+    for definition in pre.macros.definitions() {
+        push_source_text(&definition, &mut out);
+        out.push(b'\n');
+    }
+    out
+}
+
+/// Appends text the front end read, with the bytes of a file that is not
+/// UTF-8 as they were in it; see `cinrs_core::lex::decode_source`.
+fn push_source_text(text: &str, out: &mut Vec<u8>) {
+    for c in text.chars() {
+        match cinrs_core::lex::raw_byte(c) {
+            Some(byte) => out.push(byte),
+            None => {
+                let mut buf = [0; 4];
+                out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+        }
+    }
 }
 
 /// A file name as a line marker spells it: a C string literal's contents.

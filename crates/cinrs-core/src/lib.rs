@@ -380,6 +380,11 @@ pub struct Options {
     /// Macros defined and undefined on the command line, in the order given,
     /// before the first line of the unit — GCC's `-D` and `-U`.
     pub macros: Vec<CommandLineMacro>,
+    /// Files read before the first line of the unit, in the order given, each
+    /// as if `#include "file"` were written there — GCC's `-include`. As in
+    /// GCC, one is looked for in the working directory first, and then where
+    /// a quoted `#include` looks.
+    pub includes: Vec<String>,
     /// Instruction sets enabled for the whole unit, in GCC's spelling and
     /// order — `avx2`, `no-avx512f` — as the command line's `-m` switches and
     /// `-march=` enable them. Only their feature macros come from here
@@ -430,6 +435,7 @@ impl Options {
             complex: COMPLEX_SUPPORTED,
             export: false,
             macros: Vec::new(),
+            includes: Vec::new(),
             target_features: Vec::new(),
         }
     }
@@ -743,6 +749,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         crate_path,
         pack_events,
         target_events,
+        macros: _,
     } = preprocess_unit(&mut ctx, &mut options, &mut diagnostics);
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);
@@ -1183,11 +1190,26 @@ pub struct FileTranslation {
 ///
 /// A file that cannot be read, with the reason.
 pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation, String> {
+    let (name, text) = read_unit(path)?;
+    Ok(translate_source(name, text, options))
+}
+
+/// The name and the text of the C file at `path`, which is not required to
+/// be UTF-8; see [`lex::decode_source`].
+fn read_unit(path: &Path) -> Result<(String, String), String> {
     let found = include::read_source(path).map_err(|error| match error {
         include::Error::Unreadable { path, error } => format!("cannot read '{path}': {error}"),
         include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
     })?;
-    let source = capture::capture_c_file_by_line(found.name, found.text);
+    Ok((found.name, found.text))
+}
+
+/// [`translate_file`] for C that is not in a file — standard input, say.
+/// `name` is what the diagnostics and `__FILE__` call it, and its `#include
+/// "…"` looks in the directory the name is in: the working directory, for
+/// `<stdin>`. `text` is the source as [`lex::decode_source`] makes it.
+pub fn translate_source(name: String, text: String, options: &Options) -> FileTranslation {
+    let source = capture::capture_c_file_by_line(name, text);
     let mut analysis = analyze_source(source, options, Diagnostics::new());
     let headers = std::mem::take(&mut analysis.headers);
     let embedded = std::mem::take(&mut analysis.embedded_files);
@@ -1205,7 +1227,7 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         symbols = unit.symbols;
         in_module(unit.items, source.unit_id())
     });
-    Ok(FileTranslation {
+    FileTranslation {
         items,
         diagnostics,
         map: source.map,
@@ -1213,7 +1235,7 @@ pub fn translate_file(path: &Path, options: &Options) -> Result<FileTranslation,
         symbols,
         headers,
         embedded,
-    })
+    }
 }
 
 /// A C file through the preprocessor alone: what GCC's `-E` prints, and
@@ -1238,6 +1260,8 @@ pub struct FilePreprocessing {
     /// against the ones before it. The other pragmas did their work in the
     /// preprocessor, or are ones cinrs does nothing with.
     pub pragmas: Vec<(usize, String)>,
+    /// The macros defined when the unit ended: what GCC's `-dM` prints.
+    pub macros: pp::MacroTable,
 }
 
 /// Preprocesses the C file at `path`, as [`translate_file`] reads it, and
@@ -1247,11 +1271,13 @@ pub struct FilePreprocessing {
 ///
 /// A file that cannot be read, with the reason.
 pub fn preprocess_file(path: &Path, options: &Options) -> Result<FilePreprocessing, String> {
-    let found = include::read_source(path).map_err(|error| match error {
-        include::Error::Unreadable { path, error } => format!("cannot read '{path}': {error}"),
-        include::Error::NotFound { .. } => format!("{}: no such file", path.display()),
-    })?;
-    let mut source = capture::capture_c_file_by_line(found.name, found.text);
+    let (name, text) = read_unit(path)?;
+    Ok(preprocess_source(name, text, options))
+}
+
+/// [`preprocess_file`] for C that is not in a file; see [`translate_source`].
+pub fn preprocess_source(name: String, text: String, options: &Options) -> FilePreprocessing {
+    let mut source = capture::capture_c_file_by_line(name, text);
     let mut diagnostics = Diagnostics::new();
     let mut options = options.clone();
     apply_env_target(&mut options, source.root_range(), &mut diagnostics);
@@ -1284,14 +1310,15 @@ pub fn preprocess_file(path: &Path, options: &Options) -> Result<FilePreprocessi
     }
     // Stable: the two pragmas of one `target` event stay in their order.
     pragmas.sort_by_key(|(index, _)| *index);
-    Ok(FilePreprocessing {
+    FilePreprocessing {
         tokens: out.tokens,
         diagnostics,
         map: source.map,
         headers,
         embedded: out.embedded_files,
         pragmas,
-    })
+        macros: out.macros,
+    }
 }
 
 /// A unit through semantic analysis: what code generation reads.

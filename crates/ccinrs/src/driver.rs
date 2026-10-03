@@ -47,7 +47,7 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
     if inv.inputs.is_empty() {
         // `gcc -v` on its own says what it is, and that is all.
         if inv.verbose {
-            eprint!("{}", version_text());
+            eprint!("{}", verbose_text());
             return Ok(());
         }
         return Err("no input files".to_owned().into());
@@ -173,6 +173,20 @@ fn version_text() -> String {
     )
 }
 
+/// What `-v` on its own prints: [`version_text`], and then the line GCC's own
+/// `-v` ends with, `gcc version 14.2.0 (…)`, which build scripts read to
+/// decide whether a compiler takes GCC's options — zlib's `configure` gives a
+/// shared library a soname only then. It says the version cinrs presents
+/// itself as, as `__GNUC__` does, and that this is not GCC.
+fn verbose_text() -> String {
+    let (major, minor, patch) = cinrs_core::GCC_VERSION;
+    format!(
+        "{}gcc version {major}.{minor}.{patch} compatible (ccinrs {}, not GCC)\n",
+        version_text(),
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
 /// What `--help` prints.
 const HELP: &str = "\
 Usage: ccinrs [options] file...
@@ -277,6 +291,7 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     };
     options.dollar_in_identifiers = inv.dollars;
     options.macros = inv.macros.clone();
+    options.includes = inv.includes.clone();
     options.target_features = features;
     // To a C compiler every definition that is not `static` is a symbol.
     options.export = true;
@@ -338,7 +353,7 @@ impl Run<'_> {
             if output.as_os_str() != "-" {
                 check_output(&output)?;
             }
-            let translation = cinrs_core::translate_file(path, &self.options)?;
+            let translation = translate(path, &self.options)?;
             let (text, _) = diag::render(
                 &translation.map,
                 &translation.diagnostics,
@@ -411,7 +426,11 @@ impl Run<'_> {
                     continue;
                 }
             };
-            let pre = cinrs_core::preprocess_file(path, &self.options)?;
+            let pre = if path.as_os_str() == STDIN {
+                cinrs_core::preprocess_source(STDIN_NAME.to_owned(), read_stdin()?, &self.options)
+            } else {
+                cinrs_core::preprocess_file(path, &self.options)?
+            };
             let (text, tally) = diag::render(&pre.map, &pre.diagnostics, inv.warnings);
             eprint!("{text}");
             if tally.errors > 0 {
@@ -429,7 +448,11 @@ impl Run<'_> {
                 }
                 continue;
             }
-            out.extend(preprocess::render(&pre, inv.line_markers));
+            if inv.dump_macros {
+                out.extend(preprocess::render_macros(&pre));
+            } else {
+                out.extend(preprocess::render(&pre, inv.line_markers));
+            }
             if let Some((target, file)) = self.deps_beside(path, None) {
                 write_rule(&file, &rule(&target))?;
             }
@@ -490,6 +513,114 @@ fn check_output(path: &Path) -> Result<(), String> {
         )),
         _ => Ok(()),
     }
+}
+
+/// Every symbol name and pattern the version scripts a command line gives the
+/// linker (`-Wl,--version-script,FILE`, `-Wl,--version-script=FILE`) mention,
+/// in a `global:` or a `local:` list alike. A script that cannot be read is
+/// the linker's to report.
+fn version_script_patterns(linker_args: &[String]) -> Vec<String> {
+    let mut files = Vec::new();
+    for arg in linker_args {
+        let Some(list) = arg.strip_prefix("-Wl,") else {
+            continue;
+        };
+        let mut items = list.split(',');
+        while let Some(item) = items.next() {
+            let item = item.trim_start_matches('-');
+            if let Some(file) = item.strip_prefix("version-script=") {
+                files.push(file.to_owned());
+            } else if item == "version-script"
+                && let Some(file) = items.next()
+            {
+                files.push(file.to_owned());
+            }
+        }
+    }
+    let mut patterns = Vec::new();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        // Comments out, then every word that is not a keyword or the name of
+        // a version node (the word before a `{`).
+        let mut plain = String::new();
+        let mut rest = text.as_str();
+        while let Some(start) = rest.find("/*") {
+            plain.push_str(&rest[..start]);
+            rest = rest[start..]
+                .find("*/")
+                .map_or("", |end| &rest[start + end + 2..]);
+        }
+        plain.push_str(rest);
+        let plain: String = plain
+            .lines()
+            .map(|line| line.split('#').next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let spaced = plain
+            .replace('{', " { ")
+            .replace('}', " } ")
+            .replace(';', " ; ");
+        let words: Vec<&str> = spaced.split_whitespace().collect();
+        for (index, word) in words.iter().enumerate() {
+            let word = word.trim_end_matches(':');
+            let is_node = words.get(index + 1) == Some(&"{");
+            if is_node
+                || matches!(
+                    word,
+                    "{" | "}" | ";" | "global" | "local" | "extern" | "\"C\""
+                )
+            {
+                continue;
+            }
+            patterns.push(word.to_owned());
+        }
+    }
+    patterns
+}
+
+/// Whether `name` matches a version script's pattern, whose `*` and `?` are
+/// a shell's.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    fn matches(p: &[u8], n: &[u8]) -> bool {
+        match (p.first(), n.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => matches(&p[1..], n) || (!n.is_empty() && matches(p, &n[1..])),
+            (Some(b'?'), Some(_)) => matches(&p[1..], &n[1..]),
+            (Some(a), Some(b)) if a == b => matches(&p[1..], &n[1..]),
+            _ => false,
+        }
+    }
+    matches(pattern.as_bytes(), name.as_bytes())
+}
+
+/// The input name that means standard input, as GCC takes it.
+const STDIN: &str = "-";
+
+/// What the diagnostics and `__FILE__` call standard input, as in GCC.
+const STDIN_NAME: &str = "<stdin>";
+
+/// Translates the C file at `path`, or standard input for `-`.
+fn translate(path: &Path, options: &Options) -> Result<cinrs_core::FileTranslation, String> {
+    if path.as_os_str() == STDIN {
+        return Ok(cinrs_core::translate_source(
+            STDIN_NAME.to_owned(),
+            read_stdin()?,
+            options,
+        ));
+    }
+    cinrs_core::translate_file(path, options)
+}
+
+/// Standard input, read to its end as a C file is read.
+fn read_stdin() -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read standard input: {error}"))?;
+    Ok(cinrs_core::lex::decode_source(bytes))
 }
 
 /// Writes a dependency rule.
@@ -556,7 +687,7 @@ impl Run<'_> {
     ) -> Result<Option<ObjectInfo>, Failure> {
         let inv = self.inv;
         check_output(object)?;
-        let translation = cinrs_core::translate_file(path, &self.options)?;
+        let translation = translate(path, &self.options)?;
         let (text, tally) = diag::render(&translation.map, &translation.diagnostics, inv.warnings);
         eprint!("{text}");
         let Some(items) = translation.items else {
@@ -781,10 +912,26 @@ impl Run<'_> {
         let mut modifiers = "+verbatim";
         if inv.shared {
             modifiers = "+verbatim,+whole-archive";
-            if !linked.symbols.is_empty() {
+            // `rustc` asks the linker to refuse a version script naming a
+            // symbol the library does not define; a C compiler's linker lets
+            // it be, and a build's own script (zlib's `zlib.map`, given to
+            // its test of whether shared libraries work) counts on that.
+            cmd.args(["-C", "link-arg=-Wl,--undefined-version"]);
+            // A build that gives its own version script decides about every
+            // symbol it names — zlib's gives some `ZLIB_1.2.0` and the like,
+            // and hides `_*` — and naming one here too would take that away.
+            // What it does not mention, GCC's linker exports, and so does
+            // this; `rustc`'s own script would hide it.
+            let patterns = version_script_patterns(&inv.linker_args);
+            let exported: Vec<&String> = linked
+                .symbols
+                .iter()
+                .filter(|symbol| !patterns.iter().any(|p| glob_matches(p, symbol)))
+                .collect();
+            if !exported.is_empty() {
                 let script = self.work.path("exports.map");
                 let mut text = "{\n  global:\n".to_owned();
-                for symbol in &linked.symbols {
+                for symbol in exported {
                     text.push_str(&format!("    {symbol};\n"));
                 }
                 text.push_str("};\n");
@@ -1074,5 +1221,52 @@ impl Drop for WorkDir {
         if !self.keep {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// zlib's way of saying it: a soname and a script in one `-Wl,`, the
+    /// script's own nodes and locals, a wildcard, a comment.
+    #[test]
+    fn what_a_version_script_mentions() {
+        let dir = std::env::temp_dir().join(format!("ccinrs-vs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the directory");
+        let script = dir.join("z.map");
+        std::fs::write(
+            &script,
+            "ZLIB_1.2.0 {\n  global:\n    compressBound;\n  local:\n    zcalloc; /* not ours */\n    _*;\n};\n\
+             ZLIB_1.2.2 {\n    adler32_combine;\n} ZLIB_1.2.0;\n",
+        )
+        .expect("the script");
+        let args = [format!(
+            "-Wl,-soname,libz.so.1,--version-script,{}",
+            script.display()
+        )];
+        let patterns = version_script_patterns(&args);
+        assert_eq!(
+            patterns,
+            [
+                "compressBound",
+                "zcalloc",
+                "_*",
+                "adler32_combine",
+                "ZLIB_1.2.0"
+            ]
+        );
+        let mentioned = |name: &str| patterns.iter().any(|p| glob_matches(p, name));
+        assert!(mentioned("compressBound") && mentioned("_tr_init") && mentioned("zcalloc"));
+        assert!(!mentioned("zlibVersion") && !mentioned("deflate"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn globs() {
+        assert!(glob_matches("*", "anything"));
+        assert!(glob_matches("gz?ead*", "gzread_internal"));
+        assert!(!glob_matches("gz?ead", "gzreads"));
+        assert!(glob_matches("exact", "exact") && !glob_matches("exact", "exactly"));
     }
 }

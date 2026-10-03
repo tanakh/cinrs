@@ -104,6 +104,10 @@ pub struct Invocation {
     pub system_include: bool,
     /// `-D` and `-U`, in order.
     pub macros: Vec<CommandLineMacro>,
+    /// `-include`, in order.
+    pub includes: Vec<String>,
+    /// `-dM`: under `-E`, the macros defined at the end instead of the text.
+    pub dump_macros: bool,
     /// `rustc`'s `-C opt-level`: `0`, `1`, `2`, `3`, `s` or `z`.
     pub opt_level: &'static str,
     /// `rustc`'s `-C debuginfo`.
@@ -172,6 +176,8 @@ impl Default for Invocation {
             include_dirs: Vec::new(),
             system_include: true,
             macros: Vec::new(),
+            includes: Vec::new(),
+            dump_macros: false,
             opt_level: "0",
             debuginfo: 0,
             warnings: true,
@@ -208,7 +214,7 @@ impl Invocation {
 
 /// The options GCC has that this version of `ccinrs` does not, yet: an error
 /// that says so rather than "unknown option".
-const NOT_YET: &[&str] = &["-include", "-dM", "-MG"];
+const NOT_YET: &[&str] = &["-MG", "-dD", "-dN", "-imacros"];
 
 /// `-W` options that only choose which warnings GCC prints, accepted without
 /// a word: the names themselves, or a prefix ending in `-` or `=`.
@@ -412,6 +418,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
     // `-x c` makes every following file C whatever its name; `-x none` goes
     // back to judging by the extension.
     let mut force_c = false;
+    // Standard input is C only under `-x c`, or when it is only preprocessed.
+    let mut stdin = None;
     while let Some(arg) = args.next() {
         // An option whose value may be attached (`-Idir`) or the next
         // argument (`-I dir`).
@@ -493,6 +501,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             inv.include_dirs.push(PathBuf::from(dir));
             continue;
         }
+        if let Some(file) = value("-include")? {
+            inv.includes.push(file);
+            continue;
+        }
         if let Some(def) = value("-D")? {
             inv.macros.push(CommandLineMacro::Define(def));
             continue;
@@ -556,8 +568,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             "-m64" => inv.pointer_bits = Some(64),
             "-m32" => inv.pointer_bits = Some(32),
             "-" => {
-                return Err("reading the program from standard input is not supported".to_owned());
+                stdin = Some(force_c);
+                inv.inputs.push(Input::C(PathBuf::from("-")));
             }
+            "-dM" => inv.dump_macros = true,
             _ if arg.starts_with("-save-temps") => inv.save_temps = true,
             _ if arg.starts_with("-std=") => {
                 (inv.standard, inv.dialect) = standard(&arg["-std=".len()..])
@@ -621,6 +635,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             }
             _ => inv.inputs.push(input(PathBuf::from(&arg), force_c)?),
         }
+    }
+    // GCC's rule: nothing says what language standard input is, so it has to
+    // be said, unless all that is asked is to preprocess it.
+    if stdin == Some(false) && inv.stage != Stage::Preprocess {
+        return Err("-E or -x required when input is from standard input".to_owned());
     }
     Ok(inv)
 }
@@ -755,6 +774,20 @@ mod tests {
         let inv = parse_all(&["-MM", "-c", "a.c"]).unwrap();
         assert_eq!(inv.stage, Stage::Preprocess);
         assert!(inv.deps.only && !inv.deps.system);
+    }
+
+    #[test]
+    fn standard_input_and_forced_includes() {
+        let inv = parse_all(&["-E", "-dM", "-"]).unwrap();
+        assert!(inv.dump_macros);
+        assert_eq!(inv.inputs, [Input::C(PathBuf::from("-"))]);
+        assert!(parse_all(&["-x", "c", "-c", "-"]).is_ok());
+        assert_eq!(
+            parse_all(&["-c", "-"]).unwrap_err(),
+            "-E or -x required when input is from standard input"
+        );
+        let inv = parse_all(&["-include", "config.h", "-include", "b.h", "a.c"]).unwrap();
+        assert_eq!(inv.includes, ["config.h", "b.h"]);
     }
 
     #[test]

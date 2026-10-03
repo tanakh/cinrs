@@ -642,6 +642,59 @@ fn a_static_program() {
     assert_eq!(stdout(&s.run("hello", &[])), "static\n");
 }
 
+/// What a build pipes in or forces in: `-dM -E -` for the predefined macros,
+/// a program on standard input under `-x c`, and `-include`.
+#[test]
+fn standard_input_dm_and_include() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let s = Scratch::new("stdin");
+    let piped = |args: &[&str], input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ccinrs"))
+            .args(args)
+            .env("CCINRS_CACHE_DIR", cache_dir())
+            .current_dir(&s.dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("ccinrs runs");
+        child
+            .stdin
+            .take()
+            .expect("its input")
+            .write_all(input.as_bytes())
+            .expect("the input is written");
+        child.wait_with_output().expect("ccinrs ends")
+    };
+    let out = piped(&["-dM", "-E", "-"], "#define F(a, ...) a + __VA_ARGS__\n");
+    let macros = stdout(&out);
+    assert!(macros.contains("#define __GNUC__ 14\n"), "{macros}");
+    assert!(
+        macros.contains("#define F(a, ...) a + __VA_ARGS__\n"),
+        "{macros}"
+    );
+    assert!(!macros.contains("__LINE__"), "{macros}");
+    let out = piped(
+        &["-x", "c", "-", "-o", "piped"],
+        "#include <stdio.h>\nint main(void) { puts(__FILE__); return 0; }\n",
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&s.run("piped", &[])), "<stdin>\n");
+    let out = piped(&["-c", "-"], "int x;\n");
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: -E or -x required when input is from standard input\n"
+    );
+    s.write("config.h", "#define ANSWER 42\n");
+    s.write(
+        "uses.c",
+        "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", ANSWER); return 0; }\n",
+    );
+    s.compile(&["-include", "config.h", "uses.c", "-o", "uses"]);
+    assert_eq!(stdout(&s.run("uses", &[])), "42\n");
+}
+
 /// What a build asks a compiler about itself.
 #[test]
 fn the_compiler_says_what_it_is() {
