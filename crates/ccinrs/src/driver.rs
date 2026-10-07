@@ -297,7 +297,7 @@ cinrs, and rustc (RUSTC, or the one on PATH) compiles and links it.
   -l <lib>, -L <dir>, -Wl,<args>
                        Libraries and linker arguments
   -fno-cinrs-checks    Leave out Rust's run-time checks (on by default)
-  -fno-cinrs-unwind    Make functions extern \"C\", not \"C-unwind\" (about 2 %
+  -fno-cinrs-unwind    Make functions extern \"C\", not \"C-unwind\" (a little
                        faster; refuses setjmp and longjmp)
   -w                   Print no warnings
   -v                   Print the commands run

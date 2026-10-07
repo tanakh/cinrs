@@ -162,21 +162,21 @@ broken down into the four categories
 defines.
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1650/1769 correct (93.3%) — 1545 passed, 105 rejected as the standard requires
-  errors: 119 — bug 0, unimplemented 3, not planned 116, toolchain 0
-  (7 not generated) — 4 m 18 s
+gcc.c-torture/execute through `gnu11!`: 1654/1769 correct (93.5%) — 1551 passed, 103 rejected as the standard requires
+  errors: 115 — bug 0, unimplemented 3, not planned 112, toolchain 0
+  (7 not generated) — 4 m 33 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1650/1769** | **93.3 %** | 1545 | 105 | 0 | 3 | 116 |
-| `gnu89!` | 1643/1769 | 92.9 % | 1642 | 1 | 0 | 4 | 122 |
+| **`gnu11!`** | **1654/1769** | **93.5 %** | 1551 | 103 | 0 | 3 | 112 |
+| `gnu89!` | 1649/1769 | 93.2 % | 1648 | 1 | 0 | 4 | 116 |
 
 by group:
 
 | group | `gnu11!` | `gnu89!` |
 | --- | ---: | ---: |
-| `execute` | 1580/1691 (93.4 %) | 1573/1691 (93.0 %) |
+| `execute` | 1584/1691 (93.7 %) | 1579/1691 (93.4 %) |
 | `execute/ieee` | 70/78 (89.7 %) | 70/78 (89.7 %) |
 
 **There is no `[bug]` left in this corpus**, under either entry point.
@@ -200,11 +200,11 @@ every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
-1642 cases build and run.
+1648 cases build and run.
 
-**`gnu11!` gets the same 1545 of those, refuses 104 more as the standard
-requires it to, and comes out seven ahead.** Those 104 are the cases that lean
-on a rule C99 deleted — implicit `int` (101: 98 on a declaration, 3 on a K&R
+**`gnu11!` gets the same 1551 of those, refuses 102 more as the standard
+requires it to, and comes out five ahead.** Those 102 are the cases that lean
+on a rule C99 deleted — implicit `int` (99: 96 on a declaration, 3 on a K&R
 parameter) and an implicit function declaration (3) — and a C99-or-later entry
 point is *required* to refuse them. `gcc -std=gnu11` refuses them too, and has
 since GCC 14 made both constraint violations errors. Each is an `!` line in
@@ -212,12 +212,16 @@ since GCC 14 made both constraint violations errors. Each is an `!` line in
 refused with, so guard mode asserts the refusal rather than tolerating a
 failure: a case that started *compiling* would be the news.
 
-Ninety-seven of the 104 pass under `gnu89!`; the other seven get past the C89
+Ninety-seven of the 102 pass under `gnu89!`; the other five get past the C89
 rule there and stop at a second gap — four at a nested function that needs the
 enclosing *frame* (two at a nonlocal `goto` out of one, two at the address of a
-label of the enclosing function), one at a nested function that uses the
-enclosing function's variable length array, and two at `<setjmp.h>`. That is
-the whole of the difference: 1642 = 1545 + 97, and 1650 = 1545 + 104 + 1.
+label of the enclosing function), and one at a nested function that uses the
+enclosing function's variable length array. That is the whole of the
+difference: 1648 = 1551 + 97, and 1654 = 1551 + 102 + 1. (Two more,
+`execute/20210505-1` and `pr56982`, used to be counted among the 104 C89
+cases: their "type specifier missing" was `jmp_buf`, which `<setjmp.h>` did
+not declare. With [setjmp and longjmp](limitations.md#setjmp-and-longjmp)
+they pass under both.)
 
 The `+ 1` is `execute/pr117432`, which both entry points refuse and count as
 correct: it defines `qux (...)` with nothing before the `...` and calls
@@ -233,16 +237,16 @@ because GCC's own runner would not have run them either.
 
 ### The errors, by category and cause
 
-Under `gnu11!` 114 of the 119 errors are refused at compile time, in 27
+Under `gnu11!` 110 of the 115 errors are refused at compile time, in 27
 distinct causes, and 5 are programs that built and then did the wrong thing;
-under `gnu89!`, 121 of 126 in 29. The ones worth a line each, with what the
-same cause costs under `gnu89!` beside it — the 105 conforming rejections
+under `gnu89!`, 115 of 120 in 28. The ones worth a line each, with what the
+same cause costs under `gnu89!` beside it — the 103 conforming rejections
 above are *not* in this table:
 
 | category | `gnu89!` | `gnu11!` | cause | e.g. |
 | --- | ---: | ---: | --- | --- |
 | not planned | 45 | 45 | `vector_size` / `__vector_size__`: the vector extensions need an unstable Rust feature | `execute/20050316-1` |
-| not planned | 14 | 14 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `setjmp`, `longjmp`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the signalling-NaN spellings of the formats cinrs has no type for, `__builtin_nansf16`, `nansf16b`, `nansf128` and `nansf128x` | `execute/20010122-1` |
+| not planned | 10 | 10 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `apply`, `apply_args`, `shuffle`, `va_arg_pack`, and the signalling-NaN spellings of the formats cinrs has no type for, `__builtin_nansf16`, `nansf16b`, `nansf128` and `nansf128x` | `execute/20010122-1` |
 | not planned | 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | not planned | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
 | not planned | 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
@@ -252,7 +256,6 @@ above are *not* in this table:
 | not planned | 5 | 5 | a program that built and then did the wrong thing — see [below](#the-programs-that-built-and-then-did-the-wrong-thing) | `ieee/cdivchkd` |
 | not planned | 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
 | not planned | 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
-| not planned | 2 | — | `<setjmp.h>`, which cinrs does not bundle: nothing in Rust unwinds a C `longjmp`. Under `gnu11!` both cases stop at the C89 implicit `int` first, and are conforming rejections there | `execute/pr56982` |
 | not planned | 2 | 2 | `<sys/types.h>` and `<sys/mman.h>`: cinrs bundles the ISO C headers, and the POSIX ones come from the platform only under `#pragma cinrs system_include`, which the harness does not write | `execute/loop-2f` |
 | not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
 | not planned | 1 | 1 | a `link_error()` nothing defines, which an optimiser is required to delete | `ieee/fp-cmp-7` |
@@ -276,7 +279,17 @@ because a diagnostic raised inside an `#include`d corpus file carries the file
 name and is grouped on its own; the `vector_size` and
 address-of-a-nested-function counts are sums of two for the same reason.
 
-The latest round was **inline-assembly memory operands** — `"m"`, `"=m"` and
+The latest round was **`setjmp` and `longjmp`**, as a Rust unwind (see
+[setjmp and longjmp](limitations.md#setjmp-and-longjmp)), and it took
+`gnu11!` up by **four** and `gnu89!` by **six**, with no case going the other
+way in either: `execute/built-in-setjmp`, `pr60003`, `pr64242` and `pr84521`
+(`__builtin_setjmp` and `__builtin_longjmp`, `pr64242` jumping through a copy
+of the buffer) under both, and `execute/20210505-1` and `pr56982` (`<setjmp.h>`,
+a `longjmp` through a function pointer and one after `int x = setjmp(env)`),
+which `gnu11!` used to count as conforming rejections of a C89 implicit `int`
+— the missing type was `jmp_buf` — and now passes outright.
+
+The round before that was **inline-assembly memory operands** — `"m"`, `"=m"` and
 `"+m"` pass the lvalue's address to `asm!`, named in the template as
 `(%reg)`, which is what GCC's operand means — and
 **`__builtin_frame_address(0)`**, and then **`weak`**, and it took both entry
@@ -439,7 +452,7 @@ the link fails. Its twin `execute/medce-1` — `if (0) { link_error(); case 1: �
 [relooped](translation.md#control-flow-and-goto) the dead call really is inside
 an `if false`, which LLVM deletes.
 
-**Read the table by its first column.** 59 of `gnu11!`'s 119 errors are the
+**Read the table by its first column.** 55 of `gnu11!`'s 115 errors are the
 two largest `not planned` rows — the vector extensions and the `__builtin_…`
 forms nobody is going to write — another 13 are the complex-integer and
 `va_list`-in-a-record corners Rust has no counterpart for, and 1 is the
@@ -449,7 +462,7 @@ implemented yet — a label inside a statement expression, a flexible array
 member initialised inside a `union`, and a `va_arg` of a `struct` too large for
 the registers. None is a bug.
 
-The 104 C89-rule cases — implicit `int`, an implicit function declaration, a
+The 102 C89-rule cases — implicit `int`, an implicit function declaration, a
 K&R parameter with no declaration — are not in the table at all, because under
 `gnu11!` refusing them *is* the right answer. Under `gnu89!` they are not
 diagnostics at all and 97 of them build and run.

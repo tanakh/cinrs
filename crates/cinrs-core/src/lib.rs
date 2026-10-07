@@ -410,8 +410,8 @@ pub struct Options {
 /// undefined behaviour, so every frame between a `longjmp` and its `setjmp`
 /// has to be `C-unwind`. The calling convention is the same; what changes is
 /// the *type* of a function pointer, which Rust code handing a callback to the
-/// unit then has to match — and `nounwind` on every call, which costs about 2 %
-/// of the instructions SQLite runs (see `doc/ccinrs.md`).
+/// unit then has to match — and `nounwind` on every call, which costs 0.3 % of
+/// the instructions SQLite's speedtest1 runs (see `doc/ccinrs.md`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Unwind {
     /// `extern "C"`, unless the unit calls `setjmp` or `longjmp` itself or

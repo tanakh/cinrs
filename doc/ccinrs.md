@@ -93,7 +93,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-Werror`, `-Wno-error`, `-w` | every warning an error, as GCC has it — `#warning` included; no warnings |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
-| `-fno-cinrs-unwind`, `-fcinrs-unwind` | every function `extern "C"` rather than `extern "C-unwind"`, the default: about 2 % fewer instructions on SQLite's speedtest1, and `setjmp` and `longjmp` refused where they are written (see [setjmp and longjmp](#setjmp-and-longjmp)) |
+| `-fno-cinrs-unwind`, `-fcinrs-unwind` | every function `extern "C"` rather than `extern "C-unwind"`, the default: 0.3 % fewer instructions on SQLite's speedtest1 (under 0.1 % with `-fno-cinrs-checks`), and `setjmp` and `longjmp` refused where they are written (see [setjmp and longjmp](#setjmp-and-longjmp)) |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
 | `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
 | `-print-search-dirs`, `-print-multiarch`, `-print-multi-os-directory`, `-print-prog-name=`, `-print-file-name=`, … | what libtool asks: the platform's library directories (Debian's layout), and a name handed back as GCC hands back one it has no file for |
@@ -228,9 +228,12 @@ limits](limitations.md#setjmp-and-longjmp) the whole list. For a C project:
   libjpeg-turbo with TurboJPEG (ctest 664/664), xz's tuktest unit tests
   (22/22) and Lua 5.4 with its test suite, each with gcc's output.
 * **Every function is `extern "C-unwind"`**, since any file may be between a
-  `longjmp` and its `setjmp`. It costs about 2 % of the instructions on
-  SQLite's speedtest1 (inlining and code motion across calls that may now
-  unwind) and nothing measurable on the [benchmark kernels](benchmarks.md).
+  `longjmp` and its `setjmp`. It costs 0.3 % of the instructions on SQLite's
+  speedtest1 with the run-time checks and under 0.1 % without them (calls
+  that may unwind hold back some inlining and code motion; before the
+  inliner's thresholds were raised for the checks it was 2 %), and nothing
+  measurable on the [benchmark kernels](benchmarks.md), whose code is the
+  same byte for byte.
   `-fno-cinrs-unwind` takes it back, and then `setjmp` and `longjmp` are
   located errors that name the option.
 * **A `setjmp` may only stand where C17 7.13.1.1p4 allows it**, plus

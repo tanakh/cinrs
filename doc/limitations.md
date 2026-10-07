@@ -239,7 +239,7 @@ a located error that says so: what follows the call could not be resumed.
   error-raising loop is several times slower than with gcc. A `setjmp` costs
   what GCC's does, and so does a `pcall` that raises nothing.
 * **Every function is `extern "C-unwind"`** in a unit that might be crossed:
-  under `ccinrs`, every file, which costs about 2 % of the instructions on
+  under `ccinrs`, every file, which costs 0.3 % of the instructions on
   SQLite (`-fno-cinrs-unwind` takes it back, and refuses `setjmp` and
   `longjmp`); in a `c99!` block, only one that calls `setjmp` or `longjmp`
   itself or says [`#pragma cinrs unwind`](pragmas.md#unwind). A Rust callback

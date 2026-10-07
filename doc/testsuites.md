@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.6 %** (`c99!`), 99.1 % (`c23!`) | 3: 3 unimplemented |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **93.3 %** (`gnu11!`), 92.9 % (`gnu89!`) | 119: 0 bug, 3 unimplemented, 116 not planned |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **93.5 %** (`gnu11!`), 93.2 % (`gnu89!`) | 115: 0 bug, 3 unimplemented, 112 not planned |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **83.3 %** of the 203 run | 34: 0 bug, 6 unimplemented, 28 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -38,11 +38,11 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,650 of the 1,769 run are correct (93.3 %)** under
-  `gnu11!` — 1,545 passing and 105 refused as C99 requires — and 1,643
-  (92.9 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,654 of the 1,769 run are correct (93.5 %)** under
+  `gnu11!` — 1,551 passing and 103 refused as C99 requires — and 1,649
+  (93.2 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses only the one that uses C23's `va_start`. **Not one of
-  the 119 errors is a bug**; they are the x87 register operands of inline
+  the 115 errors is a bug**; they are the x87 register operands of inline
   assembly, the vector extensions, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
@@ -225,9 +225,9 @@ report breaks its error count down into them, in this order:
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1650/1769 correct (93.3%) — 1545 passed, 105 rejected as the standard requires
-  errors: 119 — bug 0, unimplemented 3, not planned 116, toolchain 0
-  (7 not generated) — 4 m 18 s
+gcc.c-torture/execute through `gnu11!`: 1654/1769 correct (93.5%) — 1551 passed, 103 rejected as the standard requires
+  errors: 115 — bug 0, unimplemented 3, not planned 112, toolchain 0
+  (7 not generated) — 4 m 33 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.

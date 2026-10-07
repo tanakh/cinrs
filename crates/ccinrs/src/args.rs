@@ -158,7 +158,7 @@ pub struct Invocation {
     pub checks: bool,
     /// Whether every function is `extern "C-unwind"`, which is what lets a
     /// `longjmp` — a Rust unwind — pass through it. **On by default**;
-    /// `-fno-cinrs-unwind` makes them `extern "C"`, which is about 2 % of the
+    /// `-fno-cinrs-unwind` makes them `extern "C"`, which saves 0.3 % of the
     /// instructions on SQLite, and refuses `setjmp` and `longjmp`.
     pub unwind: bool,
     /// `-fdollars-in-identifiers`, on by default as in GCC.

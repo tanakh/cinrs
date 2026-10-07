@@ -40,8 +40,9 @@ follows [Semantic Versioning][semver].
   type of the unit, which a `longjmp` can then pass through. Other blocks
   stay `extern "C"`. See [`doc/pragmas.md`](doc/pragmas.md#unwind).
 * **`ccinrs`'s `-fno-cinrs-unwind`** (and `-fcinrs-unwind`, the default):
-  `ccinrs` makes every function `extern "C-unwind"`, which costs about 2 % of
-  the instructions SQLite's speedtest1 runs; the option makes them
+  `ccinrs` makes every function `extern "C-unwind"`, which costs 0.3 % of the
+  instructions SQLite's speedtest1 runs (under 0.1 % without the run-time
+  checks); the option makes them
   `extern "C"` and refuses `setjmp` and `longjmp` with a located error naming
   it.
 * **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
