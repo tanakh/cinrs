@@ -146,6 +146,41 @@ fn separate_compilation() {
     s.compile(&["lib.o", "m.o", "-o", "prog"]);
     assert_eq!(stdout(&s.run("prog", &[])), "42\n");
 
+    // One file compiled twice into one program, as zstd builds its decoder
+    // with and without a feature: two crates, not one twice.
+    s.write("scale.c", "int NAME(int x) { return FACTOR * x; }\n");
+    s.write(
+        "two.c",
+        "#include <stdio.h>\nint by2(int);\nint by3(int);\n\
+         int main(void) { printf(\"%d %d\\n\", by2(5), by3(5)); return 0; }\n",
+    );
+    s.compile(&["-DNAME=by2", "-DFACTOR=2", "-c", "scale.c", "-o", "by2.o"]);
+    s.compile(&["-DNAME=by3", "-DFACTOR=3", "-c", "scale.c", "-o", "by3.o"]);
+    s.compile(&["two.c", "by2.o", "by3.o", "-o", "two"]);
+    assert_eq!(stdout(&s.run("two", &[])), "10 15\n");
+
+    // Two links at once in one directory, of outputs with one stem, as
+    // `make -j` runs mbedtls's `test_suite_aes.ecb` and `test_suite_aes.cbc`:
+    // `rustc`'s files beside its output used to collide, now and then.
+    for round in 0..3 {
+        let links: Vec<_> = ["prog.one", "prog.two"]
+            .map(|output| {
+                Command::new(env!("CARGO_BIN_EXE_ccinrs"))
+                    .args(["lib.o", "m.o", "-o", output])
+                    .env("CCINRS_CACHE_DIR", cache_dir())
+                    .current_dir(&s.dir)
+                    .spawn()
+                    .expect("ccinrs runs")
+            })
+            .into_iter()
+            .collect();
+        for mut link in links {
+            assert!(link.wait().expect("ccinrs ends").success(), "round {round}");
+        }
+        assert_eq!(stdout(&s.run("prog.one", &[])), "42\n");
+        assert_eq!(stdout(&s.run("prog.two", &[])), "42\n");
+    }
+
     let out = s.ccinrs(&["-c", "lib.c", "main.c", "-o", "both.o"]);
     assert_eq!(
         stderr(&out),

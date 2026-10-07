@@ -935,7 +935,15 @@ impl Run<'_> {
         // Under `-flto` the object is an rlib — the crate's code, and the
         // LLVM bitcode `rustc` optimises across crates — which a link loads
         // as a crate, by the name it carries.
-        let name = crate_name(&stem, path);
+        let made = if object.starts_with(self.work.dir()) {
+            index.to_string()
+        } else {
+            std::path::absolute(object)
+                .unwrap_or_else(|_| object.to_path_buf())
+                .display()
+                .to_string()
+        };
+        let name = crate_name(&stem, path, &made);
         if inv.lto.is_some() {
             source.push_str(&used_bytes(
                 "CCINRS_CRATE",
@@ -964,7 +972,12 @@ impl Run<'_> {
         if translation.uses_runtime {
             cmd.args(runtime::extern_args(self.runtime()?));
         }
-        cmd.arg("-o").arg(object).arg(&rust);
+        let written = if object.starts_with(self.work.dir()) {
+            object.to_path_buf()
+        } else {
+            self.work.path(&format!("{stem}.o"))
+        };
+        cmd.arg("-o").arg(&written).arg(&rust);
         run_rustc(inv, cmd, || {
             format!(
                 "rustc rejected the translation of {}; this is a bug in ccinrs (the Rust is in {})",
@@ -972,6 +985,9 @@ impl Run<'_> {
                 rust.display()
             )
         })?;
+        if written != object {
+            deliver(&written, object)?;
+        }
         if let Some((target, file)) = deps {
             let rule = deps::rule(
                 &inv.deps,
@@ -1321,11 +1337,38 @@ impl Run<'_> {
         if inv.strip {
             cmd.args(["-C", "strip=symbols"]);
         }
-        cmd.arg("-o").arg(output).arg(&stub);
+        let name = output
+            .file_name()
+            .map_or_else(|| "linked".into(), |name| name.to_string_lossy());
+        let written = self.work.path(&format!("out-{name}"));
+        cmd.arg("-o").arg(&written).arg(&stub);
         // A link that fails is the program's own problem — an undefined
         // symbol, a missing library — so what the linker said is the message.
-        run_rustc(inv, cmd, || format!("linking {} failed", output.display()))
+        run_rustc(inv, cmd, || format!("linking {} failed", output.display()))?;
+        deliver(&written, output)?;
+        Ok(())
     }
+}
+
+/// Moves what `rustc` wrote in the work directory to where it was asked for.
+///
+/// `rustc -o dir/out` writes its intermediate objects beside the output, named
+/// after its stem — `dir/out.ccinrs_main.<hash>-cgu.0.rcgu.o` — and deletes
+/// them when it is done, so two runs in one directory whose outputs share a
+/// stem delete each other's: `make -j` linking mbedtls's `test_suite_ecp` and
+/// `test_suite_ecp.generated` at once fails now and then. In the work
+/// directory, which is this run's own, nothing else is. The result is renamed
+/// into place, or copied, permissions and all, from another file system.
+fn deliver(written: &Path, wanted: &Path) -> Result<(), String> {
+    if std::fs::rename(written, wanted).is_ok() {
+        return Ok(());
+    }
+    // A program that is running cannot be written over, but it can be
+    // unlinked, as a linker does.
+    let _ = std::fs::remove_file(wanted);
+    std::fs::copy(written, wanted)
+        .map(|_| ())
+        .map_err(|error| format!("cannot write {}: {error}", wanted.display()))
 }
 
 /// The `-C` flags every `rustc` run gets.
@@ -1455,13 +1498,19 @@ fn shown(cmd: &Command) -> String {
 }
 
 /// The crate name of one translation unit's object: its file stem, made an
-/// identifier, and a hash of where it came from, so that two `util.c` in two
-/// directories are two crates and their private symbols never meet.
-fn crate_name(stem: &str, source: &Path) -> String {
+/// identifier, and a hash of where it came from and what it became, so that
+/// two `util.c` in two directories are two crates and their private symbols
+/// never meet — and so are one file compiled twice into two objects (with
+/// two `-D`s, or libtool's test of `nm`, which links two objects of
+/// `conftest.c`). `made` is the object's own path, or for one in the work
+/// directory, which is a new name each run, the input's place on the command
+/// line.
+fn crate_name(stem: &str, source: &Path, made: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::path::absolute(source)
         .unwrap_or_else(|_| source.to_path_buf())
         .hash(&mut hasher);
+    made.hash(&mut hasher);
     let ident: String = stem
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
