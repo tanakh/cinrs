@@ -1027,6 +1027,9 @@ impl Parser<'_> {
         while self.eat_keyword(Keyword::Extension).is_some() {
             self.in_extension = true;
         }
+        if self.at_keyword(Keyword::Asm) {
+            return Ok(ExternalDecl::Asm(self.parse_file_asm()?));
+        }
         let attrs = self.parse_attributes()?;
         if self.at_static_assert() {
             return Ok(ExternalDecl::StaticAssert(self.parse_static_assert()?));
@@ -3468,6 +3471,35 @@ impl Parser<'_> {
         self.expect_punct(Punct::Semi, " after the 'asm' statement")?;
         Ok(Stmt {
             kind: StmtKind::Asm(Box::new(asm)),
+            range: self.span_to_here(start),
+        })
+    }
+
+    /// `asm ( string-literal ) ;` at file scope — GNU's basic asm
+    /// declaration; see [`FileAsm`].
+    ///
+    /// The keyword follows the statement's rule: `__asm__` and `__asm`
+    /// everywhere, `asm` in a GNU dialect. GCC takes no qualifier here, so
+    /// `asm volatile` is the same "expected '('" it is there; the extended
+    /// form GCC 15 accepts at file scope is refused, saying so.
+    fn parse_file_asm(&mut self) -> PResult<FileAsm> {
+        let start = self.cur_range();
+        self.advance();
+        self.expect_punct(Punct::LParen, " after 'asm'")?;
+        let template = self.parse_asm_string("the assembler text")?;
+        if self.at_punct(Punct::Colon) {
+            let range = self.cur_range();
+            return Err(self.error_bail(
+                range,
+                "an extended 'asm' (one with ':') at file scope is not supported: only the \
+                 basic form, 'asm(\"…\");', becomes Rust's 'global_asm!'. Write the operands' \
+                 values into the text",
+            ));
+        }
+        self.expect_punct(Punct::RParen, " after the 'asm' text")?;
+        self.expect_punct(Punct::Semi, " after the file-scope 'asm'")?;
+        Ok(FileAsm {
+            template,
             range: self.span_to_here(start),
         })
     }

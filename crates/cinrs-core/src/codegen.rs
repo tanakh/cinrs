@@ -12,8 +12,8 @@
 //! the flexible-array companions that go with them, the `enum` aliases and
 //! their constants, the file-scope `typedef` aliases, an empty `extern` block
 //! per library the unit links, one `extern` block for everything the unit only
-//! declares, the `static mut` items, and finally the functions. A C function
-//! becomes
+//! declares, the `static mut` items, the functions, and finally a
+//! `global_asm!` for each file-scope `__asm__("…");`. A C function becomes
 //!
 //! ```text
 //! pub unsafe extern "C" fn name(mut p: ::core::ffi::c_int) -> ::core::ffi::c_int {
@@ -220,6 +220,9 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> G
                 initialisers.extend(cg.init_array_item(func, kind));
             }
         }
+    }
+    for asm in &program.global_asm {
+        out.extend(cg.global_asm_item(asm));
     }
     if !initialisers.is_empty() {
         out.extend(cg.init_array_guard());
@@ -4461,6 +4464,20 @@ impl<'a> Codegen<'a> {
             return call;
         }
         quote_spanned! {span=> { #setup #call #store_back } }
+    }
+
+    /// A file-scope `__asm__("…");`: its text as a `global_asm!` item, with
+    /// `options(att_syntax)` where sema says the text is AT&T.
+    fn global_asm_item(&self, asm: &ir::GlobalAsm) -> TokenStream {
+        let span = self.sp(asm.range);
+        let mut template = Literal::string(&asm.template);
+        template.set_span(span);
+        let options = if asm.att_syntax {
+            quote_spanned! {span=> , options(att_syntax) }
+        } else {
+            TokenStream::new()
+        };
+        quote_spanned! {span=> ::core::arch::global_asm!(#template #options); }
     }
 
     /// Where an `asm` output goes: the place itself, or — for a place that

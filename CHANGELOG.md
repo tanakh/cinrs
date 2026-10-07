@@ -58,8 +58,9 @@ follows [Semantic Versioning][semver].
   keeps rbx in a scratch register around the template; a clobber may be GCC's
   register number, as mbedtls's `"0", "1"`; `"m"`, `"=m"` and `"+m"` pass the
   lvalue's address, named in the template as `(%reg)` or not at all, as in
-  mbedtls's bignum loops and its zeroize barrier; and `%c` and `%P` print an
-  immediate without its `$`, as xz's range decoder needs.
+  mbedtls's bignum loops and its zeroize barrier; `%c` and `%P` print an
+  immediate without its `$`, as xz's range decoder needs; and basic asm at
+  file scope, `__asm__("…");`, is `global_asm!`.
 * `cinrs-core`, for a command-line driver: `translate_file` and
   `translate_source`, which hand back the Rust, the diagnostics, the headers
   read and the symbols defined; `preprocess_file` and `preprocess_source`,

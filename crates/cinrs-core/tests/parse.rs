@@ -442,3 +442,30 @@ fn the_reserved_asm_spellings_work_in_strict_iso() {
     assert!(dump.contains("asm basic volatile"), "{dump}");
     assert!(dump.contains("template \"pause\""), "{dump}");
 }
+
+/// Basic asm at file scope is a declaration of its own: adjacent literals are
+/// one text, `asm` is the GNU dialects' spelling and `__asm__` everyone's, and
+/// GCC's rule that it takes no qualifier holds. The extended form GCC 15 took
+/// to file scope is refused where its ':' is.
+#[test]
+fn file_scope_asm_declarations_parse() {
+    let dump = parse_dump_with(
+        &Options::gnu(Standard::C99),
+        r#"
+        __asm__(".globl f\n" "f: ret");
+        __extension__ asm(".symver g, g@VERS_1");
+        int x;
+        "#,
+    );
+    assert!(dump.contains(r#"file-asm ".globl f\nf: ret""#), "{dump}");
+    assert!(dump.contains(r#"file-asm ".symver g, g@VERS_1""#), "{dump}");
+    let iso = parse_dump_with(&Options::new(Standard::C99), r#"__asm(".text");"#);
+    assert!(iso.contains(r#"file-asm ".text""#), "{iso}");
+    assert_eq!(
+        parse_diagnostics("__asm__ volatile (\"nop\");\n__asm__(\"\" : : );\nint x;"),
+        "1:9: error: expected '(' after 'asm', found keyword 'volatile'\n\
+         2:12: error: an extended 'asm' (one with ':') at file scope is not supported: only \
+         the basic form, 'asm(\"…\");', becomes Rust's 'global_asm!'. Write the operands' \
+         values into the text"
+    );
+}

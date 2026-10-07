@@ -1049,6 +1049,7 @@ impl<'a> Sema<'a> {
                 ast::ExternalDecl::Function(f) => self.function_def(f),
                 ast::ExternalDecl::Decl(d) => self.file_scope_decl(d),
                 ast::ExternalDecl::StaticAssert(assert) => self.static_assert(assert),
+                ast::ExternalDecl::Asm(asm) => self.file_asm(asm),
             }
         }
         self.complete_tentative_arrays();

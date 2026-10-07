@@ -5,9 +5,9 @@
 //! the rewrite: `asm!` has no x87 or MMX registers, no register pair, no flag
 //! outputs and no `%=`; a memory operand is its address, so a bit-field cannot
 //! be one; rustc keeps rsp and rbp; and, as in GCC, rbx cannot be both a "b"
-//! operand and a clobber.
-//!
-//! Everything else about extended asm maps (`sema/asm.rs`).
+//! operand and a clobber. Everything else about extended asm maps
+//! (`sema/asm.rs`), and so does basic asm at file scope, where Rust has a
+//! stable `global_asm!`.
 
 cinrs::gnu99! {
     #pragma cinrs target "x86_64-unknown-linux-gnu"
@@ -79,4 +79,17 @@ cinrs::gnu99! {
     void pause(void) {
         asm volatile ("yield"); //~ ERROR: inline assembly is only supported on x86 and x86-64
     }
+}
+
+// File-scope asm is `global_asm!`, which has no operands to give GCC 15's
+// extended form and is not stable on WebAssembly.
+cinrs::gnu99! {
+    #pragma cinrs target "x86_64-unknown-linux-gnu"
+    int counter;
+    __asm__(".set counter_alias, %c0" : : "i"(&counter)); //~ ERROR: an extended 'asm' (one with ':') at file scope is not supported
+}
+
+cinrs::gnu99! {
+    #pragma cinrs target "wasm32-unknown-unknown"
+    __asm__(".globl nothing"); //~ ERROR: a file-scope 'asm' is not supported on wasm32
 }

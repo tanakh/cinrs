@@ -1850,6 +1850,55 @@ fn a_clobber_may_be_gccs_number_for_a_register() {
     }
 }
 
+/// Basic asm at file scope is a `global_asm!` of its text with each brace
+/// doubled — AT&T on x86, with no syntax option elsewhere — and an error where
+/// Rust's `global_asm!` is not stable.
+#[test]
+fn file_scope_asm_becomes_global_asm() {
+    let global_asm = |source: &str| -> Vec<(String, bool)> {
+        let literal = format!("r#####\"{source}\"#####");
+        let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+        let analysis = analyze(input, &asm_options());
+        assert!(analysis.diagnostics.items().is_empty());
+        let (program, diagnostics) =
+            sema::analyze(&analysis.unit, &analysis.options, analysis.source.unit_id());
+        assert!(!diagnostics.has_errors(), "{:#?}", diagnostics.items());
+        program
+            .global_asm
+            .iter()
+            .map(|asm| (asm.template.clone(), asm.att_syntax))
+            .collect()
+    };
+    assert_eq!(
+        global_asm(&format!(
+            "{X86_64}__asm__(\".globl f\\n\" \"f: # {{x}} 100%\");\nint g;\n__asm(\"ret\");"
+        )),
+        [
+            (".globl f\nf: # {{x}} 100%".to_owned(), true),
+            ("ret".to_owned(), true)
+        ]
+    );
+    assert_eq!(
+        global_asm("#pragma cinrs target \"aarch64-unknown-linux-gnu\"\n__asm__(\"nop\");"),
+        [("nop".to_owned(), false)]
+    );
+    for (triple, arch) in [
+        ("wasm32-unknown-unknown", "wasm32"),
+        ("mips-unknown-linux-gnu", "mips"),
+    ] {
+        assert_eq!(
+            asm_errors_with(
+                &format!("#pragma cinrs target \"{triple}\"\n__asm__(\"nop\");"),
+                &asm_options()
+            ),
+            [format!(
+                "a file-scope 'asm' is not supported on {arch}: it becomes Rust's 'global_asm!', \
+                 which is not stable on that architecture"
+            )]
+        );
+    }
+}
+
 /// GCC's `"x"` and `"v"` are a vector register as wide as the operand's type:
 /// `asm!`'s `xmm_reg`, `ymm_reg` or `zmm_reg`. `%x`, `%t`, `%g` name the
 /// operand's xmm, ymm, zmm register, which is `:x`, `:y`, `:z` on any of them.

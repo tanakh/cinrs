@@ -1327,6 +1327,24 @@ pub enum ExternalDecl {
     Decl(Decl),
     /// `_Static_assert(…);` — C11.
     StaticAssert(StaticAssert),
+    /// `__asm__("…");` — GNU's basic asm at file scope; see [`FileAsm`].
+    Asm(FileAsm),
+}
+
+/// `asm ( string-literal ) ;` at file scope — GNU's *basic asm declaration*,
+/// whose text GCC copies into its assembler output as it is.
+///
+/// It is what a library writes for what C cannot say: a `.symver` directive,
+/// a function written in assembly, a section switch. Only the basic form is
+/// one: GCC takes no qualifier here (`asm volatile` at file scope is a syntax
+/// error), and the extended form GCC 15 added at file scope is refused by
+/// the parser.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileAsm {
+    /// The text, adjacent string literals concatenated.
+    pub template: Spanned<String>,
+    /// Where the whole declaration was written, keyword to `;`.
+    pub range: SourceRange,
 }
 
 /// A whole translation unit — the contents of one `c99!` invocation.

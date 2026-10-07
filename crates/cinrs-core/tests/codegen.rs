@@ -2085,6 +2085,28 @@ fn c_prints_an_immediate_without_its_dollar() {
     ));
 }
 
+/// File-scope basic asm is a `global_asm!` of its text, after the functions:
+/// `%` stays as it is, a brace is doubled, adjacent literals are one, and x86
+/// gets `options(att_syntax)`. On AArch64 there is no such option.
+#[test]
+fn file_scope_asm_becomes_global_asm() {
+    let source = r#"
+        int f(void) { return 0; }
+        __asm__(".globl f_alias\n\t.set f_alias, f");
+        __asm(".globl g\n" "g: # {not an operand} 100%\n" "\tret");
+        "#;
+    let aarch64 = cinrs_core::target::TargetModel::from_triple("aarch64-unknown-linux-gnu")
+        .expect("a known triple");
+    insta::assert_snapshot!(format!(
+        "// x86_64-unknown-linux-gnu\n{}\n// aarch64-unknown-linux-gnu\n{}",
+        generate_asm(source),
+        generate_with(
+            Options::gnu(Standard::C99).for_target(aarch64),
+            r#"__asm__(".globl h\nh: ret");"#
+        )
+    ));
+}
+
 /// Extended asm: named operands in GCC's order, a tied input folded into its
 /// output as `inout … =>`, explicit registers at the operand's width (and
 /// written into the template where `%0` named one), modifiers, an immediate

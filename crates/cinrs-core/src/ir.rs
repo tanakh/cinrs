@@ -1986,6 +1986,26 @@ pub struct Object {
     pub range: SourceRange,
 }
 
+/// A file-scope basic asm declaration, already in `global_asm!`'s terms.
+///
+/// GCC copies the text of `__asm__("…");` at file scope into its assembler
+/// output, and Rust's `global_asm!` does the same with its template, so the
+/// mapping is the text itself (see `sema/asm.rs`): with no operands `%` is
+/// literal in both, and only a brace has to be doubled, since `global_asm!`
+/// reads one as the start of an operand.
+#[derive(Clone, Debug)]
+pub struct GlobalAsm {
+    /// The template in `global_asm!`'s syntax: the text with its braces
+    /// doubled.
+    pub template: String,
+    /// Whether the text is AT&T assembly, as GCC's is on x86 and x86-64, for
+    /// which code generation adds `options(att_syntax)`. On every other
+    /// architecture there is one syntax and no such option.
+    pub att_syntax: bool,
+    /// Where the declaration was written.
+    pub range: SourceRange,
+}
+
 /// A `static mut` item and its constant initialiser.
 #[derive(Clone, Debug)]
 pub struct StaticVar {
@@ -2293,6 +2313,9 @@ pub struct Program {
     pub typedefs: Vec<TypedefItem>,
     /// The `enum` constants that become Rust `const` items, in order.
     pub enum_constants: Vec<Enumerator>,
+    /// The file-scope `__asm__("…");` declarations, in order; see
+    /// [`GlobalAsm`].
+    pub global_asm: Vec<GlobalAsm>,
     /// Every string literal, indexed by [`StrId`].
     pub strings: Vec<StrData>,
     /// The libraries the unit must be linked against, named by

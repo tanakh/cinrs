@@ -116,7 +116,11 @@
   (`register int x asm("eax")`: write `"a"(x)`). `asm!` is unsafe, so a
   `[[cinrs::safe]]` function cannot contain one. A register-or-memory
   constraint (`"rm"`, `"g"`) always gets the register, which may change the
-  instruction GCC would have chosen but not the meaning.
+  instruction GCC would have chosen but not the meaning. Basic asm at **file
+  scope** is `global_asm!`, so it is an error where that is unstable (wasm32,
+  MIPS, SPARC), GCC 15's file-scope extended asm is refused, and a C name in
+  its text links only when the definition is a real symbol (`#pragma cinrs
+  export`, or `ccinrs`).
 * `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or
   returned; the usual uses — `va_start`, `va_arg`, `va_copy`, passing a list to
   `vprintf` — are fine, and so is a **`va_list *`** parameter or local, which

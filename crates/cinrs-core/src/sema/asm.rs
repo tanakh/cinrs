@@ -1,4 +1,5 @@
-//! GNU inline assembly, mapped onto `core::arch::asm!`.
+//! GNU inline assembly, mapped onto `core::arch::asm!`, and file-scope asm,
+//! mapped onto `core::arch::global_asm!`.
 //!
 //! GCC's extended asm and Rust's `asm!` share one model — an opaque template
 //! plus operands with constraints — so for the shapes real C writes (`rdtsc`,
@@ -7,6 +8,25 @@
 //! generation a finished [`ir::AsmStmt`]; everything it cannot map is a
 //! diagnostic that names the constraint or the feature, because an `asm!`
 //! whose meaning differs from GCC's would be worse than none.
+//!
+//! # File-scope asm
+//!
+//! `__asm__("…");` written where a declaration may be is GCC's *basic asm
+//! declaration*: the text goes into the assembler output as it is, between
+//! the functions. xz's `common.h` falls back to one for its `.symver`
+//! directives, and a function written in assembly is the other common use.
+//! `global_asm!` is the same thing in Rust, so the [`ir::GlobalAsm`] is the
+//! text with its braces doubled — with no operands, `%` is literal in both,
+//! and a brace is the one character `global_asm!` reads as syntax (AVX-512's
+//! `{%k1}` mask and the `{vex}` prefix have them). On x86 and x86-64 it gets
+//! `options(att_syntax)`, GCC's assembly being AT&T; on every other
+//! architecture `global_asm!` is stable on there is one syntax and no such
+//! option, and on the rest — wasm32, MIPS, SPARC — the declaration is an
+//! error. A symbol the text defines is reached from C through an ordinary
+//! declaration, `int f(int);`. The other way, a C name in the text links
+//! only if the definition is a real symbol: under `#pragma cinrs export`, or
+//! in `ccinrs`, which exports everything; inside a Rust crate a C function's
+//! symbol is otherwise Rust's to mangle.
 //!
 //! # The mapping
 //!
@@ -401,6 +421,40 @@ impl Sema<'_> {
         }
         self.extended_asm(asm, range)
             .map_or(Stmt::Nop, |stmt| Stmt::Asm(Box::new(stmt)))
+    }
+
+    /// Checks a file-scope basic asm declaration and maps it onto
+    /// `global_asm!`; see the module documentation.
+    pub(super) fn file_asm(&mut self, asm: &ast::FileAsm) {
+        // Every architecture `global_asm!` is stable on (probed with 1.99),
+        // and whether its assembly has an AT&T flavour to ask for.
+        let att_syntax = match self.target.arch {
+            Arch::X86 | Arch::X86_64 => true,
+            Arch::Aarch64
+            | Arch::Arm
+            | Arch::Riscv32
+            | Arch::Riscv64
+            | Arch::LoongArch64
+            | Arch::S390x
+            | Arch::PowerPc
+            | Arch::PowerPc64 => false,
+            Arch::Wasm32 | Arch::Mips | Arch::Mips64 | Arch::Sparc | Arch::Sparc64 => {
+                self.error(
+                    asm.range,
+                    format!(
+                        "a file-scope 'asm' is not supported on {}: it becomes Rust's \
+                         'global_asm!', which is not stable on that architecture",
+                        self.target.arch.as_str()
+                    ),
+                );
+                return;
+            }
+        };
+        self.program.global_asm.push(ir::GlobalAsm {
+            template: double_braces(&asm.template.node),
+            att_syntax,
+            range: asm.range,
+        });
     }
 
     /// A basic asm template: `%` is literal, and so are the braces — GCC
@@ -1710,6 +1764,12 @@ fn family_root(reg: &str) -> &str {
         .iter()
         .find(|f| f.names.contains(&reg) || f.high == Some(reg))
         .map_or(reg, |f| f.names[3])
+}
+
+/// Text with no operands, as an `asm!` or `global_asm!` template: the same
+/// text with each brace doubled, which is the format string's own escape.
+fn double_braces(text: &str) -> String {
+    text.replace('{', "{{").replace('}', "}}")
 }
 
 /// Skips the operand reference after a refused modifier, so that it is not

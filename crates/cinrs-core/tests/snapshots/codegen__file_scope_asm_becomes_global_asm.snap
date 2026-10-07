@@ -1,0 +1,29 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "format!(\"// x86_64-unknown-linux-gnu\\n{}\\n// aarch64-unknown-linux-gnu\\n{}\",\ngenerate_asm(source),\ngenerate_with(Options::gnu(Standard::C99).for_target(aarch64),\nr#\"__asm__(\".globl h\\nh: ret\");\"#))"
+---
+// x86_64-unknown-linux-gnu
+mod __cinrs_unit_310e8867 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub unsafe extern "C" fn f() -> ::core::ffi::c_int {
+        unsafe {
+            return 0;
+        }
+    }
+    ::core::arch::global_asm!(".globl f_alias\n\t.set f_alias, f", options(att_syntax));
+    ::core::arch::global_asm!(
+        ".globl g\ng: # {{not an operand}} 100%\n\tret", options(att_syntax)
+    );
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_310e8867::*;
+
+// aarch64-unknown-linux-gnu
+mod __cinrs_unit_8ed24f18 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    ::core::arch::global_asm!(".globl h\nh: ret");
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_8ed24f18::*;

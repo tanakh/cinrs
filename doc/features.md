@@ -890,12 +890,26 @@ displacement `-2017`, `(unsigned char)255` is `$-1`, `0x80000000u` is
 two's-complement value — which `movabsq` takes, and which GCC itself refuses
 under `%c`.
 
+**Basic asm at file scope** — `__asm__("…");` where a declaration may stand,
+which xz falls back to for its `.symver` directives — is Rust's
+`core::arch::global_asm!` with the same text, emitted after the unit's
+functions. With no operands `%` is literal in both; a brace is doubled for
+Rust and reaches the assembler as written. On x86 and x86-64 it gets
+`options(att_syntax)`; it works without one on every architecture where
+`global_asm!` is stable (AArch64, Arm, RISC-V, LoongArch, PowerPC, s390x) and
+is a located error on the others (wasm32, MIPS, SPARC). A function the text
+defines is called through an ordinary declaration, `int f(int);`; a C name the
+text refers to links only if it is a real symbol, which a definition is under
+`#pragma cinrs export` and in `ccinrs`. GCC takes no qualifier on it
+(`asm volatile` is a syntax error there), and the extended form GCC 15 allows at
+file scope, with operands, is refused.
+
 `asm!` is `unsafe`, which every generated function body already is, so inline
 assembly works in any function **but a `[[cinrs::safe]]` one**, where it is
 refused by name. It needs only `core`, so it works under `#pragma cinrs
-no_std`. It is **x86 and x86-64 only**: the template is one architecture's
-assembly and the operand mapping is x86's registers, so an `asm` for another
-target is a located error.
+no_std`. An `asm` statement is **x86 and x86-64 only**: the template is one
+architecture's assembly and the operand mapping is x86's registers, so one for
+another target is a located error.
 
 **What is refused, and what to write instead.**
 
@@ -949,8 +963,8 @@ ask about one instruction set.
 `tests/inline_asm.rs` runs all of this — every operand kind, the modifiers,
 member and pointer outputs, `asm` in a loop, a `switch` and a function with a
 `goto`, `<cpuid.h>` against Rust's own `__cpuid`, an rbx clobber with values
-live across it, and memory operands named and unnamed — with the values `gcc
--O2` printed for the same C.
+live across it, memory operands named and unnamed, and a function written in
+file-scope asm — with the values `gcc -O2` printed for the same C.
 
 ## Thread-local objects
 

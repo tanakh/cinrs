@@ -202,11 +202,23 @@ error: inline assembly is only supported on x86 and x86-64: the template is asse
 80 |         asm volatile ("yield");
    |         ^^^
 
+error: an extended 'asm' (one with ':') at file scope is not supported: only the basic form, 'asm("…");', becomes Rust's 'global_asm!'. Write the operands' values into the text
+  --> tests/ui/inline_asm_refused.rs:89:39
+   |
+89 |     __asm__(".set counter_alias, %c0" : : "i"(&counter));
+   |                                       ^
+
+error: a file-scope 'asm' is not supported on wasm32: it becomes Rust's 'global_asm!', which is not stable on that architecture
+  --> tests/ui/inline_asm_refused.rs:94:5
+   |
+94 |     __asm__(".globl nothing");
+   |     ^^^^^^^
+
 error: register class `ymm_reg` requires the `avx` target feature
   --> tests/ui/inline_asm_refused.rs:73:27
    |
 73 |         __asm__("" : "+x"(v));
    |                           ^
 
-error: aborting due to 35 previous errors
+error: aborting due to 37 previous errors
 

@@ -653,3 +653,47 @@ mod rbx_clobber_x86_64 {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// File-scope asm: `global_asm!`. A function written in assembly is called from
+// C through an ordinary declaration. Its name is unique to this file, since a
+// test binary is one symbol namespace; it carries the platform's label prefix
+// (`_` on macOS) and reads its argument where the platform's ABI puts it.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "x86_64")]
+mod file_scope_asm {
+    cinrs::gnu99! {
+        #define STR(x) #x
+        #define XSTR(x) STR(x)
+        #define ADD_ONE XSTR(__USER_LABEL_PREFIX__) "cinrs_inline_asm_test_add_one"
+        #ifdef _WIN32
+        #define FIRST_ARG "%rcx"
+        #else
+        #define FIRST_ARG "%rdi"
+        #endif
+
+        /* The braces of the comment reach the assembler as they are, and the
+           '%' of a register needs no doubling: basic asm has no operands. */
+        __asm__(".text\n"
+                ".globl " ADD_ONE "\n"
+                ADD_ONE ":\n"
+                "\t# {not an operand}\n"
+                "\tleal 1(" FIRST_ARG "), %eax\n"
+                "\tret\n");
+
+        int cinrs_inline_asm_test_add_one(int);
+        int add_one_twice(int x) {
+            return cinrs_inline_asm_test_add_one(cinrs_inline_asm_test_add_one(x));
+        }
+    }
+
+    #[test]
+    fn a_function_written_in_file_scope_asm_is_called_from_c() {
+        unsafe {
+            assert_eq!(add_one_twice(40), 42);
+            assert_eq!(add_one_twice(-2), 0);
+            assert_eq!(cinrs_inline_asm_test_add_one(i32::MAX), i32::MIN);
+        }
+    }
+}

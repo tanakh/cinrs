@@ -235,6 +235,7 @@ impl<'a> Dumper<'a> {
             ExternalDecl::Function(f) => self.function_def(f),
             ExternalDecl::Decl(d) => self.decl(d),
             ExternalDecl::StaticAssert(sa) => self.static_assert(sa),
+            ExternalDecl::Asm(asm) => self.line(format!("file-asm {:?}", asm.template.node)),
         }
     }
 
