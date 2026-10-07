@@ -400,6 +400,21 @@ impl Sema<'_> {
                 );
             }
         }
+        // `__attribute__((common))` on a tentative definition makes a common
+        // symbol, which every unit including the header defines and the
+        // linker merges into one: Redis's `redismodule.h` declares its API's
+        // function pointers so. A weak definition is merged the same way,
+        // where the unit can make one; elsewhere it stays an ordinary one.
+        if weak_definition.is_none()
+            && let Some(range) = attrs.common
+            && file_scope
+            && storage.is_none()
+            && declarator.init.is_none()
+            && decl.specifiers.thread_local.is_none()
+            && self.program.weak_definitions
+        {
+            weak_definition = Some(range);
+        }
 
         let thread_local = self.check_thread_local(decl, storage, file_scope);
         if thread_local == ThreadLocal::Rejected {

@@ -199,6 +199,11 @@ follows [Semantic Versioning][semver].
 * A directive among a function-like macro's arguments is processed, as GCC
   does: CPython's `perf_jit_trampoline.c` writes an `#ifdef` between the
   parentheses of a macro call, which was "expected expression, found '#'".
+* `__attribute__((common))` on a tentative definition is a weak definition
+  where `ccinrs` makes those, so that the copies every unit including the
+  header defines merge into one, as common symbols do: Redis's
+  `redismodule.h` declares its API's pointers so, and `redis-server` failed
+  to link with "duplicate symbol".
 * Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
   compiles position-independent code, `__PIE__` and `__pie__` (2) where it
   links position-independent executables, `__FXSR__` with the rest of the
@@ -253,6 +258,11 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* A link with `-flto` that also takes an object or an archive `ccinrs`
+  compiled without it is made without link-time optimisation: the other
+  machine code calls Rust's standard library by name, and LTO kept only what
+  the `-flto` crates used — "undefined symbol: core::panicking::panic" when
+  Redis linked `redis-cli` with its `deps/` archives.
 * A wide string literal as an arm of `?:` that needs a `const` pointer —
   CPython's `return sep ? sep + 1 : L"";` — compiles; the block holding the
   literal's `static` was read as a statement before its `as`.

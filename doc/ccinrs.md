@@ -172,7 +172,12 @@ C, cinrs's runtime and Rust's standard library. A call in a loop to a
 function in another file becomes the loop's own code, as with GCC's LTO.
 
 An object compiled with `-flto` links with one compiled without, and a link
-without `-flto` takes it as ordinary code. What it cannot do is go into an
+without `-flto` takes it as ordinary code. A link *with* `-flto` that has an
+object or an archive compiled here without it — Redis links its `deps/`
+archives into a server built with `-flto` — is made without link-time
+optimisation, every object as the ordinary code it also holds: Rust's LTO
+keeps only the standard library's symbols its own modules use, and the
+other machine code calls more of them by name. What it cannot do is go into an
 archive: an rlib is an archive itself, and `ar` would make an archive of
 archives — the link says so — as GCC's own LTO objects need `gcc-ar`.
 

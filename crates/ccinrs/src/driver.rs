@@ -164,6 +164,9 @@ struct ObjectInfo {
     symbols: Vec<String>,
     /// The crates the `-flto` ones are.
     crates: Vec<String>,
+    /// Whether one of them was compiled here *without* `-flto`: machine code
+    /// that calls into Rust's standard library by symbol.
+    native: bool,
 }
 
 impl ObjectInfo {
@@ -171,6 +174,7 @@ impl ObjectInfo {
         self.uses_runtime |= other.uses_runtime;
         self.symbols.extend(other.symbols);
         self.crates.extend(other.crates);
+        self.native |= other.native;
     }
 }
 
@@ -1141,6 +1145,7 @@ impl Run<'_> {
             uses_runtime: translation.uses_runtime,
             symbols: translation.symbols,
             crates: inv.lto.map(|_| name).into_iter().collect(),
+            native: inv.lto.is_none(),
         }))
     }
 
@@ -1294,6 +1299,7 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     symbols.extend(elf::exported_symbols(&bytes, STAMP_PREFIX.as_bytes()));
     let crates = marked_names(&bytes, CRATE_PREFIX);
     let prefix = STAMP_PREFIX.as_bytes();
+    let stamped = bytes.windows(prefix.len()).any(|w| w == prefix);
     let mut rest = &bytes[..];
     while let Some(at) = rest.windows(prefix.len()).position(|w| w == prefix) {
         let found = &rest[at..];
@@ -1317,6 +1323,7 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     Ok(ObjectInfo {
         uses_runtime,
         symbols,
+        native: stamped && crates.is_empty(),
         crates,
     })
 }
@@ -1415,8 +1422,15 @@ impl Run<'_> {
             cmd.arg("--extern").arg(extern_crate);
         }
         // `-flto` at the link is what optimises them all as one — the C, the
-        // runtime and Rust's standard library alike.
+        // runtime and Rust's standard library alike. Not when an object or an
+        // archive compiled here without it is in the link, though: Rust's LTO
+        // keeps only the standard library's symbols its own modules use, and
+        // the machine code would be left calling `core::panicking::panic` and
+        // the rest by names nothing defines — Redis links its `deps/`'
+        // archives into a server built with `-flto`. The `-flto` objects
+        // hold machine code too, so they link as they are.
         match inv.lto {
+            _ if linked.native => {}
             Some(Lto::Fat) => {
                 cmd.args(["-C", "lto=fat"]);
             }

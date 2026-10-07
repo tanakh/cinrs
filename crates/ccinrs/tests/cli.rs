@@ -447,6 +447,33 @@ fn a_weak_definition_is_overridden_by_a_strong_one() {
     assert_eq!(stdout(&s.run("lto", &[])), "2 3 (null)\n1\n");
 }
 
+/// `__attribute__((common))` on a tentative definition in a header that two
+/// files include, as Redis's `redismodule.h` declares its API's pointers: one
+/// object, which the linker merges, as it does a weak definition.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_common_definition_in_two_files_is_one_object() {
+    let s = Scratch::new("common-definition");
+    s.write(
+        "api.h",
+        "extern int (*api_hook)(int) __attribute__((common));\n\
+         int (*api_hook)(int) __attribute__((common));\n\
+         int api_level __attribute__((__common__));\n",
+    );
+    s.write(
+        "one.c",
+        "#include \"api.h\"\nstatic int twice(int x) { return 2 * x; }\n\
+         void install(void) { api_hook = twice; api_level = 7; }\n",
+    );
+    s.write(
+        "main.c",
+        "#include <stdio.h>\n#include \"api.h\"\nvoid install(void);\n\
+         int main(void) { install(); printf(\"%d %d\\n\", api_hook(21), api_level); return 0; }\n",
+    );
+    s.compile(&["-O2", "main.c", "one.c", "-o", "common"]);
+    assert_eq!(stdout(&s.run("common", &[])), "42 7\n");
+}
+
 /// GCC's vector extensions: a vector type's alignment follows `-mavx` as
 /// GCC's does, glibc's `<link.h>` — whose vectors an `aligned` lowers to 16
 /// bytes — compiles, and a vector passed by value to a function of another
@@ -1451,6 +1478,27 @@ fn link_time_optimisation() {
             "{}",
             stderr(&out)
         );
+    }
+    // An archive compiled without `-flto`, whose machine code calls Rust's
+    // standard library by symbol — a dereference's run-time check does — in
+    // a link with it: Redis links its `deps/` so. Rust's LTO would keep only
+    // the symbols its own modules use, so the link is made without it.
+    s.write(
+        "pick.c",
+        "int pick(const int *p, int i) { return p[i] * 2; }\n",
+    );
+    s.write(
+        "use.c",
+        "#include <stdio.h>\nint pick(const int *, int);\nint main(void) { int a[2] = { 4, 5 }; printf(\"%d\\n\", pick(a, 1)); return 0; }\n",
+    );
+    s.compile(&["-O2", "-c", "pick.c"]);
+    let archived = Command::new("ar")
+        .args(["rcs", "libpick.a", "pick.o"])
+        .current_dir(&s.dir)
+        .status();
+    if archived.is_ok_and(|status| status.success()) {
+        s.compile(&["-O2", "-flto", "use.c", "libpick.a", "-o", "mixed"]);
+        assert_eq!(stdout(&s.run("mixed", &[])), "10\n");
     }
 }
 

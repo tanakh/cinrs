@@ -729,6 +729,7 @@ impl Parser<'_> {
             // The last of the two written is the one that counts, as in GCC.
             Some(gnu::Attribute::MsStruct) => attrs.ms_struct = Some(Spanned::new(true, range)),
             Some(gnu::Attribute::GccStruct) => attrs.ms_struct = Some(Spanned::new(false, range)),
+            Some(gnu::Attribute::Common) => attrs.common = attrs.common.or(Some(range)),
             // A statement attribute with nothing to say here: a `switch` group
             // falls through in the generated Rust either way.
             Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}

@@ -72,6 +72,9 @@ pub enum Attribute {
     MsStruct,
     /// `gcc_struct`: by the System V rules, which is the default here.
     GccStruct,
+    /// `common`: a tentative definition is a common symbol, which the linker
+    /// merges with every other unit's.
+    Common,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -135,6 +138,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "vector_size" => Attribute::VectorSize,
         "ms_struct" => Attribute::MsStruct,
         "gcc_struct" => Attribute::GccStruct,
+        "common" => Attribute::Common,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,
