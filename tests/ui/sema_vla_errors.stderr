@@ -41,89 +41,83 @@ error: a variable length array cannot have static storage duration
 34 |         extern int elsewhere[len];
    |                    ^^^^^^^^^
 
-error: a variably modified type cannot have static storage duration
-  --> tests/ui/sema_vla_errors.rs:35:20
-   |
-35 |         static int (*row)[len];
-   |                    ^
-
 error: a variable length array cannot have an initializer
-  --> tests/ui/sema_vla_errors.rs:41:13
+  --> tests/ui/sema_vla_errors.rs:43:13
    |
-41 |         int values[len] = { 1, 2, 3 };
+43 |         int values[len] = { 1, 2, 3 };
    |             ^^^^^^
 
 error: a variable length array cannot have an initializer
-  --> tests/ui/sema_vla_errors.rs:42:13
+  --> tests/ui/sema_vla_errors.rs:44:13
    |
-42 |         int square[len][2] = { { 1, 2 } };
+44 |         int square[len][2] = { { 1, 2 } };
    |             ^^^^^^
 
 error: '_Alignas' requires C11 or later (this block is c99!)
-  --> tests/ui/sema_vla_errors.rs:47:9
+  --> tests/ui/sema_vla_errors.rs:49:9
    |
-47 |         _Alignas(16) int values[len];
+49 |         _Alignas(16) int values[len];
    |         ^^^^^^^^
 
 error: use of undeclared identifier 'cols'
-  --> tests/ui/sema_vla_errors.rs:54:25
+  --> tests/ui/sema_vla_errors.rs:56:25
    |
-54 |         int square[len][cols];
+56 |         int square[len][cols];
    |                         ^^^^
 
 error: '[*]' is only allowed in a function prototype
-  --> tests/ui/sema_vla_errors.rs:59:19
+  --> tests/ui/sema_vla_errors.rs:61:19
    |
-59 |         int values[*];
+61 |         int values[*];
    |                   ^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:65:9
+  --> tests/ui/sema_vla_errors.rs:67:9
    |
-65 |         goto past;
+67 |         goto past;
    |         ^^^^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:73:9
+  --> tests/ui/sema_vla_errors.rs:75:9
    |
-73 |         goto past;
+75 |         goto past;
    |         ^^^^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:81:9
+  --> tests/ui/sema_vla_errors.rs:83:9
    |
-81 |         goto past;
+83 |         goto past;
    |         ^^^^
 
 error: jump into the scope of an identifier with variably modified type
-  --> tests/ui/sema_vla_errors.rs:93:9
+  --> tests/ui/sema_vla_errors.rs:95:9
    |
-93 |         case 1:
+95 |         case 1:
    |         ^^^^
 
 error: a variable length array cannot be declared directly in the body of a 'switch'; a label after it would jump into its scope
-   --> tests/ui/sema_vla_errors.rs:102:13
+   --> tests/ui/sema_vla_errors.rs:104:13
     |
-102 |         int values[len];
+104 |         int values[len];
     |             ^^^^^^
 
 error: a variable length array cannot have static storage duration
-   --> tests/ui/sema_vla_errors.rs:113:20
+   --> tests/ui/sema_vla_errors.rs:115:20
     |
-113 |         static int table[sizeof values];
+115 |         static int table[sizeof values];
     |                    ^^^^^
 
 error: initializer is not a compile-time constant expression
-   --> tests/ui/sema_vla_errors.rs:114:37
+   --> tests/ui/sema_vla_errors.rs:116:37
     |
-114 |         static unsigned long size = sizeof values;
+116 |         static unsigned long size = sizeof values;
     |                                     ^^^^^^
 
 error: 'case' label is not a compile-time constant expression
-   --> tests/ui/sema_vla_errors.rs:116:14
+   --> tests/ui/sema_vla_errors.rs:118:14
     |
-116 |         case sizeof values:
+118 |         case sizeof values:
     |              ^^^^^^
 
-error: aborting due to 21 previous errors
+error: aborting due to 20 previous errors
 

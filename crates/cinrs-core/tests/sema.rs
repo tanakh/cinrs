@@ -396,6 +396,12 @@ fn constructs_that_are_still_out_of_reach_are_named() {
     accepted("int f(int n) { int a[n][n]; return a[0][0]; }");
     accepted("int f(int n) { int a[3][n]; return a[0][0]; }");
     accepted("int f(int n) { int (*p)[n]; return p != 0; }");
+    // A static *pointer* to one is a variably modified type with static
+    // storage, which C allows at block scope (6.7.6.2p2), and a pointer to
+    // `int[100]` converts to it as a compatible type: autoconf's
+    // variable-length-array probe.
+    accepted("int B[100]; int f(int m) { static int (*q)[m] = &B; return (*q)[0]; }");
+    accepted("int B[100]; int g(int m) { int (*p)[m] = &B; return (*p)[1] + (p == &B); }");
     accepted("int f(int n) { typedef int A[n]; A a; return a[0]; }");
     accepted("int f(int n, int m, int a[n][m]) { return a[1][1]; }");
     accepted("int f(int n, int m, int a[*][*]); int f(int n, int m, int a[n][m]) { return **a; }");
@@ -403,10 +409,6 @@ fn constructs_that_are_still_out_of_reach_are_named() {
     rejected(
         "int n; int a[n];",
         &["array size is not an integer constant expression"],
-    );
-    rejected(
-        "int f(int n) { static int (*p)[n]; return p != 0; }",
-        &["a variably modified type cannot have static storage duration"],
     );
     rejected(
         "int f(int n) { int a[*]; return a[0]; }",

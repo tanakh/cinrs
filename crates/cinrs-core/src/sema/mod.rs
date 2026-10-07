@@ -1471,15 +1471,19 @@ impl<'a> Sema<'a> {
                 x.konst == y.konst && self.compatible_in(x.pointee, y.pointee, comparing)
             }
             // C99 6.7.5.2p6: compatible element types, and equal sizes only
-            // when *both* have one. `extern int j[]; int j[3];` declares one
-            // object, and `__builtin_types_compatible_p(int[5], int[])` is
-            // one of GCC's own torture cases.
+            // when *both* have one that is a constant. `extern int j[]; int
+            // j[3];` declares one object, and
+            // `__builtin_types_compatible_p(int[5], int[])` is one of GCC's
+            // own torture cases. A variable length array is compatible with an
+            // array of any length — the two have to agree when the program
+            // runs, which is undefined behaviour when they do not — so `int
+            // (*p)[m] = &B;` with an `int B[100]` needs no cast; autoconf's
+            // variable-length-array probe writes exactly that.
             (Ty::Array(x), Ty::Array(y)) => {
                 let (x, y) = (self.types().array_type(x), self.types().array_type(y));
                 x.elem_const == y.elem_const
-                    && x.vla == y.vla
                     && self.compatible_in(x.elem, y.elem, comparing)
-                    && (x.incomplete || y.incomplete || x.len == y.len)
+                    && (x.vla || y.vla || x.incomplete || y.incomplete || x.len == y.len)
             }
             (Ty::Record(x), Ty::Record(y)) => self.records_compatible(x, y, comparing),
             _ => false,

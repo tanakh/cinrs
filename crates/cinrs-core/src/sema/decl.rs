@@ -516,14 +516,20 @@ impl Sema<'_> {
         }
 
         if file_scope || is_static {
-            // C99 6.7.5.2p2: an object with static storage duration may not
-            // have a variably modified type — `static int (*p)[n];` has no
-            // moment at which its bound could be evaluated. Having evaluated
-            // one is exactly what says the type is.
-            if !bounds.is_empty() {
+            // C99 6.7.5.2p2: only an identifier with block scope and no
+            // linkage may have a variably modified type — at file scope there
+            // is no moment at which its bound could be evaluated, and having
+            // evaluated one is exactly what says the type is. Static storage
+            // is forbidden only to an object of variable length array type,
+            // which went to `declare_vla` above: a block-scope `static int
+            // (*q)[m]` is a static pointer whose type's bound is evaluated, like
+            // any other, each time the declaration is reached (6.8p3), and
+            // autoconf's variable-length-array probe declares one.
+            if file_scope && !bounds.is_empty() {
                 self.error(
                     declarator.range,
-                    "a variably modified type cannot have static storage duration",
+                    "a variably modified type cannot be declared at file scope: there is no \
+                     moment at which its bound could be evaluated",
                 );
             }
             // An object with static storage duration outlives every argument
@@ -559,7 +565,9 @@ impl Sema<'_> {
                 self.apply_object_attributes(id, &attrs, declarator);
                 self.apply_object_alignment(id, ty, requested);
             }
-            return Vec::new();
+            // The bounds of a block-scope static's type, evaluated where the
+            // declaration stands; empty for everything else.
+            return if file_scope { Vec::new() } else { bounds };
         }
 
         if let Some(label) = &declarator.asm_label {

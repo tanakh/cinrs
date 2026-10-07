@@ -32,7 +32,9 @@ cinrs::c99! {
     void storage_classes(int len) {
         static int kept[len]; //~ ERROR: a variable length array cannot have static storage duration
         extern int elsewhere[len]; //~ ERROR: a variable length array cannot have static storage duration
-        static int (*row)[len]; //~ ERROR: a variably modified type cannot have static storage duration
+        /* A static *pointer* to one is allowed (6.7.6.2p2 forbids only the
+           array itself); `tests/vla.rs` runs one. */
+        static int (*row)[len];
         (void)kept;
         (void)row;
     }

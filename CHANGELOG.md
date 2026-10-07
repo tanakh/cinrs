@@ -104,6 +104,11 @@ follows [Semantic Versioning][semver].
   prototyped pointer and fills a static table. Passing one where a
   `char *(*)(char **, int)` was wanted made `rustc` refuse the translation,
   so every autoconf 2.70+ `configure` found no C89, C99 or C11 compiler.
+* A block-scope `static` pointer to a variable length array, `static int
+  (*q)[m] = &B;`, is allowed, as C allows it, and a variable length array type
+  is compatible with an array of any length, so `int (*p)[m] = &B;` with an
+  `int B[100]` needs no cast. autoconf's variable-length-array probe writes
+  both, and `configure` concluded there were no VLAs.
 * An inline-assembly immediate is printed in its operand's width,
   sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
   UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler

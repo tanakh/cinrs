@@ -635,6 +635,60 @@ fn a_variable_length_array_parameter_is_a_pointer() {
     }
 }
 
+/// autoconf's `AC_C_VARARRAYS` ("checking for variable-length arrays"), with
+/// the `extern int n` it only compiles against defined here so that it runs.
+/// A block-scope `static` *pointer* to a variable length array is allowed —
+/// C forbids static storage only to the array itself — and its bound is
+/// evaluated each time the declaration is reached; `&B`, an `int (*)[100]`,
+/// converts to `int (*)[m]` without a cast, the two array types being
+/// compatible. Every value is what gcc prints.
+#[test]
+fn autoconfs_variable_length_array_probe() {
+    c99! {
+        int n = 4;
+        int B[100];
+        int fvla (int m, int C[m][m]);
+
+        int
+        simple (int count, int all[static count])
+        {
+          return all[count - 1];
+        }
+
+        int
+        fvla (int m, int C[m][m])
+        {
+          typedef int VLA[m][m];
+          VLA x;
+          int D[m];
+          static int (*q)[m] = &B;
+          int (*s)[n] = q;
+          return C && &x[0][0] == &D[0] && &D[0] == s[0];
+        }
+
+        int through_static(int m) {
+            static int (*q)[m] = &B;
+            int (*p)[m] = &B;
+            return (*q)[0] * 10 + (*p)[1] + (q == p) * 100
+                + (int)(sizeof *q / sizeof (*q)[0]) * 1000;
+        }
+
+        int probe(void) {
+            int C[4][4] = { { 0 } };
+            int all[3] = { 1, 2, 3 };
+            B[0] = 3;
+            B[1] = 4;
+            return fvla(4, C) * 10 + simple(3, all);
+        }
+    }
+
+    unsafe {
+        assert_eq!(probe(), 3);
+        assert_eq!(through_static(100), 100_134);
+        assert_eq!(through_static(7), 7_134);
+    }
+}
+
 #[test]
 fn a_function_that_also_jumps_keeps_its_array() {
     // A `goto` sends the whole function through the control-flow graph, where
