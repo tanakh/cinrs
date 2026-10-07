@@ -440,6 +440,13 @@ mod declarators {
         typedef int (__attribute__((stdcall)) *Fn)(int);
         static int twice(int n) { return n * 2; }
         int through_a_pointer(int n) { Fn f = twice; return f(n); }
+
+        /* And one after a parameter's whole declarator, array suffix
+         * included, as GCC's torture case `stkalign` writes `main`. */
+        int count_args(int argc, char *argv[] __attribute__((unused)),
+                       int (*table)[2] __attribute__((unused))) {
+            return argc;
+        }
     }
 }
 
@@ -447,6 +454,10 @@ mod declarators {
 fn attributes_in_every_position_gcc_accepts_them() {
     assert_eq!(unsafe { declarators::packed_size() }, 5);
     assert_eq!(unsafe { declarators::through_a_pointer(21) }, 42);
+    assert_eq!(
+        unsafe { declarators::count_args(3, core::ptr::null_mut(), core::ptr::null_mut()) },
+        3
+    );
 }
 
 /// `transparent_union`: a parameter of the union type takes an argument of

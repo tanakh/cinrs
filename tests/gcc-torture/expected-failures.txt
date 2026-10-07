@@ -254,7 +254,6 @@ execute/simd-6                        [not-planned]    compile error: 'vector_si
 execute/stdarg-1                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-2                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-3                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
-execute/stkalign                      [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 !execute/strct-pack-3                                  error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/tstdi-1                                       error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/va-arg-13                     [not-planned]    compile error: va_list is only supported as a local variable or parameter

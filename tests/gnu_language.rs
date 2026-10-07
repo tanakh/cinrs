@@ -39,6 +39,28 @@ c99! {
     __signed int alt_signed(__signed__ char c) { return c; }
 }
 
+gnu99! {
+    static int ext_bump(int x) { return x + 1; }
+
+    /* A statement may *begin* with `__extension__`, and what follows says
+     * whether it is a declaration: curl's `typecheck-gcc.h` wraps every
+     * `curl_easy_setopt` in `__extension__({ … })`. */
+    int ext_statements(int n) {
+        int r = 0;
+        __extension__({ r = ext_bump(n); });
+        __extension__ (r += 100);
+        __extension__ __extension__ (r += 1000);
+        __extension__ int declared = 10000;
+        __extension__ __typeof__(r) typed = 100000;
+        return r + declared + typed;
+    }
+}
+
+#[test]
+fn a_statement_may_begin_with_extension() {
+    assert_eq!(unsafe { ext_statements(41) }, 111_142);
+}
+
 #[test]
 fn the_double_underscore_keywords_work_in_a_strict_block() {
     assert_eq!(unsafe { alt_double(21) }, 42);

@@ -1539,6 +1539,12 @@ impl Parser<'_> {
     /// specifier (or, for a type name, a specifier-qualifier list).
     fn starts_decl_specifier(&self, n: usize) -> bool {
         let tok = self.nth(n);
+        // `__extension__` prefixes an expression as readily as a declaration
+        // — curl's `typecheck-gcc.h` opens a statement with
+        // `__extension__({ … })` — so what follows it decides.
+        if tok.keyword() == Some(Keyword::Extension) {
+            return self.starts_decl_specifier(n + 1);
+        }
         if let Some(k) = tok.keyword() {
             return matches!(
                 k,
@@ -1578,7 +1584,6 @@ impl Parser<'_> {
                     | Keyword::TypeofUnqual
                     | Keyword::BoolName
                     | Keyword::Attribute
-                    | Keyword::Extension
                     | Keyword::TypeofGnu
                     | Keyword::TypeofUnqualGnu
                     | Keyword::AutoType
@@ -2904,7 +2909,13 @@ impl Parser<'_> {
             }
             let start = self.cur_range();
             let specs = self.parse_decl_specifiers(true)?;
-            let declarator = self.parse_declarator(specs.base.clone(), true)?;
+            let mut declarator = self.parse_declarator(specs.base.clone(), true)?;
+            // GNU lets an attribute follow the whole declarator of a
+            // parameter, array suffix and all: `char *argv[]
+            // __attribute__((unused))`, which GCC's torture case `stkalign`
+            // writes.
+            let trailing = self.parse_attributes()?;
+            declarator.attrs.merge(trailing);
             if let Some(name) = &declarator.name {
                 self.declare(&name.name.clone(), SymKind::Ordinary);
             }

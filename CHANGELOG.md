@@ -129,6 +129,8 @@ follows [Semantic Versioning][semver].
   is compatible with an array of any length, so `int (*p)[m] = &B;` with an
   `int B[100]` needs no cast. autoconf's variable-length-array probe writes
   both, and `configure` concluded there were no VLAs.
+* An attribute may follow a parameter's whole declarator — `char *argv[]
+  __attribute__((unused))` — where it was a syntax error (`execute/stkalign`).
 * An inline-assembly immediate is printed in its operand's width,
   sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
   UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler
@@ -143,6 +145,9 @@ follows [Semantic Versioning][semver].
   — glibc's `SIG_ERR`, `((__sighandler_t) -1)`, and `(void *) -1` — is all
   ones, as in GCC. It was written `-1 as c_ulong`, which `rustc` refused
   (E0600); curl's test servers keep `SIG_ERR` in a `static`.
+* A statement may begin with `__extension__` and still be an expression:
+  curl's `typecheck-gcc.h` wraps every `curl_easy_setopt` in
+  `__extension__({ … })`, which was read as a declaration with no type.
 
 ## 0.2.0 — 2026-10-02
 
