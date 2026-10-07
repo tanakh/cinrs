@@ -420,6 +420,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
     let mut stdin = None;
     // The `-W` and `-f` options GCC would not take, which `-Werror` refuses.
     let mut unknown: Vec<String> = Vec::new();
+    // Clang's `-Werror=unknown-warning-option` and `-Wno-unknown-warning-option`.
+    let mut unknown_error = false;
+    let mut unknown_quiet = false;
     // Between `--whole-archive` and `--no-whole-archive`.
     let mut whole = false;
     // `.h` files, which only `-E` and `-M` take.
@@ -636,6 +639,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             // be, as GCC lets it be.
             "-Werror" => inv.werror = true,
             "-Wno-error" => inv.werror = false,
+            // Clang's own switches for what it says of an unknown one:
+            // jemalloc's `configure` asks for an error before it probes a
+            // warning option, and would otherwise take Clang's for GCC's.
+            "-Werror=unknown-warning-option" => unknown_error = true,
+            "-Wno-error=unknown-warning-option" => unknown_error = false,
+            "-Wno-unknown-warning-option" => unknown_quiet = true,
+            "-Wunknown-warning-option" => unknown_quiet = false,
             // GCC's old spelling of `-Wextra`, which libevent's configure
             // still adds.
             "-W" => {}
@@ -710,6 +720,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
         && inv.werror
     {
         return Err(format!("unrecognized command-line option '{first}'"));
+    }
+    if let Some(first) = unknown.iter().find(|arg| arg.starts_with("-W"))
+        && unknown_error
+    {
+        return Err(format!("unknown warning option '{first}'"));
+    }
+    if unknown_quiet {
+        inv.notes
+            .retain(|note| !note.starts_with("ignoring unknown warning option"));
     }
     Ok(inv)
 }
@@ -1062,6 +1081,20 @@ mod tests {
             "unrecognized command-line option '-ffrobnicate'"
         );
         assert!(parse_all(&["-Werror", "a.c"]).unwrap().werror);
+        // Clang's switches for an unknown warning option, as jemalloc's
+        // configure uses them.
+        assert_eq!(
+            parse_all(&[
+                "-Werror=unknown-warning-option",
+                "-Wshorten-64-to-32",
+                "a.c"
+            ])
+            .unwrap_err(),
+            "unknown warning option '-Wshorten-64-to-32'"
+        );
+        let inv = parse_all(&["-Wno-unknown-warning-option", "-Wshorten-64-to-32", "a.c"]).unwrap();
+        assert!(inv.notes.is_empty(), "{:?}", inv.notes);
+        assert!(!inv.werror);
         assert_eq!(
             parse_all(&["-fuse-ld=bfd", "a.c"])
                 .unwrap()
