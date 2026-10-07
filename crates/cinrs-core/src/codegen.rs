@@ -2991,6 +2991,12 @@ impl<'a> Codegen<'a> {
         let c_uint = self.ty(Ty::UInt, span);
         let usize_ty = primitive_ty("usize", span);
         quote_spanned! {span=>
+            // A `longjmp` is an unwind; with `panic = "abort"` it would end
+            // the program instead, so a crate built that way is told here.
+            #[cfg(panic = "abort")]
+            ::core::compile_error!(
+                "setjmp/longjmp need `panic = \"unwind\"`: cinrs makes a longjmp a Rust unwind"
+            );
             const #magic: #usize_ty = 0x636a_6d70;
             const #magic_mask: #usize_ty = 0x636a_6d73;
             const #payload_magic: #usize_ty = 0x636c_6a70;
