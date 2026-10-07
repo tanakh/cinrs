@@ -269,8 +269,8 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 | Corpus | Correct | Entry point |
 | --- | --- | --- |
 | [c-testsuite] — whole programs with expected output | **215 of 218 (98.6 %)** | `c99!` |
-| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,643 of 1,769 (92.9 %)** | `gnu11!` |
-| [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **167 of 203 (82.3 %)** | per test |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,650 of 1,769 (93.3 %)** | `gnu11!` |
+| [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **169 of 203 (83.3 %)** | per test |
 | glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
 
 "Correct" means the case passed, or the entry point is required to refuse it

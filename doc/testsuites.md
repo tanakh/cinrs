@@ -6,8 +6,8 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.6 %** (`c99!`), 99.1 % (`c23!`) | 3: 3 unimplemented |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **92.9 %** (`gnu11!`), 92.5 % (`gnu89!`) | 126: 0 bug, 3 unimplemented, 123 not planned |
-| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **82.3 %** of the 203 run | 36: 0 bug, 6 unimplemented, 30 not planned |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **93.3 %** (`gnu11!`), 92.9 % (`gnu89!`) | 119: 0 bug, 3 unimplemented, 116 not planned |
+| [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **83.3 %** of the 203 run | 34: 0 bug, 6 unimplemented, 28 not planned |
 
 The first two run programs and check the answer; only the third measures what
 `cinrs` **refuses**, which is half of what a front end is for. Between them
@@ -38,24 +38,24 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,643 of the 1,769 run are correct (92.9 %)** under
-  `gnu11!` — 1,538 passing and 105 refused as C99 requires — and 1,636
-  (92.5 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,650 of the 1,769 run are correct (93.3 %)** under
+  `gnu11!` — 1,545 passing and 105 refused as C99 requires — and 1,643
+  (92.9 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses only the one that uses C23's `va_start`. **Not one of
-  the 126 errors is a bug**; they are the memory operands and x87 registers of
-  inline assembly, the vector extensions, the complex
+  the 119 errors is a bug**; they are the x87 register operands of inline
+  assembly, the vector extensions, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
   implement, and five programs that built and then did the wrong thing, which
   the document names one by one.
 * **[Clang's C conformance tests](clang-c-tests.md)** — one file per WG14
   paper or defect report, with `// expected-error` comments saying exactly
-  which lines must be diagnosed. **167 of the 203 revisions run are correct
-  (82.3 %)** — 136 answered exactly and 31 refused because the entry point
+  which lines must be diagnosed. **169 of the 203 revisions run are correct
+  (83.3 %)** — 138 answered exactly and 31 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
-  **557 are diagnosed on the right line**. This is the only suite that measures
+  **577 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and **not
-  one of its 36 errors is a bug** either: they are the features the document
+  one of its 34 errors is a bug** either: they are the features the document
   lists as not yet implemented, and the places where `cinrs` and Clang
   disagree on purpose — usually with GCC on `cinrs`'s side.
 
@@ -219,15 +219,15 @@ report breaks its error count down into them, in this order:
 | --- | --- | --- |
 | **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
 | **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
-| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the memory operands and x87 registers of inline assembly, which `asm!` has no operand for, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
+| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the x87 register operands of inline assembly, which `asm!` has no operand for, the vector extensions, the trampoline and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
 | **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. No list has one today: the last were the variadic *definitions* and `va_list` objects that needed `c_variadic`, which became stable in 1.99 — now the minimum supported version. |
 
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1643/1769 correct (92.9%) — 1538 passed, 105 rejected as the standard requires
-  errors: 126 — bug 0, unimplemented 3, not planned 123, toolchain 0
-  (7 not generated) — 4 m 17 s
+gcc.c-torture/execute through `gnu11!`: 1650/1769 correct (93.3%) — 1545 passed, 105 rejected as the standard requires
+  errors: 119 — bug 0, unimplemented 3, not planned 116, toolchain 0
+  (7 not generated) — 4 m 18 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.
@@ -237,7 +237,7 @@ and the old numbers are still there: `passed` is the pass rate's numerator.
 One id per line: a marker, the id, a category tag and a note.
 
 ```
-execute/20061220-1  [not-planned]    compile error: the constraint "m" asks for a memory operand, …
+execute/990413-2    [not-planned]    compile error: the constraint "t" (an x87 stack register) is not supported, …
 00213               [unimplemented]  unsupported: a `goto` out of a statement expression
 ?NNNNN                               needs a newer Rust than the minimum supported one
 !00200                               error: "'long long' requires C99 or later"  conforming: …

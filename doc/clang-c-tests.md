@@ -163,9 +163,9 @@ corpus revision: **99 files, 276 RUN lines, 203 run, 73 skipped**, in about
 fifteen seconds.
 
 ```
-clang/test/C: 167/203 correct (82.3%) — 136 passed, 31 rejected as the standard requires
-  errors: 36 — bug 0, unimplemented 6, not planned 30, toolchain 0
-  (73 skipped) — 14.3 s
+clang/test/C: 169/203 correct (83.3%) — 138 passed, 31 rejected as the standard requires
+  errors: 34 — bug 0, unimplemented 6, not planned 28, toolchain 0
+  (73 skipped) — 16.3 s
 ```
 
 **Correct** is a revision that came out as the test asks, plus one `cinrs`
@@ -180,7 +180,7 @@ is where the rule and the four error categories are set out.
 | `C99` | 30 | 28 | **93.3 %** | 0 | 0 | 2 | 37 | 7 |
 | `C11` | 23 | 20 | **87.0 %** | 0 | 2 | 1 | 30 | 7 |
 | `C23` | 45 | 34 | **75.6 %** | 0 | 4 | 7 | 69 | 24 |
-| `drs` | 105 | 85 | **81.0 %** | 0 | 0 | 20 | 140 | 35 |
+| `drs` | 105 | 87 | **82.9 %** | 0 | 0 | 18 | 140 | 35 |
 
 **There is no `[bug]` column left to fill.** Every revision that does not come
 out as the test asks is either a feature this crate has not got to yet or a
@@ -192,7 +192,7 @@ rest, and this directory is one file per C23 paper.
 
 ### Why the revision number is the lowest of the three suites
 
-**82.3 % here does not mean 18 % of the C is wrong.** Three things compress it,
+**83.3 % here does not mean 17 % of the C is wrong.** Three things compress it,
 and none of them is a translation error:
 
 1. **A revision is all-or-nothing.** One error on one line, out of the forty
@@ -202,12 +202,12 @@ and none of them is a translation error:
 2. **A file is five revisions.** `drs/dr0xx.c`, `dr1xx.c`, `dr2xx.c`,
    `dr3xx.c` and `dr4xx.c` are compiled once per revision of C, so a single
    cause is counted five times. Collapsing the cascades leaves **41 distinct
-   root causes** behind the 67 listed revisions — 22 of them conforming
+   root causes** behind the 65 listed revisions — 22 of them conforming
    refusals — and the report prints them with their counts.
-3. **31 of the 67 are conforming refusals**, which the correct rate above
+3. **31 of the 65 are conforming refusals**, which the correct rate above
    already counts as correct rather than as gaps.
 
-Put together: 36 errors in **19 root causes**, none of which is a bug.
+Put together: 34 errors in **19 root causes**, none of which is a bug.
 
 ### Annotations: the other half of the picture
 
@@ -216,19 +216,19 @@ The report counts the `expected-error` *lines* as well as the revisions:
 ```
   annotations, over the 203 revisions run
       620  lines carry a required `expected-error`
-      557  of them were diagnosed (89.8%)
-       63  were not
-      463  errors landed on a line no directive names
+      577  of them were diagnosed (93.1%)
+       43  were not
+      451  errors landed on a line no directive names
            191 of those are on the 31 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
-620 lines are asked about and **557 are answered on the right line**. The last
+620 lines are asked about and **577 are answered on the right line**. The last
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
-of them. 191 of the 463 are on the 31 revisions that are conforming refusals
-outright; the other 272 are on the 36 error revisions, where the same effect
+of them. 191 of the 451 are on the 31 revisions that are conforming refusals
+outright; the other 260 are on the 34 error revisions, where the same effect
 piles up behind whichever refusal came first.
 
 The last three came from `_Alignas` on an *object*, which is now honoured
@@ -239,7 +239,7 @@ diagnosed where it is written.
 
 ### The errors, by category
 
-36 revisions do not come out as the test asks and are not deliberate refusals.
+34 revisions do not come out as the test asks and are not deliberate refusals.
 Every one is in `tests/clang-c/expected-failures.txt` with a category and a
 one-line cause, and a note of the form ``see `<id>`` says "same reason as that
 one", which is how the report collapses the cascades.
@@ -254,7 +254,7 @@ initializer for a variable length array (1); and a `constexpr` object of an
 array type (1, `C23/n3018.c:0`) or of a structure type (1, `C23/n3006.c`),
 which are the same gap — only the arithmetic types are supported.
 
-**`[not-planned]` — 30 revisions, 14 root causes.** Nothing here is a to-do:
+**`[not-planned]` — 28 revisions, 14 root causes.** Nothing here is a to-do:
 
 * `drs/dr4xx.c` (5): a compound literal as the operand of `_Static_assert`.
   Clang folds it as a documented GNU extension and *warns*; ISO C does not
@@ -350,7 +350,11 @@ annotations answered on the line the test names (79.2 % of them to 89.4 %; the
 round after it left the revision count alone and took the annotations to
 89.8 %). C23's improved tag compatibility ([N3037](c-status.md#c23)) then took
 it to 82.3 %: `drs/dr1xx.c:4` came out as required, and `C23/n3037_1.c` became
-the conforming refusal described above.
+the conforming refusal described above. A differing macro redefinition
+becoming a warning, with the later definition standing as in GCC and Clang,
+then took it to **83.3 %**: `drs/dr0xx.c:3` and `drs/dr0xx.c:4` came out as
+required, and over the same rounds the annotations answered on the right line
+rose from 557 to 577 (93.1 %).
 That round is the list at the end of this document. It began with five
 `[bug]` root causes: two of them — `drs/dr1xx.c` and `C23/n3007.c` — came out
 as required, and the other three were reclassified with the reason, which is
