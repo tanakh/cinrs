@@ -404,8 +404,11 @@ impl Sema<'_> {
             return Vec::new();
         }
         if storage == Some(ast::StorageClass::Extern) {
+            let objects_before = self.program.objects.len();
             self.declare_extern_object(name, declarator);
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
+                let fresh = id.0 as usize >= objects_before;
+                self.extern_thread_local(id, name, thread_local == ThreadLocal::Yes, fresh);
                 self.apply_object_attributes(id, &attrs, declarator);
                 if let Some(range) = attrs.weak {
                     if matches!(self.program.object(id).storage, Storage::Extern { .. }) {
@@ -910,6 +913,43 @@ impl Sema<'_> {
         }
     }
 
+    /// Settles whether the object an `extern` declaration named is
+    /// thread-local, which C11 6.7.1p3 makes every declaration of it say or
+    /// none: a new one declared `_Thread_local` becomes another unit's
+    /// thread-local object, reached through its accessor. `fresh` says the
+    /// declaration made the object rather than naming one declared before.
+    fn extern_thread_local(
+        &mut self,
+        id: ObjectId,
+        name: &ast::Ident,
+        thread_local: bool,
+        fresh: bool,
+    ) {
+        let object = self.program.object(id);
+        if thread_local == object.storage.is_thread_local() {
+            return;
+        }
+        if thread_local
+            && fresh
+            && let Storage::Extern { item_name } = &object.storage
+        {
+            let item_name = item_name.clone();
+            self.program.objects[id.0 as usize].storage = Storage::ExternThreadLocal { item_name };
+            return;
+        }
+        let previous = object.range;
+        self.error_note(
+            name.range,
+            format!(
+                "'{}' is declared '_Thread_local' in one declaration and not in another; the \
+                 specifier has to be on every declaration of an object",
+                name.name
+            ),
+            previous,
+            format!("previous declaration of '{}' is", name.name),
+        );
+    }
+
     /// Checks a `_Thread_local` object declaration (C11 6.7.1).
     ///
     /// The three spellings — `_Thread_local`, C23's `thread_local` and GNU's
@@ -919,8 +959,10 @@ impl Sema<'_> {
     ///
     /// * at block scope it needs `static` or `extern` (6.7.1p3), because an
     ///   object with automatic storage duration is per *call*, not per thread;
-    /// * `extern` is refused: naming a TLS symbol another object file defines
-    ///   needs Rust's `#[thread_local]` on an `extern` item, which is unstable;
+    /// * `extern` declares another cinrs unit's object, reached through the
+    ///   accessor that unit exports, since naming a TLS symbol another object
+    ///   file defines would need Rust's unstable `#[thread_local]` on an
+    ///   `extern` item; see [`ir::Storage::ExternThreadLocal`];
     /// * a function is not an object (6.7.1p4);
     /// * and the object's initialiser must be a constant expression, which the
     ///   static-initialiser path enforces on its own.
@@ -936,15 +978,8 @@ impl Sema<'_> {
         let Some(range) = decl.specifiers.thread_local else {
             return ThreadLocal::No;
         };
-        if storage == Some(ast::StorageClass::Extern) {
-            self.error(
-                range,
-                "an 'extern' thread-local object is not supported: reaching a TLS symbol \
-                 defined elsewhere needs Rust's `#[thread_local]`, which is unstable. \
-                 Define the object in this unit instead",
-            );
-            return ThreadLocal::Rejected;
-        }
+        // `extern` is fine: another cinrs unit's object is reached through
+        // the accessor it exports; see [`ir::Storage::ExternThreadLocal`].
         if matches!(
             storage,
             Some(ast::StorageClass::Auto | ast::StorageClass::Register)
@@ -1749,9 +1784,13 @@ impl Sema<'_> {
     /// afterwards. Doing nothing at all is what left `extern int x; int x;`
     /// with an undefined symbol at link time.
     fn define_here(&mut self, id: ObjectId, declarator: &ast::InitDeclarator) {
-        if !matches!(self.program.object(id).storage, Storage::Extern { .. }) {
-            return;
-        }
+        let thread_local = match self.program.object(id).storage {
+            Storage::Extern { .. } => false,
+            // `extern __thread int x; __thread int x;` defines a thread-local
+            // object here, with the accessor another unit reaches it through.
+            Storage::ExternThreadLocal { .. } => true,
+            _ => return,
+        };
         // `extern int w __attribute__((weak)); int w;` is a weak *definition*
         // in GCC, and an ordinary one here, with the warning that says so; the
         // references to it are to this definition, and none of them is weak.
@@ -1762,9 +1801,16 @@ impl Sema<'_> {
         let ty = self.program.object(id).ty;
         let name = self.program.object(id).name.clone();
         let item_name = self.reserve_item_name(&name);
-        self.program.objects[id.0 as usize].storage = Storage::Static {
-            item_name,
-            exported: true,
+        self.program.objects[id.0 as usize].storage = if thread_local {
+            Storage::ThreadLocal {
+                item_name,
+                exported: true,
+            }
+        } else {
+            Storage::Static {
+                item_name,
+                exported: true,
+            }
         };
         self.program.externs.retain(|e| *e != id);
         let init = self.zero(ty, declarator.range);

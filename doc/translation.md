@@ -830,6 +830,37 @@ when the initialiser runs and in nothing a C program can observe. The rest —
 where C allows the specifier, and what is refused — is [What
 works](features.md#thread-local-objects).
 
+**Across units.** A `thread_local!` has no C symbol, and naming a TLS symbol
+another object defines would need Rust's unstable `#[thread_local]` on an
+`extern` item. So a unit that gives such an object a symbol — `#pragma cinrs
+export`, or any file `ccinrs` compiles — also exports an accessor that returns
+the calling thread's copy, under a name no C program can spell:
+
+```rust
+#[unsafe(export_name = "counter.cinrs_tls")]
+pub extern "C" fn __cinrs_tls_counter() -> *mut c_int {
+    let copy = counter.with(|cell| ::core::cell::UnsafeCell::get(cell));
+    unsafe { &raw mut (*copy) }
+}
+```
+
+and a unit that writes `extern __thread int counter;` declares that function
+and reaches the object through it, once per expression:
+
+```rust
+unsafe extern "C" {
+    #[link_name = "counter.cinrs_tls"]
+    fn __cinrs_tls_counter() -> *mut c_int;
+}
+// every use of `counter` in the C is  (*__cinrs_tls_counter())
+```
+
+The linker matches the accessor, so a missing definition is an undefined
+`counter.cinrs_tls`, which names the object. The scheme is cinrs's own: an
+object file a C compiler made can neither define such a variable for a cinrs
+unit nor use one a cinrs unit defines — which, for `ccinrs`, is no loss, since
+what it links is what it compiled.
+
 ## Control flow and `goto`
 
 `if`, `while`, `do`/`while`, `for`, `break`, `continue` and `switch` — with

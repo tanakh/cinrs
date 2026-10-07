@@ -427,16 +427,8 @@ fn thread_local_objects_are_accepted_where_c_allows_them() {
            has static storage duration, one copy per thread",
         ],
     );
-    // The one shape C allows and this crate cannot generate.
-    rejected(
-        Standard::C11,
-        "extern _Thread_local int elsewhere;",
-        &[
-            "an 'extern' thread-local object is not supported: reaching a TLS symbol defined \
-           elsewhere needs Rust's `#[thread_local]`, which is unstable. Define the object \
-           in this unit instead",
-        ],
-    );
+    // Another unit's, reached through the accessor that unit exports.
+    accepted(Standard::C11, "extern _Thread_local int elsewhere;");
 }
 
 #[test]

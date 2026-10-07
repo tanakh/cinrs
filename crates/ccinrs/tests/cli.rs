@@ -338,6 +338,48 @@ fn a_programs_own_long_double_function_is_called() {
     );
 }
 
+/// A thread-local object with external linkage, defined in one file and
+/// declared `extern` in another: the defining object exports the accessor
+/// `counter.cinrs_tls`, and each thread sees its own copy through it. A
+/// missing definition is an undefined accessor, named after the object.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn an_extern_thread_local_object_is_reached_through_its_accessor() {
+    let s = Scratch::new("extern-tls");
+    s.write(
+        "def.c",
+        "__thread int counter = 0;\nint bump(int by) { counter += by; return counter; }\n",
+    );
+    s.write(
+        "use.c",
+        "#include <pthread.h>\n#include <stdio.h>\n\
+         extern __thread int counter;\nint bump(int by);\n\
+         static void *worker(void *arg) {\n\
+         \x20   counter = (int)(long)arg;\n\
+         \x20   for (int i = 0; i < 100; i++) bump(1);\n\
+         \x20   return (void *)(long)counter;\n\
+         }\n\
+         int main(void) {\n\
+         \x20   pthread_t a, b; void *ra, *rb;\n\
+         \x20   pthread_create(&a, NULL, worker, (void *)10L);\n\
+         \x20   pthread_create(&b, NULL, worker, (void *)20L);\n\
+         \x20   pthread_join(a, &ra); pthread_join(b, &rb);\n\
+         \x20   bump(42);\n\
+         \x20   printf(\"%ld %ld %d\\n\", (long)ra, (long)rb, counter);\n\
+         \x20   return 0;\n\
+         }\n",
+    );
+    s.compile(&["-pthread", "use.c", "def.c", "-o", "tls"]);
+    assert_eq!(stdout(&s.run("tls", &[])), "110 120 42\n");
+    let out = s.ccinrs(&["-pthread", "use.c", "-o", "missing"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("undefined symbol: counter.cinrs_tls"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// GCC's `-ftrivial-auto-var-init=`: `zero`, the default, clears a local
 /// array nothing initialised; `uninitialized` leaves it a `MaybeUninit`, and
 /// the program that writes before it reads behaves the same; `pattern` is

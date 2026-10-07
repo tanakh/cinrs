@@ -708,7 +708,8 @@ impl Names {
             match &object.storage {
                 Storage::Static { item_name, .. }
                 | Storage::ThreadLocal { item_name, .. }
-                | Storage::Extern { item_name } => spelled.push(item_name),
+                | Storage::Extern { item_name }
+                | Storage::ExternThreadLocal { item_name } => spelled.push(item_name),
                 Storage::Automatic => {}
             }
         }
@@ -2255,6 +2256,18 @@ impl<'a> Codegen<'a> {
         let mut symbols: Vec<&str> = Vec::new();
         for id in &self.program.externs {
             let object = self.program.object(*id);
+            // Another unit's thread-local object is its accessor; see
+            // [`Storage::ExternThreadLocal`].
+            if let Storage::ExternThreadLocal { item_name } = &object.storage {
+                let ospan = self.sp(object.range);
+                let accessor = self.tls_accessor_ident(item_name);
+                let ty = self.ty(object.ty, ospan);
+                let symbol =
+                    Program::tls_accessor(object.asm_label.as_deref().unwrap_or(item_name));
+                let link = link_name(&symbol, ospan);
+                items.extend(quote_spanned! {ospan=> #link fn #accessor() -> *mut #ty; });
+                continue;
+            }
             let Storage::Extern { item_name } = &object.storage else {
                 continue;
             };
@@ -2610,6 +2623,33 @@ impl<'a> Codegen<'a> {
         } else {
             value
         };
+        // The accessor another unit reaches the object through, for one with
+        // a C symbol: see [`Storage::ExternThreadLocal`]. It returns the
+        // calling thread's copy, through whatever wrappers the storage has.
+        let accessor = if *exported && self.program.export {
+            let symbol = Program::tls_accessor(object.asm_label.as_deref().unwrap_or(&object.name));
+            self.symbols.push(symbol.clone());
+            let mut literal = Literal::string(&symbol);
+            literal.set_span(span);
+            let function = self.tls_accessor_ident(item_name);
+            let c_ty = self.ty(object.ty, span);
+            let cell_ident = Ident::new("__cinrs_cell", Span::mixed_site());
+            let tmp = Ident::new("__cinrs_copy", Span::mixed_site());
+            let place = parenthesize(quote_spanned! {span=> *#tmp }, span);
+            let place = self.through_storage(var.object, place, span);
+            quote_spanned! {span=>
+                #[unsafe(export_name = #literal)]
+                #[doc(hidden)]
+                pub extern "C" fn #function() -> *mut #c_ty {
+                    let #tmp = #name.with(|#cell_ident| ::core::cell::UnsafeCell::get(#cell_ident));
+                    // SAFETY: the pointer is this thread's copy of the object,
+                    // and only its address is taken here.
+                    unsafe { &raw mut #place }
+                }
+            }
+        } else {
+            TokenStream::new()
+        };
         // The lint exemptions are the unit module's own (see
         // [`crate::in_module`]), and a `thread_local!` is expanded inside it
         // like anything else, so the `static` it generates inherits them.
@@ -2617,6 +2657,7 @@ impl<'a> Codegen<'a> {
             ::std::thread_local! {
                 #vis static #name: #cell = #value;
             }
+            #accessor
         }
     }
 
@@ -4172,7 +4213,19 @@ impl<'a> Codegen<'a> {
                 self.c_ident(item_name, span)
             }
             Storage::Extern { item_name } => self.extern_object_ident(item_name, span),
+            // What names one is the accessor it is reached through; see
+            // [`Codegen::tls_accessor_ident`].
+            Storage::ExternThreadLocal { item_name } => self.tls_accessor_ident(item_name),
         }
+    }
+
+    /// The private Rust name of the accessor an [`extern` thread-local
+    /// object](Storage::ExternThreadLocal) is reached through, in this
+    /// crate's own hygiene, and the exported one a definition's accessor has.
+    fn tls_accessor_ident(&self, item_name: &str) -> Ident {
+        let base = self.c_ident(item_name, Span::call_site()).to_string();
+        let base = base.trim_start_matches("r#");
+        Ident::new(&format!("__cinrs_tls_{base}"), Span::mixed_site())
     }
 
     // -- the control-flow-graph form ----------------------------------------
@@ -8968,6 +9021,22 @@ impl<'a> Codegen<'a> {
     fn place_access(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
         let span = self.sp(place.range);
         match &place.kind {
+            // Another unit's thread-local object: the calling thread's copy,
+            // as the accessor the defining unit exports hands it out. Taken
+            // once, so an expression that reads the object twice calls it once.
+            PlaceKind::Object(id)
+                if matches!(
+                    self.program.object(*id).storage,
+                    Storage::ExternThreadLocal { .. }
+                ) =>
+            {
+                let accessor = self.object_ident(*id, span);
+                let tmp = self.temporary_at(span);
+                LoweredPlace::plain(
+                    quote_spanned! {span=> let #tmp = #accessor(); },
+                    parenthesize(quote_spanned! {span=> *#tmp }, span),
+                )
+            }
             PlaceKind::Object(id) if self.program.object(*id).storage.is_thread_local() => {
                 // A thread-local object is reached through the `*mut T` inside
                 // its cell, which is valid for as long as this thread's copy

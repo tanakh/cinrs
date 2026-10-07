@@ -143,16 +143,16 @@ pub fn analyze(
     (program, diags)
 }
 
-/// The two rules that depend on a `#pragma cinrs`, checked once the pragmas
-/// are known.
+/// The rules that depend on a `#pragma cinrs`, checked once the pragmas are
+/// known.
 ///
 /// The preprocessor reads them, so they only reach the [`Program`] after
 /// [`analyze`] has finished — see [`crate::expand`], which sets them and then
-/// calls this. Both are about thread-local objects:
-///
-/// * `thread_local!` lives in `std`, and a unit that said `no_std` has none;
-/// * there is no stable way to give a `thread_local!` item a C symbol, so
-///   `#pragma cinrs export` cannot export one.
+/// calls this. They are about what needs `std` — processor detection,
+/// `setjmp`, and `thread_local!` — in a unit that said `no_std`. (A
+/// thread-local object `#pragma cinrs export` gives a C symbol is exported as
+/// the accessor another unit reaches it through; see
+/// [`ir::Storage::ExternThreadLocal`].)
 pub fn check_pragmas(program: &Program) -> Diagnostics {
     let mut diags = Diagnostics::new();
     if program.no_std {
@@ -177,29 +177,19 @@ pub fn check_pragmas(program: &Program) -> Diagnostics {
             );
         }
     }
-    if !program.no_std && !program.export {
+    if !program.no_std {
         return diags;
     }
     for object in &program.objects {
-        let Storage::ThreadLocal { exported, .. } = &object.storage else {
+        if !matches!(object.storage, Storage::ThreadLocal { .. }) {
             continue;
-        };
-        if program.no_std {
-            diags.error(
-                object.range,
-                "'_Thread_local' requires std; this unit says no_std. Rust's `thread_local!` \
-                 is a `std` macro, and `core` has no thread-local storage"
-                    .to_owned(),
-            );
         }
-        if program.export && *exported {
-            diags.error(
-                object.range,
-                "a '_Thread_local' object cannot be exported: `#pragma cinrs export` gives an \
-                 item a C symbol, and there is no stable way to give one to a `thread_local!`"
-                    .to_owned(),
-            );
-        }
+        diags.error(
+            object.range,
+            "'_Thread_local' requires std; this unit says no_std. Rust's `thread_local!` is a \
+             `std` macro, and `core` has no thread-local storage"
+                .to_owned(),
+        );
     }
     diags
 }

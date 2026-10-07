@@ -411,10 +411,12 @@ pub struct Options {
     /// platform's headers and cinrs's bundled ones is taken to be compiled by
     /// cinrs too, with cinrs's ABI.
     ///
-    /// It decides what a `long double` in such a function's prototype is:
-    /// cinrs's `long double` — a `double` — rather than the platform's x87
-    /// or quad type, so a call to it is not refused (see [`crate::sema`]'s
-    /// `long double` boundary).
+    /// It decides two things. A `long double` in such a function's prototype
+    /// is cinrs's `long double` — a `double` — rather than the platform's x87
+    /// or quad type, so a call to it is not refused (see
+    /// [`crate::sema`]'s `long double` boundary). And a thread-local object
+    /// with external linkage is reached through the accessor function a
+    /// cinrs unit that defines one exports (see [`ir::Storage::ThreadLocal`]).
     ///
     /// **Off by default**: a `c99!` block may call a C library a C compiler
     /// built, through that library's own header, which is not one of the

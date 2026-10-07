@@ -2,7 +2,8 @@
 //!
 //! C11 6.7.1 puts it on objects with static storage duration, which at block
 //! scope means one of `static` or `extern` has to be there too; the rest is
-//! what this crate cannot generate, each with the reason.
+//! what this crate cannot generate, each with the reason. An `extern` one is
+//! another unit's, reached through that unit's accessor.
 
 cinrs::c11! {
     void f(void) {
@@ -13,7 +14,8 @@ cinrs::c11! {
 
     _Thread_local void h(void); //~ ERROR: not allowed on a function
 
-    extern _Thread_local int elsewhere; //~ ERROR: `#[thread_local]`, which is unstable
+    /* Another unit's: reached through the accessor that unit exports. */
+    extern _Thread_local int elsewhere;
 
     _Thread_local int seed = 1;
     _Thread_local int *link = &seed; //~ ERROR: not a compile-time constant expression

@@ -2130,6 +2130,23 @@ fn file_scope_asm_becomes_global_asm() {
     ));
 }
 
+/// A thread-local object with external linkage in a unit that gives it a
+/// symbol: the `thread_local!` item and the accessor `x.cinrs_tls` another
+/// unit reaches it through. An `extern` one is that accessor, declared, and
+/// every use of it a dereference of what it returns — once per expression.
+#[test]
+fn a_thread_local_object_is_shared_through_an_accessor() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r#"
+        #pragma cinrs export
+        _Thread_local int counter = 1;
+        extern _Thread_local long total;
+        int bump(void) { counter += 1; total += counter; return counter; }
+        "#
+    ));
+}
+
 /// `#pragma cinrs auto_var_init uninitialized`: a local array with no
 /// initialiser is a `MaybeUninit` of it, reached through a raw pointer to the
 /// binding — in the structured lowering and in the hoisted locals of a

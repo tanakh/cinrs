@@ -274,6 +274,13 @@ C project meets first:
   do not declare is one of the program's own files, compiled by `ccinrs`, and
   takes the same `double` — Redis's `ld2string` and `string2ld`, declared in
   its own `util.h`, are called as they are defined.
+* **A thread-local object with external linkage** is a Rust `thread_local!`,
+  which has no C symbol; the file that defines one exports an accessor,
+  `name.cinrs_tls`, returning the calling thread's copy, and a file that
+  declares it `extern __thread` reaches it through that — so Redis's
+  `__thread sds thread_reusable_qb` works across its files. An object file a
+  C compiler made cannot reach such a variable, nor `ccinrs`'s files one a C
+  compiler defined; a missing definition is an undefined `name.cinrs_tls`.
 * **Only `rustc` links.** An object from another compiler links with
   `ccinrs`'s, but `ccinrs`'s objects need Rust's standard library, so another
   compiler's driver — `c++` linking a C++ program, say — cannot link them.

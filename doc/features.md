@@ -984,9 +984,13 @@ non-constant initialiser. The initialiser goes in `thread_local!`'s `const { …
 block — the cheap form — wherever Rust allows it, which is everywhere except an
 initialiser that names the address of another item (`_Thread_local int *p =
 &global;`), since a Rust constant may not refer to a `static`; that one takes the
-lazy form, which nothing in C can observe. An `extern` thread-local object and
-exporting one under `#pragma cinrs export` are refused — both would need Rust's
-unstable `#[thread_local]`.
+lazy form, which nothing in C can observe. One with external linkage that the
+unit gives a symbol (`#pragma cinrs export`, or any file `ccinrs` compiles)
+exports an accessor, `name.cinrs_tls`, returning the calling thread's copy, and
+an `extern` one in another unit is reached through it — the stable stand-in for
+Rust's unstable `#[thread_local]` on an `extern` item, which C compilers'
+objects cannot share. See [Thread-local
+objects](translation.md#thread-local-objects).
 
 ## C11 threads
 

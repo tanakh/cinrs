@@ -1926,6 +1926,23 @@ pub enum Storage {
         /// The name the symbol has.
         item_name: String,
     },
+    /// A thread-local object defined outside the translation unit: `extern
+    /// __thread T x;`.
+    ///
+    /// Rust has no stable way to name a TLS symbol another object defines
+    /// (`#[thread_local]` on an `extern` static is unstable), so a cinrs unit
+    /// that defines a thread-local object with external linkage — and gives
+    /// it a symbol, under `#pragma cinrs export` or in `ccinrs` — also exports
+    /// an accessor, `x.cinrs_tls`, an `extern "C" fn() -> *mut T` that
+    /// returns the calling thread's copy; see [`Program::tls_accessor`]. This
+    /// unit declares that function and reaches the object through it. The
+    /// symbol is the accessor's, so a missing definition is an undefined
+    /// `x.cinrs_tls`, and a thread-local object a C compiler defined cannot
+    /// be reached at all.
+    ExternThreadLocal {
+        /// The name the object has, which the accessor's symbol is made of.
+        item_name: String,
+    },
 }
 
 impl Storage {
@@ -1936,13 +1953,28 @@ impl Storage {
             Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {
                 Some(item_name)
             }
-            Storage::Automatic | Storage::Extern { .. } => None,
+            Storage::Automatic | Storage::Extern { .. } | Storage::ExternThreadLocal { .. } => None,
         }
     }
 
-    /// Whether this is a thread-local object.
+    /// Whether this is a thread-local object, defined here or not.
     pub fn is_thread_local(&self) -> bool {
-        matches!(self, Storage::ThreadLocal { .. })
+        matches!(
+            self,
+            Storage::ThreadLocal { .. } | Storage::ExternThreadLocal { .. }
+        )
+    }
+}
+
+impl Program {
+    /// The symbol of the accessor a thread-local object with external
+    /// linkage named `symbol` is reached through from another unit:
+    /// `symbol.cinrs_tls`. A `.` is valid in an ELF, Mach-O and COFF symbol
+    /// and in none of C's, so it can collide with nothing a program defines,
+    /// and a linker that cannot find it says so in words that name the
+    /// object. See [`Storage::ExternThreadLocal`].
+    pub fn tls_accessor(symbol: &str) -> String {
+        format!("{symbol}.cinrs_tls")
     }
 }
 

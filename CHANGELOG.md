@@ -35,6 +35,13 @@ follows [Semantic Versioning][semver].
     leaves its scope, as in GCC.
   * Refused on WebAssembly, under `#pragma cinrs no_std` and with
     `panic = "abort"`.
+* **A thread-local object shared between units**: one with external linkage
+  that a unit gives a symbol (`#pragma cinrs export`, every file of
+  `ccinrs`) exports an accessor, `name.cinrs_tls`, returning the calling
+  thread's copy, and `extern _Thread_local` (`extern __thread`) in another
+  unit reaches the object through it. Both were refused; Redis's
+  `__thread sds thread_reusable_qb` and jemalloc's `configure` TLS probe need
+  them. An object a C compiler made cannot share one.
 * **`ccinrs`: a `long double` function of the program's own** — declared in
   its own files rather than in the platform's headers — is called with
   cinrs's `long double`, the `double` its definition, compiled by `ccinrs`

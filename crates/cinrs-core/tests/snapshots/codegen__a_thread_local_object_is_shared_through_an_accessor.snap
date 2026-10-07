@@ -1,0 +1,49 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr#\"\n        #pragma cinrs export\n        _Thread_local int counter = 1;\n        extern _Thread_local long total;\n        int bump(void) { counter += 1; total += counter; return counter; }\n        \"#)"
+---
+mod __cinrs_unit_61407c42 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "total.cinrs_tls"]
+        fn __cinrs_tls_total() -> *mut ::core::ffi::c_long;
+    }
+    ::std::thread_local! {
+        pub static counter : ::core::cell::UnsafeCell < ::core::ffi::c_int > = const {
+        ::core::cell::UnsafeCell::new(1) };
+    }
+    #[unsafe(export_name = "counter.cinrs_tls")]
+    #[doc(hidden)]
+    pub extern "C" fn __cinrs_tls_counter() -> *mut ::core::ffi::c_int {
+        let __cinrs_copy = counter
+            .with(|__cinrs_cell| ::core::cell::UnsafeCell::get(__cinrs_cell));
+        unsafe { &raw mut (*__cinrs_copy) }
+    }
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn bump() -> ::core::ffi::c_int {
+        unsafe {
+            let __cinrs_tmp0 = counter
+                .with(|__cinrs_cell| ::core::cell::UnsafeCell::get(__cinrs_cell));
+            (*__cinrs_tmp0) = (*__cinrs_tmp0).wrapping_add(1);
+            let __cinrs_tmp1 = __cinrs_tls_total();
+            (*__cinrs_tmp1) = (*__cinrs_tmp1)
+                .wrapping_add(
+                    ({
+                        let __cinrs_tmp2 = counter
+                            .with(|__cinrs_cell| ::core::cell::UnsafeCell::get(
+                                __cinrs_cell,
+                            ));
+                        (*__cinrs_tmp2)
+                    }) as ::core::ffi::c_long,
+                );
+            return {
+                let __cinrs_tmp3 = counter
+                    .with(|__cinrs_cell| ::core::cell::UnsafeCell::get(__cinrs_cell));
+                (*__cinrs_tmp3)
+            };
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_61407c42::*;

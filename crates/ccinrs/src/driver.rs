@@ -412,8 +412,9 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // still wins for that unit.
     options.auto_var_init = inv.auto_var_init;
     // What ccinrs links is what it compiled, and the platform's libraries:
-    // a function the program declares outside the platform's headers is
-    // another of its own files, with cinrs's `long double`.
+    // a function or object the program declares outside the platform's
+    // headers is another of its own files, with cinrs's `long double` and
+    // cinrs's way to a thread-local object.
     options.own_declarations_are_cinrs = true;
     options
 }

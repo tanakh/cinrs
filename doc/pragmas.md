@@ -225,9 +225,13 @@ and the C `main` is the program's entry, called by the C runtime with the real
 `argc` and `argv`; or keep the unit that defines `main` unexported and call it
 from the Rust `fn main`.
 
-One thing cannot be exported: a `_Thread_local` object, because there is no
-stable way to give a Rust `thread_local!` a C symbol. It is a located error
-rather than a silently missing symbol.
+A `_Thread_local` object is exported differently, because there is no stable
+way to give a Rust `thread_local!` a C symbol: the unit exports an accessor,
+`name.cinrs_tls`, an `extern "C" fn` returning the calling thread's copy, and
+another unit that declares `extern _Thread_local T name;` reaches the object
+through it — so a `c99!` block that defines one under this pragma and another
+that declares it share it, thread by thread. A C compiler's object file can do
+neither; see [Thread-local objects](translation.md#thread-local-objects).
 
 ### `safe f g h`
 
