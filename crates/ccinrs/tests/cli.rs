@@ -130,6 +130,81 @@ int main(void) {
     assert_eq!(stdout(&s.run("units", &[])), "12 22 22 1001\n");
 }
 
+/// `setjmp` in one file, `longjmp` in another, and the C library's `qsort` in
+/// between: every function is `extern "C-unwind"`, and glibc's frames have
+/// unwind tables. The platform's `<setjmp.h>` is the one read.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn setjmp_and_longjmp_across_files_and_the_c_library() {
+    let s = Scratch::new("setjmp");
+    s.write(
+        "sort.c",
+        r#"#include <setjmp.h>
+#include <stdlib.h>
+static jmp_buf *target;
+static int compares;
+static int cmp(const void *a, const void *b) {
+    if (++compares == 10) longjmp(*target, compares);
+    return *(const int *)a - *(const int *)b;
+}
+void sort_or_jump(jmp_buf *env, int *v, int n) {
+    target = env;
+    qsort(v, n, sizeof *v, cmp);
+}
+"#,
+    );
+    s.write(
+        "main.c",
+        r#"#include <setjmp.h>
+#include <stdio.h>
+void sort_or_jump(jmp_buf *env, int *v, int n);
+int main(void) {
+    int v[50];
+    jmp_buf env;
+    for (int i = 0; i < 50; i++) v[i] = (i * 7) % 50;
+    int r = setjmp(env);
+    if (r == 0) {
+        sort_or_jump(&env, v, 50);
+        printf("sorted\n");
+        return 1;
+    }
+    printf("came back with %d\n", r);
+    return 0;
+}
+"#,
+    );
+    s.compile(&["-O2", "sort.c", "main.c", "-o", "jump"]);
+    let out = s.run("jump", &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "came back with 10\n");
+}
+
+/// A `longjmp` to a function that has returned is undefined in C; here the
+/// program stops with a message instead of unwinding out of `main`.
+#[cfg(unix)]
+#[test]
+fn a_longjmp_to_a_returned_function_aborts() {
+    let s = Scratch::new("setjmp-dead");
+    s.write(
+        "dead.c",
+        r#"#include <setjmp.h>
+static jmp_buf env;
+static int arm(void) { if (setjmp(env)) return 1; return 0; }
+int main(void) { arm(); longjmp(env, 1); }
+"#,
+    );
+    s.compile(&["dead.c", "-o", "dead"]);
+    let out = s.run("dead", &[]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains(
+            "longjmp: the function that called setjmp with this jmp_buf has already returned"
+        ),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// `-c` makes one object per file, named as GCC names it, and a later run
 /// links them; an object from another `rustc` is refused by name.
 #[test]

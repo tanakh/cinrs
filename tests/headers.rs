@@ -1066,16 +1066,11 @@ fn arch_refusal(name: &str, model: &str) -> Option<&'static str> {
 
 /// The headers that are an `#error` on purpose.
 ///
-/// `<setjmp.h>` always: `setjmp`/`longjmp` have no translation, and a header
-/// that says so is more use than a missing one. `<mmintrin.h>` always too:
-/// `core::arch` dropped MMX and `__m64`, so there is nothing to map, and the
-/// header names the SSE2 form of each intrinsic instead. `<complex.h>` only
-/// when the `complex` feature is off, which is exactly what
-/// `__STDC_NO_COMPLEX__` promises the program.
-const REFUSED: &[(&str, &str)] = &[
-    ("setjmp.h", "setjmp"),
-    ("mmintrin.h", "cinrs has no MMX and no '__m64'"),
-];
+/// `<mmintrin.h>` always: `core::arch` dropped MMX and `__m64`, so there is
+/// nothing to map, and the header names the SSE2 form of each intrinsic
+/// instead. `<complex.h>` only when the `complex` feature is off, which is
+/// exactly what `__STDC_NO_COMPLEX__` promises the program.
+const REFUSED: &[(&str, &str)] = &[("mmintrin.h", "cinrs has no MMX and no '__m64'")];
 
 /// The header whose refusal depends on a cargo feature; see [`REFUSED`].
 fn feature_refusal(name: &str) -> Option<&'static str> {

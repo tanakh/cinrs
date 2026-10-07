@@ -757,7 +757,7 @@ fn a_diagnostic_inside_a_header_names_the_header_and_points_at_the_directive() {
 #[test]
 fn every_bundled_header_compiles_on_its_own() {
     for (name, _) in cinrs_core::include::BUNDLED {
-        if *name == "setjmp.h" || *name == "mmintrin.h" {
+        if *name == "mmintrin.h" {
             continue;
         }
         let standard = if *name == "stdatomic.h" {
@@ -822,22 +822,46 @@ fn stdatomic_needs_c11() {
     );
 }
 
-/// The one bundled header that is a refusal rather than a set of
-/// declarations.
+/// `<setjmp.h>` on its own declares the jumps and generates nothing that needs
+/// the `C-unwind` ABI; a unit that calls them is generated with it, a
+/// `longjmp` of its own, and the items they share.
 #[test]
-fn setjmp_says_it_is_not_supported() {
-    let errors = emitted_errors(expand(stream("#include <setjmp.h>"), &options()));
+fn setjmp_switches_the_unit_to_c_unwind() {
+    let quiet = expand(
+        stream("#include <setjmp.h>\nint f(void) { return 1; }"),
+        &options(),
+    )
+    .to_string();
+    assert!(!quiet.contains("compile_error"), "{quiet}");
+    assert!(!quiet.contains("C-unwind"), "{quiet}");
+    let source = "#include <setjmp.h>\n\
+                  static jmp_buf env;\n\
+                  static void fail(void) { longjmp(env, 2); }\n\
+                  int f(void) { if (setjmp(env) == 0) { fail(); return 0; } return 1; }";
+    let output = expand(stream(source), &options()).to_string();
+    assert!(!output.contains("compile_error"), "{output}");
+    assert!(output.contains("extern \"C-unwind\" fn f"), "{output}");
+    assert!(output.contains("catch_unwind"), "{output}");
+    assert!(output.contains("fn __cinrs_longjmp"), "{output}");
+    // The `longjmp` is the unit's own function, not an import.
+    assert!(
+        output.contains("extern \"C-unwind\" fn longjmp"),
+        "{output}"
+    );
+    assert!(!output.contains("link_name = \"longjmp\""), "{output}");
+}
+
+/// A `setjmp` where C17 7.13.1.1p4 does not allow one is refused where it
+/// was written.
+#[test]
+fn setjmp_in_an_operand_is_refused() {
+    let source =
+        "#include <setjmp.h>\nstatic jmp_buf env;\nint f(void) {\n    return 1 + setjmp(env);\n}";
+    let errors = emitted_errors(expand(stream(source), &options()));
     assert_eq!(errors.len(), 1, "{errors:#?}");
     assert!(
-        errors[0]
-            .message
-            .contains("setjmp/longjmp are not supported by cinrs"),
-        "{:?}",
-        errors[0].message
-    );
-    // Reported inside the header, and pointed at the directive.
-    assert!(
-        errors[0].message.starts_with("<cinrs>/setjmp.h:"),
+        errors[0].message.contains("'setjmp' cannot be called here")
+            && errors[0].message.contains("C17 7.13.1.1p4"),
         "{:?}",
         errors[0].message
     );
