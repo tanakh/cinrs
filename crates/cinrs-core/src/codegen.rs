@@ -4263,14 +4263,24 @@ impl<'a> Codegen<'a> {
     }
 
     /// `Some(f as unsafe extern "C" fn(…) -> R)`: a function name used as a
-    /// value.
+    /// value, of the pointer type `ty` the expression has.
+    ///
+    /// The two differ for a function **defined without a prototype**. `static
+    /// char *e(p, i) char **p; int i; { … }` has the C type `char *()`, so a
+    /// use of `e` is an `Option<unsafe extern "C" fn() -> *mut c_char>` to
+    /// everything around it — a conversion to a prototyped pointer type
+    /// transmutes from that — while the item takes its two parameters. The
+    /// value is transmuted to the expression's type, which is the same
+    /// address under another signature: the contract C's call through an
+    /// unprototyped pointer already rests on. autoconf's C89 probe passes such
+    /// an `e` where a `char *(*)(char **, int)` is wanted.
     ///
     /// A method of its own rather than an arm of [`Codegen::expr`]'s match
     /// because that function is the recursion this module is bounded by, and in
     /// an unoptimised build every temporary of every arm has a stack slot of
     /// its own; see `expand.rs`'s `codegen_of_deeply_nested_input_fits_in_a_
     /// small_stack`.
-    fn func_addr(&self, id: ir::FuncId, span: Span) -> Value {
+    fn func_addr(&self, id: ir::FuncId, ty: Ty, span: Span) -> Value {
         let function = self.program.function(id);
         let name = if function.intrinsic.is_some() {
             self.intrinsic_shim_name(id, span)
@@ -4278,8 +4288,14 @@ impl<'a> Codegen<'a> {
             self.function_path(function, span)
         };
         let signature = self.function_pointer_ty(function, span);
+        let value = quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) };
+        let wanted = self.ty(ty, span);
+        let have = quote_spanned! {span=> ::core::option::Option<#signature> };
+        if have.to_string() == wanted.to_string() {
+            return Value::new(value, prec::CALL);
+        }
         Value::new(
-            quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) },
+            quote_spanned! {span=> ::core::mem::transmute::<#have, #wanted>(#value) },
             prec::CALL,
         )
     }
@@ -4908,7 +4924,7 @@ impl<'a> Codegen<'a> {
                 }
             }
             ExprKind::AddrOf(place) => self.address_of(place, expr.ty, span),
-            ExprKind::FuncAddr(id) => self.func_addr(*id, span),
+            ExprKind::FuncAddr(id) => self.func_addr(*id, expr.ty, span),
             // GNU's `&&label`. The value is the label's number, cast to the
             // pointer type the expression has — which is what `goto *`'s
             // dispatch matches on, and what lets a dispatch table be an
@@ -5062,6 +5078,19 @@ impl<'a> Codegen<'a> {
             ExprKind::Cond { .. } if expr.ty.is_void() => {
                 let tokens = self.expr_stmt(expr);
                 Value::new(quote_spanned! {span=> { #tokens } }, prec::BLOCK)
+            }
+            // A function name converted to another function pointer type is
+            // the item's own pointer at that type, in one step rather than
+            // through the type the name has: that type differs from the
+            // item's for a definition without a prototype.
+            ExprKind::Cast(inner)
+                if matches!(inner.kind, ExprKind::FuncAddr(_))
+                    && self.program.types.is_func_pointer(expr.ty) =>
+            {
+                let ExprKind::FuncAddr(id) = inner.kind else {
+                    unreachable!("just matched")
+                };
+                self.func_addr(id, expr.ty, span)
             }
             ExprKind::Cast(inner) => {
                 let from = inner.ty;
@@ -8538,6 +8567,12 @@ fn needs_unsafe(types: &ir::Types, expr: &Expr) -> bool {
             let transmuted = types.is_func_pointer(expr.ty) || types.is_func_pointer(inner.ty);
             transmuted || recurse(inner)
         }
+        // A function defined without a prototype is transmuted to the
+        // unprototyped type its name has; see `Codegen::func_addr`.
+        ExprKind::FuncAddr(_) => matches!(
+            types.pointee(expr.ty),
+            Some(Ty::Func(func)) if !types.func_type(func).prototyped
+        ),
         // `<*mut T>::offset` is an unsafe call however safe its operand is:
         // `static const char *p = "foo" + 1;` — `execute/pr53084` — is the
         // address of a string literal, which is safe to take, plus one.

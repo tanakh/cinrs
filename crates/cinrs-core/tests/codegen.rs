@@ -451,6 +451,29 @@ fn a_call_without_a_prototype_casts_at_the_call_site() {
     ));
 }
 
+/// A function *defined* without a prototype has the type `char *()`, and the
+/// item takes its real parameters: its name as a value is the item's pointer
+/// transmuted to that type — so a static table of one needs the `unsafe` the
+/// transmute does — and converted to another function pointer type it is the
+/// item's pointer at that type, in one step. autoconf's C89 probe passes `e`
+/// where a `char *(*)(char **, int)` is wanted, which is the item's own type.
+#[test]
+fn a_function_defined_without_a_prototype_has_its_unprototyped_type() {
+    insta::assert_snapshot!(generate(
+        r"
+        static char *e(p, i)
+            char **p;
+            int i;
+        {
+            return p[i];
+        }
+        static char *f(char *(*g)(char **, int), char **p) { return g(p, 0); }
+        static char *(*table[])() = { e };
+        char *use(char **p) { return f(e, p); }
+        "
+    ));
+}
+
 /// A `goto` out of a nest of loops to a label near the end of the function:
 /// the label ends a labelled block, and the jump is the `break` that leaves it.
 #[test]

@@ -99,6 +99,11 @@ follows [Semantic Versioning][semver].
 * A null pointer that is only tested is a constant: `bool b = true | false |
   !nullptr;`, autoconf's C23 probe, and `int i = (void *)0 == 0;` are static
   initialisers, as in GCC. They were "not a compile-time constant expression".
+* The name of a function defined without a prototype (`char *e(p, i) char
+  **p; int i; { … }`) is a value of its unprototyped type, which converts to a
+  prototyped pointer and fills a static table. Passing one where a
+  `char *(*)(char **, int)` was wanted made `rustc` refuse the translation,
+  so every autoconf 2.70+ `configure` found no C89, C99 or C11 compiler.
 * An inline-assembly immediate is printed in its operand's width,
   sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
   UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler

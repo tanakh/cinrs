@@ -146,6 +146,44 @@ fn a_definition_pairs_with_an_unprototyped_declaration() {
 }
 
 // ---------------------------------------------------------------------------
+// the address of a function defined without a prototype
+// ---------------------------------------------------------------------------
+
+c99! {
+    /* autoconf's C89 probe (AC_PROG_CC), which every autoconf 2.70+
+       `configure` compiles: `e` has the type `char *()`, and is passed where a
+       `char *(*)(char **, int)` is wanted. */
+    static char *knr_pick(p, i)
+        char **p;
+        int i;
+    {
+        return p[i];
+    }
+
+    static char *knr_apply(char *(*g)(char **, int), char **p, int i) { return g(p, i); }
+
+    int knr_through_a_prototype(char **p) { return knr_apply(knr_pick, p, 1) == p[1]; }
+
+    /* The same address kept at its own, unprototyped, type: in a local, in
+       a static table, and called through both. */
+    static char *(*knr_table[])() = { knr_pick };
+
+    int knr_through_no_prototype(char **p) {
+        char *(*g)() = knr_pick;
+        return g(p, 0) == p[0] && knr_table[0](p, 1) == p[1] && g == knr_table[0];
+    }
+}
+
+#[test]
+fn a_function_defined_without_a_prototype_is_a_function_pointer_value() {
+    let mut words = [c"zero".as_ptr().cast_mut(), c"one".as_ptr().cast_mut()];
+    unsafe {
+        assert_eq!(knr_through_a_prototype(words.as_mut_ptr()), 1);
+        assert_eq!(knr_through_no_prototype(words.as_mut_ptr()), 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // C89: implicit `int`, implicit declarations, and calls before the definition
 // ---------------------------------------------------------------------------
 

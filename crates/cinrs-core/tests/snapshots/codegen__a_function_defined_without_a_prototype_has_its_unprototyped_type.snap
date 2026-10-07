@@ -1,0 +1,75 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        static char *e(p, i)\n            char **p;\n            int i;\n        {\n            return p[i];\n        }\n        static char *f(char *(*g)(char **, int), char **p) { return g(p, 0); }\n        static char *(*table[])() = { e };\n        char *use(char **p) { return f(e, p); }\n        \")"
+---
+mod __cinrs_unit_ee8c3a5a {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    static mut table: [::core::option::Option<
+        unsafe extern "C" fn() -> *mut ::core::ffi::c_char,
+    >; 1] = unsafe {
+        [
+            ::core::mem::transmute::<
+                ::core::option::Option<
+                    unsafe extern "C" fn(
+                        *mut *mut ::core::ffi::c_char,
+                        ::core::ffi::c_int,
+                    ) -> *mut ::core::ffi::c_char,
+                >,
+                ::core::option::Option<
+                    unsafe extern "C" fn() -> *mut ::core::ffi::c_char,
+                >,
+            >(
+                ::core::option::Option::Some(
+                    e
+                        as unsafe extern "C" fn(
+                            *mut *mut ::core::ffi::c_char,
+                            ::core::ffi::c_int,
+                        ) -> *mut ::core::ffi::c_char,
+                ),
+            ),
+        ]
+    };
+    unsafe extern "C" fn e(
+        mut p: *mut *mut ::core::ffi::c_char,
+        mut i: ::core::ffi::c_int,
+    ) -> *mut ::core::ffi::c_char {
+        unsafe {
+            return {
+                let __cinrs_tmp0 = p.offset(i as ::core::primitive::isize);
+                (*__cinrs_tmp0)
+            };
+        }
+    }
+    unsafe extern "C" fn f(
+        mut g: ::core::option::Option<
+            unsafe extern "C" fn(
+                *mut *mut ::core::ffi::c_char,
+                ::core::ffi::c_int,
+            ) -> *mut ::core::ffi::c_char,
+        >,
+        mut p: *mut *mut ::core::ffi::c_char,
+    ) -> *mut ::core::ffi::c_char {
+        unsafe {
+            return (g.expect("null function pointer"))(p, 0);
+        }
+    }
+    pub unsafe extern "C" fn r#use(
+        mut p: *mut *mut ::core::ffi::c_char,
+    ) -> *mut ::core::ffi::c_char {
+        unsafe {
+            return f(
+                ::core::option::Option::Some(
+                    e
+                        as unsafe extern "C" fn(
+                            *mut *mut ::core::ffi::c_char,
+                            ::core::ffi::c_int,
+                        ) -> *mut ::core::ffi::c_char,
+                ),
+                p,
+            );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_ee8c3a5a::*;
