@@ -2286,8 +2286,23 @@ impl<'a> Codegen<'a> {
                 items.extend(quote_spanned! {ospan=> #link static mut #alias: #ty; });
             }
         }
+        // A real weak definition is used through its symbol, which the unit
+        // declares like anyone else's; see [`Codegen::weak_definition_asm`].
+        for var in &self.program.statics {
+            let object = self.program.object(var.object);
+            if !self.program.weak_defined_object(object) {
+                continue;
+            }
+            let ospan = self.sp(object.range);
+            let rust_name = self.extern_object_ident(&object.name, ospan);
+            let ty = self.binding_ty(var.object, self.storage_ty(var.object, ospan), ospan);
+            let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
+            symbols.push(symbol);
+            let link = link_name(symbol, ospan);
+            items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
+        }
         for func in &self.program.functions {
-            if !func.is_extern() {
+            if !func.is_extern() && !self.program.weak_defined_function(func) {
                 continue;
             }
             // An [x86 intrinsic](crate::x86) has no symbol: a call to it is
@@ -2331,7 +2346,9 @@ impl<'a> Codegen<'a> {
             symbols.push(symbol);
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
-            if func.weak.is_some() {
+            // The weak *reference*'s alias, for a function the unit only
+            // declares; a real weak definition is a symbol of the unit's own.
+            if func.weak.is_some() && func.is_extern() {
                 let alias = self.weak_alias_ident(&rust_name);
                 let link = self.weak_alias_link(symbol, fspan);
                 items.extend(quote_spanned! {fspan=> #link fn #alias(#params) #ret; });
@@ -2567,6 +2584,25 @@ impl<'a> Codegen<'a> {
             }
             None => TokenStream::new(),
         };
+        // A real weak definition: the storage under a private name, and the C
+        // symbol a weak alias of it; see [`Codegen::weak_definition_asm`].
+        // `#[used]` keeps the storage when nothing in the unit names it but
+        // the alias.
+        if self.program.weak_defined_object(object) {
+            let body = self.weak_body_ident(&object.name);
+            let symbol = object
+                .asm_label
+                .as_deref()
+                .unwrap_or(&object.name)
+                .to_owned();
+            let alias = self.weak_definition_asm(&symbol, &body, Some(ty.clone()), span);
+            return quote_spanned! {span=>
+                #section
+                #[used]
+                static mut #body: #ty = #init;
+                #alias
+            };
+        }
         // `static mut` rather than a cell: C code assigns to globals from
         // anywhere, and reading or writing one directly (never taking a
         // reference) is what keeps edition 2024's `static_mut_refs` quiet.
@@ -2707,7 +2743,14 @@ impl<'a> Codegen<'a> {
 
     fn signature(&mut self, func: &Function) -> TokenStream {
         let span = self.sp(func.range);
-        let name = self.c_ident(func.item_name(), span);
+        // A real weak definition's body is a private item, and the C symbol
+        // the weak alias `Codegen::weak_definition_asm` makes of it.
+        let weak = self.program.weak_defined_function(func);
+        let name = if weak {
+            self.weak_body_ident(func.item_name())
+        } else {
+            self.c_ident(func.item_name(), span)
+        };
         let mut params = TokenStream::new();
         // A lifted nested function takes the objects it uses from the
         // enclosing frame as pointers, in front of everything the program
@@ -2765,12 +2808,19 @@ impl<'a> Codegen<'a> {
         // takes, which is what `#[unsafe(export_name)]` says. On a *declaration*
         // the label is always honoured, through the `extern` block's
         // `#[link_name]`.
-        let exported = !func.is_static && self.program.export;
-        let vis = if func.is_static {
+        let exported = !func.is_static && self.program.export && !weak;
+        let vis = if func.is_static || weak {
             TokenStream::new()
         } else {
             quote_spanned! {span=> pub }
         };
+        if weak {
+            let symbol = func
+                .asm_label
+                .as_deref()
+                .unwrap_or_else(|| self.entry_symbol(func));
+            self.symbols.push(symbol.to_owned());
+        }
         let export = if exported {
             let symbol = func
                 .asm_label
@@ -2969,6 +3019,19 @@ impl<'a> Codegen<'a> {
         } else {
             TokenStream::new()
         };
+        // The weak alias a real weak definition is; see
+        // [`Codegen::weak_definition_asm`].
+        let alias = if self.program.weak_defined_function(func) {
+            let symbol = func
+                .asm_label
+                .as_deref()
+                .unwrap_or_else(|| self.entry_symbol(func))
+                .to_owned();
+            let body = self.weak_body_ident(func.item_name());
+            self.weak_definition_asm(&symbol, &body, None, span)
+        } else {
+            TokenStream::new()
+        };
         // One `unsafe` block around the whole body: in edition 2024 the body of
         // an `unsafe fn` is not itself an unsafe block any more. A safe
         // function is exactly the one that does not get it — that block is what
@@ -2976,11 +3039,69 @@ impl<'a> Codegen<'a> {
         if func.is_safe() {
             return quote_spanned! {span=>
                 #signature { #arena #body }
+                #alias
             };
         }
         quote_spanned! {span=>
             #signature {
                 unsafe { #arena #body }
+            }
+            #alias
+        }
+    }
+
+    /// The private name a [real weak definition](Program::weak_defined_function)'s
+    /// body is generated under, in this crate's own hygiene.
+    fn weak_body_ident(&self, item_name: &str) -> Ident {
+        let base = self.c_ident(item_name, Span::call_site()).to_string();
+        let base = base.trim_start_matches("r#");
+        Ident::new(&format!("__cinrs_weak_body_{base}"), Span::mixed_site())
+    }
+
+    /// The `global_asm!` that makes the C symbol `symbol` a weak alias of the
+    /// private item `body`: `.weak`, its type, for an object its size, and
+    /// `.set`.
+    ///
+    /// Rust's `#[linkage = "weak"]` is unstable; the assembler's alias is the
+    /// same thing in the object file — a weak, defined, global symbol another
+    /// definition overrides at link time. Every use in the unit goes through
+    /// the symbol, declared in the unit's `extern` block, and never through
+    /// the private item, so that an override is what it reaches: a call cannot
+    /// be inlined from the default, nor an object's value folded. `sym` names
+    /// the body exactly as it is mangled; `STT_FUNC` / `STT_OBJECT` is the
+    /// spelling of `.type` every ELF assembler takes. Only made where
+    /// [`Program::weak_definitions`] says the alias is sound.
+    fn weak_definition_asm(
+        &self,
+        symbol: &str,
+        body: &Ident,
+        object: Option<TokenStream>,
+        span: Span,
+    ) -> TokenStream {
+        let lit = |text: String| {
+            let mut literal = Literal::string(&text);
+            literal.set_span(span);
+            literal
+        };
+        let weak = lit(format!(".weak {symbol}"));
+        let set = lit(format!(".set {symbol}, {{body}}"));
+        match object {
+            None => {
+                let ty = lit(format!(".type {symbol}, STT_FUNC"));
+                quote_spanned! {span=>
+                    ::core::arch::global_asm!(#weak, #ty, #set, body = sym #body);
+                }
+            }
+            Some(binding_ty) => {
+                let ty = lit(format!(".type {symbol}, STT_OBJECT"));
+                let size = lit(format!(".size {symbol}, {{size}}"));
+                quote_spanned! {span=>
+                    ::core::arch::global_asm!(
+                        #weak, #ty, #size, #set,
+                        body = sym #body,
+                        size = const ::core::mem::size_of::<#binding_ty>(),
+                    );
+                }
             }
         }
     }
@@ -4207,6 +4328,11 @@ impl<'a> Codegen<'a> {
                 Some(name) => self.c_ident(name, span),
                 None => self.c_ident(&object.name, span),
             },
+            // A real weak definition is used through its symbol; see
+            // [`Codegen::weak_definition_asm`].
+            Storage::Static { .. } if self.program.weak_defined_object(object) => {
+                self.extern_object_ident(&object.name, span)
+            }
             // A `static mut` is used as a place, never referenced, so
             // edition 2024's `static_mut_refs` lint has nothing to say.
             Storage::Static { item_name, .. } | Storage::ThreadLocal { item_name, .. } => {

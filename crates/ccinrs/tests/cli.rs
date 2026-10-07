@@ -380,6 +380,73 @@ fn an_extern_thread_local_object_is_reached_through_its_accessor() {
     );
 }
 
+/// A weak definition is a real one on ELF: a function and an object another
+/// file overrides — reached through the symbol by the defining file's own
+/// callers too — the default when nothing does, jemalloc's weak tentative
+/// `malloc_conf` overridden by a test's definition, and a shared library's
+/// weak symbol interposed by the program. Under `-flto` it falls back to an
+/// ordinary definition, with the warning.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_weak_definition_is_overridden_by_a_strong_one() {
+    let s = Scratch::new("weak-definition");
+    s.write(
+        "fdef.c",
+        "#include <stdio.h>\n\
+         __attribute__((weak)) int hook(int x) { return x + 1; }\n\
+         __attribute__((weak)) int level = 3;\n\
+         const char *conf __attribute__((weak));\n\
+         int call_hook(int x) { return hook(x); }\n\
+         int (*hook_address(void))(int) { return hook; }\n\
+         void report(void) { printf(\"%d %d %s\\n\", call_hook(1), level, conf ? conf : \"(null)\"); }\n",
+    );
+    s.write(
+        "override.c",
+        "int hook(int x) { return x + 100; }\nint level = 30;\nconst char *conf = \"override\";\n",
+    );
+    s.write(
+        "main.c",
+        "#include <stdio.h>\nvoid report(void);\nint hook(int);\nint (*hook_address(void))(int);\n\
+         int main(void) { report(); printf(\"%d\\n\", hook_address() == hook); return 0; }\n",
+    );
+    s.compile(&["-O2", "main.c", "fdef.c", "-o", "alone"]);
+    assert_eq!(stdout(&s.run("alone", &[])), "2 3 (null)\n1\n");
+    s.compile(&["-O2", "main.c", "fdef.c", "override.c", "-o", "overridden"]);
+    assert_eq!(stdout(&s.run("overridden", &[])), "101 30 override\n1\n");
+    // The symbols are weak and defined, as GCC makes them.
+    s.compile(&["-c", "fdef.c", "-o", "fdef.o"]);
+    let nm = Command::new("nm").arg(s.dir.join("fdef.o")).output();
+    if let Ok(nm) = nm {
+        let table = stdout(&nm);
+        assert!(table.contains(" W hook\n"), "{table}");
+        assert!(table.contains(" V level\n"), "{table}");
+    }
+    // A shared library's weak definitions, which the program interposes.
+    s.compile(&["-O2", "-shared", "-fPIC", "fdef.c", "-o", "libfdef.so"]);
+    let rpath = format!("-Wl,-rpath,{}", s.dir.display());
+    s.compile(&[
+        "-O2",
+        "main.c",
+        "override.c",
+        "-L.",
+        "-lfdef",
+        &rpath,
+        "-o",
+        "shared",
+    ]);
+    assert_eq!(stdout(&s.run("shared", &[])), "101 30 override\n1\n");
+    // `-flto` merges the files before they are assembled, so the definition
+    // is an ordinary one there, with the warning.
+    let lto = s.ccinrs(&["-O2", "-flto", "main.c", "fdef.c", "-o", "lto"]);
+    assert!(lto.status.success(), "{}", stderr(&lto));
+    assert!(
+        stderr(&lto).contains("'hook' is defined weakly, which Rust cannot express"),
+        "{}",
+        stderr(&lto)
+    );
+    assert_eq!(stdout(&s.run("lto", &[])), "2 3 (null)\n1\n");
+}
+
 /// GCC's `-ftrivial-auto-var-init=`: `zero`, the default, clears a local
 /// array nothing initialised; `uninitialized` leaves it a `MaybeUninit`, and
 /// the program that writes before it reads behaves the same; `pattern` is

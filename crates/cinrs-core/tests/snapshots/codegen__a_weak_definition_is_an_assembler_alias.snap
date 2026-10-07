@@ -1,0 +1,40 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_with(options,\nr#\"\n        __attribute__((weak)) int hook(int x) { return x + 1; }\n        int level __attribute__((weak)) = 3;\n        int call(void) { return hook(level); }\n        \"#)"
+---
+mod __cinrs_unit_61a2587f {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "level"]
+        pub static mut __cinrs_61a2587f_level: ::core::ffi::c_int;
+        #[link_name = "hook"]
+        pub fn hook(x: ::core::ffi::c_int) -> ::core::ffi::c_int;
+    }
+    #[used]
+    static mut __cinrs_weak_body_level: ::core::ffi::c_int = 3;
+    ::core::arch::global_asm!(
+        ".weak level", ".type level, STT_OBJECT", ".size level, {size}",
+        ".set level, {body}", body = sym __cinrs_weak_body_level, size = const
+        ::core::mem::size_of:: < ::core::ffi::c_int > (),
+    );
+    unsafe extern "C" fn __cinrs_weak_body_hook(
+        mut x: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            return x.wrapping_add(1);
+        }
+    }
+    ::core::arch::global_asm!(
+        ".weak hook", ".type hook, STT_FUNC", ".set hook, {body}", body = sym
+        __cinrs_weak_body_hook
+    );
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn call() -> ::core::ffi::c_int {
+        unsafe {
+            return hook(__cinrs_61a2587f_level);
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_61a2587f::*;

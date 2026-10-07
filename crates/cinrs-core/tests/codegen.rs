@@ -2130,6 +2130,27 @@ fn file_scope_asm_becomes_global_asm() {
     ));
 }
 
+/// A real weak definition (`Options::weak_definitions`, which `ccinrs` sets on
+/// ELF without `-flto`): the body is a private item, the C symbol a weak
+/// alias of it made by `global_asm!`, and every use — the unit's own call, the
+/// object's read — goes through the symbol, declared in the `extern` block.
+#[test]
+fn a_weak_definition_is_an_assembler_alias() {
+    let target = cinrs_core::target::TargetModel::from_triple("x86_64-unknown-linux-gnu")
+        .expect("a known triple");
+    let mut options = Options::gnu(Standard::C99).for_target(target);
+    options.weak_definitions = true;
+    options.export = true;
+    insta::assert_snapshot!(generate_with(
+        options,
+        r#"
+        __attribute__((weak)) int hook(int x) { return x + 1; }
+        int level __attribute__((weak)) = 3;
+        int call(void) { return hook(level); }
+        "#
+    ));
+}
+
 /// A thread-local object with external linkage in a unit that gives it a
 /// symbol: the `thread_local!` item and the accessor `x.cinrs_tls` another
 /// unit reaches it through. An `extern` one is that accessor, declared, and

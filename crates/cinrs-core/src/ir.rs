@@ -1967,6 +1967,27 @@ impl Storage {
 }
 
 impl Program {
+    /// Whether `func` is a real weak definition: a function the unit defines
+    /// with external linkage that some declaration of said `weak`, in a unit
+    /// that makes [weak definitions](Program::weak_definitions). Its body is
+    /// a private item, the C symbol is a weak alias of it, and every use goes
+    /// through the symbol.
+    pub fn weak_defined_function(&self, func: &Function) -> bool {
+        self.weak_definitions
+            && func.weak.is_some()
+            && func.body.is_some()
+            && !func.is_static
+            && !func.is_nested()
+    }
+
+    /// Whether `object` is a real weak definition; see
+    /// [`Program::weak_defined_function`].
+    pub fn weak_defined_object(&self, object: &Object) -> bool {
+        self.weak_definitions
+            && object.weak.is_some()
+            && matches!(object.storage, Storage::Static { exported: true, .. })
+    }
+
     /// The symbol of the accessor a thread-local object with external
     /// linkage named `symbol` is reached through from another unit:
     /// `symbol.cinrs_tls`. A `.` is valid in an ELF, Mach-O and COFF symbol
@@ -2469,6 +2490,10 @@ pub struct Program {
     /// [uninitialised](Object::uninit), and the arena behind variable length
     /// arrays and `alloca` hands out its bytes without clearing them first.
     pub uninit_locals: bool,
+    /// Whether a weak definition is a real one, made with the assembler:
+    /// [`crate::Options::weak_definitions`], on a target whose objects are
+    /// ELF. See [`Program::weak_defined_function`].
+    pub weak_definitions: bool,
     /// The Rust path of the `cinrs` facade crate, which the generated code
     /// names when it needs the runtime: `::cinrs` unless
     /// `#pragma cinrs crate "…"` said otherwise.
@@ -2566,10 +2591,13 @@ impl Program {
     /// only declarations came from `<immintrin.h>` needs no block at all.
     pub fn has_externs(&self) -> bool {
         !self.externs.is_empty()
+            || self.functions.iter().any(|func| {
+                (func.is_extern() && func.intrinsic.is_none()) || self.weak_defined_function(func)
+            })
             || self
-                .functions
+                .objects
                 .iter()
-                .any(|func| func.is_extern() && func.intrinsic.is_none())
+                .any(|object| self.weak_defined_object(object))
     }
 }
 

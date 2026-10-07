@@ -381,11 +381,18 @@ impl Sema<'_> {
         // An `extern` declaration reserves no storage, so it is a weak
         // reference (below); anything else here defines the object, which GCC
         // allows only where the object has a symbol at all.
+        // A real weak definition is marked on the object once it exists; see
+        // [`ir::Program::weak_defined_object`].
+        let mut weak_definition = None;
         if storage != Some(ast::StorageClass::Extern)
             && let Some(range) = attrs.weak
         {
             if file_scope && storage != Some(ast::StorageClass::Static) {
-                self.warn_weak_definition(range, &name.name, None);
+                if self.program.weak_definitions && decl.specifiers.thread_local.is_none() {
+                    weak_definition = Some(range);
+                } else {
+                    self.warn_weak_definition(range, &name.name, None);
+                }
             } else {
                 self.error(
                     range,
@@ -416,6 +423,13 @@ impl Sema<'_> {
                         // of the `extern` block again, and the weakness with
                         // it; see `Sema::define_here`.
                         self.check_weak_reference(range, &name.name);
+                        let object = &mut self.program.objects[id.0 as usize];
+                        object.weak = object.weak.or(Some(range));
+                    } else if self.program.weak_definitions
+                        && matches!(self.program.object(id).storage, Storage::Static { .. })
+                    {
+                        // `int x; extern int x __attribute__((weak));` makes
+                        // the definition a weak one.
                         let object = &mut self.program.objects[id.0 as usize];
                         object.weak = object.weak.or(Some(range));
                     } else {
@@ -591,6 +605,10 @@ impl Sema<'_> {
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 self.apply_object_attributes(id, &attrs, declarator);
                 self.apply_object_alignment(id, ty, requested);
+                if let Some(range) = weak_definition {
+                    let object = &mut self.program.objects[id.0 as usize];
+                    object.weak = object.weak.or(Some(range));
+                }
             }
             // The bounds of a block-scope static's type, evaluated where the
             // declaration stands; empty for everything else.
@@ -1792,9 +1810,12 @@ impl Sema<'_> {
             _ => return,
         };
         // `extern int w __attribute__((weak)); int w;` is a weak *definition*
-        // in GCC, and an ordinary one here, with the warning that says so; the
-        // references to it are to this definition, and none of them is weak.
-        if let Some(weak) = self.program.objects[id.0 as usize].weak.take() {
+        // in GCC: a real one where the unit makes them (the mark stays on the
+        // object; see [`ir::Program::weak_defined_object`]), and otherwise an
+        // ordinary one, with the warning that says so, whose references are
+        // to this definition, none of them weak.
+        let real_weak = self.program.weak_definitions && !thread_local;
+        if !real_weak && let Some(weak) = self.program.objects[id.0 as usize].weak.take() {
             let name = self.program.object(id).name.clone();
             self.warn_weak_definition(declarator.range, &name, Some((weak, "declared weak")));
         }
@@ -2350,7 +2371,11 @@ impl Sema<'_> {
             } else if definition.is_some()
                 || (scope == FuncScope::File && self.defined_functions.contains(&name.name))
             {
-                self.warn_weak_definition(range, &name.name, None);
+                // A real weak definition where the unit makes them; see
+                // [`ir::Program::weak_defined_function`].
+                if !self.program.weak_definitions || scope != FuncScope::File {
+                    self.warn_weak_definition(range, &name.name, None);
+                }
             } else {
                 self.check_weak_reference(range, &name.name);
             }

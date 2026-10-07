@@ -262,9 +262,14 @@ limits](limitations.md#setjmp-and-longjmp) the whole list. For a C project:
 Everything [cinrs's own limitations](limitations.md) lists applies; the ones a
 C project meets first:
 
-* **A weak definition** (`__attribute__((weak))` on a function with a body)
-  is an ordinary one, with a warning: a second definition elsewhere is a
-  duplicate symbol rather than an override.
+* **A weak definition** (`__attribute__((weak))` on a function with a body,
+  or on an object the file defines) is a real one on ELF — another file's
+  definition overrides it, the defining file's own calls included, and a
+  shared library exports it weak — made with an assembler alias of a private
+  body. Under **`-flto`**, where another file's override could be merged into
+  the same module as that alias, and on macOS and Windows, it is an ordinary
+  definition with a warning, and a second definition elsewhere is a duplicate
+  symbol rather than an override.
 * **`setjmp` and `longjmp`** work with limits; see [above](#setjmp-and-longjmp).
 * **`long double` is `double`.** A literal `printf` or `scanf` format that
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`

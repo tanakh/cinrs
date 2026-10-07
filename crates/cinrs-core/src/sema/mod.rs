@@ -963,6 +963,13 @@ impl<'a> Sema<'a> {
                 // default is what a diagnostic path would generate with.
                 crate_path: ir::DEFAULT_CRATE_PATH.to_owned(),
                 uninit_locals: options.auto_var_init == crate::AutoVarInit::Uninitialized,
+                // The assembler alias needs an ELF object.
+                weak_definitions: options.weak_definitions
+                    && !matches!(
+                        options.target.os,
+                        crate::target::Os::Darwin | crate::target::Os::Windows
+                    )
+                    && options.target.arch != crate::target::Arch::Wasm32,
                 ..Program::default()
             },
             scopes: vec![Scope::default()],

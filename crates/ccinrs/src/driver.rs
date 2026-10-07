@@ -416,6 +416,12 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // headers is another of its own files, with cinrs's `long double` and
     // cinrs's way to a thread-local object.
     options.own_declarations_are_cinrs = true;
+    // A weak definition is a real one, made with the assembler, wherever the
+    // object is assembled on its own: not under `-flto`, where an override in
+    // another file can share the module with the alias. cinrs-core settles
+    // the object format. ccinrs writes a shared library's export list itself,
+    // so a symbol only the assembler defines is exported too.
+    options.weak_definitions = inv.lto.is_none();
     options
 }
 

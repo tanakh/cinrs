@@ -424,6 +424,26 @@ pub struct Options {
     /// compiled — every file of the program — and the platform's libraries,
     /// whose declarations are in the platform's headers.
     pub own_declarations_are_cinrs: bool,
+    /// Whether a weak *definition* — `__attribute__((weak))` on a function or
+    /// an object the unit defines — is a real one, which another definition
+    /// of the symbol overrides at link time.
+    ///
+    /// Rust's `#[linkage]` is unstable, so it is made with the assembler: the
+    /// body goes under a private name, a `global_asm!` makes the C symbol a
+    /// weak alias of it (`.weak f` / `.set f, body`), and every use in the
+    /// unit goes through the symbol, so that an override is what it reaches.
+    /// That needs an ELF object, and an object that is not merged with
+    /// another before it is assembled: under link-time optimisation a strong
+    /// definition in another file can land in the same module as the alias,
+    /// which the assembler refuses. And `rustc`'s own export list for a
+    /// `cdylib` names `#[no_mangle]` items only, so a symbol only assembly
+    /// defines would not be exported.
+    ///
+    /// **Off by default**, where the definition is an ordinary one with a
+    /// warning: a `c99!` block cannot see whether its crate is built with LTO
+    /// or as a `cdylib`. `ccinrs` turns it on for an ELF target without
+    /// `-flto`, where it writes the export list itself.
+    pub weak_definitions: bool,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -529,6 +549,7 @@ impl Options {
             unwind: Unwind::Auto,
             auto_var_init: AutoVarInit::Zero,
             own_declarations_are_cinrs: false,
+            weak_definitions: false,
         }
     }
 

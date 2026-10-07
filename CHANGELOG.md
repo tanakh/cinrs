@@ -160,10 +160,15 @@ follows [Semantic Versioning][semver].
   link. WebAssembly and Windows refuse the declaration instead.
 * A weak *definition* — `__attribute__((weak))` on a function or an object the
   unit defines, or on any declaration of one, as zstd's CLI defines the hooks
-  its library header declares weak — is an ordinary definition with a
-  warning, where it used to be refused. With no other definition the program
-  is GCC's; a second, strong definition elsewhere is a duplicate symbol at link
-  time rather than an override.
+  its library header declares weak — is a real one in `ccinrs` on ELF without
+  `-flto`: the body is a private item and the C symbol a weak alias of it,
+  made with `global_asm!` (`nm` says `W`), every use in the file goes through
+  the symbol, and another file's strong definition overrides it — jemalloc's
+  tests override its weak `malloc_conf` — as does a program the weak symbol
+  of a shared library. Elsewhere — a `c99!` block, `-flto`, macOS, Windows,
+  WebAssembly — it is an ordinary definition with a warning, where it used to
+  be refused; a second definition is then a duplicate symbol rather than an
+  override. `Options::weak_definitions` is the switch.
 * Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
   compiles position-independent code, `__PIE__` and `__pie__` (2) where it
   links position-independent executables, `__FXSR__` with the rest of the
