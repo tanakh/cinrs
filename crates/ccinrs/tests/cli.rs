@@ -293,6 +293,68 @@ fn no_cinrs_unwind_refuses_setjmp() {
     assert!(s.run("plain", &[]).status.success());
 }
 
+/// GCC's `-ftrivial-auto-var-init=`: `zero`, the default, clears a local
+/// array nothing initialised; `uninitialized` leaves it a `MaybeUninit`, and
+/// the program that writes before it reads behaves the same; `pattern` is
+/// taken as `zero` with a warning; anything else is GCC's error.
+#[test]
+fn trivial_auto_var_init_chooses_what_locals_start_as() {
+    let s = Scratch::new("auto-var-init");
+    s.write(
+        "locals.c",
+        "#include <stdio.h>\n\
+         static void fill(int *p, int n) { for (int i = 0; i < n; i++) p[i] = i; }\n\
+         int main(void) {\n\
+         \x20   int buf[256];\n\
+         \x20   fill(buf, 10);\n\
+         \x20   printf(\"%d\\n\", buf[9]);\n\
+         \x20   return 0;\n\
+         }\n",
+    );
+    for (flag, maybe_uninit) in [
+        ("-ftrivial-auto-var-init=zero", false),
+        ("-ftrivial-auto-var-init=uninitialized", true),
+    ] {
+        s.compile(&[flag, "locals.c", "-o", "locals"]);
+        let out = s.run("locals", &[]);
+        assert!(out.status.success(), "{flag}: {}", stderr(&out));
+        assert_eq!(stdout(&out), "9\n", "{flag}");
+        let rust = s.ccinrs(&[flag, "-S", "locals.c", "-o", "locals.rs"]);
+        assert!(rust.status.success(), "{flag}: {}", stderr(&rust));
+        let text = std::fs::read_to_string(s.dir.join("locals.rs")).expect("the Rust");
+        assert_eq!(
+            text.contains("MaybeUninit"),
+            maybe_uninit,
+            "{flag}:\n{text}"
+        );
+    }
+    let pattern = s.ccinrs(&[
+        "-ftrivial-auto-var-init=pattern",
+        "-c",
+        "locals.c",
+        "-o",
+        "p.o",
+    ]);
+    assert!(pattern.status.success(), "{}", stderr(&pattern));
+    assert!(
+        stderr(&pattern).contains(
+            "warning: '-ftrivial-auto-var-init=pattern' is taken as '-ftrivial-auto-var-init=zero'"
+        ),
+        "{}",
+        stderr(&pattern)
+    );
+    let bogus = s.ccinrs(&["-ftrivial-auto-var-init=maybe", "-c", "locals.c"]);
+    assert!(!bogus.status.success());
+    assert!(
+        stderr(&bogus).contains(
+            "unrecognized argument in option '-ftrivial-auto-var-init=maybe'; valid arguments \
+             to '-ftrivial-auto-var-init=' are: pattern uninitialized zero"
+        ),
+        "{}",
+        stderr(&bogus)
+    );
+}
+
 /// The program stopped by `abort`, as a failed run-time check or a `longjmp`
 /// that cannot be done stops it.
 #[cfg(unix)]

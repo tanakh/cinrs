@@ -2027,6 +2027,21 @@ pub struct Object {
     /// function pointer holding such an address is only ever compared, which
     /// is all C allows of it. See [`codegen`](crate::codegen).
     pub data_fn_pointer: bool,
+    /// Set for a local **array** declared without an initialiser in a unit
+    /// that asked for uninitialised locals ([`crate::AutoVarInit::Uninitialized`]):
+    /// the binding is a `core::mem::MaybeUninit` of the array, made with
+    /// `MaybeUninit::uninit()`, and every use reaches the array through
+    /// `(*(&raw mut x).cast::<[T; N]>())` — a place, never a value of the
+    /// whole array, so nothing reads bytes the program did not write unless
+    /// the C reads an element it did not write, which is the indeterminate
+    /// value C leaves it too.
+    ///
+    /// Only arrays: an array is never a value in C, so it is only ever read
+    /// an element at a time. A structure or union may be copied whole with a
+    /// member still indeterminate, which C allows and a Rust typed copy does
+    /// not, so those are still zero-filled, as scalars are — whose store LLVM
+    /// deletes wherever the program writes the variable first.
+    pub uninit: bool,
     /// Where the declarator was written.
     pub range: SourceRange,
 }
@@ -2417,6 +2432,11 @@ pub struct Program {
     /// a [non-local jump](Program::nonlocal_jumps) needs. Filled in after
     /// semantic analysis.
     pub unwind: bool,
+    /// Whether the unit asked for uninitialised locals
+    /// ([`crate::AutoVarInit::Uninitialized`]): its arrays are left
+    /// [uninitialised](Object::uninit), and the arena behind variable length
+    /// arrays and `alloca` hands out its bytes without clearing them first.
+    pub uninit_locals: bool,
     /// The Rust path of the `cinrs` facade crate, which the generated code
     /// names when it needs the runtime: `::cinrs` unless
     /// `#pragma cinrs crate "…"` said otherwise.

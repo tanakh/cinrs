@@ -39,14 +39,15 @@ to the last two, for a reason its own section gives.
 | [`safe f g h`](#safe-f-g-h) | generates those functions without `unsafe` | the whole unit |
 | [`no_std`](#no_std) | takes the `Vec`s a VLA or `alloca` needs from `alloc` | the whole unit |
 | [`unwind`](#unwind) | makes every function and function pointer `extern "C-unwind"` | the whole unit |
+| [`auto_var_init zero\|uninitialized`](#auto_var_init-zero-and-auto_var_init-uninitialized) | what a local array declared without an initialiser starts out as | the whole unit |
 | [`crate "<path>"`](#crate-path) | says where the `cinrs` facade crate is | the whole unit |
 
-An option that is not one of those nine is an error that lists them:
+An option that is not one of those ten is an error that lists them:
 
 ```text
 error: unknown #pragma cinrs option 'frobnicate'; the options are 'target',
        'include_path', 'system_include', 'link', 'export', 'safe', 'no_std',
-       'unwind' and 'crate'
+       'unwind', 'auto_var_init' and 'crate'
 ```
 
 and `#pragma cinrs` with nothing after it is the same error, differently
@@ -314,6 +315,40 @@ Rust callback handed to the unit then has to be — the reason it is not the
 default. It takes no argument and reaches the whole unit. `ccinrs` makes
 every file `C-unwind`, and under `-fno-cinrs-unwind` refuses this pragma with
 a located error.
+
+### `auto_var_init zero` and `auto_var_init uninitialized`
+
+```c
+#pragma cinrs auto_var_init uninitialized
+
+int poll_once(int fd) {
+    struct epoll_event events[1024];   /* filled by the kernel, up to n */
+    int n = epoll_wait(fd, events, 1024, 0);
+    …
+}
+```
+
+What a local declared without an initialiser starts out as — GCC's
+`-ftrivial-auto-var-init=`, which [`ccinrs`](ccinrs.md) takes too. `zero`, the
+default, zero-fills every such local, which Rust needs if the program reads
+one before it writes it. `uninitialized` leaves a local **array** uninitialised,
+as GCC does by default: its storage is a `MaybeUninit`, reached through a raw
+pointer, so a table like the one above is not cleared on every call — libuv's
+event loop ran at a hundredth of GCC's speed for it. The arena behind variable
+length arrays and `alloca` stops clearing too.
+
+The contract is C's, and it is the program's to keep: **reading an element
+nothing wrote is undefined behaviour**, in the generated Rust as in C. Scalars,
+structures and unions stay zero-filled — a scalar's zero costs nothing, and a
+structure may be copied whole with a member indeterminate, which Rust's typed
+copy may not do. See [Locals declared without an
+initialiser](translation.md#locals-declared-without-an-initialiser) for the
+generated code and the measurements.
+
+It takes one word and reaches the whole unit wherever it is written, and wins
+over `ccinrs`'s option for its unit. GCC's `pattern` is refused here with the
+reason — `0xFE` in every byte makes a `_Bool` that is neither true nor false,
+which Rust may not have — and anything else names the two words it takes.
 
 ### `crate "<path>"`
 

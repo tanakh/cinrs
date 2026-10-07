@@ -69,6 +69,10 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
   headers, and whatever `--sysroot` and `-I` point at.
 * Every definition that is not `static` is a **C symbol**, as in any C
   compiler.
+* **A local declared without an initialiser is zero-filled**, which is GCC's
+  `-ftrivial-auto-var-init=zero` — Rust may not read uninitialised memory.
+  `-ftrivial-auto-var-init=uninitialized` leaves local arrays uninitialised,
+  as GCC does by default; see [the options](#options).
 
 ## Options
 
@@ -94,6 +98,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
 | `-fno-cinrs-unwind`, `-fcinrs-unwind` | every function `extern "C"` rather than `extern "C-unwind"`, the default: 0.3 % fewer instructions on SQLite's speedtest1 (under 0.1 % with `-fno-cinrs-checks`), and `setjmp` and `longjmp` refused where they are written (see [setjmp and longjmp](#setjmp-and-longjmp)) |
+| `-ftrivial-auto-var-init=zero`, `=uninitialized`, `=pattern` | what a local declared without an initialiser starts out as. `zero` is the default; `uninitialized` leaves a local **array** uninitialised — a `MaybeUninit`, reached through a raw pointer — so a large buffer is not cleared on every call, and makes reading an element nothing wrote undefined behaviour, as C does (libuv's event loop in miniature: 1.04 s → 0.006 s, gcc 0.009 s); scalars, structures and unions stay zero. `pattern` is taken as `zero` with a warning: GCC's `0xFE` bytes make a `_Bool` Rust may not have. A file's `#pragma cinrs auto_var_init` wins for that file. See [Locals declared without an initialiser](translation.md#locals-declared-without-an-initialiser) |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
 | `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
 | `-print-search-dirs`, `-print-multiarch`, `-print-multi-os-directory`, `-print-prog-name=`, `-print-file-name=`, … | what libtool asks: the platform's library directories (Debian's layout), and a name handed back as GCC hands back one it has no file for |

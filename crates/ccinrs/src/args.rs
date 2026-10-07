@@ -18,7 +18,7 @@
 
 use std::path::PathBuf;
 
-use cinrs_core::{CommandLineMacro, Dialect, Standard};
+use cinrs_core::{AutoVarInit, CommandLineMacro, Dialect, Standard};
 
 use crate::gcc_warnings;
 
@@ -161,6 +161,13 @@ pub struct Invocation {
     /// `-fno-cinrs-unwind` makes them `extern "C"`, which saves 0.3 % of the
     /// instructions on SQLite, and refuses `setjmp` and `longjmp`.
     pub unwind: bool,
+    /// What a local declared without an initialiser starts out as: GCC's
+    /// `-ftrivial-auto-var-init=`. **Zero by default**, which is what Rust
+    /// needs anyway; `=uninitialized` leaves local arrays uninitialised, which
+    /// is GCC's own default and saves clearing a large buffer on every call.
+    /// `=pattern` is taken as `=zero`, with a warning. See
+    /// [`cinrs_core::AutoVarInit`].
+    pub auto_var_init: AutoVarInit,
     /// `-fdollars-in-identifiers`, on by default as in GCC.
     pub dollars: bool,
     /// What `-fsigned-char` or `-funsigned-char` asked for, which the driver
@@ -236,6 +243,7 @@ impl Default for Invocation {
             werror: false,
             checks: true,
             unwind: true,
+            auto_var_init: AutoVarInit::Zero,
             dollars: true,
             char_signed: None,
             pointer_bits: None,
@@ -730,6 +738,28 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
         "no-cinrs-checks" => inv.checks = false,
         "cinrs-unwind" => inv.unwind = true,
         "no-cinrs-unwind" => inv.unwind = false,
+        // GCC's three answers to what an uninitialised local holds. `pattern`
+        // fills every byte with 0xFE, which makes a `_Bool` that is neither
+        // true nor false — something Rust may not have — so it is taken as
+        // `zero`, the other hardening choice, and said so.
+        "trivial-auto-var-init=zero" => inv.auto_var_init = AutoVarInit::Zero,
+        "trivial-auto-var-init=uninitialized" => {
+            inv.auto_var_init = AutoVarInit::Uninitialized;
+        }
+        "trivial-auto-var-init=pattern" => {
+            inv.auto_var_init = AutoVarInit::Zero;
+            inv.notes.push(format!(
+                "'{arg}' is taken as '-ftrivial-auto-var-init=zero': GCC's pattern fills every \
+                 byte with 0xFE, which makes a '_Bool' that is neither true nor false, and Rust \
+                 may not have one"
+            ));
+        }
+        _ if name.starts_with("trivial-auto-var-init=") => {
+            return Err(format!(
+                "unrecognized argument in option '{arg}'; valid arguments to \
+                 '-ftrivial-auto-var-init=' are: pattern uninitialized zero"
+            ));
+        }
         "dollars-in-identifiers" => inv.dollars = true,
         "no-dollars-in-identifiers" => inv.dollars = false,
         "signed-char" | "no-unsigned-char" => inv.char_signed = Some(true),
@@ -1052,6 +1082,20 @@ mod tests {
                 .unwrap()
                 .unwind
         );
+        assert_eq!(
+            parse_all(&["a.c"]).unwrap().auto_var_init,
+            AutoVarInit::Zero
+        );
+        assert_eq!(
+            parse_all(&["-ftrivial-auto-var-init=uninitialized", "a.c"])
+                .unwrap()
+                .auto_var_init,
+            AutoVarInit::Uninitialized
+        );
+        let pattern = parse_all(&["-ftrivial-auto-var-init=pattern", "a.c"]).unwrap();
+        assert_eq!(pattern.auto_var_init, AutoVarInit::Zero);
+        assert_eq!(pattern.notes.len(), 1);
+        assert!(parse_all(&["-ftrivial-auto-var-init=maybe", "a.c"]).is_err());
         assert_eq!(
             parse_all(&["-funsigned-char", "a.c"]).unwrap().char_signed,
             Some(false)

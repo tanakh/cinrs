@@ -642,6 +642,16 @@ impl Sema<'_> {
             }];
         }
         let explicit = init.is_some();
+        // An array nothing initialises is left uninitialised where the unit
+        // asked for that; see [`ir::Object::uninit`]. The zero below is still
+        // what the IR holds, and code generation does not emit it.
+        if !explicit
+            && self.auto_var_init == crate::AutoVarInit::Uninitialized
+            && matches!(ty, Ty::Array(_))
+            && !self.types().is_vm(ty)
+        {
+            self.program.objects[id.0 as usize].uninit = true;
+        }
         let init = match init {
             Some(init) => init,
             None => self.zero(ty, declarator.range),

@@ -635,6 +635,9 @@ struct Sema<'a> {
     /// Which ABI the unit is asked for; [`crate::Unwind::Never`] refuses the
     /// non-local jumps, which need `C-unwind`.
     unwind: crate::Unwind,
+    /// What a local declared without an initialiser starts out as; see
+    /// [`ir::Object::uninit`].
+    auto_var_init: crate::AutoVarInit,
     program: Program,
     scopes: Vec<Scope>,
     tags: Vec<HashMap<String, TagEntry>>,
@@ -955,12 +958,14 @@ impl<'a> Sema<'a> {
             gating: options.gating(),
             target: options.target,
             unwind: options.unwind,
+            auto_var_init: options.auto_var_init,
             program: Program {
                 unit_id,
                 // `#pragma cinrs crate` is the preprocessor's and reaches the
                 // program after this, in `crate::expand_with`; until then the
                 // default is what a diagnostic path would generate with.
                 crate_path: ir::DEFAULT_CRATE_PATH.to_owned(),
+                uninit_locals: options.auto_var_init == crate::AutoVarInit::Uninitialized,
                 ..Program::default()
             },
             scopes: vec![Scope::default()],
@@ -1824,6 +1829,7 @@ impl<'a> Sema<'a> {
             section: None,
             weak: None,
             data_fn_pointer: false,
+            uninit: false,
             range,
         });
         self.object_level.push(level);

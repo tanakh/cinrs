@@ -2130,6 +2130,41 @@ fn file_scope_asm_becomes_global_asm() {
     ));
 }
 
+/// `#pragma cinrs auto_var_init uninitialized`: a local array with no
+/// initialiser is a `MaybeUninit` of it, reached through a raw pointer to the
+/// binding — in the structured lowering and in the hoisted locals of a
+/// control-flow graph alike — while an array that has an initialiser, a
+/// scalar and a structure are zero-filled as ever.
+#[test]
+fn an_uninitialised_array_is_a_maybe_uninit() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C99,
+        r#"
+        #pragma cinrs auto_var_init uninitialized
+        struct pair { int a, b; };
+        void fill(int *p, int n);
+        int structured(void) {
+            int buf[64];
+            int ready[2] = { 1 };
+            int scalar;
+            struct pair p;
+            fill(buf, 64);
+            scalar = buf[3];
+            p.a = ready[0];
+            return scalar + p.a + p.b;
+        }
+        int with_goto(int n) {
+            char seen[16];
+            int i = 0;
+        again:
+            seen[i] = (char)n;
+            if (++i < 16) goto again;
+            return seen[15];
+        }
+        "#
+    ));
+}
+
 /// `__builtin_ctz` on x86-64 counts a 32-bit operand in a 64-bit register
 /// with bit 32 set — the same answer for every value, 32 for zero — so that
 /// `tzcnt` writes the register it reads and carries no false dependency on

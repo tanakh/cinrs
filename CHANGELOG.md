@@ -35,6 +35,16 @@ follows [Semantic Versioning][semver].
     leaves its scope, as in GCC.
   * Refused on WebAssembly, under `#pragma cinrs no_std` and with
     `panic = "abort"`.
+* **Uninitialised local arrays, on request**: `ccinrs
+  -ftrivial-auto-var-init=uninitialized` (GCC's option; `zero` is the default
+  and `pattern` is taken as `zero` with a warning) and `#pragma cinrs
+  auto_var_init uninitialized`. A local array declared without an initialiser
+  is then a `MaybeUninit`, reached through a raw pointer, instead of being
+  cleared on every entry to its block, and the arena behind variable length
+  arrays and `alloca` stops clearing; reading an element nothing wrote is
+  undefined behaviour, as in C. Scalars, structures and unions stay
+  zero-filled. libuv's `uv__io_poll` in miniature goes from 1.04 s to 0.006 s
+  (gcc 0.009 s). See [`doc/translation.md`](doc/translation.md#locals-declared-without-an-initialiser).
 * **`#pragma cinrs unwind`**, and `extern "C-unwind"` for a unit that calls
   `setjmp` or `longjmp`: every function, declaration and function pointer
   type of the unit, which a `longjmp` can then pass through. Other blocks

@@ -179,6 +179,74 @@ and Rust reaches such an object the way one C translation unit hands another a
 FILE *get_stdout(void) { return stdout; }
 ```
 
+### Locals declared without an initialiser
+
+C leaves such a local indeterminate, and Rust may not read uninitialised
+memory at all, so **every one is zero-filled by default** — what GCC's
+hardening option `-ftrivial-auto-var-init=zero` does:
+
+```c
+int x;
+char buf[128];
+struct pair p;
+```
+
+```rust
+let mut x: c_int = 0;
+let mut buf: [c_char; 128] = [0; 128];
+let mut p: pair = ::core::mem::zeroed::<pair>();
+```
+
+For a scalar this is free: LLVM deletes the store wherever the program writes
+the variable before it reads it. A large array is another matter — it is
+cleared on every entry to its block, and libuv's `uv__io_poll`, which declares
+15 KB of `epoll_event`s in its loop, spends almost all its time doing that.
+`#pragma cinrs auto_var_init uninitialized` (see [`doc/pragmas.md`](pragmas.md))
+and `ccinrs -ftrivial-auto-var-init=uninitialized` leave a local **array**
+uninitialised instead, which is what GCC does by default:
+
+```rust
+let mut buf: ::core::mem::MaybeUninit<[c_char; 128]> = ::core::mem::MaybeUninit::uninit();
+// every use of `buf` in the C is  (*(&raw mut buf).cast::<[c_char; 128]>())
+```
+
+The storage stays a `MaybeUninit` — never `MaybeUninit::uninit().assume_init()`,
+which is undefined behaviour for an array of integers before anything reads it
+— and the array is the place at its address, reached the way an [initialised
+flexible array member](#an-initialised-flexible-array-member) is. Every element
+the program writes and then reads is an ordinary write and read through a raw
+pointer, wherever the binding is: in a block, hoisted to the top of a function
+lowered into a control-flow graph (a `goto` into the scope included), outside
+the `catch_unwind` of a function that calls `setjmp`, or captured by a nested
+function. A declaration in a loop is a fresh, uninitialised array on every
+pass. `sizeof`, the address and the decay to a pointer are unchanged. The
+arena behind variable length arrays and `alloca` stops clearing what it hands
+out in such a unit too, for the same reason.
+
+**The contract is C's.** Reading an element nothing wrote is undefined
+behaviour in the generated Rust, as reading an indeterminate value is in C —
+and Rust will hold the program to it more strictly than a C compiler usually
+does in practice. That is the trade the option asks for, and nothing else
+changes: the default is zero, and a unit that does not ask is untouched.
+
+Only arrays are left uninitialised. A **structure or union** may be copied
+whole while a member is still indeterminate — C allows that, Rust's typed copy
+of it does not — so those stay zero-filled, as do **scalars**, whose zero costs
+nothing. An array *of* structures is an array: its elements are read one at a
+time, and copying an element nothing wrote is the program reading an
+indeterminate value. GCC's third choice, `pattern` (every byte `0xFE`), is not
+offered: it would make a `_Bool` that is neither `true` nor `false`, which Rust
+may not have; `ccinrs` takes `-ftrivial-auto-var-init=pattern` as `zero` and
+says so.
+
+Measured with `ccinrs -O2 -fno-cinrs-checks` against `gcc -O2`:
+
+| | gcc | zero (default) | uninitialized |
+| --- | ---: | ---: | ---: |
+| libuv's `uv__io_poll` in miniature (two 1024-entry tables) | 0.009 s | 1.04 s | 0.006 s |
+| curl's `formatf` locals (6 KB of tables, three million calls) | 0.033 s | 0.024 s | 0.020 s |
+| the same, with the run-time checks on | — | 0.135 s | 0.022 s |
+
 ## Types
 
 | C | Rust |
@@ -666,7 +734,9 @@ bytes, as it does in GCC, and still has an address; a *negative* one is
 undefined behaviour in C, and here it converts to a huge `size_t` and the
 allocation panics or aborts rather than corrupting anything. The elements are
 zeroed: C leaves them indeterminate, but reading uninitialised memory through a
-raw pointer is undefined in Rust too.
+raw pointer is undefined in Rust too — unless the unit asked for
+[uninitialised locals](#locals-declared-without-an-initialiser), whose arena
+hands its bytes out as they are.
 
 The arena is a type of the unit's own module, `__cinrs_vla_arena`, emitted
 once for a unit that needs it. Its storage is a list of chunks that never move

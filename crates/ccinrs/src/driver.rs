@@ -299,6 +299,8 @@ cinrs, and rustc (RUSTC, or the one on PATH) compiles and links it.
   -fno-cinrs-checks    Leave out Rust's run-time checks (on by default)
   -fno-cinrs-unwind    Make functions extern \"C\", not \"C-unwind\" (a little
                        faster; refuses setjmp and longjmp)
+  -ftrivial-auto-var-init=uninitialized
+                       Leave local arrays uninitialised (zero by default)
   -w                   Print no warnings
   -v                   Print the commands run
   --version, -dumpversion, -dumpmachine
@@ -406,6 +408,9 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     } else {
         Unwind::Never
     };
+    // `-ftrivial-auto-var-init=`; a unit's `#pragma cinrs auto_var_init`
+    // still wins for that unit.
+    options.auto_var_init = inv.auto_var_init;
     options
 }
 

@@ -857,6 +857,9 @@ pub struct Preprocessed {
     /// Whether `#pragma cinrs unwind` asked for the `extern "C-unwind"` ABI;
     /// see [`crate::Options::unwind`].
     pub unwind: bool,
+    /// What `#pragma cinrs auto_var_init` asked uninitialised locals to be,
+    /// if it was written; see [`crate::Options::auto_var_init`].
+    pub auto_var_init: Option<crate::AutoVarInit>,
     /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate,
     /// which the generated code names when it needs the runtime.
     pub crate_path: Option<String>,
@@ -1008,6 +1011,7 @@ pub fn preprocess(
         export: pp.export,
         no_std: pp.no_std,
         unwind: pp.unwind,
+        auto_var_init: pp.auto_var_init,
         crate_path: pp.crate_path,
         pack_events: pp.pack_events,
         target_events: pp.target_events,
@@ -1424,6 +1428,8 @@ struct Pp<'a> {
     unwind: bool,
     /// Whether the options refuse the pragma: [`crate::Unwind::Never`].
     unwind_refused: bool,
+    /// Set by `#pragma cinrs auto_var_init`.
+    auto_var_init: Option<crate::AutoVarInit>,
     /// The Rust path `#pragma cinrs crate` gave the facade crate.
     crate_path: Option<String>,
     /// Where the data model in force came from, which is what a
@@ -1510,6 +1516,7 @@ impl<'a> Pp<'a> {
             no_std: false,
             unwind: false,
             unwind_refused: options.unwind == crate::Unwind::Never,
+            auto_var_init: None,
             crate_path: None,
             target_source: options.target_source.clone(),
             target: options.target,
@@ -3279,7 +3286,8 @@ impl Pp<'_> {
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
     const OPTIONS: &'static str = "'target', 'include_path', 'system_include', 'link', \
-                                   'export', 'safe', 'no_std', 'unwind' and 'crate'";
+                                   'export', 'safe', 'no_std', 'unwind', 'auto_var_init' \
+                                   and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -3315,6 +3323,7 @@ impl Pp<'_> {
             // is not.
             "safe" => self.safe_pragma(&rest[1..], option.range),
             "system_include" => self.system_include_pragma(&rest[1..], option.range),
+            "auto_var_init" => self.auto_var_init_pragma(&rest[1..], option.range),
             // Unit-wide and argument-less: everything with external linkage
             // becomes a real C symbol, the `Vec`s a variable length array
             // or `alloca` needs come from `alloc` rather than from `std`, and
@@ -3435,6 +3444,60 @@ impl Pp<'_> {
                 ),
             }
         }
+    }
+
+    /// `#pragma cinrs auto_var_init zero` and `… uninitialized`: what a local
+    /// declared without an initialiser starts out as, for the whole unit —
+    /// GCC's `-ftrivial-auto-var-init=`, which `ccinrs` takes as well. See
+    /// [`crate::AutoVarInit`].
+    ///
+    /// GCC's third choice, `pattern`, is refused with the reason: filling
+    /// every byte with `0xFE` makes a `_Bool` that is neither `true` nor
+    /// `false`, which Rust may not have.
+    fn auto_var_init_pragma(&mut self, rest: &[PTok], range: SourceRange) {
+        let choices = "'zero' or 'uninitialized'";
+        let Some(tok) = rest.first() else {
+            self.diags.error(
+                range,
+                format!("#pragma cinrs auto_var_init needs {choices}"),
+            );
+            return;
+        };
+        let mode = match tok.name() {
+            Some("zero") => crate::AutoVarInit::Zero,
+            Some("uninitialized") => crate::AutoVarInit::Uninitialized,
+            Some("pattern") => {
+                self.diags.error(
+                    tok.range,
+                    "#pragma cinrs auto_var_init pattern is not supported: GCC's pattern \
+                     fills every byte with 0xFE, which makes a '_Bool' that is neither true \
+                     nor false, and Rust may not have one. Use 'zero' or 'uninitialized'"
+                        .to_owned(),
+                );
+                return;
+            }
+            name => {
+                let what = match name {
+                    Some(name) => format!("'{name}'"),
+                    None => tok.kind.describe().to_owned(),
+                };
+                self.diags.error(
+                    tok.range,
+                    format!("#pragma cinrs auto_var_init takes {choices}, not {what}"),
+                );
+                return;
+            }
+        };
+        if let Some(extra) = rest.get(1) {
+            self.diags.error(
+                extra.range,
+                format!(
+                    "unexpected {} after #pragma cinrs auto_var_init, which takes one word",
+                    extra.kind.describe()
+                ),
+            );
+        }
+        self.auto_var_init = Some(mode);
     }
 
     /// `#pragma cinrs system_include` and `#pragma cinrs system_include first`,

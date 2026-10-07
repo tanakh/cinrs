@@ -401,6 +401,35 @@ pub struct Options {
     /// between a `longjmp` and its `setjmp`, and for [`Unwind::Never`] under
     /// `-fno-cinrs-unwind`.
     pub unwind: Unwind,
+    /// What a local declared without an initialiser starts out as; see
+    /// [`AutoVarInit`]. **Zero** by default; `ccinrs
+    /// -ftrivial-auto-var-init=uninitialized` and `#pragma cinrs
+    /// auto_var_init uninitialized` (which wins for its unit) ask for
+    /// uninitialised arrays.
+    pub auto_var_init: AutoVarInit,
+}
+
+/// What a local declared without an initialiser holds before the program
+/// writes it — GCC's `-ftrivial-auto-var-init`.
+///
+/// C leaves it indeterminate. Rust may not read uninitialised memory at all,
+/// so cinrs zero-fills every such local unless told otherwise, which is
+/// GCC's own hardening option `-ftrivial-auto-var-init=zero`. For a scalar
+/// the store is free — LLVM deletes it wherever the program writes the
+/// variable first — but a large array is cleared on every entry to its
+/// block, which is what makes libuv's event loop, whose `uv__io_poll` declares
+/// 15 KB of `epoll_event`s, run at a fraction of GCC's speed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoVarInit {
+    /// Every local is zero-filled.
+    #[default]
+    Zero,
+    /// A local **array** with no initialiser is left uninitialised: its
+    /// storage is a `MaybeUninit`, reached only through a raw pointer to it,
+    /// and reading an element nothing wrote is undefined behaviour — in the
+    /// generated Rust as in C, where its value is indeterminate. Scalars,
+    /// structures and unions are still zeroed; see `doc/translation.md`.
+    Uninitialized,
 }
 
 /// Which ABI a unit's functions have: `extern "C"` or `extern "C-unwind"`.
@@ -481,6 +510,7 @@ impl Options {
             includes: Vec::new(),
             target_features: Vec::new(),
             unwind: Unwind::Auto,
+            auto_var_init: AutoVarInit::Zero,
         }
     }
 
@@ -791,6 +821,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         export,
         no_std,
         unwind,
+        auto_var_init,
         crate_path,
         pack_events,
         target_events,
@@ -801,6 +832,11 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
     // `Unwind::Never` the preprocessor has already refused it.
     if unwind && options.unwind == Unwind::Auto {
         options.unwind = Unwind::Always;
+    }
+    // `#pragma cinrs auto_var_init` is the unit's own answer, and wins over
+    // the option for its unit; see [`Options::auto_var_init`].
+    if let Some(mode) = auto_var_init {
+        options.auto_var_init = mode;
     }
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);

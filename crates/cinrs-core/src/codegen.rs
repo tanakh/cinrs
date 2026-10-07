@@ -3527,7 +3527,12 @@ impl<'a> Codegen<'a> {
     /// pointer in Rust — and which a reused chunk would not otherwise
     /// guarantee: a struct copied into it earlier leaves its padding
     /// uninitialised. It costs what the program's own initialisation of the
-    /// same bytes costs.
+    /// same bytes costs. A unit that asked for [uninitialised
+    /// locals](ir::Program::uninit_locals) has taken that contract on for its
+    /// arrays, and these are its arrays: its arena does not clear. Nothing
+    /// reads a chunk as the `u128`s it is made of — the arena only hands out
+    /// pointers into it — so a chunk holding uninitialised bytes is itself
+    /// fine, and only a C read of an element nothing wrote is undefined.
     ///
     /// Everything is in [`Cell`]s so that any number of frames can hold a
     /// shared borrow of the arena at once. The methods are safe: the only
@@ -3548,6 +3553,14 @@ impl<'a> Codegen<'a> {
             span,
         );
         let void = self.pointee_ty(Ty::Void, span);
+        // Every byte handed out is cleared, unless the unit asked for
+        // uninitialised locals, of which these are the variable length and
+        // `alloca`'d ones.
+        let clear = if self.program.uninit_locals {
+            TokenStream::new()
+        } else {
+            quote_spanned! {span=> ::core::ptr::write_bytes(first, 0, bytes); }
+        };
         // The stack of chunk lists a thread's dropped arenas left behind, and
         // the two ends of it; without `std` there is no thread-local storage,
         // and every arena frees its chunks as it always did.
@@ -3684,7 +3697,7 @@ impl<'a> Codegen<'a> {
                             if start <= size && bytes <= size - start {
                                 self.top.set(start + bytes);
                                 let first = base.add(start);
-                                ::core::ptr::write_bytes(first, 0, bytes);
+                                #clear
                                 return first;
                             }
                         }
@@ -4010,6 +4023,27 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// The binding of an [uninitialised array](ir::Object::uninit):
+    /// `let mut a: MaybeUninit<[T; N]> = MaybeUninit::uninit();`, with the
+    /// alignment wrapper inside it when the declaration asked for one. `None`
+    /// for every other object.
+    ///
+    /// Having uninitialised storage is fine in Rust as long as it is a
+    /// `MaybeUninit`; what is not is a *value* of the array made from it —
+    /// `MaybeUninit::uninit().assume_init()` would be undefined behaviour
+    /// before anything is read. So the binding stays a `MaybeUninit`, and
+    /// every use goes through a raw pointer to it ([`Codegen::through_storage`]).
+    fn uninit_binding(&self, id: ir::ObjectId, name: &Ident, span: Span) -> Option<TokenStream> {
+        let object = self.program.object(id);
+        if !object.uninit {
+            return None;
+        }
+        let ty = self.binding_ty(id, self.ty(object.ty, span), span);
+        Some(quote_spanned! {span=>
+            let mut #name: ::core::mem::MaybeUninit<#ty> = ::core::mem::MaybeUninit::uninit();
+        })
+    }
+
     /// The place expression naming an object, reaching through the alignment
     /// wrapper and the flexible-array companion when the binding has them.
     fn object_access(&self, id: ir::ObjectId, span: Span) -> TokenStream {
@@ -4041,6 +4075,15 @@ impl<'a> Codegen<'a> {
     fn through_storage(&self, id: ir::ObjectId, base: TokenStream, span: Span) -> TokenStream {
         let object = self.program.object(id);
         let mut access = base;
+        // An uninitialised array's binding is a `MaybeUninit` of it, and the
+        // array is the place at its address; see [`ir::Object::uninit`].
+        if object.uninit {
+            let ty = self.binding_ty(id, self.ty(object.ty, span), span);
+            access = parenthesize(
+                quote_spanned! {span=> *(&raw mut #access).cast::<#ty>() },
+                span,
+            );
+        }
         if object.align.is_some() {
             let field = Literal::usize_unsuffixed(0);
             access = quote_spanned! {span=> #access.#field };
@@ -4226,6 +4269,10 @@ impl<'a> Codegen<'a> {
                 continue;
             }
             let name = self.object_ident(local.object, ospan);
+            if let Some(binding) = self.uninit_binding(local.object, &name, ospan) {
+                out.extend(binding);
+                continue;
+            }
             let (ty, init) = if object.ty.is_va_list() {
                 // A `va_list` has no zero value; it starts out as a copy of
                 // the list the function was called with, exactly as it does
@@ -4799,6 +4846,9 @@ impl<'a> Codegen<'a> {
                 let name = self.object_ident(id, self.sp(self.program.object(id).range));
                 let object = self.program.object(id);
                 let span = self.sp(object.range);
+                if let Some(binding) = self.uninit_binding(id, &name, span) {
+                    return binding;
+                }
                 let object_ty = object.ty;
                 let ty = self.binding_ty(id, self.ty(object_ty, span), span);
                 let init = self.expr_at(init, object_ty);
@@ -5537,6 +5587,10 @@ impl<'a> Codegen<'a> {
             let object = self.program.object(*id);
             let ospan = self.sp(object.range);
             let name = self.object_ident(*id, ospan);
+            if let Some(binding) = self.uninit_binding(*id, &name, ospan) {
+                hoisted.extend(binding);
+                continue;
+            }
             let ty = self.binding_ty(*id, self.ty(object.ty, ospan), ospan);
             let zero = self.zero_tokens(object.ty, ospan);
             let zero = self.binding_init(*id, zero, ospan);
