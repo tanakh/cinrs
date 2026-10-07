@@ -391,23 +391,21 @@ fn permitted_setjmp<'e>(
                     op: ast::UnaryOp::LogNot,
                     operand,
                 } => call(operand),
-                ast::ExprKind::Binary { op, lhs, rhs }
-                    if matches!(
-                        op,
+                ast::ExprKind::Binary {
+                    op:
                         ast::BinaryOp::Lt
-                            | ast::BinaryOp::Gt
-                            | ast::BinaryOp::Le
-                            | ast::BinaryOp::Ge
-                            | ast::BinaryOp::Eq
-                            | ast::BinaryOp::Ne
-                    ) =>
-                {
-                    match (call(lhs), call(rhs)) {
-                        (Some(found), None) if constant(rhs) => Some(found),
-                        (None, Some(found)) if constant(lhs) => Some(found),
-                        _ => None,
-                    }
-                }
+                        | ast::BinaryOp::Gt
+                        | ast::BinaryOp::Le
+                        | ast::BinaryOp::Ge
+                        | ast::BinaryOp::Eq
+                        | ast::BinaryOp::Ne,
+                    lhs,
+                    rhs,
+                } => match (call(lhs), call(rhs)) {
+                    (Some(found), None) if constant(rhs) => Some(found),
+                    (None, Some(found)) if constant(lhs) => Some(found),
+                    _ => None,
+                },
                 _ => None,
             }
         }

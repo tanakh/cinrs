@@ -3127,7 +3127,13 @@ impl<'a> Codegen<'a> {
                         __cinrs_words.add(1).write_unaligned(::core::ptr::from_ref(self).addr());
                         __cinrs_words.add(2).write_unaligned(self.serial.get());
                         __cinrs_words.add(3).write_unaligned(__cinrs_site);
-                        __cinrs_words.add(4).write_unaligned(__cinrs_check as #usize_ty);
+                        // The check is stored as the pointer it is, not as an
+                        // integer, so that the pointer `longjmp` calls keeps
+                        // its provenance. The other words are only compared.
+                        __cinrs_words
+                            .add(4)
+                            .cast::<*const ()>()
+                            .write_unaligned(__cinrs_check as *const ());
                         #[cfg(unix)]
                         if __cinrs_mask != 0 {
                             #sigmask(0, ::core::ptr::null(), __cinrs_words.add(5).cast());
@@ -3416,23 +3422,24 @@ impl<'a> Codegen<'a> {
             #[allow(unknown_lints, unused_unsafe, clippy::pedantic, clippy::nursery)]
             unsafe fn #longjmp(__cinrs_buf: *mut ::core::ffi::c_void, __cinrs_value: #c_int) -> ! {
                 let __cinrs_words = __cinrs_buf.cast::<#usize_ty>().cast_const();
-                let (__cinrs_magic, __cinrs_frame, __cinrs_serial, __cinrs_site, __cinrs_check) = unsafe {
+                let (__cinrs_magic, __cinrs_frame, __cinrs_serial, __cinrs_site) = unsafe {
                     (
                         __cinrs_words.read_unaligned(),
                         __cinrs_words.add(1).read_unaligned(),
                         __cinrs_words.add(2).read_unaligned(),
                         __cinrs_words.add(3).read_unaligned(),
-                        __cinrs_words.add(4).read_unaligned(),
                     )
                 };
                 if __cinrs_magic != #magic && __cinrs_magic != #magic_mask {
                     #abort(#unfilled_message);
                 }
                 // SAFETY: the `setjmp` that filled the buffer in wrote its
-                // own unit's check there.
+                // own unit's check there, as a pointer — so it is read back
+                // as one, provenance and all, and only once the magic says
+                // a `setjmp` wrote it.
                 let __cinrs_check = unsafe {
-                    ::core::mem::transmute::<#usize_ty, fn(#usize_ty, #usize_ty) -> bool>(
-                        __cinrs_check,
+                    ::core::mem::transmute::<*const (), fn(#usize_ty, #usize_ty) -> bool>(
+                        __cinrs_words.add(4).cast::<*const ()>().read_unaligned(),
                     )
                 };
                 if !__cinrs_check(__cinrs_frame, __cinrs_serial) {
@@ -3440,7 +3447,9 @@ impl<'a> Codegen<'a> {
                 }
                 // An unwind that cannot get there would end the program with
                 // the unwinder's own words; say ours instead, before starting.
-                #[cfg(unix)]
+                // Miri, which runs no unwinder of the platform's, cannot walk
+                // the stack this way, and goes without the check.
+                #[cfg(all(unix, not(miri)))]
                 #reach(__cinrs_frame);
                 #[cfg(unix)]
                 if __cinrs_magic == #magic_mask {
