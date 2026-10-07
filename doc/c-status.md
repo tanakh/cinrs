@@ -115,8 +115,8 @@ families that are, never a guess.
 
 | Architecture | Pointer | `long` | Endian | `__int128` | `align(long long, double)` | Macros |
 | --- | --- | --- | --- | --- | --- | --- |
-| `x86_64*` (incl. `gnux32`, where the pointer is 32) | 64 (32) | LP64 rule | little | yes | 8 | `__x86_64__`, `__amd64__` |
-| `i386`/`i486`/`i586`/`i686` | 32 | 32 | little | no | **4 off Windows**, 8 on it | `__i386__` |
+| `x86_64*` (incl. `gnux32`, where the pointer is 32) | 64 (32) | LP64 rule | little | yes | 8 | `__x86_64__`, `__amd64__`, `__SSE__`, `__SSE2__`, `__FXSR__` |
+| `i386`/`i486`/`i586`/`i686` | 32 | 32 | little | no | **4 off Windows**, 8 on it | `__i386__`; `i386` in a GNU dialect |
 | `aarch64*` (`aarch64_be` big; `gnu_ilp32` 32-bit pointer) | 64 (32) | LP64 rule | little | yes | 8 | `__aarch64__` |
 | `arm*`, `thumb*` (`armeb*` big) | 32 | 32 | little | no | 8 | `__arm__` |
 | `riscv32*` / `riscv64*` | 32 / 64 | LP64 rule | little | 64-bit only | 8 | `__riscv`, `__riscv_xlen` |
@@ -132,10 +132,10 @@ Windows**, which is LLP64 and keeps a 32-bit `long`.
 
 | Operating system | Macros | `wchar_t` | `wint_t` | `time_t` | Object format |
 | --- | --- | --- | --- | --- | --- |
-| `linux` (incl. `android`) | `__linux__`, `__gnu_linux__`, `__unix__` | 32-bit `int`, unsigned on Arm | `unsigned int` | `long` | `__ELF__` |
-| `darwin`/`macos`/`ios`/`tvos`/`watchos`/`visionos` | `__APPLE__`, `__MACH__`, `__unix__` | 32-bit `int` | `int` | `long` | Mach-O |
-| `windows` (`msvc` and `gnu`) | `_WIN32`, `_WIN64` at 64 bits | **16-bit `unsigned short`** | `unsigned short` | `long long` | PE |
-| `freebsd`, `netbsd`, `openbsd` | `__FreeBSD__`/`__NetBSD__`/`__OpenBSD__`, `__unix__` | 32-bit `int` | `unsigned int` | `long` | `__ELF__` |
+| `linux` (incl. `android`) | `__linux__`, `__gnu_linux__`, `__unix__`, `__PIC__`, `__PIE__`; `linux` and `unix` in a GNU dialect | 32-bit `int`, unsigned on Arm | `unsigned int` | `long` | `__ELF__` |
+| `darwin`/`macos`/`ios`/`tvos`/`watchos`/`visionos` | `__APPLE__`, `__MACH__`, `__unix__`, `__PIC__` | 32-bit `int` | `int` | `long` | Mach-O |
+| `windows` (`msvc` and `gnu`) | `_WIN32`, `_WIN64` at 64 bits, `__PIC__` | **16-bit `unsigned short`** | `unsigned short` | `long long` | PE |
+| `freebsd`, `netbsd`, `openbsd` | `__FreeBSD__`/`__NetBSD__`/`__OpenBSD__`, `__unix__`, `__PIC__`, `__PIE__`; `unix` in a GNU dialect | 32-bit `int` | `unsigned int` | `long` | `__ELF__` |
 | `wasi` | `__wasi__` | 32-bit `int` | `unsigned int` | `long` | wasm |
 | `none` (and `arch-unknown-unknown`) | — | 32-bit `int` | `unsigned int` | `long` | `__ELF__` off wasm |
 

@@ -143,6 +143,11 @@ impl Arch {
             // and claiming SSE2 where there is none would send a program down a
             // path its processor cannot run.
             //
+            // `__FXSR__` is the third instruction set of that baseline —
+            // `fxsave` and `fxrstor`, which every SSE processor has and
+            // `rustc`'s x86-64 targets enable — and GCC predefines it with
+            // the other two.
+            //
             // `__MMX__` is deliberately absent although GCC predefines it on
             // x86-64: `core::arch` has no MMX and no `__m64`, so the branch it
             // would open leads to a diagnostic rather than to code.
@@ -153,6 +158,7 @@ impl Arch {
                 ("__amd64", "1"),
                 ("__SSE__", "1"),
                 ("__SSE2__", "1"),
+                ("__FXSR__", "1"),
                 ("__SSE_MATH__", "1"),
                 ("__SSE2_MATH__", "1"),
             ],
@@ -264,6 +270,24 @@ impl Os {
             self,
             Os::Linux | Os::FreeBsd | Os::NetBsd | Os::OpenBsd | Os::None
         )
+    }
+
+    /// Whether `rustc` compiles position-independent code for this system by
+    /// default (its target specification's `relocation-model` is `pic`), which
+    /// is what `__PIC__` says. Every system with a loader; not wasm, whose
+    /// specification says `static`, nor a bare-metal `-none` triple.
+    fn pic(self) -> bool {
+        matches!(
+            self,
+            Os::Linux | Os::Darwin | Os::Windows | Os::FreeBsd | Os::NetBsd | Os::OpenBsd
+        )
+    }
+
+    /// Whether `rustc` links position-independent executables here
+    /// (`position-independent-executables` in its specification), which is
+    /// what `__PIE__` says. Apple's targets and Windows say no.
+    fn pie(self) -> bool {
+        matches!(self, Os::Linux | Os::FreeBsd | Os::NetBsd | Os::OpenBsd)
     }
 }
 
@@ -940,6 +964,42 @@ impl TargetModel {
                 Env::Musl => out.push(("__cinrs_musl__", "1".to_owned())),
                 _ => {}
             }
+        }
+        // The relocation model the objects are compiled for, which is
+        // `rustc`'s default for the target and not cinrs's to choose: position
+        // independent wherever there is an operating system to load them (the
+        // value 2 is GCC's for `-fPIC`), and position-independent
+        // *executables* where `rustc` links those — Linux, Android and the
+        // BSDs, as GCC does by default on the distributions that build PIE.
+        // wasm and the bare-metal targets are static, and say nothing.
+        if self.os.pic() {
+            out.push(("__PIC__", "2".to_owned()));
+            out.push(("__pic__", "2".to_owned()));
+        }
+        if self.os.pie() {
+            out.push(("__PIE__", "2".to_owned()));
+            out.push(("__pie__", "2".to_owned()));
+        }
+        out
+    }
+
+    /// The macros GCC predefines in the user's namespace, which only a GNU
+    /// dialect gets: `linux` and `unix` on Linux, `unix` on the BSDs, and
+    /// `i386` on 32-bit x86. A strict one (`-std=c17`) has only their
+    /// reserved spellings, `__linux__` and the rest, which [`TargetModel::macros`]
+    /// gives every dialect; GCC's `builtin_define_std` makes the same split.
+    pub fn gnu_macros(&self) -> Vec<(&'static str, &'static str)> {
+        let mut out = Vec::new();
+        if self.arch == Arch::X86 {
+            out.push(("i386", "1"));
+        }
+        match self.os {
+            Os::Linux => {
+                out.push(("linux", "1"));
+                out.push(("unix", "1"));
+            }
+            Os::FreeBsd | Os::NetBsd | Os::OpenBsd => out.push(("unix", "1")),
+            Os::Darwin | Os::Windows | Os::Wasi | Os::None => {}
         }
         out
     }

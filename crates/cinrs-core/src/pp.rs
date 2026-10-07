@@ -5336,9 +5336,14 @@ impl Pp<'_> {
         self.define_object("__STDC_EMBED_NOT_FOUND__", "0");
         self.define_object("__STDC_EMBED_FOUND__", "1");
         self.define_object("__STDC_EMBED_EMPTY__", "2");
-        // Only a strict entry point is `-std=c99`; a GNU one is `-std=gnu99`.
+        // Only a strict entry point is `-std=c99`; a GNU one is `-std=gnu99`,
+        // and has GCC's `linux`, `unix` and `i386` besides.
         if !options.dialect.is_gnu() {
             self.define_object("__STRICT_ANSI__", "1");
+        } else {
+            for (name, value) in options.target.gnu_macros() {
+                self.define_object(name, value);
+            }
         }
         // cinrs presents itself as GCC 14.2, because that is the version the
         // world's `__GNUC__` gates are written against: 4.2.1 (Clang's

@@ -90,6 +90,10 @@ follows [Semantic Versioning][semver].
   warning, where it used to be refused. With no other definition the program
   is GCC's; a second, strong definition elsewhere is a duplicate symbol at link
   time rather than an override.
+* Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
+  compiles position-independent code, `__PIE__` and `__pie__` (2) where it
+  links position-independent executables, `__FXSR__` with the rest of the
+  x86-64 baseline, and in the GNU dialects only `linux`, `unix` and `i386`.
 * `cinrs-core`, for a command-line driver: `translate_file` and
   `translate_source`, which hand back the Rust, the diagnostics, the headers
   read and the symbols defined; `preprocess_file` and `preprocess_source`,

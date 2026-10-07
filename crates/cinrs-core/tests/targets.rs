@@ -456,6 +456,72 @@ fn the_data_model_macros() {
     );
 }
 
+/// What GCC predefines beside the identity: the relocation model `rustc`
+/// compiles for (`__PIC__` wherever there is a loader, `__PIE__` where
+/// executables are position independent), FXSR with the rest of the x86-64
+/// baseline, and — in a GNU dialect only — `linux`, `unix` and `i386`, which
+/// a strict one leaves to the program, as GCC's `-std=c11` does.
+#[test]
+fn the_relocation_model_fxsr_and_the_gnu_names() {
+    accepts(
+        "x86_64-unknown-linux-gnu",
+        r#"
+        #if __PIC__ != 2 || __pic__ != 2 || __PIE__ != 2 || __pie__ != 2
+        #error Linux code is position-independent, and so are its executables
+        #endif
+        #if !defined(__FXSR__) || !defined(__SSE2__) || defined(__MMX__)
+        #error the x86-64 baseline is FXSR, SSE and SSE2, and MMX is refused
+        #endif
+        #if defined(linux) || defined(unix) || defined(i386)
+        #error a strict dialect has none of GCC's names in the user's namespace
+        #endif
+        "#,
+    );
+    accepts(
+        "aarch64-apple-darwin",
+        r#"
+        #if __PIC__ != 2 || defined(__PIE__)
+        #error Mach-O code is PIC, and rustc links no PIE there
+        #endif
+        "#,
+    );
+    accepts(
+        "x86_64-pc-windows-msvc",
+        r#"
+        #if __PIC__ != 2 || defined(__PIE__) || defined(__FXSR__) == 0
+        #error rustc compiles Windows code PIC
+        #endif
+        "#,
+    );
+    accepts(
+        "wasm32-unknown-unknown",
+        r#"
+        #if defined(__PIC__) || defined(__PIE__)
+        #error wasm is static
+        #endif
+        "#,
+    );
+    let gnu = |triple: &str| Options::gnu(Standard::C11).for_target(model(triple));
+    let names = r#"
+        #if !defined(linux) || !defined(unix) || !defined(i386) || linux != 1
+        #error a GNU dialect has GCC's linux, unix and i386
+        #endif
+        "#;
+    assert_eq!(
+        errors_with(names, &gnu("i686-unknown-linux-gnu")),
+        Vec::<String>::new()
+    );
+    let bsd = r#"
+        #if !defined(unix) || defined(linux) || defined(i386)
+        #error FreeBSD on x86-64 is unix and nothing else
+        #endif
+        "#;
+    assert_eq!(
+        errors_with(bsd, &gnu("x86_64-unknown-freebsd")),
+        Vec::<String>::new()
+    );
+}
+
 /// `<limits.h>`, which is written entirely in terms of those macros.
 #[test]
 fn limits_h_follows_the_model() {
