@@ -1081,7 +1081,8 @@ What this asks of the program:
   controlling expression of an `if`, `switch`, `while`, `do` or `for`, negated
   there with `!`, compared there with an integer constant, or as a whole
   expression statement; cinrs also takes `r = setjmp(buf);` and
-  `int r = setjmp(buf);`, as GCC does. Anything else — `f(setjmp(buf))`,
+  `int r = setjmp(buf);`, and the assignment inside a controlling expression,
+  `if ((r = setjmp(buf)) == 0)`, as GCC does. Anything else — `f(setjmp(buf))`,
   `return setjmp(buf);`, one inside a statement expression — is a located
   error, because what follows the call could not be resumed on its own.
 * **The ABI.** An unwind that leaves an `extern "C"` function is undefined
@@ -1098,7 +1099,15 @@ What this asks of the program:
   unwind: about a microsecond, plus about 90 ns for each frame it crosses,
   where GCC's is tens of nanoseconds.
 * **std, and a target that unwinds.** `#pragma cinrs no_std` and WebAssembly,
-  whose Rust aborts on a panic, refuse both.
+  whose Rust aborts on a panic, refuse both, and so does a crate built with
+  `panic = "abort"`, at compile time.
+* **Signal handlers.** A `longjmp` out of a handler works when the signal
+  arrived inside a library call — `raise`, a `kill` of the process itself, a
+  blocking system call — and not when it interrupted the program's own code,
+  where there is no call to unwind from: the program aborts.
+* **What the frames in between do.** They are unwound, so they run what Rust
+  runs on the way out: a `cleanup` attribute's function is called, where
+  GCC's `longjmp` skips it, and variable length arrays are given back.
 
 ## One block, one module
 

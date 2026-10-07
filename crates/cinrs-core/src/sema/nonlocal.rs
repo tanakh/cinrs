@@ -41,7 +41,8 @@ use super::{Entry, Sema};
 pub(super) enum SetjmpPlace {
     /// The controlling expression of an `if`, `switch`, `while`, `do` or
     /// `for`: the call itself, `!` of it, or it compared with an integer
-    /// constant.
+    /// constant — and, beyond C17, any of those with the call's value
+    /// assigned first, `(rc = setjmp(buf)) == 0`.
     Control,
     /// A whole expression statement: the call, the call cast to `void`, and —
     /// beyond C17, as GCC accepts it — `lvalue = setjmp(buf)`.
@@ -63,8 +64,8 @@ const MASK_BYTES: u64 = 128;
 const SETJMP_PLACES: &str = "as the whole controlling expression of an 'if', 'switch', \
                              'while', 'do' or 'for' statement — on its own, negated with '!', \
                              or compared with an integer constant — or as a whole expression \
-                             statement (C17 7.13.1.1p4); cinrs also takes 'r = setjmp(buf);' \
-                             and 'int r = setjmp(buf);'";
+                             statement (C17 7.13.1.1p4); cinrs also takes 'r = setjmp(buf);', \
+                             'int r = setjmp(buf);' and 'if ((r = setjmp(buf)) == 0)'";
 
 impl Sema<'_> {
     /// Runs `check` over `expr` with the one `setjmp` C allows in `place`, if
@@ -356,6 +357,17 @@ fn permitted_setjmp<'e>(
                 _ => None,
             },
             _ => None,
+        }
+    };
+    // Beyond C17 again, as GCC takes it: `if ((rc = setjmp(buf)) == 0)`,
+    // which Jim Tcl writes. The assignment is the rest of the expression, so
+    // it is resumed with it.
+    let call = |e: &'e ast::Expr| -> Option<&'e ast::Expr> {
+        match &e.kind {
+            ast::ExprKind::Assign { op: None, rhs, .. } if place == SetjmpPlace::Control => {
+                call(rhs)
+            }
+            _ => call(e),
         }
     };
     match place {

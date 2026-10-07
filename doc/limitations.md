@@ -135,16 +135,24 @@
   what that costs. glibc's `<tgmath.h>` goes through, but its macros need
   `__builtin_tgmath`, which cinrs does not have.
 * `setjmp` and `longjmp` are a Rust unwind and a `catch_unwind` (see [What
-  the C becomes](translation.md#non-local-jumps)), which has four
+  the C becomes](translation.md#non-local-jumps)), which has six
   consequences. A `setjmp` may only stand where C17 7.13.1.1p4 allows it, plus
-  `r = setjmp(buf);` and `int r = setjmp(buf);` — anywhere else, and inside a
+  `r = setjmp(buf);`, `int r = setjmp(buf);` and
+  `if ((r = setjmp(buf)) == 0)` — anywhere else, and inside a
   statement expression, it is a located error. A `longjmp` costs about a
   microsecond, plus about 90 ns for every frame it crosses, where GCC's costs
   tens of nanoseconds. Every frame it crosses has to be one cinrs compiled
   with the `C-unwind` ABI (a unit that uses `setjmp` or `longjmp` has it, and
   `#pragma cinrs unwind` gives it to one that does not) or a C function with
   unwind tables, as glibc's are. And it needs `std` and a target that
-  unwinds: `#pragma cinrs no_std` and WebAssembly refuse it. A `longjmp` to a
+  unwinds: `#pragma cinrs no_std` and WebAssembly refuse it. A `longjmp` out
+  of a signal handler works when the signal arrived inside a library call
+  (`raise`, `kill` of the process itself, a blocking system call), and not
+  when it interrupted the program's own code — a timer, a fault: there is no
+  call there to unwind from, and the program aborts ("failed to initiate
+  panic"). And the frames a `longjmp` leaves are unwound the way Rust unwinds
+  them: a `cleanup` attribute's function runs, where GCC's `longjmp` skips
+  it, and a variable length array's storage is given back. A `longjmp` to a
   function that has returned, undefined in C, aborts with a message.
 * Of TS 18661-3's floating types, `_Float32`, `_Float64`, `_Float32x` and
   `_Float64x` are here as the types they are on this model (`float`, `double`,

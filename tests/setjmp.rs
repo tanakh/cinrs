@@ -87,12 +87,19 @@ fn every_place_c_allows_a_setjmp() {
             (void) setjmp(env);
             if (again++ < 5) longjmp(env, 1);
             log += again * 100000;
+            /* Beyond C17, as GCC takes it: assigned inside the condition. */
+            int rc;
+            if ((rc = setjmp(env)) == 0) longjmp(env, 4);
+            log += rc * 1000000;
             return log;
         }
     }
 
     unsafe {
-        assert_eq!(places(), 1 + 10 + 100 + 1000 + 3 * 10000 + 6 * 100000);
+        assert_eq!(
+            places(),
+            1 + 10 + 100 + 1000 + 3 * 10000 + 6 * 100000 + 4 * 1000000
+        );
     }
 }
 
