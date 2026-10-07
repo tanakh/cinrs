@@ -49,9 +49,14 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 
 * **`-std=gnu17`**, as GCC 14 has it, and the predefined macros of GCC 14.2
   (`__GNUC__` is 14) together with `__CINRS__`.
+* **Every function is `extern "C-unwind"`**, so that a `longjmp` — a Rust
+  unwind here — can pass through any file; see [setjmp and
+  longjmp](#setjmp-and-longjmp). `-fno-cinrs-unwind` makes them `extern "C"`.
 * **Rust's run-time checks are on**: a misaligned or null pointer dereference,
   an out-of-bounds `memcpy` overlap and the checks cinrs writes itself stop the
-  program with a panic at the C line, at every optimisation level.
+  program with a panic at the C line, at every optimisation level — Rust's
+  message, and then `abort`, which a hook the link installs makes immediate
+  rather than an unwind looking for a handler.
   `-fno-cinrs-checks` takes them out. With them on, LLVM's inliner is told to
   reach further (`-inlinehint-threshold=1000`,
   `-inline-cold-callsite-threshold=225`), so that a small `inline` function
@@ -88,6 +93,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-Werror`, `-Wno-error`, `-w` | every warning an error, as GCC has it — `#warning` included; no warnings |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
+| `-fno-cinrs-unwind`, `-fcinrs-unwind` | every function `extern "C"` rather than `extern "C-unwind"`, the default: about 2 % fewer instructions on SQLite's speedtest1, and `setjmp` and `longjmp` refused where they are written (see [setjmp and longjmp](#setjmp-and-longjmp)) |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
 | `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
 | `-print-search-dirs`, `-print-multiarch`, `-print-multi-os-directory`, `-print-prog-name=`, `-print-file-name=`, … | what libtool asks: the platform's library directories (Debian's layout), and a name handed back as GCC hands back one it has no file for |
@@ -211,6 +217,38 @@ Unity's switches for a compiler without `setjmp` or weak definitions
 its CMake build does not give outside MSVC; cmark's `api_test` has C++ in it,
 which CMake links with `c++` — see below.
 
+## setjmp and longjmp
+
+A `longjmp` is a Rust unwind that the function which called `setjmp`
+catches, re-entering its body after that `setjmp`; [What the C
+becomes](translation.md#non-local-jumps) is the translation and [cinrs's
+limits](limitations.md#setjmp-and-longjmp) the whole list. For a C project:
+
+* **What builds.** libpng's default configuration (`make check` 36/36),
+  libjpeg-turbo with TurboJPEG (ctest 664/664), xz's tuktest unit tests
+  (22/22) and Lua 5.4 with its test suite, each with gcc's output.
+* **Every function is `extern "C-unwind"`**, since any file may be between a
+  `longjmp` and its `setjmp`. It costs about 2 % of the instructions on
+  SQLite's speedtest1 (inlining and code motion across calls that may now
+  unwind) and nothing measurable on the [benchmark kernels](benchmarks.md).
+  `-fno-cinrs-unwind` takes it back, and then `setjmp` and `longjmp` are
+  located errors that name the option.
+* **A `setjmp` may only stand where C17 7.13.1.1p4 allows it**, plus
+  `r = setjmp(buf);`, `int r = setjmp(buf);` and
+  `if ((r = setjmp(buf)) == 0)`; anywhere else is a located error.
+* **A `longjmp` costs about 1.2 µs**, plus about 130 ns per frame it crosses,
+  not GCC's tens of nanoseconds: Lua's `error`/`pcall` loop is several times
+  slower than gcc's build, its ordinary code is not.
+* **Locals keep their latest values**, `volatile` or not, and a `cleanup`
+  attribute does not run when a `longjmp` leaves its scope, as in GCC.
+* **What cannot be done stops the program with a message** of cinrs's own,
+  before anything is unwound: a `longjmp` out of a signal handler that
+  interrupted the program's own code (a `SIGALRM` in a loop, a fault — one
+  raised inside a library call is fine), onto a buffer whose `setjmp` has
+  returned or ran on another thread or stack, or through a frame without
+  unwind tables. A C library compiled by another compiler and crossed by a
+  `longjmp` needs unwind tables, which GCC gives by default on x86-64.
+
 ## Limitations
 
 Everything [cinrs's own limitations](limitations.md) lists applies; the ones a
@@ -219,14 +257,7 @@ C project meets first:
 * **A weak definition** (`__attribute__((weak))` on a function with a body)
   is an ordinary one, with a warning: a second definition elsewhere is a
   duplicate symbol rather than an override.
-* **`setjmp` and `longjmp`** work, as a Rust unwind (see [What the C
-  becomes](translation.md#non-local-jumps)): every function `ccinrs` compiles
-  is `extern "C-unwind"` for it. A `setjmp` may only stand where C17
-  7.13.1.1p4 allows it (plus `r = setjmp(buf);`), and a `longjmp` costs about
-  a microsecond, not GCC's tens of nanoseconds — an interpreter that raises
-  errors by the million notices. A C library compiled by another compiler and
-  crossed by a `longjmp` needs unwind tables, which GCC gives by default on
-  x86-64.
+* **`setjmp` and `longjmp`** work with limits; see [above](#setjmp-and-longjmp).
 * **`long double` is `double`.** A literal `printf` or `scanf` format that
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`
   for the platform's C library, which then reads the `double` it is given;

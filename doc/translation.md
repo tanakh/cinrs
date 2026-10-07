@@ -1065,11 +1065,16 @@ the loop, which the relooper's state variable handles.
 
 `longjmp(buf, v)` reads the buffer, checks that the activation is still live
 — a thread-local list of the frames that have run a `setjmp`, which each
-frame's `Drop` leaves — and calls `std::panic::resume_unwind` with the frame,
-the site and the value (`1` for `0`, as C says). `resume_unwind` runs no panic
-hook and prints nothing; a frame the jump is not for passes it on. A jump to
-a function that has returned aborts with a message rather than unwinding out
-of `main`. The `longjmp` a unit declares is replaced by a function of the
+frame's `Drop` leaves — walks the stack to the `setjmp`'s frame with
+`_Unwind_Backtrace`, as the unwind's search phase will, and calls
+`std::panic::resume_unwind` with the frame, the site and the value (`1` for
+`0`, as C says). `resume_unwind` runs no panic hook and prints nothing; a
+frame the jump is not for passes it on. A jump that cannot be done — to a
+function that has returned, onto another thread's or another stack's
+buffer, out of a signal handler that interrupted the program's own code, or
+through a frame that cannot be unwound — stops the program with a message
+that names the case and links [the limits](limitations.md#setjmp-and-longjmp),
+before anything is unwound. The `longjmp` a unit declares is replaced by a function of the
 unit's own with the same name and signature, so its address can be taken
 (libpng hands `longjmp` itself to the library); `__builtin_setjmp` and
 `__builtin_longjmp` work the same way. A `sigsetjmp(buf, 1)` saves the signal
@@ -1086,28 +1091,33 @@ What this asks of the program:
   `return setjmp(buf);`, one inside a statement expression — is a located
   error, because what follows the call could not be resumed on its own.
 * **The ABI.** An unwind that leaves an `extern "C"` function is undefined
-  behaviour (Rust aborts where it can see it), so every function, every
-  declaration and every function pointer of a unit that uses `setjmp` or
-  `longjmp` is `extern "C-unwind"`, and `#pragma cinrs unwind` asks for that
-  in a unit that does not — one a `longjmp` passes through, a callback's
-  caller, say. `ccinrs` does it for every file. The calling convention is
-  the same; what changes is the Rust *type* of a function pointer, which Rust
-  code handing the unit a callback has to match.
+  behaviour (Rust aborts where it can see it), so the frames a `longjmp`
+  crosses have to be `extern "C-unwind"`. In a `c99!` block that is the
+  unit's choice: `extern "C"` by default, and `extern "C-unwind"` — every
+  function, every declaration and every function pointer type — in a unit
+  that calls `setjmp` or `longjmp` itself, or that says [`#pragma cinrs
+  unwind`](pragmas.md#unwind) because a `longjmp` passes through it (a
+  callback's caller, say). `ccinrs` makes every file `C-unwind`, and
+  `-fno-cinrs-unwind` makes every one `extern "C"` and refuses `setjmp` and
+  `longjmp`. The calling convention is the same; what changes is the Rust
+  *type* of a function pointer, which Rust code handing the unit a callback
+  has to match.
 * **Foreign frames.** A C library function between the two — `qsort` calling
   a comparator that jumps — has to have unwind tables; glibc's do.
 * **The cost.** A `setjmp` costs what GCC's does. A `longjmp` is a Rust
-  unwind: about a microsecond, plus about 90 ns for each frame it crosses,
-  where GCC's is tens of nanoseconds.
+  unwind and a walk ahead of it: about 1.2 µs, plus about 130 ns for each
+  frame it crosses, where GCC's is tens of nanoseconds.
 * **std, and a target that unwinds.** `#pragma cinrs no_std` and WebAssembly,
   whose Rust aborts on a panic, refuse both, and so does a crate built with
   `panic = "abort"`, at compile time.
 * **Signal handlers.** A `longjmp` out of a handler works when the signal
   arrived inside a library call — `raise`, a `kill` of the process itself, a
   blocking system call — and not when it interrupted the program's own code,
-  where there is no call to unwind from: the program aborts.
-* **What the frames in between do.** They are unwound, so they run what Rust
-  runs on the way out: a `cleanup` attribute's function is called, where
-  GCC's `longjmp` skips it, and variable length arrays are given back.
+  where there is no call to unwind from: the program stops with a message.
+* **What the frames in between do.** They are unwound, and they run what
+  GCC's `longjmp` runs: no `cleanup` attribute's function (the guard checks
+  `std::thread::panicking()`), and the storage of variable length arrays is
+  given back, as the stack is.
 
 ## One block, one module
 

@@ -298,13 +298,22 @@ type it writes, `extern "C-unwind"` rather than `extern "C"`. A `longjmp` is a
 Rust unwind here (see [Non-local jumps](translation.md#non-local-jumps)), and
 an unwind that leaves an `extern "C"` function is undefined behaviour, so a
 unit a `longjmp` passes through needs it — like the one above, when the
-callback another unit hands it jumps out. A unit that calls `setjmp` or
-`longjmp` itself is `C-unwind` without asking.
+callback another unit hands it jumps out.
+
+The policy for a block, exactly:
+
+* **`extern "C"` by default.** A block that neither jumps nor is jumped
+  through keeps the ABI Rust callers and callbacks are written against.
+* **`extern "C-unwind"` with this pragma**, or **automatically** for a unit
+  that calls `setjmp` or `longjmp` (any spelling, `__builtin_` ones included)
+  or takes `longjmp`'s address.
 
 The calling convention is the same; what changes is the Rust *type* of the
 unit's function pointers, `Option<unsafe extern "C-unwind" fn(…)>`, which a
-Rust callback handed to the unit then has to be. It takes no argument and
-reaches the whole unit. `ccinrs` turns it on for every file.
+Rust callback handed to the unit then has to be — the reason it is not the
+default. It takes no argument and reaches the whole unit. `ccinrs` makes
+every file `C-unwind`, and under `-fno-cinrs-unwind` refuses this pragma with
+a located error.
 
 ### `crate "<path>"`
 

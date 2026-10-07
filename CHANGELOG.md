@@ -12,17 +12,38 @@ follows [Semantic Versioning][semver].
 
 ### Added
 
-* **`setjmp` and `longjmp`** (prototype), as a Rust unwind: `longjmp` is
-  `resume_unwind` to the activation the `jmp_buf` names, and a function that
-  calls `setjmp` runs its control-flow graph inside `catch_unwind`, with its
-  locals hoisted outside, re-entering at the `setjmp` the jump came back to.
-  `setjmp`, `_setjmp`, `sigsetjmp` (signal mask included), `__builtin_setjmp`
-  and their `longjmp`s, from the bundled `<setjmp.h>` or the platform's; a
-  `setjmp` where C17 7.13.1.1p4 allows it, plus `r = setjmp(buf)` and
-  `int r = setjmp(buf)`, and anywhere else a located error. A unit that uses
-  either, or says `#pragma cinrs unwind`, is `extern "C-unwind"` throughout;
-  `ccinrs` makes every file so. A `longjmp` to a function that has returned
-  aborts with a message. See [`doc/translation.md`](doc/translation.md#non-local-jumps).
+* **`setjmp` and `longjmp`**, as a Rust unwind: `longjmp` is `resume_unwind`
+  to the activation the `jmp_buf` names, and a function that calls `setjmp`
+  runs its control-flow graph inside `catch_unwind`, with its locals hoisted
+  outside — so they keep their latest values — re-entering at the `setjmp`
+  the jump came back to. `setjmp`, `_setjmp`, `sigsetjmp` (signal mask
+  included), `__builtin_setjmp` and their `longjmp`s, from the bundled
+  `<setjmp.h>` (now a real header) or the platform's, and `longjmp`'s address.
+  A `setjmp` where C17 7.13.1.1p4 allows it, plus `r = setjmp(buf)`,
+  `int r = setjmp(buf)` and `if ((r = setjmp(buf)) == 0)`, and anywhere else
+  a located error. libpng's default build, TurboJPEG, xz's unit tests and Lua
+  now build and pass their suites with `ccinrs`, and six gcc-torture cases
+  pass. See [`doc/limitations.md`](doc/limitations.md#setjmp-and-longjmp) for
+  what works and what does not.
+  * A `longjmp` that cannot be done stops the program with a message of
+    cinrs's own before anything is unwound: out of a signal handler that
+    interrupted the program's own code, onto a buffer whose `setjmp` has
+    returned or ran on another thread or stack, or through a frame without
+    unwind tables. It walks the stack first, which is part of its cost —
+    about 1.2 µs and 130 ns a frame, against GCC's tens of nanoseconds.
+  * A `cleanup` attribute does not run when a `longjmp` (or a Rust panic)
+    leaves its scope, as in GCC.
+  * Refused on WebAssembly, under `#pragma cinrs no_std` and with
+    `panic = "abort"`.
+* **`#pragma cinrs unwind`**, and `extern "C-unwind"` for a unit that calls
+  `setjmp` or `longjmp`: every function, declaration and function pointer
+  type of the unit, which a `longjmp` can then pass through. Other blocks
+  stay `extern "C"`. See [`doc/pragmas.md`](doc/pragmas.md#unwind).
+* **`ccinrs`'s `-fno-cinrs-unwind`** (and `-fcinrs-unwind`, the default):
+  `ccinrs` makes every function `extern "C-unwind"`, which costs about 2 % of
+  the instructions SQLite's speedtest1 runs; the option makes them
+  `extern "C"` and refuses `setjmp` and `longjmp` with a located error naming
+  it.
 * **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
   versioned with the other four; see [`doc/ccinrs.md`](doc/ccinrs.md). Each C
   file is translated by cinrs and compiled by `rustc` into an ordinary object,
@@ -135,6 +156,12 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* A program or library `ccinrs` links stops at a panic — a run-time check
+  that failed — with Rust's message and `abort`, through a hook its link
+  installs. Now that every function is `extern "C-unwind"`, the panic would
+  otherwise unwind looking for a handler and end with "fatal runtime error:
+  failed to initiate panic"; before, it ended with a backtrace of "panic in a
+  function that cannot unwind".
 * A source file — a header, an `include_c99!` file — no longer has to be
   UTF-8. A byte that is not part of a UTF-8 sequence is passed through a
   narrow string literal as the byte it was, read as Latin-1 in a wide one and
@@ -166,6 +193,11 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* `s.a = s.b = 1` on two bit-fields of one record compiles; the setter's
+  borrow of the record overlapped the inner assignment's (E0499, in libpng's
+  pngfix).
+* `__extension__` is followed by a *cast* expression, as in GCC's grammar:
+  Lua's `(__extension__ (lua_CFunction)(p))` was a call of a type.
 * A function declared through a `typedef` of a function type — `typedef int
   handler(int); static handler f, g;` — is a function. It was read as an
   object of an incomplete type and refused; expat declares its parser's state

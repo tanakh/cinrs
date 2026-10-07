@@ -134,26 +134,8 @@
   `#pragma cinrs system_include`; see [System headers](system-headers.md) for
   what that costs. glibc's `<tgmath.h>` goes through, but its macros need
   `__builtin_tgmath`, which cinrs does not have.
-* `setjmp` and `longjmp` are a Rust unwind and a `catch_unwind` (see [What
-  the C becomes](translation.md#non-local-jumps)), which has six
-  consequences. A `setjmp` may only stand where C17 7.13.1.1p4 allows it, plus
-  `r = setjmp(buf);`, `int r = setjmp(buf);` and
-  `if ((r = setjmp(buf)) == 0)` — anywhere else, and inside a
-  statement expression, it is a located error. A `longjmp` costs about a
-  microsecond, plus about 90 ns for every frame it crosses, where GCC's costs
-  tens of nanoseconds. Every frame it crosses has to be one cinrs compiled
-  with the `C-unwind` ABI (a unit that uses `setjmp` or `longjmp` has it, and
-  `#pragma cinrs unwind` gives it to one that does not) or a C function with
-  unwind tables, as glibc's are. And it needs `std` and a target that
-  unwinds: `#pragma cinrs no_std` and WebAssembly refuse it. A `longjmp` out
-  of a signal handler works when the signal arrived inside a library call
-  (`raise`, `kill` of the process itself, a blocking system call), and not
-  when it interrupted the program's own code — a timer, a fault: there is no
-  call there to unwind from, and the program aborts ("failed to initiate
-  panic"). And the frames a `longjmp` leaves are unwound the way Rust unwinds
-  them: a `cleanup` attribute's function runs, where GCC's `longjmp` skips
-  it, and a variable length array's storage is given back. A `longjmp` to a
-  function that has returned, undefined in C, aborts with a message.
+* `setjmp` and `longjmp` work, as a Rust unwind, with limits of their own:
+  see [setjmp and longjmp](#setjmp-and-longjmp) below.
 * Of TS 18661-3's floating types, `_Float32`, `_Float64`, `_Float32x` and
   `_Float64x` are here as the types they are on this model (`float`, `double`,
   `double`, and `long double`, which is `double`). `_Float128` (and
@@ -214,3 +196,78 @@
   [string literal](features.md#input-forms) (`c99! { r#"…"# }`) never needs a
   position in the first place. A `cargo build` is unaffected: `rustc` gives the
   positions and the file on disk is what it compiles.
+
+## setjmp and longjmp
+
+A `longjmp` is a Rust unwind here, and the function that called `setjmp`
+catches it and goes on after the `setjmp` the buffer names; [What the C
+becomes](translation.md#non-local-jumps) shows the translation. What follows
+from that:
+
+**What works.**
+
+* `setjmp`, `_setjmp`, `sigsetjmp` (the signal mask saved and restored),
+  GCC's `__builtin_setjmp`, and their `longjmp`s — from the bundled
+  `<setjmp.h>` or the platform's, through a function pointer to `longjmp`
+  too (libpng hands `longjmp` itself to the library).
+* A `longjmp` across any number of frames: other C files, another `c99!`
+  block, and C library functions with unwind tables — glibc's `qsort`
+  calling a comparator that jumps, a `raise` or a blocking system call whose
+  signal handler jumps.
+* libpng's error recovery, TurboJPEG, xz's tuktest, and Lua's
+  `pcall`/`error` and its test suite run with their gcc output.
+
+**Where a `setjmp` may stand.** As C17 7.13.1.1p4 says: the whole controlling
+expression of an `if`, `switch`, `while`, `do` or `for`, alone, negated with
+`!`, or compared with an integer constant; or a whole expression statement,
+cast to `void` or not. Beyond C17, as GCC takes them: `r = setjmp(buf);`,
+`int r = setjmp(buf);` and `if ((r = setjmp(buf)) == 0)`. Anywhere else — an
+operand of anything else, `return setjmp(buf);`, a statement expression — is
+a located error that says so: what follows the call could not be resumed.
+
+**What differs from GCC.**
+
+* **Locals keep their latest values.** C promises only `volatile` ones after
+  a `longjmp`; here every local of the function that called `setjmp` has the
+  value it had when the jump left, which is stronger and allowed.
+* **A `cleanup` attribute does not run** when a `longjmp` leaves its scope —
+  as in GCC, which runs one only for `-fexceptions` unwinding. The storage of
+  a variable length array or an `alloca` *is* given back, as the stack is.
+* **A `longjmp` costs about 1.2 µs**, plus about 130 ns for every frame it
+  crosses (it walks the stack once to check that the jump can be done, and
+  the unwind walks it twice), where GCC's costs tens of nanoseconds: Lua's
+  error-raising loop is several times slower than with gcc. A `setjmp` costs
+  what GCC's does, and so does a `pcall` that raises nothing.
+* **Every function is `extern "C-unwind"`** in a unit that might be crossed:
+  under `ccinrs`, every file, which costs about 2 % of the instructions on
+  SQLite (`-fno-cinrs-unwind` takes it back, and refuses `setjmp` and
+  `longjmp`); in a `c99!` block, only one that calls `setjmp` or `longjmp`
+  itself or says [`#pragma cinrs unwind`](pragmas.md#unwind). A Rust callback
+  handed to such a unit has to be `extern "C-unwind"` too.
+
+**What cannot be done, and stops the program with a message.**
+
+* **A `longjmp` out of a signal handler that interrupted the program's own
+  code** — a timer's `SIGALRM` in a loop, a fault. There is no call at the
+  interrupted instruction to unwind from:
+
+  ```text
+  cinrs: longjmp out of a signal handler that interrupted the program's own code
+  (an asynchronous signal, such as a timer's or a fault's): a longjmp is an unwind
+  here, and there is no call at the interrupted instruction to unwind from; see …
+  ```
+
+  A signal that arrives inside a library call — `raise`, `kill` of the
+  process itself, a blocking `read` — is fine.
+* **A `longjmp` to a function that has returned, or onto another thread's or
+  another stack's buffer** (a coroutine library's), which C17 7.13.2.1 leaves
+  undefined: "cinrs: longjmp to a jmp_buf whose setjmp is not active on this
+  thread: …", or "… to a setjmp that is not on this stack: …".
+* **A frame in between that cannot be unwound** — C compiled without unwind
+  tables, or a file `ccinrs -fno-cinrs-unwind` compiled: "cinrs: longjmp
+  cannot unwind to its setjmp: …".
+
+**Refused where they are written.** WebAssembly (whose Rust aborts on a
+panic), a target with no operating system and `#pragma cinrs no_std` (no
+`std` to catch an unwind with), a crate built with `panic = "abort"` (at
+compile time), and `ccinrs -fno-cinrs-unwind`.
