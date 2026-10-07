@@ -408,6 +408,15 @@ fn the_command_line_is_checked() {
         "ccinrs: warning: ignoring unknown warning option '-Wfrobnicate'\n\
          ccinrs: warning: ignoring unknown option '-ffrobnicate'\n"
     );
+    // CMake's `check_c_compiler_flag(/W4)` must not take an MSVC option for
+    // a file it does not find.
+    let out = s.ccinrs(&["-c", "x.c", "/W4"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: warning: /W4: linker input file unused because linking not done\n\
+         ccinrs: error: /W4: linker input file not found: No such file or directory\n"
+    );
     let out = s.ccinrs(&["-fshort-enums", "x.c"]);
     assert_eq!(
         stderr(&out),
@@ -424,6 +433,24 @@ fn the_command_line_is_checked() {
     assert_eq!(
         stderr(&out),
         "ccinrs: error: x.cpp: ccinrs compiles C, not this language\n"
+    );
+    // A header is preprocessed, as curl's tests preprocess `curl.h`, and
+    // compiled by nothing else.
+    s.write(
+        "api.h",
+        "#define TWICE(x) ((x) * 2)\nint api(int);\nTWICE(21)\n",
+    );
+    let out = s.ccinrs(&["-E", "-P", "api.h"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("int api(int);") && stdout(&out).contains("21 ) * 2"),
+        "{}",
+        stdout(&out)
+    );
+    let out = s.ccinrs(&["-c", "api.h"]);
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: api.h: a header is not compiled on its own; ccinrs makes no precompiled headers\n"
     );
     let out = s.ccinrs(&["--target=foo-bar", "x.c"]);
     assert!(
@@ -711,6 +738,17 @@ fn the_compiler_says_what_it_is() {
     let out = s.ccinrs(&["-v"]);
     assert!(out.status.success());
     assert!(stderr(&out).starts_with("ccinrs "), "{}", stderr(&out));
+    // What libtool and CMake ask of a compiler.
+    assert_eq!(
+        stdout(&s.ccinrs(&["--target=aarch64-unknown-linux-musl", "-print-multiarch"])),
+        "aarch64-linux-musl\n"
+    );
+    assert_eq!(stdout(&s.ccinrs(&["-print-prog-name=ld"])), "ld\n");
+    let out = stdout(&s.ccinrs(&["-print-search-dirs"]));
+    assert!(
+        out.starts_with("install: ") && out.contains("\nlibraries: ="),
+        "{out}"
+    );
 }
 
 /// `-flto` makes objects that are crates, which a link with `-flto`

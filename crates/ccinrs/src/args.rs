@@ -67,7 +67,7 @@ pub enum Lto {
 }
 
 /// What a command line asks that is not a compilation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Query {
     /// `--version`.
     Version,
@@ -79,6 +79,19 @@ pub enum Query {
     DumpMachine,
     /// `--help`.
     Help,
+    /// `-print-search-dirs`, whose `libraries:` line libtool reads.
+    SearchDirs,
+    /// `-print-prog-name=…`, `-print-file-name=…`: GCC answers with the path
+    /// of its own program or file of that name, or with the name itself when
+    /// it has none — and `ccinrs` has none.
+    Name(String),
+    /// `-print-multi-os-directory`.
+    MultiOsDirectory,
+    /// `-print-multiarch`: Debian's name for the target's library directory.
+    Multiarch,
+    /// `-print-sysroot`, `-print-multi-directory`, `-print-multi-lib`,
+    /// `-dumpspecs`: what GCC says when there is nothing to say, as a line.
+    Literal(&'static str),
 }
 
 /// One file named on the command line.
@@ -393,6 +406,31 @@ const QUIET_FLAGS: &[&str] = &[
     "no-jump-tables",
     "merge-constants",
     "no-merge-constants",
+    // Hardening a distribution's build asks for, which changes nothing a
+    // program can see.
+    "stack-protector-strong",
+    "stack-protector-all",
+    "stack-protector-explicit",
+    "cf-protection=",
+    "zero-call-used-regs=",
+    "sanitize-recover",
+    "no-sanitize-recover",
+    "optimize-sibling-calls",
+    "no-optimize-sibling-calls",
+    "tls-model=",
+    "strict-flex-arrays=",
+    "debug-prefix-map=",
+    "visibility-inlines-hidden",
+    // Floating point kept strict, which `rustc` never does otherwise: no
+    // contraction into fused multiply-adds, no fast-math assumptions, SSE's
+    // precision and no other.
+    "fp-contract=",
+    "no-fast-math",
+    "no-finite-math-only",
+    "signed-zeros",
+    "trapping-math",
+    "no-trapping-math",
+    "excess-precision=",
 ];
 
 /// `-f` options that change what a program means in a way cinrs cannot
@@ -434,6 +472,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
     let mut force_c = false;
     // Standard input is C only under `-x c`, or when it is only preprocessed.
     let mut stdin = None;
+    // `.h` files, which only `-E` and `-M` take.
+    let mut headers: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next() {
         // An option whose value may be attached (`-Idir`) or the next
         // argument (`-I dir`).
@@ -559,11 +599,27 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             "-dumpversion" => inv.query = Some(Query::DumpVersion),
             "-dumpfullversion" => inv.query = Some(Query::DumpFullVersion),
             "-dumpmachine" => inv.query = Some(Query::DumpMachine),
+            "-print-search-dirs" => inv.query = Some(Query::SearchDirs),
+            "-print-multi-os-directory" => inv.query = Some(Query::MultiOsDirectory),
+            "-print-multiarch" => inv.query = Some(Query::Multiarch),
+            "-print-libgcc-file-name" => inv.query = Some(Query::Name("libgcc.a".to_owned())),
+            "-print-sysroot" => inv.query = Some(Query::Literal("")),
+            "-print-multi-directory" => inv.query = Some(Query::Literal(".")),
+            "-print-multi-lib" => inv.query = Some(Query::Literal(".;")),
+            "-dumpspecs" => inv.query = Some(Query::Literal("")),
+            _ if arg.starts_with("-print-prog-name=") || arg.starts_with("-print-file-name=") => {
+                let (_, name) = arg.split_once('=').expect("the prefix has one");
+                inv.query = Some(Query::Name(name.to_owned()));
+            }
             "-w" => inv.warnings = false,
             "-v" => inv.verbose = true,
             "-s" => inv.strip = true,
             "-shared" => inv.shared = true,
             "-static" => inv.static_link = true,
+            // `rustc` links a position-independent executable for Linux
+            // anyway, and the objects are position-independent whatever is
+            // asked: `-no-pie` is a property a program cannot observe.
+            "-pie" | "-no-pie" => {}
             // The C driver's spelling of `--export-dynamic`, which the C
             // compiler `rustc` links with understands as it is.
             "-rdynamic" => inv.linker_args.push(arg.clone()),
@@ -647,13 +703,27 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             _ if arg.starts_with('-') => {
                 return Err(format!("unrecognized command-line option '{arg}'"));
             }
-            _ => inv.inputs.push(input(PathBuf::from(&arg), force_c)?),
+            _ => {
+                let path = PathBuf::from(&arg);
+                if !force_c && path.extension().is_some_and(|ext| ext == "h") {
+                    headers.push(path.clone());
+                }
+                inv.inputs.push(input(path, force_c)?);
+            }
         }
     }
     // GCC's rule: nothing says what language standard input is, so it has to
     // be said, unless all that is asked is to preprocess it.
     if stdin == Some(false) && inv.stage != Stage::Preprocess {
         return Err("-E or -x required when input is from standard input".to_owned());
+    }
+    if let Some(header) = headers.first()
+        && inv.stage != Stage::Preprocess
+    {
+        return Err(format!(
+            "{}: a header is not compiled on its own; ccinrs makes no precompiled headers",
+            header.display()
+        ));
     }
     Ok(inv)
 }
@@ -695,11 +765,9 @@ fn input(path: PathBuf, force_c: bool) -> Result<Input, String> {
         .unwrap_or("")
         .to_owned();
     match ext.as_str() {
-        "c" | "i" => Ok(Input::C(path)),
-        "h" => Err(format!(
-            "{}: a header is not compiled on its own; ccinrs makes no precompiled headers",
-            path.display()
-        )),
+        // A header is C to `-E` and `-M` — curl's tests preprocess `curl.h`
+        // — and to nothing else; see `parse`.
+        "c" | "i" | "h" => Ok(Input::C(path)),
         "cc" | "cpp" | "cxx" | "C" | "c++" | "m" | "mm" => Err(format!(
             "{}: ccinrs compiles C, not this language",
             path.display()
@@ -900,6 +968,10 @@ mod tests {
             "-pedantic",
             "-fPIC",
             "-fwrapv",
+            "-fstack-protector-strong",
+            "-ftls-model=global-dynamic",
+            "-ffp-contract=off",
+            "-pie",
             "a.c",
         ])
         .unwrap();
@@ -924,6 +996,22 @@ mod tests {
                 .unwrap_err()
                 .contains("unrecognized")
         );
+    }
+
+    #[test]
+    fn questions_a_build_asks() {
+        let ask = |arg: &str| parse_all(&[arg]).unwrap().query;
+        assert_eq!(ask("-print-search-dirs"), Some(Query::SearchDirs));
+        assert_eq!(ask("-print-multiarch"), Some(Query::Multiarch));
+        assert_eq!(
+            ask("-print-prog-name=ld"),
+            Some(Query::Name("ld".to_owned()))
+        );
+        assert_eq!(
+            ask("-print-file-name=libc.so"),
+            Some(Query::Name("libc.so".to_owned()))
+        );
+        assert_eq!(ask("-print-multi-directory"), Some(Query::Literal(".")));
     }
 
     #[test]

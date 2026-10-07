@@ -79,11 +79,12 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-march=`, `-mcpu=` | `rustc`'s `-C target-cpu`, `native` included; the feature macros (`__AVX2__`, …) follow what the processor has |
 | `-mavx2`, `-mno-avx512f`, … | `rustc`'s `-C target-feature`, in GCC's names, and the macros with them (x86) |
 | `--target=`, `--sysroot=` | another machine; see [Targets](#targets) |
-| `-l`, `-L`, `-Wl,…`, `-pthread`, `-s` | as GCC's; `-pthread` also defines `_REENTRANT` |
+| `-l`, `-L`, `-Wl,…`, `-pthread`, `-s`, `-pie`, `-no-pie` | as GCC's; `-pthread` also defines `_REENTRANT`; the program is position-independent either way |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
 | `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
+| `-print-search-dirs`, `-print-multiarch`, `-print-multi-os-directory`, `-print-prog-name=`, `-print-file-name=`, … | what libtool asks: the platform's library directories (Debian's layout), and a name handed back as GCC hands back one it has no file for |
 
 A `-W` option, a common `-f` code-generation option (`-fPIC`,
 `-fno-strict-aliasing`, `-fvisibility=hidden`, …), `-pedantic` and `-pipe`

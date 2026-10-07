@@ -41,7 +41,7 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
             eprintln!("ccinrs: warning: {note}");
         }
     }
-    if let Some(query) = inv.query {
+    if let Some(query) = &inv.query {
         return answer(inv, query);
     }
     if inv.inputs.is_empty() {
@@ -167,21 +167,70 @@ impl ObjectInfo {
     }
 }
 
-/// Answers `--version`, `-dumpmachine` and the like.
-fn answer(inv: &Invocation, query: Query) -> Result<(), Failure> {
+/// Answers `--version`, `-dumpmachine`, `-print-search-dirs` and the like.
+fn answer(inv: &Invocation, query: &Query) -> Result<(), Failure> {
     let (major, minor, patch) = cinrs_core::GCC_VERSION;
+    let triple = || -> Result<String, String> {
+        match &inv.target {
+            Some(triple) => Ok(triple.clone()),
+            None => Ok(Rustc::locate()?.host),
+        }
+    };
     match query {
         Query::Version => print!("{}", version_text()),
         // What `__GNUC__` says, which is what a build that asks compares.
         Query::DumpVersion => println!("{major}"),
         Query::DumpFullVersion => println!("{major}.{minor}.{patch}"),
-        Query::DumpMachine => match &inv.target {
-            Some(triple) => println!("{triple}"),
-            None => println!("{}", Rustc::locate()?.host),
-        },
+        Query::DumpMachine => println!("{}", triple()?),
         Query::Help => print!("{HELP}"),
+        Query::Name(name) => println!("{name}"),
+        // GCC's answer on a 64-bit Debian or Ubuntu, where the libraries are
+        // in `lib/<multiarch>` beside `lib`.
+        Query::MultiOsDirectory => println!("../lib"),
+        Query::Multiarch => println!("{}", multiarch(&triple()?)),
+        Query::Literal(text) => println!("{text}"),
+        // The directories a link searches for the C library's libraries:
+        // the platform's, for a program for this machine, whose linker is
+        // the platform's; nothing for another.
+        Query::SearchDirs => {
+            let install = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| format!("{}/", dir.display())))
+                .unwrap_or_default();
+            let mut libraries = Vec::new();
+            if inv.target.is_none() {
+                let arch = multiarch(&triple()?);
+                if !arch.is_empty() {
+                    libraries.push(format!("/lib/{arch}/"));
+                    libraries.push(format!("/usr/lib/{arch}/"));
+                }
+                libraries.push("/lib/".to_owned());
+                libraries.push("/usr/lib/".to_owned());
+                libraries.retain(|dir| Path::new(dir).is_dir());
+            }
+            println!("install: {install}");
+            println!("programs: ={install}");
+            println!("libraries: ={}", libraries.join(":"));
+        }
     }
     Ok(())
+}
+
+/// Debian's name for a Linux target's library directory — `x86_64-linux-gnu`,
+/// `i386-linux-gnu`, `aarch64-linux-musl` — or nothing for another system.
+fn multiarch(triple: &str) -> String {
+    let parts: Vec<&str> = triple.split('-').collect();
+    let (Some(arch), Some(env)) = (parts.first(), parts.last()) else {
+        return String::new();
+    };
+    if !parts.contains(&"linux") {
+        return String::new();
+    }
+    let arch = match *arch {
+        "i386" | "i486" | "i586" | "i686" => "i386",
+        other => other,
+    };
+    format!("{arch}-linux-{env}")
 }
 
 /// What `--version` prints: ccinrs's own version, and the `rustc` it would
@@ -455,18 +504,10 @@ impl Run<'_> {
         let inv = self.inv;
         let mut out = Vec::new();
         let mut failed = false;
+        unused_linker_inputs(inv)?;
         for input in &inv.inputs {
-            let path = match input {
-                Input::C(path) => path,
-                Input::Linker(path) => {
-                    if inv.warnings {
-                        eprintln!(
-                            "ccinrs: warning: {}: linker input file unused because linking not done",
-                            path.display()
-                        );
-                    }
-                    continue;
-                }
+            let Input::C(path) = input else {
+                continue;
             };
             let pre = if path.as_os_str() == STDIN {
                 cinrs_core::preprocess_source(STDIN_NAME.to_owned(), read_stdin()?, &self.options)
@@ -786,6 +827,34 @@ fn write_rule(file: &Path, rule: &str) -> Result<(), String> {
     std::fs::write(file, rule).map_err(|error| format!("cannot write {}: {error}", file.display()))
 }
 
+/// The files for the linker on a command line that stops before the link,
+/// reported as unused, as GCC reports them — and one that does not exist is an
+/// error, as in GCC 15: CMake's test of whether `/W4` is a compiler option
+/// compiles a file with it, and an MSVC option must not pass for one.
+fn unused_linker_inputs(inv: &Invocation) -> Result<(), String> {
+    let mut missing = None;
+    for input in &inv.inputs {
+        if let Input::Linker(path) = input {
+            if inv.warnings {
+                eprintln!(
+                    "ccinrs: warning: {}: linker input file unused because linking not done",
+                    path.display()
+                );
+            }
+            if missing.is_none() && std::fs::metadata(path).is_err() {
+                missing = Some(path);
+            }
+        }
+    }
+    match missing {
+        Some(path) => Err(format!(
+            "{}: linker input file not found: No such file or directory",
+            path.display()
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The C files of a command line that stops before the link (`flag` is `-c`
 /// or `-S`), each with its index and the file it becomes: `-o` for a single
 /// one, `<stem>.<extension>` in the working directory otherwise, as GCC names
@@ -809,16 +878,7 @@ fn outputs_each<'a>(
             "cannot specify '-o' with '{flag}' and more than one C file"
         ));
     }
-    if inv.warnings {
-        for input in &inv.inputs {
-            if let Input::Linker(path) = input {
-                eprintln!(
-                    "ccinrs: warning: {}: linker input file unused because linking not done",
-                    path.display()
-                );
-            }
-        }
-    }
+    unused_linker_inputs(inv)?;
     Ok(sources
         .into_iter()
         .map(|(index, path)| {

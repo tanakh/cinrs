@@ -38,7 +38,11 @@ follows [Semantic Versioning][semver].
   * `-flto` compiles each file to an rlib and has the link optimise them as
     one program, cinrs's runtime and Rust's standard library included.
   * `-shared` links an ELF shared library that exports the C symbols;
-    `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`.
+    `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`, and
+    the `-print-*` questions libtool asks. `-E` takes a header, and `-pie`,
+    `-no-pie` and the hardening options distributions pass are taken.
+    `/dev/null` is a C file like any other, and a file for the linker that
+    does not exist is an error even when nothing is linked, as in GCC 15.
   * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`
     the first time a program needs it and kept in a cache directory.
   * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark, brotli, zlib and
