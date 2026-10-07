@@ -449,6 +449,77 @@ fn attributes_in_every_position_gcc_accepts_them() {
     assert_eq!(unsafe { declarators::through_a_pointer(21) }, 42);
 }
 
+/// `transparent_union`: a parameter of the union type takes an argument of
+/// any member's type — or a null pointer constant — and is passed as its first
+/// member, which is what glibc's `<sys/socket.h>` relies on under
+/// `_GNU_SOURCE` (`tests/system_headers.rs` calls the real `accept4`). Inside
+/// a definition the parameter is the union. Every value is what gcc prints.
+mod transparent {
+    cinrs::gnu99! {
+        typedef union {
+            int *ip;
+            long *lp;
+            const char *cp;
+        } num_arg __attribute__((__transparent_union__));
+
+        union __attribute__((transparent_union)) word { int i; unsigned u; };
+
+        static int deref(num_arg a) { return a.ip ? *a.ip : -1; }
+        static int low_bit(union word w) { return (int)(w.u & 1u); }
+
+        int calls(void) {
+            int x = 7;
+            long y = 40;
+            char buf[sizeof(int)] = "x";
+            num_arg both = { &x };
+            int (*through)(num_arg) = deref;
+            return deref(&x) * 1000000      /* the first member: 7 */
+                 + (deref(&y) == 40) * 100000 /* another member's type */
+                 + (deref(0) == -1) * 10000   /* a null pointer constant */
+                 + (deref((void *)0) == -1) * 1000
+                 + (deref(both) == 7) * 100   /* the union itself */
+                 + (through(buf) == 'x') * 10 /* through a pointer to it */
+                 + low_bit(3u) + low_bit(-2);  /* an integer of either sign */
+        }
+    }
+
+    #[test]
+    fn a_transparent_union_takes_any_member_and_is_passed_as_the_first() {
+        assert_eq!(unsafe { calls() }, 7_111_111);
+    }
+
+    /// GCC's rule for function types: a transparent union parameter is
+    /// compatible with any of its members' types, either way round, so the
+    /// function's address goes where a pointer to a function of the member
+    /// type is wanted — and the call through it passes what that function
+    /// takes. `gcc -O0` and `clang` print `7 40 40`.
+    mod function_types {
+        cinrs::gnu99! {
+            typedef union {
+                int *ip;
+                long *lp;
+            } num_arg __attribute__((__transparent_union__));
+
+            static int deref(num_arg a) { return a.ip ? *a.ip : -1; }
+            static int by_long(long *p) { return (int)*p; }
+
+            int through_pointers(void) {
+                int x = 7;
+                long y = 40;
+                int (*first)(int *) = deref;    /* the first member's type */
+                int (*second)(long *) = deref;  /* another member's */
+                int (*back)(num_arg) = by_long; /* the other way round */
+                return first(&x) * 10000 + second(&y) * 100 + back(&y);
+            }
+        }
+
+        #[test]
+        fn a_transparent_union_parameter_is_compatible_with_its_members() {
+            assert_eq!(unsafe { through_pointers() }, 74_040);
+        }
+    }
+}
+
 mod exported {
     /// An `asm` label on a *definition* names the symbol the item takes, which
     /// only means something for a unit that asks for real C symbols at all.

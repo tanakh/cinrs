@@ -61,6 +61,14 @@ follows [Semantic Versioning][semver].
   mbedtls's bignum loops and its zeroize barrier; `%c` and `%P` print an
   immediate without its `$`, as xz's range decoder needs; and basic asm at
   file scope, `__asm__("…");`, is `global_asm!`.
+* `__attribute__((transparent_union))`: a parameter of such a union takes an
+  argument of any member's type, or a null pointer constant, and is passed as
+  the first member, which is GCC's ABI. glibc's `bind`, `accept` and
+  `getsockname` under `_GNU_SOURCE` take a `struct sockaddr_in *` or `NULL`,
+  as libuv calls them. A union whose members could not all be passed that way
+  keeps GCC's warning and is an ordinary union. A function type with such a
+  parameter is compatible with one that has a member's type there, so libuv
+  passes `getsockname` as an `int (*)(int, struct sockaddr *, socklen_t *)`.
 * `cinrs-core`, for a command-line driver: `translate_file` and
   `translate_source`, which hand back the Rust, the diagnostics, the headers
   read and the symbols defined; `preprocess_file` and `preprocess_source`,

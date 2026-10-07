@@ -3119,6 +3119,42 @@ fn a_declaration_with_no_prototype_takes_the_library_one() {
 }
 
 #[test]
+fn a_union_that_cannot_be_passed_as_its_first_member_is_not_made_transparent() {
+    let (program, messages) = analysed(
+        "typedef union { int *p; const char *s; } fine __attribute__((transparent_union));\n\
+         union mixed { int i; float f; } __attribute__((transparent_union));\n\
+         union __attribute__((transparent_union)) sizes { char c; int i; };\n\
+         union __attribute__((transparent_union)) bits { int i : 3; int j; };\n\
+         union __attribute__((transparent_union)) none { };\n\
+         struct __attribute__((transparent_union)) pair { int a, b; };\n\
+         typedef int number __attribute__((transparent_union));\n\
+         int f(fine x, union mixed m, union sizes s) { return *x.p + m.i + s.i; }",
+        &Options::gnu(Standard::C11),
+    );
+    // GCC drops the attribute with a warning wherever the members could not
+    // all be passed as the first one is, and so does this.
+    let ignored = "warning: 'transparent_union' attribute ignored: every member has to be \
+                   passed as the first one is, a scalar of its size";
+    assert_eq!(
+        messages,
+        [
+            ignored,
+            ignored,
+            ignored,
+            "warning: union cannot be made transparent",
+            "warning: 'transparent_union' attribute ignored: only a union can be transparent",
+            "warning: 'transparent_union' attribute ignored: only a union can be transparent",
+        ]
+    );
+    // The one that holds is passed as its first member, a pointer; the
+    // others stay unions, passed as unions are.
+    let f = signature_of(&program, "f");
+    assert!(program.types.abi_param(f.params[0]).is_pointer());
+    assert_eq!(program.types.abi_param(f.params[1]), f.params[1]);
+    assert_eq!(program.types.abi_param(f.params[2]), f.params[2]);
+}
+
+#[test]
 fn a_data_address_in_a_function_pointer_is_held_by_a_whole_object_only() {
     // A whole object holds one as a data pointer; see
     // `ir::Object::data_fn_pointer`.

@@ -1255,6 +1255,95 @@ mod glibc {
         }
     }
 
+    // Under `_GNU_SOURCE`, glibc's `<sys/socket.h>` declares `bind`,
+    // `getsockname`, `accept4` and the rest with a `__transparent_union__`
+    // parameter, `__SOCKADDR_ARG` or `__CONST_SOCKADDR_ARG`: any of the
+    // `struct sockaddr_*` pointers, or `NULL`, goes where it is wanted, and
+    // the library is passed the pointer. libuv calls `accept4(fd, NULL,
+    // NULL, …)`.
+    mod gnu_source {
+        cinrs::gnu11! {
+            #define _GNU_SOURCE 1
+            #pragma cinrs system_include
+            #include <arpa/inet.h>
+            #include <errno.h>
+            #include <netinet/in.h>
+            #include <string.h>
+            #include <sys/socket.h>
+            #include <unistd.h>
+
+            int transparent_sockets(void) {
+                int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+                if (fd < 0) return -1;
+                struct sockaddr_in sin;
+                memset(&sin, 0, sizeof sin);
+                sin.sin_family = AF_INET;
+                sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                /* A `struct sockaddr_in *` for `__CONST_SOCKADDR_ARG`. */
+                if (bind(fd, &sin, sizeof sin) != 0 || listen(fd, 1) != 0) {
+                    close(fd);
+                    return -2;
+                }
+                struct sockaddr_in got;
+                socklen_t len = sizeof got;
+                if (getsockname(fd, &got, &len) != 0 || len != sizeof got) {
+                    close(fd);
+                    return -3;
+                }
+                /* And the `struct sockaddr *` every other C library wants. */
+                struct sockaddr_storage st;
+                socklen_t len2 = sizeof st;
+                if (getsockname(fd, (struct sockaddr *)&st, &len2) != 0) {
+                    close(fd);
+                    return -4;
+                }
+                if (((struct sockaddr_in *)&st)->sin_port != got.sin_port || got.sin_port == 0) {
+                    close(fd);
+                    return -5;
+                }
+                /* `NULL` for `__SOCKADDR_ARG`: nothing is pending. */
+                int r = accept4(fd, NULL, NULL, SOCK_NONBLOCK);
+                int e = errno;
+                close(fd);
+                if (r != -1 || (e != EAGAIN && e != EWOULDBLOCK)) return -6;
+                return 1;
+            }
+
+            /* libuv's `uv__pipe_getsockpeername(handle, getsockname, …)`:
+               `getsockname`, whose second parameter is `__SOCKADDR_ARG`, is
+               a function of the type with that union's first member there,
+               and is called through such a pointer. */
+            typedef int (*sockname_fn)(int, struct sockaddr *, socklen_t *);
+
+            static int call_through(sockname_fn f, int fd, struct sockaddr *sa, socklen_t *len) {
+                return f(fd, sa, len);
+            }
+
+            int transparent_function_pointer(void) {
+                int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+                if (fd < 0) return -1;
+                struct sockaddr_storage st;
+                socklen_t len = sizeof st;
+                int r = call_through(getsockname, fd, (struct sockaddr *)&st, &len);
+                sockname_fn peer = getpeername;
+                socklen_t len2 = sizeof st;
+                int p = peer(fd, (struct sockaddr *)&st, &len2); /* not connected */
+                close(fd);
+                return r == 0 && st.ss_family == AF_UNIX && p == -1 && errno == ENOTCONN;
+            }
+        }
+
+        #[test]
+        fn a_transparent_union_parameter_takes_any_sockaddr_and_null() {
+            assert_eq!(unsafe { transparent_sockets() }, 1);
+        }
+
+        #[test]
+        fn a_function_with_a_transparent_union_parameter_is_a_pointer_to_its_member() {
+            assert_eq!(unsafe { transparent_function_pointer() }, 1);
+        }
+    }
+
     #[test]
     fn a_bundled_header_and_a_platform_header_agree_on_every_shared_type() {
         unsafe {

@@ -703,6 +703,9 @@ impl Parser<'_> {
             // Only sema knows whether a definition follows, and that is the
             // whole of the question `weak` asks; see `Sema::reject_weak`.
             Some(gnu::Attribute::Weak) => attrs.weak = attrs.weak.or(Some(range)),
+            Some(gnu::Attribute::TransparentUnion) => {
+                attrs.transparent_union = attrs.transparent_union.or(Some(range));
+            }
             // A statement attribute with nothing to say here: a `switch` group
             // falls through in the generated Rust either way.
             Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}

@@ -1300,6 +1300,7 @@ impl Sema<'_> {
             packed: None,
             rust_align: 1,
             flexible: false,
+            transparent: false,
             emit: true,
             stands_for: None,
             range,
@@ -1594,6 +1595,61 @@ impl Sema<'_> {
         record.packed = laid_out.packed_attr;
         record.rust_align = laid_out.rust_align;
         record.flexible = flexible;
+        if let Some(range) = spec.attrs.transparent_union {
+            self.make_transparent(id, range);
+        }
+    }
+
+    /// GCC's `transparent_union`, on the union `id` — written on the union
+    /// itself or on a `typedef` of it, which is glibc's spelling.
+    ///
+    /// GCC passes such a union as its first member, so every member has to be
+    /// passed the same way: a scalar of the first member's size, and a pointer
+    /// or an integer where the first one is either, a floating member only
+    /// beside floating ones of its size. Where that does not hold, GCC ignores
+    /// the attribute with a warning ("'transparent_union' attribute
+    /// ignored"), and so does this; an empty union or a `struct` likewise
+    /// ("union cannot be made transparent").
+    pub(super) fn make_transparent(&mut self, id: RecordId, range: SourceRange) {
+        let record = self.types().record(id);
+        if record.kind != RecordKind::Union {
+            self.diags.warning(
+                range,
+                "'transparent_union' attribute ignored: only a union can be transparent",
+            );
+            return;
+        }
+        if !record.complete || record.fields.is_empty() {
+            self.diags
+                .warning(range, "union cannot be made transparent");
+            return;
+        }
+        let first = record.fields[0].ty;
+        let class = |ty: Ty| {
+            if ty.is_floating() {
+                Some(1)
+            } else if ty.is_integer() || ty.is_pointer() {
+                Some(0)
+            } else {
+                None
+            }
+        };
+        let size = |sema: &Self, ty: Ty| sema.size_of(ty);
+        let fits = record.fields.iter().all(|field| {
+            field.bits.is_none()
+                && class(field.ty).is_some()
+                && class(field.ty) == class(first)
+                && size(self, field.ty) == size(self, first)
+        });
+        if !fits {
+            self.diags.warning(
+                range,
+                "'transparent_union' attribute ignored: every member has to be passed as \
+                 the first one is, a scalar of its size",
+            );
+            return;
+        }
+        self.program.types.record_mut(id).transparent = true;
     }
 
     /// Refuses an `_Atomic` member that packing has left under-aligned.

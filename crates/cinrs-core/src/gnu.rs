@@ -58,6 +58,11 @@ pub enum Attribute {
     /// would be the only way to say it, and ignored on a declaration; see
     /// [`crate::sema`].
     Weak,
+    /// `transparent_union`: a parameter of the union type takes an argument
+    /// of any member's type and is passed as the first member; glibc's
+    /// `<sys/socket.h>` declares `accept` and the rest with one under
+    /// `_GNU_SOURCE`.
+    TransparentUnion,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -123,6 +128,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "cleanup" => Attribute::Cleanup,
         "mode" => Attribute::Mode,
         "weak" => Attribute::Weak,
+        "transparent_union" => Attribute::TransparentUnion,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,
@@ -201,7 +207,6 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
     "sentinel",
     "stdcall",
     "target_clones",
-    "transparent_union",
     "unavailable",
     "unsequenced",
     "unused",

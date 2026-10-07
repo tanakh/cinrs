@@ -620,6 +620,10 @@ pub struct RecordDef {
     pub rust_align: u64,
     /// Whether the record ends in a flexible array member.
     pub flexible: bool,
+    /// Whether this is a union with GCC's `transparent_union` attribute: a
+    /// parameter of the type takes an argument of any member's type, and is
+    /// passed as its first member is — see [`Types::abi_param`].
+    pub transparent: bool,
     /// Whether an item should be generated for this tag.
     pub emit: bool,
     /// The C type this record stands in for, when it is not a record in C at
@@ -890,6 +894,20 @@ impl Types {
         let id = RecordId(self.records.len() as u32);
         self.records.push(def);
         id
+    }
+
+    /// The type a parameter of type `ty` is *passed* as: `ty` itself, except
+    /// for a [transparent union](RecordDef::transparent), which GCC passes as
+    /// its first member — so glibc's `accept(int, __SOCKADDR_ARG, …)` is
+    /// called with a `struct sockaddr *`, which is what the library takes.
+    /// The C type of the parameter is still the union; this is the ABI.
+    pub fn abi_param(&self, ty: Ty) -> Ty {
+        match ty {
+            Ty::Record(id) if self.record(id).transparent => {
+                self.record(id).fields.first().map_or(ty, |field| field.ty)
+            }
+            _ => ty,
+        }
     }
 
     /// Adds an `enum` tag.

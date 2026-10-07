@@ -2243,6 +2243,14 @@ impl Sema<'_> {
                 continue;
             };
             match sig.params.get(index) {
+                // A transparent union is passed as its first member; the
+                // argument goes straight to that type.
+                Some(param) if self.types().abi_param(*param) != *param => {
+                    match self.transparent_argument(value, *param, index + 1, &name, arg.range) {
+                        Some(value) => values.push(value),
+                        None => failed = true,
+                    }
+                }
                 Some(param) => {
                     let value = self.convert_for(
                         value,
@@ -3349,6 +3357,107 @@ impl Sema<'_> {
             _ => return None,
         };
         Some(self.const_to_expr(value, to, expr.range))
+    }
+
+    /// An argument for a parameter of a [transparent
+    /// union](ir::RecordDef::transparent) type, converted to the type the
+    /// union is passed as: its first member's.
+    ///
+    /// GCC's rule (`convert_for_assignment`): the union itself is passed as
+    /// it is; otherwise the first member of a compatible type is the one, or
+    /// the first pointer member the argument's pointer converts to without
+    /// losing a qualifier — `void *` converting to and from any of them — and
+    /// failing those one it converts to by dropping a `const`; a null pointer
+    /// constant goes to the first pointer member. The value is converted to that
+    /// member's type and then to the first member's, which every member is
+    /// passed as; glibc's `accept(fd, NULL, NULL)` and `getsockname(fd,
+    /// &sin, &len)` with a `struct sockaddr_in` are the two shapes real code
+    /// writes.
+    fn transparent_argument(
+        &mut self,
+        value: Expr,
+        union: Ty,
+        index: usize,
+        func: &str,
+        range: SourceRange,
+    ) -> Option<Expr> {
+        let Ty::Record(id) = union else {
+            return None;
+        };
+        if value.ty.is_error() {
+            return Some(value);
+        }
+        let members: Vec<Ty> = self
+            .types()
+            .record(id)
+            .fields
+            .iter()
+            .map(|field| field.ty)
+            .collect();
+        let first = members[0];
+        if self.compatible(value.ty, union) {
+            let place = super::place_of(
+                PlaceKind::Field {
+                    base: Box::new(super::place_of(
+                        PlaceKind::Temporary(Box::new(value)),
+                        union,
+                        false,
+                        range,
+                    )),
+                    record: id,
+                    index: 0,
+                },
+                first,
+                false,
+                range,
+            );
+            return Some(Expr::new(ExprKind::Load(place), first, range));
+        }
+        let null = self.is_null_constant(&value);
+        let mut chosen = None;
+        let mut marginal = None;
+        for member in &members {
+            if self.compatible(*member, value.ty) {
+                chosen = Some(*member);
+                break;
+            }
+            if !member.is_pointer() {
+                continue;
+            }
+            if let (Some(to), Some(from)) = (self.pointee(*member), self.pointee(value.ty)) {
+                let to_const = self.types().points_to_const(*member);
+                let from_const = self.types().points_to_const(value.ty);
+                if to.is_void() || from.is_void() || self.compatible(to, from) {
+                    if to_const || !from_const {
+                        chosen = Some(*member);
+                        break;
+                    }
+                    // It would drop a `const`, which GCC accepts with a
+                    // warning when no member does better.
+                    if marginal.is_none() {
+                        marginal = Some(*member);
+                    }
+                }
+            }
+            if null {
+                chosen = Some(*member);
+                break;
+            }
+        }
+        let Some(member) = chosen.or(marginal) else {
+            self.error(
+                range,
+                format!(
+                    "passing '{}' to parameter {index} of '{func}', of the transparent union \
+                     type '{}', none of whose members has that type",
+                    self.tyname(value.ty),
+                    self.tyname(union)
+                ),
+            );
+            return None;
+        };
+        let value = self.convert(value, member);
+        Some(self.convert(value, first))
     }
 
     /// Converts a value for an assignment-like context, reporting the

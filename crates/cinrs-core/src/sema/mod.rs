@@ -1553,7 +1553,7 @@ impl<'a> Sema<'a> {
                     && x.params
                         .iter()
                         .zip(&y.params)
-                        .all(|(a, b)| self.compatible_in(*a, *b, comparing))
+                        .all(|(a, b)| self.param_compatible(*a, *b, comparing))
             }
             _ => {
                 let prototyped = if x.prototyped { x } else { y };
@@ -1564,6 +1564,34 @@ impl<'a> Sema<'a> {
                         .all(|p| *p == p.promote_argument(&self.target))
             }
         }
+    }
+
+    /// Whether two parameter types of two prototypes are compatible.
+    ///
+    /// GCC adds one rule to C's (`type_lists_compatible_p`): a parameter of a
+    /// [transparent union](ir::RecordDef::transparent) type is compatible
+    /// with one of any of its members' types, either way round. That is what
+    /// lets libuv pass glibc's `getsockname`, whose second parameter is
+    /// `__SOCKADDR_ARG` under `_GNU_SOURCE`, where an `int (*)(int, struct
+    /// sockaddr *, socklen_t *)` is wanted. The pointer is the same function
+    /// either way, and the call through it passes the union as its first
+    /// member, which every member is passed as; see [`ir::Types::abi_param`].
+    fn param_compatible(&self, a: Ty, b: Ty, comparing: &mut Vec<(RecordId, RecordId)>) -> bool {
+        if self.compatible_in(a, b, comparing) {
+            return true;
+        }
+        let has_member = |union: Ty, other: Ty, comparing: &mut Vec<(RecordId, RecordId)>| {
+            let Ty::Record(id) = union else {
+                return false;
+            };
+            let record = self.types().record(id);
+            record.transparent
+                && record
+                    .fields
+                    .iter()
+                    .any(|field| self.compatible_in(field.ty, other, comparing))
+        };
+        has_member(a, b, comparing) || has_member(b, a, comparing)
     }
 
     /// The composite of two declarations of one function (C99 6.2.7p3), or
@@ -1592,7 +1620,7 @@ impl<'a> Sema<'a> {
                     && a.params
                         .iter()
                         .zip(&b.params)
-                        .all(|(x, y)| self.compatible(*x, *y));
+                        .all(|(x, y)| self.param_compatible(*x, *y, &mut Vec::new()));
                 same.then(|| a.clone())
             }
             // 6.7.5.3p15, and the composite type is the prototype's.

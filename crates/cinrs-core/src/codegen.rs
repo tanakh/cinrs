@@ -2378,7 +2378,7 @@ impl<'a> Codegen<'a> {
             if index > 0 {
                 params.extend(quote_spanned! {span=> , });
             }
-            let ty = self.ty(*ty, span);
+            let ty = self.ty(self.program.types.abi_param(*ty), span);
             match func.param_names.get(index).and_then(|n| n.as_ref()) {
                 Some(name) => {
                     let name = self.c_ident(name, span);
@@ -2572,6 +2572,9 @@ impl<'a> Codegen<'a> {
             if index > 0 {
                 params.extend(quote_spanned! {span=> , });
             }
+            // A transparent union is taken as the first member it is passed
+            // as; sema's prologue builds the union.
+            let ty = &self.program.types.abi_param(*ty);
             if named {
                 let id = func.params[index];
                 let object = self.program.object(id);
@@ -6688,21 +6691,25 @@ impl<'a> Codegen<'a> {
         // happens there too. Where the prototype *was* in scope, sema has
         // already converted every argument to its parameter's type and the
         // comparison is an equality that holds.
+        //
+        // A transparent union parameter is compared at the type it is passed
+        // as, which is what sema converted the argument to.
         let reinterpreted = !sig.variadic
             && (args.len() != sig.params.len()
                 || args.iter().zip(&sig.params).any(|(arg, param)| {
-                    arg.ty != *param && !arg.ty.is_error() && !param.is_error()
+                    arg.ty != self.program.types.abi_param(*param)
+                        && !arg.ty.is_error()
+                        && !param.is_error()
                 }));
         let promoted: Vec<Ty> = if reinterpreted {
             args.iter().map(|arg| arg.ty).collect()
         } else {
-            Vec::new()
+            sig.params
+                .iter()
+                .map(|param| self.program.types.abi_param(*param))
+                .collect()
         };
-        let params = if reinterpreted {
-            &promoted
-        } else {
-            &sig.params
-        };
+        let params = &promoted;
 
         let mut target = match callee {
             Callee::Direct(id) => {
@@ -6931,7 +6938,7 @@ impl<'a> Codegen<'a> {
             if index > 0 {
                 list.extend(quote_spanned! {span=> , });
             }
-            list.extend(self.ty(*param, span));
+            list.extend(self.ty(self.program.types.abi_param(*param), span));
         }
         if variadic {
             if !params.is_empty() {

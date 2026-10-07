@@ -1,0 +1,34 @@
+error: passing 'double' to parameter 1 of 'deref', of the transparent union type 'union num_arg', none of whose members has that type
+  --> tests/ui/gnu_transparent_union.rs:17:23
+   |
+17 |         int n = deref(d);
+   |                       ^
+
+error: passing 'struct pair' to parameter 1 of 'deref', of the transparent union type 'union num_arg', none of whose members has that type
+  --> tests/ui/gnu_transparent_union.rs:18:20
+   |
+18 |         n += deref(p);
+   |                    ^
+
+error: passing 'short *' to parameter 1 of 'deref', of the transparent union type 'union num_arg', none of whose members has that type
+  --> tests/ui/gnu_transparent_union.rs:19:20
+   |
+19 |         n += deref(s);
+   |                    ^
+
+error: cannot initialize 'not_a_member', of type 'int (*)(short *)', with an expression of type 'int (*)(union num_arg)'
+       note: the pointee types differ; add a cast if the conversion is intended
+  --> tests/ui/gnu_transparent_union.rs:26:36
+   |
+26 |     int (*not_a_member)(short *) = deref;
+   |                                    ^^^^^
+
+error: cannot initialize 'nor_back', of type 'int (*)(union num_arg)', with an expression of type 'int (*)(short *)'
+       note: the pointee types differ; add a cast if the conversion is intended
+  --> tests/ui/gnu_transparent_union.rs:27:32
+   |
+27 |     int (*nor_back)(num_arg) = by_short;
+   |                                ^^^^^^^^
+
+error: aborting due to 5 previous errors
+

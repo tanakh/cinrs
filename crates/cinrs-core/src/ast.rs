@@ -596,6 +596,10 @@ pub struct Attributes {
     /// `weak`, which only sema can answer: it is refused on a definition and
     /// accepted on a declaration.
     pub weak: Option<SourceRange>,
+    /// `transparent_union`, on a `union` or on a `typedef` of one: a parameter
+    /// of the type takes an argument of any member's type, and is passed as
+    /// the first member is.
+    pub transparent_union: Option<SourceRange>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -637,6 +641,7 @@ impl Attributes {
         self.mode = self.mode.take().or(other.mode);
         self.safe = self.safe.or(other.safe);
         self.weak = self.weak.or(other.weak);
+        self.transparent_union = self.transparent_union.or(other.transparent_union);
     }
 }
 

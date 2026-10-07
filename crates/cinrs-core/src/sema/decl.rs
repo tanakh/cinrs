@@ -1779,6 +1779,19 @@ impl Sema<'_> {
             Err(err) => Err(err.message),
         };
         let mut out = self.take_vm_bounds();
+        // `typedef union { … } T __attribute__((transparent_union));` — glibc's
+        // `__SOCKADDR_ARG` — makes the union itself transparent, as GCC does.
+        if let Some(range) = attrs.transparent_union
+            && let Ok(resolved) = &resolved
+        {
+            match *resolved {
+                Ty::Record(id) => self.make_transparent(id, range),
+                _ => self.diags.warning(
+                    range,
+                    "'transparent_union' attribute ignored: only a union can be transparent",
+                ),
+            }
+        }
         if let Ok(resolved) = resolved
             && self.types().is_vm(resolved)
             && file_scope
@@ -2907,6 +2920,23 @@ impl Sema<'_> {
             // A parameter of a *definition* is an object; one of a prototype
             // is not, and is fine.
             self.refuse_float128_object(&name.name, ty, name.range);
+            // A transparent union is passed as its first member, and is the
+            // union again inside: the item takes the member under a hidden
+            // name, and the prologue builds the union from it, as it does for
+            // an old-style parameter's declared type.
+            let abi = self.types().abi_param(ty);
+            if abi != ty {
+                let object = self.new_object(
+                    &format!("__cinrs_tu_{}", name.name),
+                    abi,
+                    Storage::Automatic,
+                    false,
+                    name.range,
+                );
+                converted.push((name.clone(), ty, abi, object, param.ty.qualifiers.is_const));
+                params.push(object);
+                continue;
+            }
             if func.old_style {
                 // `resolve_param_ty` already succeeded for this parameter in
                 // `declare_function`, or there would be no `id` to be here
@@ -2965,7 +2995,8 @@ impl Sema<'_> {
         let first_function = self.program.functions.len();
         // `let a: c_char = __cinrs_kr_a as c_char;` — C99 6.9.1p10 gives an
         // old-style parameter the type its own declaration gave it, while the
-        // caller passed the promoted one, which is what the item takes.
+        // caller passed the promoted one, which is what the item takes. A
+        // transparent union is built from the first member it was passed as.
         let mut body = Vec::new();
         for (name, declared, promoted, object, is_const) in converted {
             let load = Expr::new(
@@ -2978,7 +3009,18 @@ impl Sema<'_> {
                 promoted,
                 name.range,
             );
-            let init = self.convert(load, declared);
+            let init = match declared {
+                Ty::Record(record) if self.types().record(record).transparent => Expr::new(
+                    ExprKind::UnionLit {
+                        record,
+                        index: 0,
+                        value: Box::new(load),
+                    },
+                    declared,
+                    name.range,
+                ),
+                _ => self.convert(load, declared),
+            };
             let local = self.new_object(
                 &name.name,
                 declared,
