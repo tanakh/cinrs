@@ -43,6 +43,17 @@
 //!   (`printf("%Lf", x)`, `sscanf("%Lf", &x)`) is refused for the same
 //!   reason.
 //!
+//! "Declared-only" is the platform's in a `c99!` block, which may call a C
+//! library a C compiler built through that library's own header. Under
+//! [`crate::Options::own_declarations_are_cinrs`] — what `ccinrs` sets, since
+//! what it links is what it compiled — only a function declared in the
+//! platform's headers or cinrs's bundled ones (or given the C library's
+//! prototype on the program's behalf) is the platform's: one the program
+//! declares in its own file or header is another file of the program, whose
+//! `long double` is the `double` this one passes, `printf`-style variadic
+//! functions of its own included. Redis's `ld2string` and `string2ld` are
+//! those. The twins are redirected wherever they are declared.
+//!
 //! Which expressions are `long double` has to be worked out on the side,
 //! since the type itself is already `double` in the IR: the declarations
 //! (objects, parameters, members, `typedef`s) are remembered by the range of
@@ -470,13 +481,27 @@ impl Sema<'_> {
         }
     }
 
-    /// Whether the function `id` is the platform's: declared here and defined
-    /// nowhere in the unit.
-    fn is_platform_function(&self, id: FuncId) -> bool {
+    /// Whether the function `id` is declared here and defined nowhere in the
+    /// unit.
+    fn is_declared_only(&self, id: FuncId) -> bool {
         let func = self.program.function(id);
         func.body.is_none()
             && func.intrinsic.is_none()
             && !self.defined_functions.contains(&func.name)
+    }
+
+    /// Whether the function `id` is the platform's: declared only, and —
+    /// where [`crate::Options::own_declarations_are_cinrs`] says the
+    /// program's own declarations are cinrs's — declared in the platform's
+    /// headers or cinrs's bundled ones, or given the C library's prototype on
+    /// the program's behalf. A function the program declares in its own file
+    /// or header is then another file of the program, compiled by cinrs, whose
+    /// `long double` is the `double` this one passes.
+    fn is_platform_function(&self, id: FuncId) -> bool {
+        self.is_declared_only(id)
+            && (!self.own_declarations_are_cinrs
+                || self.library_declared.contains(&id)
+                || self.library_prototyped.contains(&id))
     }
 
     /// Redirects the [twins](LONG_DOUBLE_TWINS) and refuses the rest, once the
@@ -490,7 +515,9 @@ impl Sema<'_> {
         let mut redirected = std::collections::HashSet::new();
         for index in 0..self.program.functions.len() {
             let id = FuncId(index as u32);
-            if !self.is_platform_function(id) {
+            // Wherever it is declared: a program that declares `powl` itself
+            // means the C library's, and that is `pow` here.
+            if !self.is_declared_only(id) {
                 continue;
             }
             let func = &mut self.program.functions[index];

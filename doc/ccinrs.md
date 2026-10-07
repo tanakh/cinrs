@@ -270,7 +270,10 @@ C project meets first:
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`
   for the platform's C library, which then reads the `double` it is given;
   a `long double` passed any other way to a platform function whose own is
-  wider (x87's on x86-64 Linux) is an error.
+  wider (x87's on x86-64 Linux) is an error. A function the platform's headers
+  do not declare is one of the program's own files, compiled by `ccinrs`, and
+  takes the same `double` — Redis's `ld2string` and `string2ld`, declared in
+  its own `util.h`, are called as they are defined.
 * **Only `rustc` links.** An object from another compiler links with
   `ccinrs`'s, but `ccinrs`'s objects need Rust's standard library, so another
   compiler's driver — `c++` linking a C++ program, say — cannot link them.

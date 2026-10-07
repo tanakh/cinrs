@@ -293,6 +293,51 @@ fn no_cinrs_unwind_refuses_setjmp() {
     assert!(s.run("plain", &[]).status.success());
 }
 
+/// What ccinrs links is what it compiled, so a function the program declares
+/// in its own header is another of its files, whose `long double` is the
+/// `double` this one passes — Redis's `ld2string` — while one the platform's
+/// headers declare keeps the x87 `long double` and is refused.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn a_programs_own_long_double_function_is_called() {
+    let s = Scratch::new("own-long-double");
+    s.write(
+        "half.h",
+        "long double half(long double x);\nlong double sum(int n, ...);\n",
+    );
+    s.write(
+        "half.c",
+        "#include <stdarg.h>\n#include \"half.h\"\n\
+         long double half(long double x) { return x / 2; }\n\
+         long double sum(int n, ...) {\n\
+         \x20   va_list ap; long double s = 0;\n\
+         \x20   va_start(ap, n);\n\
+         \x20   for (int i = 0; i < n; i++) s += va_arg(ap, long double);\n\
+         \x20   va_end(ap);\n\
+         \x20   return s;\n\
+         }\n",
+    );
+    s.write(
+        "main.c",
+        "#include <stdio.h>\n#include \"half.h\"\n\
+         int main(void) { printf(\"%.3f %.1f\\n\", (double)half(3.0L), (double)sum(2, 1.5L, 2.0L)); return 0; }\n",
+    );
+    s.compile(&["main.c", "half.c", "-o", "half"]);
+    assert_eq!(stdout(&s.run("half", &[])), "1.500 3.5\n");
+    s.write(
+        "platform.c",
+        "#define _GNU_SOURCE\n#include <stdlib.h>\n\
+         char *f(long double x, int *d, int *s) { return qfcvt(x, 2, d, s); }\n",
+    );
+    let out = s.ccinrs(&["-c", "platform.c"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("'qfcvt' takes a 'long double' (which is 'double' here)"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// GCC's `-ftrivial-auto-var-init=`: `zero`, the default, clears a local
 /// array nothing initialised; `uninitialized` leaves it a `MaybeUninit`, and
 /// the program that writes before it reads behaves the same; `pattern` is

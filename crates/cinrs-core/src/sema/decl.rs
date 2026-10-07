@@ -2647,6 +2647,12 @@ impl Sema<'_> {
                 id
             }
         };
+        // A declaration in the platform's headers or cinrs's own makes the
+        // function the C library's, whatever else declares it; see
+        // [`Sema::is_platform_function`].
+        if self.unit.in_library_header(name.range) {
+            self.library_declared.insert(id);
+        }
         Some(id)
     }
 

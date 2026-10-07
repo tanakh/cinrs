@@ -958,6 +958,7 @@ impl Parser<'_> {
             enums: std::mem::take(&mut self.enums),
             typeofs: std::mem::take(&mut self.typeofs),
             range,
+            library_headers: Vec::new(),
         }
     }
 

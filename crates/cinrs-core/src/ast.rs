@@ -1392,6 +1392,21 @@ pub struct TranslationUnit {
     pub typeofs: Vec<TypeofOperand>,
     /// The range covering the whole input.
     pub range: SourceRange,
+    /// The global positions the platform's headers and cinrs's bundled ones
+    /// occupy, filled in after preprocessing: a declaration whose name is in
+    /// one of them is the C library's rather than the program's. See
+    /// [`crate::Options::own_declarations_are_cinrs`].
+    pub library_headers: Vec<SourceRange>,
+}
+
+impl TranslationUnit {
+    /// Whether `range` is inside the platform's headers or cinrs's bundled
+    /// ones.
+    pub fn in_library_header(&self, range: SourceRange) -> bool {
+        self.library_headers
+            .iter()
+            .any(|header| header.start <= range.start && range.start < header.end)
+    }
 }
 
 impl TranslationUnit {

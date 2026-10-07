@@ -638,6 +638,11 @@ struct Sema<'a> {
     /// What a local declared without an initialiser starts out as; see
     /// [`ir::Object::uninit`].
     auto_var_init: crate::AutoVarInit,
+    /// [`Options::own_declarations_are_cinrs`].
+    own_declarations_are_cinrs: bool,
+    /// The functions some declaration of which is in the platform's headers
+    /// or cinrs's bundled ones; see [`Sema::is_platform_function`].
+    library_declared: HashSet<ir::FuncId>,
     program: Program,
     scopes: Vec<Scope>,
     tags: Vec<HashMap<String, TagEntry>>,
@@ -959,6 +964,8 @@ impl<'a> Sema<'a> {
             target: options.target,
             unwind: options.unwind,
             auto_var_init: options.auto_var_init,
+            own_declarations_are_cinrs: options.own_declarations_are_cinrs,
+            library_declared: HashSet::new(),
             program: Program {
                 unit_id,
                 // `#pragma cinrs crate` is the preprocessor's and reaches the

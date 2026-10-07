@@ -35,6 +35,13 @@ follows [Semantic Versioning][semver].
     leaves its scope, as in GCC.
   * Refused on WebAssembly, under `#pragma cinrs no_std` and with
     `panic = "abort"`.
+* **`ccinrs`: a `long double` function of the program's own** — declared in
+  its own files rather than in the platform's headers — is called with
+  cinrs's `long double`, the `double` its definition, compiled by `ccinrs`
+  too, takes; Redis's `ld2string` and `string2ld` were refused as if they were
+  the C library's. `Options::own_declarations_are_cinrs` is the switch; a
+  `c99!` block keeps refusing, since it may be calling a C library a C
+  compiler built through that library's own header.
 * **Uninitialised local arrays, on request**: `ccinrs
   -ftrivial-auto-var-init=uninitialized` (GCC's option; `zero` is the default
   and `pattern` is taken as `zero` with a warning) and `#pragma cinrs

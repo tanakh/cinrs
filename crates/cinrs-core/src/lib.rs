@@ -407,6 +407,21 @@ pub struct Options {
     /// auto_var_init uninitialized` (which wins for its unit) ask for
     /// uninitialised arrays.
     pub auto_var_init: AutoVarInit,
+    /// Whether a function or object the unit declares *outside* the
+    /// platform's headers and cinrs's bundled ones is taken to be compiled by
+    /// cinrs too, with cinrs's ABI.
+    ///
+    /// It decides what a `long double` in such a function's prototype is:
+    /// cinrs's `long double` — a `double` — rather than the platform's x87
+    /// or quad type, so a call to it is not refused (see [`crate::sema`]'s
+    /// `long double` boundary).
+    ///
+    /// **Off by default**: a `c99!` block may call a C library a C compiler
+    /// built, through that library's own header, which is not one of the
+    /// platform's. `ccinrs` turns it on, because what it links is what it
+    /// compiled — every file of the program — and the platform's libraries,
+    /// whose declarations are in the platform's headers.
+    pub own_declarations_are_cinrs: bool,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -511,6 +526,7 @@ impl Options {
             target_features: Vec::new(),
             unwind: Unwind::Auto,
             auto_var_init: AutoVarInit::Zero,
+            own_declarations_are_cinrs: false,
         }
     }
 
@@ -840,7 +856,7 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
     }
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);
-    let unit = parse::parse(
+    let mut unit = parse::parse(
         &tokens,
         unit_range,
         &packing,
@@ -848,6 +864,16 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         &options,
         &mut diagnostics,
     );
+    // Where the C library's declarations are; see
+    // [`ast::TranslationUnit::library_headers`].
+    unit.library_headers = included
+        .iter()
+        .filter(|file| file.kind != include::HeaderKind::User)
+        .map(|file| SourceRange {
+            start: file.base,
+            end: file.base + file.text.len() as Pos,
+        })
+        .collect();
     // Annotate here rather than at the end: every diagnostic is annotated
     // exactly once, right after the pass that produced it.
     expansions.annotate(&mut diagnostics);

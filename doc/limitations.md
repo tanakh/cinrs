@@ -68,9 +68,15 @@
   Where the platform's `long double` is `double` too (MSVC, 32-bit Arm, Apple
   arm64) nothing is refused, but the twins are still linked to the sibling:
   Microsoft's C runtime has no `powl`, `sinl` or `fabsl` symbol, only
-  `<corecrt_math.h>`'s inline wrappers over `pow`, `sin` and `fabs`. A `long double` function defined in *another*
-  `cinrs` unit is refused the same way, since a unit cannot tell it from the
-  platform's.
+  `<corecrt_math.h>`'s inline wrappers over `pow`, `sin` and `fabs`. In a
+  `c99!` block, a `long double` function defined in *another* `cinrs` unit is
+  refused the same way, since a block cannot tell it from a C library a C
+  compiler built and declared in a header of its own. `ccinrs` can: what it
+  links is what it compiled, so only a function the **platform's headers**
+  (or cinrs's bundled ones) declare is the platform's, and one the program
+  declares in its own files — Redis's `ld2string` — is called with cinrs's
+  `long double`, the `double` its definition takes, `...` included
+  ([`Options::own_declarations_are_cinrs`](../crates/cinrs-core/src/lib.rs)).
 * The [SIMD intrinsics](features.md#simd-intrinsics) are x86's and x86-64's, and
   what `core::arch` has on this crate's minimum supported Rust version — SSE
   through AVX-512, with the AVX-512 intrinsics Rust still keeps unstable
