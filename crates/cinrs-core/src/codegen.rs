@@ -8759,6 +8759,18 @@ impl<'a> Codegen<'a> {
             return quote_spanned! {span=> #object.store(#value, #order); };
         }
         match &place.bits {
+            // A value that is a block of its own — the `b = 1` of
+            // `s.a = s.b = 1` — may store into the same record, which the
+            // setter has already borrowed mutably; it is computed first.
+            Some(bits)
+                if value.clone().into_iter().any(
+                    |t| matches!(&t, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace),
+                ) =>
+            {
+                let setter = &bits.setter;
+                let tmp = Ident::new("__cinrs_bits", Span::mixed_site());
+                quote_spanned! {span=> { let #tmp = #value; #access.#setter(#tmp); } }
+            }
             Some(bits) => {
                 let setter = &bits.setter;
                 quote_spanned! {span=> #access.#setter(#value); }
