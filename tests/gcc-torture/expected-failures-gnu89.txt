@@ -64,7 +64,6 @@ execute/20050607-1                    [not-planned]    compile error: 'vector_si
 execute/20060420-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20070919-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20101011-1                    [not-planned]    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
-execute/20210505-1                    [not-planned]    compile error: expected ';' after declaration, found identifier 'buf' — `<setjmp.h>`, which cinrs does not bundle, so `jmp_buf` is not a type here. Nothing in Rust unwinds a C `longjmp`
 execute/20230630-2                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/20230630-4                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/920302-1                      [not-planned]    compile error: passing 'short[5] *' to parameter 1 of 'execute', of incompatible type 'short *' — the case calls `execute(&p)` with `p` a `short[5]`, which is a constraint violation C requires a diagnostic for and which GCC only warned about until GCC 14. Its computed gotos work
@@ -81,7 +80,6 @@ execute/alias-3                       [not-planned]    compile error: 'alias' is
 execute/alias-4                       [not-planned]    compile error: 'alias' is not supported: write a function that forwards to the other one instead
 execute/align-3                       [not-planned]    compile error: 'aligned' is not supported on a function; Rust has no way to say it
 execute/align-nest                    [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
-execute/built-in-setjmp               [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/builtin-types-compatible-p    [not-planned]    runtime: killed by signal 6 — it requires `__builtin_types_compatible_p(long double, double)` and two distinct anonymous enums to answer no; `long double` is `double` here and an untagged `enum` is `int`, both documented mappings
 execute/comp-goto-2                   [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/complex-6                     [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
@@ -123,17 +121,13 @@ execute/pr51447                       [not-planned]    compile error: 'goto nonl
 execute/pr53645                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr53645-2                     [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr56837                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/pr56982                       [not-planned]    compile error: expected ';' after declaration, found identifier 'env' — `<setjmp.h>`, which cinrs does not bundle, so `jmp_buf` is not a type here. Nothing in Rust unwinds a C `longjmp`
-execute/pr60003                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr60960                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr64242                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr65427                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr70903                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr71626-2                     [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr80692                       [not-planned]    compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
 execute/pr82210                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/pr84521                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr85169                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr85331                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr86659-1                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that

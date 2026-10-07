@@ -69,8 +69,8 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   preprocessor with `#include` and `#embed` — and the GNU extensions real code
   uses: statement expressions, `typeof`, `__attribute__((cleanup))`, nested
   functions, `__int128`, `__builtin_*`, and inline assembly, for the operand
-  kinds `asm!` has. What has no honest translation (`setjmp`) is a located
-  error, never a guess.
+  kinds `asm!` has, and `setjmp`/`longjmp` as a Rust unwind. What has no
+  honest translation is a located error, never a guess.
 * **The SIMD intrinsics, by name.** `#include <immintrin.h>` and write
   `_mm_add_epi32(a, b)`: 6,081 of Intel's intrinsics, SSE through AVX2 and
   AVX-512 with FMA, AES, GFNI, VAES, SHA, RDRAND and the BMI scalar ones, mapped
@@ -244,7 +244,7 @@ extensions][gnu-extensions] is the same for GCC's.
 
 The ones most likely to matter; [the full list][limitations] has the rest.
 
-* Not supported, each as a located error: `setjmp`/`longjmp`, the memory
+* Not supported, each as a located error: the memory
   operands and `asm goto` of inline assembly (which is otherwise
   `core::arch::asm!`, x86 only), the GNU vector extensions (the Intel
   intrinsics are the SIMD that is here),

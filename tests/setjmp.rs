@@ -319,6 +319,53 @@ fn a_longjmp_from_another_unit() {
     }
 }
 
+/// A unit with no `setjmp` or `longjmp` of its own that a `longjmp` passes
+/// through — a callback's caller — asks for the `C-unwind` ABI with the
+/// pragma.
+mod walker {
+    cinrs::c99! {
+        #pragma cinrs unwind
+        #pragma cinrs export
+
+        int cinrs_setjmp_test_walk(const int *v, int n, int (*visit)(int)) {
+            int total = 0;
+            for (int i = 0; i < n; i++)
+                total += visit(v[i]);
+            return total;
+        }
+    }
+}
+
+mod visitor {
+    cinrs::c99! {
+        #include <setjmp.h>
+
+        int cinrs_setjmp_test_walk(const int *v, int n, int (*visit)(int));
+
+        static jmp_buf env;
+
+        static int visit(int x) {
+            if (x < 0) longjmp(env, x);
+            return x;
+        }
+
+        int walk_until_negative(void) {
+            static const int v[] = { 1, 2, 3, -4, 5 };
+            int r = setjmp(env);
+            if (r == 0)
+                return cinrs_setjmp_test_walk(v, 5, visit);
+            return r * 100;
+        }
+    }
+}
+
+#[test]
+fn a_longjmp_through_a_unit_that_asked_for_c_unwind() {
+    unsafe {
+        assert_eq!(visitor::walk_until_negative(), -400);
+    }
+}
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
 fn sigsetjmp_saves_and_restores_the_signal_mask() {

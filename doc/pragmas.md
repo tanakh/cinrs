@@ -38,14 +38,15 @@ to the last two, for a reason its own section gives.
 | [`export`](#export) | gives everything with external linkage a real C symbol | the whole unit |
 | [`safe f g h`](#safe-f-g-h) | generates those functions without `unsafe` | the whole unit |
 | [`no_std`](#no_std) | takes the `Vec`s a VLA or `alloca` needs from `alloc` | the whole unit |
+| [`unwind`](#unwind) | makes every function and function pointer `extern "C-unwind"` | the whole unit |
 | [`crate "<path>"`](#crate-path) | says where the `cinrs` facade crate is | the whole unit |
 
-An option that is not one of those eight is an error that lists them:
+An option that is not one of those nine is an error that lists them:
 
 ```text
 error: unknown #pragma cinrs option 'frobnicate'; the options are 'target',
-       'include_path', 'system_include', 'link', 'export', 'safe', 'no_std'
-       and 'crate'
+       'include_path', 'system_include', 'link', 'export', 'safe', 'no_std',
+       'unwind' and 'crate'
 ```
 
 and `#pragma cinrs` with nothing after it is the same error, differently
@@ -282,6 +283,28 @@ object under it is a located error: `thread_local!` is a `std` macro and
 
 There is no environment variable for it, and no Cargo feature: the `cinrs`
 facade is `#![no_std]` already, and this is about the *generated code*.
+
+### `unwind`
+
+```c
+#pragma cinrs unwind
+#pragma cinrs export
+
+void each(int *v, int n, void (*f)(int)) { for (int i = 0; i < n; i++) f(v[i]); }
+```
+
+Makes every function the unit defines or declares, and every function pointer
+type it writes, `extern "C-unwind"` rather than `extern "C"`. A `longjmp` is a
+Rust unwind here (see [Non-local jumps](translation.md#non-local-jumps)), and
+an unwind that leaves an `extern "C"` function is undefined behaviour, so a
+unit a `longjmp` passes through needs it — like the one above, when the
+callback another unit hands it jumps out. A unit that calls `setjmp` or
+`longjmp` itself is `C-unwind` without asking.
+
+The calling convention is the same; what changes is the Rust *type* of the
+unit's function pointers, `Option<unsafe extern "C-unwind" fn(…)>`, which a
+Rust callback handed to the unit then has to be. It takes no argument and
+reaches the whole unit. `ccinrs` turns it on for every file.
 
 ### `crate "<path>"`
 

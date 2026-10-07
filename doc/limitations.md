@@ -1,7 +1,7 @@
 # Known limitations
 
 * Not supported, each as a located error rather than a silent mistranslation:
-  `setjmp`/`longjmp`, `_BitInt`, `_Imaginary`, a complex *integer* type
+  `_BitInt`, `_Imaginary`, a complex *integer* type
   (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
   C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
@@ -134,10 +134,18 @@
   `#pragma cinrs system_include`; see [System headers](system-headers.md) for
   what that costs. glibc's `<tgmath.h>` goes through, but its macros need
   `__builtin_tgmath`, which cinrs does not have.
-* `setjmp` and `longjmp` are refused where they are *called*, whichever header
-  declared them: they resume a saved machine context, and the state a
-  `longjmp` would return into is the generated Rust's. Declaring them, and
-  declaring a `jmp_buf`, are fine — half of POSIX pulls `<setjmp.h>` in.
+* `setjmp` and `longjmp` are a Rust unwind and a `catch_unwind` (see [What
+  the C becomes](translation.md#non-local-jumps)), which has four
+  consequences. A `setjmp` may only stand where C17 7.13.1.1p4 allows it, plus
+  `r = setjmp(buf);` and `int r = setjmp(buf);` — anywhere else, and inside a
+  statement expression, it is a located error. A `longjmp` costs about a
+  microsecond, plus about 90 ns for every frame it crosses, where GCC's costs
+  tens of nanoseconds. Every frame it crosses has to be one cinrs compiled
+  with the `C-unwind` ABI (a unit that uses `setjmp` or `longjmp` has it, and
+  `#pragma cinrs unwind` gives it to one that does not) or a C function with
+  unwind tables, as glibc's are. And it needs `std` and a target that
+  unwinds: `#pragma cinrs no_std` and WebAssembly refuse it. A `longjmp` to a
+  function that has returned, undefined in C, aborts with a message.
 * Of TS 18661-3's floating types, `_Float32`, `_Float64`, `_Float32x` and
   `_Float64x` are here as the types they are on this model (`float`, `double`,
   `double`, and `long double`, which is `double`). `_Float128` (and

@@ -216,11 +216,17 @@ which CMake links with `c++` — see below.
 Everything [cinrs's own limitations](limitations.md) lists applies; the ones a
 C project meets first:
 
-* **`setjmp` and `longjmp`** are refused, and a **weak definition**
-  (`__attribute__((weak))` on a function with a body) is an ordinary one, with
-  a warning: a second definition elsewhere is a duplicate symbol rather than
-  an override. Lua, Tcl-style interpreters and test frameworks such as Unity
-  use them by default.
+* **A weak definition** (`__attribute__((weak))` on a function with a body)
+  is an ordinary one, with a warning: a second definition elsewhere is a
+  duplicate symbol rather than an override.
+* **`setjmp` and `longjmp`** work, as a Rust unwind (see [What the C
+  becomes](translation.md#non-local-jumps)): every function `ccinrs` compiles
+  is `extern "C-unwind"` for it. A `setjmp` may only stand where C17
+  7.13.1.1p4 allows it (plus `r = setjmp(buf);`), and a `longjmp` costs about
+  a microsecond, not GCC's tens of nanoseconds — an interpreter that raises
+  errors by the million notices. A C library compiled by another compiler and
+  crossed by a `longjmp` needs unwind tables, which GCC gives by default on
+  x86-64.
 * **`long double` is `double`.** A literal `printf` or `scanf` format that
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`
   for the platform's C library, which then reads the `double` it is given;

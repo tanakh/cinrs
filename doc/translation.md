@@ -29,6 +29,7 @@ is `::core::ffi::c_int`.
 * [Thread-local objects](#thread-local-objects)
 * [Control flow and `goto`](#control-flow-and-goto)
 * [Labels as values](#labels-as-values)
+* [Non-local jumps](#non-local-jumps)
 * [One block, one module](#one-block-one-module)
 * [Linking two blocks together](#linking-two-blocks-together)
 
@@ -1010,6 +1011,94 @@ too, the difference of the two numbers. What such a value is *not* is a real
 address: nothing may be read through it, and arithmetic on one only means
 anything inside its own function. The full row, with the limits, is in
 [`doc/gnu-extensions.md`](gnu-extensions.md#language-extensions).
+
+## Non-local jumps
+
+A C `longjmp` restores a machine context, and Rust has no way to say that a
+call returns twice. What Rust does have is unwinding, an edge out of every
+call that the compiler knows about. So **`longjmp` is an unwind, and the
+function that called `setjmp` catches it**:
+
+```c
+int attempt(void) {
+    int tries = 0;
+    if (setjmp(env) == 0) { tries++; risky(); return 0; }
+    return tries;
+}
+```
+
+```rust
+pub unsafe extern "C-unwind" fn attempt() -> c_int {
+    unsafe {
+        let mut __cinrs_sj_resume: c_uint = 0;      // which setjmp to resume
+        let mut __cinrs_sj_value: c_int = 0;        // what it returns
+        let mut tries: c_int = 0;                   // the locals, hoisted
+        let __cinrs_sj = __cinrs_sj_frame::new();   // this activation
+        loop {
+            match ::std::panic::catch_unwind(AssertUnwindSafe(|| -> c_int {
+                match __cinrs_sj_resume {
+                    1 => {}                                         // back from a longjmp
+                    _ => { tries = 0; __cinrs_sj.save(env, 1, 0); __cinrs_sj_value = 0; }
+                }
+                if __cinrs_sj_value == 0 { tries += 1; risky(); return 0; }
+                return tries;
+            })) {
+                Ok(r) => return r,
+                Err(payload) => {
+                    (__cinrs_sj_resume, __cinrs_sj_value) = __cinrs_sj.land(payload);
+                }
+            }
+        }
+    }
+}
+```
+
+The function goes through the [control-flow graph](#control-flow-and-goto),
+with its locals hoisted *above* the closure, so a `longjmp` finds them as the
+unwind left them — which is more than C promises (only `volatile` locals),
+and allowed. Each `setjmp` is a block boundary: what comes before it writes
+the activation and the site's number into the buffer, and the rest of the
+statement reads the hidden value in place of the call. The graph's entry is a
+`match` on which `setjmp` a `longjmp` came back to, so running the closure
+again resumes exactly there; a `setjmp` inside a loop is a second way into
+the loop, which the relooper's state variable handles.
+
+`longjmp(buf, v)` reads the buffer, checks that the activation is still live
+— a thread-local list of the frames that have run a `setjmp`, which each
+frame's `Drop` leaves — and calls `std::panic::resume_unwind` with the frame,
+the site and the value (`1` for `0`, as C says). `resume_unwind` runs no panic
+hook and prints nothing; a frame the jump is not for passes it on. A jump to
+a function that has returned aborts with a message rather than unwinding out
+of `main`. The `longjmp` a unit declares is replaced by a function of the
+unit's own with the same name and signature, so its address can be taken
+(libpng hands `longjmp` itself to the library); `__builtin_setjmp` and
+`__builtin_longjmp` work the same way. A `sigsetjmp(buf, 1)` saves the signal
+mask after the five words the token takes, and the `longjmp` restores it.
+
+What this asks of the program:
+
+* **Where a `setjmp` stands.** C17 7.13.1.1p4 allows it as the whole
+  controlling expression of an `if`, `switch`, `while`, `do` or `for`, negated
+  there with `!`, compared there with an integer constant, or as a whole
+  expression statement; cinrs also takes `r = setjmp(buf);` and
+  `int r = setjmp(buf);`, as GCC does. Anything else — `f(setjmp(buf))`,
+  `return setjmp(buf);`, one inside a statement expression — is a located
+  error, because what follows the call could not be resumed on its own.
+* **The ABI.** An unwind that leaves an `extern "C"` function is undefined
+  behaviour (Rust aborts where it can see it), so every function, every
+  declaration and every function pointer of a unit that uses `setjmp` or
+  `longjmp` is `extern "C-unwind"`, and `#pragma cinrs unwind` asks for that
+  in a unit that does not — one a `longjmp` passes through, a callback's
+  caller, say. `ccinrs` does it for every file. The calling convention is
+  the same; what changes is the Rust *type* of a function pointer, which Rust
+  code handing the unit a callback has to match.
+* **Foreign frames.** A C library function between the two — `qsort` calling
+  a comparator that jumps — has to have unwind tables; glibc's do.
+* **The cost.** A `setjmp` costs what GCC's does. A `longjmp` is a Rust
+  unwind: about a microsecond, plus about 90 ns for each frame it crosses,
+  where GCC's is tens of nanoseconds.
+* **std, and a target that unwinds.** `#pragma cinrs no_std` and WebAssembly,
+  whose Rust aborts on a panic, refuse both.
 
 ## One block, one module
 

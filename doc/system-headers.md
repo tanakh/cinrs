@@ -328,7 +328,7 @@ strict unit that wants POSIX.
 | `<limits.h>` | ✓ | ✓ | Reaches the bundled `<limits.h>` through `#include_next`, which is the whole reason that directive is implemented. |
 | `<locale.h>` | ✓ | ✓ | |
 | `<math.h>` | ✓ | ✓ | The `__MATHCALL` macro machinery and `__MATHDECL_ALIAS`. |
-| `<setjmp.h>` | ✓ | ✓ | Declaring `jmp_buf` and the functions is fine; *calling* `setjmp` or `longjmp` is refused by name — see [`doc/c-status.md`](c-status.md#c99). |
+| `<setjmp.h>` | ✓ | ✓ | glibc's `jmp_buf`; `setjmp` (glibc's macro over `_setjmp`), `sigsetjmp` (over `__sigsetjmp`) and the `longjmp`s are recognised by name and translated — see [What the C becomes](translation.md#non-local-jumps). |
 | `<signal.h>` | ✓ | ✓ | `sigset_t` and `struct sigaction`, which the bundled header does not carry — but in `c11!` only with a feature test macro; see below. |
 | `<stdalign.h>` | ✓ | ✓ | |
 | `<stdarg.h>` | ✓ | ✓ | Not in `/usr/include`: the bundled one answers, as it does for a real compiler. |
@@ -463,10 +463,11 @@ beyond the search rules:
   [attribute table](gnu-extensions.md#__attribute__-forms) for both, and for
   why `__has_attribute(weak)` still answers 0.
 * **A clean refusal for the extended floating types**, as above.
-* **A refusal on `setjmp`/`longjmp` calls by name.** The bundled `<setjmp.h>`
-  is an `#error`, so before this the refusal came from the header; the
-  platform's declares them as ordinary functions, and a program that called one
-  would have compiled and then corrupted itself.
+* **`setjmp`/`longjmp` recognised by name.** The platform's `<setjmp.h>`
+  declares them as ordinary functions, and calling the C library's would
+  corrupt the program; so a call is translated by name, whichever header
+  declared it (a call through a function pointer of one of those names is
+  still refused).
 * **`dev_t` and `ino_t` in the bundled `<sys/types.h>`**, which were
   `unsigned long long` on a 64-bit target where glibc and musl both spell them
   `unsigned long`. Same width, different type — and a typedef redefinition is

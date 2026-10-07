@@ -229,9 +229,10 @@ link against the real C library: `<assert.h>`, `<complex.h>`, `<ctype.h>`,
 `<stdlib.h>`, `<stdnoreturn.h>`, `<string.h>`, `<threads.h>`, `<time.h>`,
 `<uchar.h>`, `<wchar.h>` and `<wctype.h>`. A real `<stdio.h>` is not plain C —
 glibc's is built out of GNU extensions, compiler builtins and `__asm__` renaming,
-and its layouts are the host's rather than the target model's. `<setjmp.h>` is
-bundled as a header that says `setjmp`/`longjmp` are not supported; the *call* is
-refused whichever header declared it, and declaring them and a `jmp_buf` is fine.
+and its layouts are the host's rather than the target model's. The bundled
+`<setjmp.h>` declares a `jmp_buf` of cinrs's own; `setjmp` and `longjmp` are a
+Rust unwind and a `catch_unwind` whichever header declared them — see [What
+the C becomes](translation.md#non-local-jumps).
 
 Two groups of headers that are not C's are bundled beside them, for the same
 reason: what they declare is the *compiler's* rather than a library's, so the

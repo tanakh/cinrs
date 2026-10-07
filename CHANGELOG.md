@@ -12,6 +12,17 @@ follows [Semantic Versioning][semver].
 
 ### Added
 
+* **`setjmp` and `longjmp`** (prototype), as a Rust unwind: `longjmp` is
+  `resume_unwind` to the activation the `jmp_buf` names, and a function that
+  calls `setjmp` runs its control-flow graph inside `catch_unwind`, with its
+  locals hoisted outside, re-entering at the `setjmp` the jump came back to.
+  `setjmp`, `_setjmp`, `sigsetjmp` (signal mask included), `__builtin_setjmp`
+  and their `longjmp`s, from the bundled `<setjmp.h>` or the platform's; a
+  `setjmp` where C17 7.13.1.1p4 allows it, plus `r = setjmp(buf)` and
+  `int r = setjmp(buf)`, and anywhere else a located error. A unit that uses
+  either, or says `#pragma cinrs unwind`, is `extern "C-unwind"` throughout;
+  `ccinrs` makes every file so. A `longjmp` to a function that has returned
+  aborts with a message. See [`doc/translation.md`](doc/translation.md#non-local-jumps).
 * **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
   versioned with the other four; see [`doc/ccinrs.md`](doc/ccinrs.md). Each C
   file is translated by cinrs and compiled by `rustc` into an ordinary object,
