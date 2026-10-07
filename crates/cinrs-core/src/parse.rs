@@ -4028,11 +4028,13 @@ impl Parser<'_> {
         }
 
         // `__extension__ expr` holds back the pedantic warnings there are none
-        // of. `__real__` and `__imag__` are GNU's two halves of a complex
-        // value, and sema types them: each is an lvalue whenever its operand
-        // is, and each has a meaning on a *real* operand too.
+        // of. Its operand is a *cast* expression, as in GCC's grammar: Lua's
+        // `cast_func` is `(__extension__ (lua_CFunction)(p))`. `__real__` and
+        // `__imag__` are GNU's two halves of a complex value, and sema types
+        // them: each is an lvalue whenever its operand is, and each has a
+        // meaning on a *real* operand too.
         if self.eat_keyword(Keyword::Extension).is_some() {
-            return self.parse_unary_expr();
+            return self.parse_cast_expr();
         }
         if let Some(k @ (Keyword::RealGnu | Keyword::ImagGnu)) = self.peek().keyword() {
             self.advance();
