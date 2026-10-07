@@ -861,6 +861,34 @@ fn setjmp_switches_the_unit_to_c_unwind() {
     assert!(!output.contains("link_name = \"longjmp\""), "{output}");
 }
 
+/// `Unwind::Never` — `ccinrs -fno-cinrs-unwind` — keeps every function
+/// `extern "C"` and refuses what would need `C-unwind`, the pragma included.
+#[test]
+fn unwind_never_refuses_setjmp_longjmp_and_the_pragma() {
+    let mut options = options();
+    options.unwind = cinrs_core::Unwind::Never;
+    let source = "#include <setjmp.h>\n\
+                  static jmp_buf env;\n\
+                  int f(void) { if (setjmp(env)) return 1; longjmp(env, 1); }";
+    let errors = emitted_errors(expand(stream(source), &options));
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    assert!(
+        errors.iter().all(|e| e
+            .message
+            .contains("is not available under `-fno-cinrs-unwind`")),
+        "{errors:#?}"
+    );
+    let errors = emitted_errors(expand(stream("#pragma cinrs unwind\nint g;"), &options));
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(
+        errors[0].message.contains("#pragma cinrs unwind asks for"),
+        "{errors:#?}"
+    );
+    // Nothing that needs it is `extern "C"`.
+    let output = expand(stream("int h(void) { return 1; }"), &options).to_string();
+    assert!(output.contains("extern \"C\" fn h"), "{output}");
+}
+
 /// A `setjmp` where C17 7.13.1.1p4 does not allow one is refused where it
 /// was written.
 #[test]

@@ -979,6 +979,10 @@ fn sj_ident(name: &str) -> Ident {
     Ident::new(name, Span::mixed_site())
 }
 
+/// Where a `longjmp` that cannot be done sends the reader of its message.
+const SETJMP_DOC: &str =
+    "https://github.com/tanakh/cinrs/blob/master/doc/limitations.md#setjmp-and-longjmp";
+
 // ---------------------------------------------------------------------------
 // the generator
 // ---------------------------------------------------------------------------
@@ -1583,7 +1587,7 @@ impl<'a> Codegen<'a> {
     /// Whether the unit's functions are `extern "C-unwind"`; see
     /// [`ir::Program::unwind`].
     fn unwind(&self) -> bool {
-        self.program.unwind || self.options.unwind || !self.program.nonlocal_jumps.is_empty()
+        self.program.unwind || self.options.unwind.resolve(self.program)
     }
 
     /// The ABI string every function of the unit, and every function pointer
@@ -2987,9 +2991,55 @@ impl<'a> Codegen<'a> {
         let magic_mask = sj_ident("__CINRS_SJ_MAGIC_MASK");
         let payload_magic = sj_ident("__CINRS_SJ_PAYLOAD");
         let setmask = sj_ident("__CINRS_SJ_SETMASK");
+        let reach = sj_ident("__cinrs_sj_reach");
+        let uw_context = sj_ident("__cinrs_uw_context");
+        let uw_backtrace = sj_ident("__cinrs_uw_backtrace");
+        let uw_ip = sj_ident("__cinrs_uw_ip");
+        let uw_cfa = sj_ident("__cinrs_uw_cfa");
+        let uw_lsda = sj_ident("__cinrs_uw_lsda");
+        let uw_start = sj_ident("__cinrs_uw_start");
+        let uw_step = sj_ident("__cinrs_uw_step");
+        let uw_covered = sj_ident("__cinrs_uw_covered");
         let c_int = self.ty(Ty::Int, span);
         let c_uint = self.ty(Ty::UInt, span);
         let usize_ty = primitive_ty("usize", span);
+        let u8_ty = primitive_ty("u8", span);
+        let u16_ty = primitive_ty("u16", span);
+        let u32_ty = primitive_ty("u32", span);
+        let u64_ty = primitive_ty("u64", span);
+        let i16_ty = primitive_ty("i16", span);
+        let i32_ty = primitive_ty("i32", span);
+        let message = |text: &str| {
+            let mut literal = Literal::string(&format!("{text}; see {SETJMP_DOC}"));
+            literal.set_span(span);
+            literal
+        };
+        let unfilled_message = message(
+            "cinrs: longjmp to a jmp_buf that no setjmp filled in \
+             (C17 7.13.2.1: undefined behaviour)",
+        );
+        let inactive_message = message(
+            "cinrs: longjmp to a jmp_buf whose setjmp is not active on this thread: \
+             the function that called setjmp has returned, or it ran on another thread \
+             (C17 7.13.2.1: undefined behaviour)",
+        );
+        let signal_message = message(
+            "cinrs: longjmp out of a signal handler that interrupted the program's own \
+             code (an asynchronous signal, such as a timer's or a fault's): a longjmp is \
+             an unwind here, and there is no call at the interrupted instruction to \
+             unwind from",
+        );
+        let blocked_message = message(
+            "cinrs: longjmp cannot unwind to its setjmp: a function in between cannot be \
+             unwound through (one compiled without unwind tables, or with the C ABI — \
+             ccinrs -fno-cinrs-unwind)",
+        );
+        let elsewhere_message = message(
+            "cinrs: longjmp to a setjmp that is not on this stack: the function that \
+             called setjmp is active on another stack of this thread, such as another \
+             coroutine's (C17 7.13.2.1: undefined behaviour), or a function in between \
+             has no unwind tables",
+        );
         quote_spanned! {span=>
             // A `longjmp` is an unwind; with `panic = "abort"` it would end
             // the program instead, so a crate built that way is told here.
@@ -3110,7 +3160,27 @@ impl<'a> Codegen<'a> {
                 #[inline(always)]
                 fn drop(&mut self) {
                     if self.serial.get() != 0 {
-                        #live.with(|__cinrs_live| __cinrs_live.0.set(self.prev.get()));
+                        #live.with(|__cinrs_live| {
+                            let __cinrs_me = ::core::ptr::from_ref(self);
+                            if __cinrs_live.0.get() == __cinrs_me {
+                                __cinrs_live.0.set(self.prev.get());
+                                return;
+                            }
+                            // Out of order, which only another stack on this
+                            // thread does (a coroutine library): unlink it
+                            // from the middle, so the list never names a
+                            // frame that is gone.
+                            let mut __cinrs_at = __cinrs_live.0.get();
+                            while !__cinrs_at.is_null() {
+                                // SAFETY: every frame on the list is live.
+                                let __cinrs_this = unsafe { &*__cinrs_at };
+                                if __cinrs_this.prev.get() == __cinrs_me {
+                                    __cinrs_this.prev.set(self.prev.get());
+                                    return;
+                                }
+                                __cinrs_at = __cinrs_this.prev.get();
+                            }
+                        });
                     }
                 }
             }
@@ -3138,6 +3208,207 @@ impl<'a> Codegen<'a> {
                 ::std::eprintln!("{}", __cinrs_message);
                 ::std::process::abort()
             }
+            /// An opaque `_Unwind_Context`.
+            #[cfg(unix)]
+            #[allow(unknown_lints, non_camel_case_types, missing_debug_implementations)]
+            #[repr(C)]
+            struct #uw_context {
+                _private: [#u8_ty; 0],
+            }
+            /// The unwinder's own walk over the stack, which is what an unwind
+            /// does in its search phase, and what the frames it sees say.
+            #[cfg(unix)]
+            #[allow(unknown_lints, clashing_extern_declarations)]
+            unsafe extern "C" {
+                #[link_name = "_Unwind_Backtrace"]
+                fn #uw_backtrace(
+                    _: extern "C" fn(*mut #uw_context, *mut ::core::ffi::c_void) -> #c_int,
+                    _: *mut ::core::ffi::c_void,
+                ) -> #c_int;
+                #[link_name = "_Unwind_GetIPInfo"]
+                fn #uw_ip(_: *mut #uw_context, _: *mut #c_int) -> #usize_ty;
+                #[link_name = "_Unwind_GetCFA"]
+                fn #uw_cfa(_: *mut #uw_context) -> #usize_ty;
+                #[link_name = "_Unwind_GetLanguageSpecificData"]
+                fn #uw_lsda(_: *mut #uw_context) -> *mut ::core::ffi::c_void;
+                #[link_name = "_Unwind_GetRegionStart"]
+                fn #uw_start(_: *mut #uw_context) -> #usize_ty;
+            }
+            /// One frame of the walk, whose state is `[target, the previous
+            /// frame's stack pointer, flags]`; the flags are 1 for a frame a
+            /// signal interrupted, 2 for a frame the unwind could not leave,
+            /// and 4 for the target's frame passed.
+            ///
+            /// In a walk, `_Unwind_GetCFA` is the frame's own stack pointer
+            /// (the CFA of the frame below it), so the frame the `setjmp`'s
+            /// frame object lives in is the last one whose stack pointer is
+            /// at or below it: the walk is past it at the first frame above.
+            #[cfg(unix)]
+            #[allow(unknown_lints, unused_unsafe, clippy::pedantic, clippy::nursery)]
+            extern "C" fn #uw_step(
+                __cinrs_context: *mut #uw_context,
+                __cinrs_arg: *mut ::core::ffi::c_void,
+            ) -> #c_int {
+                // SAFETY: the argument is the walk's own state, and the
+                // context is the unwinder's for this frame.
+                unsafe {
+                    let __cinrs_walk = &mut *__cinrs_arg.cast::<[#usize_ty; 3]>();
+                    let __cinrs_sp = #uw_cfa(__cinrs_context);
+                    if __cinrs_sp > __cinrs_walk[0] && __cinrs_walk[1] <= __cinrs_walk[0] {
+                        __cinrs_walk[2] |= 4;
+                        return 1;
+                    }
+                    __cinrs_walk[1] = __cinrs_sp;
+                    let mut __cinrs_before: #c_int = 0;
+                    let __cinrs_ip = #uw_ip(__cinrs_context, &mut __cinrs_before);
+                    if __cinrs_ip == 0 {
+                        return 1;
+                    }
+                    let __cinrs_lsda = #uw_lsda(__cinrs_context);
+                    if __cinrs_lsda.is_null() {
+                        // No landing pads: the unwind steps straight to the
+                        // caller, from any instruction.
+                        return 0;
+                    }
+                    if __cinrs_before != 0 {
+                        // A signal interrupted this frame at an instruction
+                        // that is not a call, and its landing pads are laid out
+                        // for calls: the personality would terminate, or land
+                        // somewhere the code does not expect to be entered.
+                        __cinrs_walk[2] |= 1 | 2;
+                        return 1;
+                    }
+                    // A call the table does not cover is one the compiler
+                    // took not to unwind: an `extern "C"` function's.
+                    if !#uw_covered(
+                        __cinrs_lsda.cast::<#u8_ty>().cast_const(),
+                        #uw_start(__cinrs_context),
+                        __cinrs_ip - 1,
+                    ) {
+                        __cinrs_walk[2] |= 2;
+                        return 1;
+                    }
+                    0
+                }
+            }
+            /// Whether the call-site table of an LSDA covers `ip` — what
+            /// decides, in the search phase, between going on and
+            /// terminating. A table this does not understand counts as
+            /// covering it.
+            #[cfg(unix)]
+            #[allow(unknown_lints, unused_unsafe, clippy::pedantic, clippy::nursery)]
+            unsafe fn #uw_covered(__cinrs_lsda: *const #u8_ty, __cinrs_func: #usize_ty, __cinrs_ip: #usize_ty) -> bool {
+                unsafe fn __cinrs_uleb(__cinrs_p: &mut *const #u8_ty) -> #usize_ty {
+                    let mut __cinrs_value: #usize_ty = 0;
+                    let mut __cinrs_shift: #u32_ty = 0;
+                    loop {
+                        let __cinrs_byte = unsafe { **__cinrs_p };
+                        *__cinrs_p = unsafe { __cinrs_p.add(1) };
+                        if __cinrs_shift < <#usize_ty>::BITS {
+                            __cinrs_value |= ((__cinrs_byte & 0x7f) as #usize_ty) << __cinrs_shift;
+                        }
+                        __cinrs_shift += 7;
+                        if __cinrs_byte & 0x80 == 0 {
+                            return __cinrs_value;
+                        }
+                    }
+                }
+                unsafe fn __cinrs_read(__cinrs_p: &mut *const #u8_ty, __cinrs_encoding: #u8_ty) -> ::core::option::Option<#usize_ty> {
+                    unsafe {
+                        let __cinrs_value = match __cinrs_encoding {
+                            0x00 => {
+                                let __cinrs_v = __cinrs_p.cast::<#usize_ty>().read_unaligned();
+                                *__cinrs_p = __cinrs_p.add(::core::mem::size_of::<#usize_ty>());
+                                __cinrs_v
+                            }
+                            0x01 => __cinrs_uleb(__cinrs_p),
+                            0x02 | 0x0a => {
+                                let __cinrs_v = __cinrs_p.cast::<#u16_ty>().read_unaligned();
+                                *__cinrs_p = __cinrs_p.add(2);
+                                if __cinrs_encoding == 0x0a { __cinrs_v as #i16_ty as #usize_ty } else { __cinrs_v as #usize_ty }
+                            }
+                            0x03 | 0x0b => {
+                                let __cinrs_v = __cinrs_p.cast::<#u32_ty>().read_unaligned();
+                                *__cinrs_p = __cinrs_p.add(4);
+                                if __cinrs_encoding == 0x0b { __cinrs_v as #i32_ty as #usize_ty } else { __cinrs_v as #usize_ty }
+                            }
+                            0x04 | 0x0c => {
+                                let __cinrs_v = __cinrs_p.cast::<#u64_ty>().read_unaligned();
+                                *__cinrs_p = __cinrs_p.add(8);
+                                __cinrs_v as #usize_ty
+                            }
+                            _ => return ::core::option::Option::None,
+                        };
+                        ::core::option::Option::Some(__cinrs_value)
+                    }
+                }
+                unsafe {
+                    let mut __cinrs_p = __cinrs_lsda;
+                    // The landing-pad base; anything but "the function's
+                    // start" is a table this does not judge.
+                    if *__cinrs_p != 0xff {
+                        return true;
+                    }
+                    __cinrs_p = __cinrs_p.add(1);
+                    let __cinrs_ttype = *__cinrs_p;
+                    __cinrs_p = __cinrs_p.add(1);
+                    if __cinrs_ttype != 0xff {
+                        __cinrs_uleb(&mut __cinrs_p);
+                    }
+                    let __cinrs_encoding = *__cinrs_p;
+                    __cinrs_p = __cinrs_p.add(1);
+                    let __cinrs_len = __cinrs_uleb(&mut __cinrs_p);
+                    let __cinrs_end = __cinrs_p.add(__cinrs_len);
+                    while __cinrs_p < __cinrs_end {
+                        let ::core::option::Option::Some(__cinrs_start) = __cinrs_read(&mut __cinrs_p, __cinrs_encoding) else {
+                            return true;
+                        };
+                        let ::core::option::Option::Some(__cinrs_size) = __cinrs_read(&mut __cinrs_p, __cinrs_encoding) else {
+                            return true;
+                        };
+                        if __cinrs_read(&mut __cinrs_p, __cinrs_encoding).is_none() {
+                            return true;
+                        }
+                        __cinrs_uleb(&mut __cinrs_p);
+                        // The table is sorted by start.
+                        if __cinrs_ip < __cinrs_func.wrapping_add(__cinrs_start) {
+                            return false;
+                        }
+                        if __cinrs_ip < __cinrs_func.wrapping_add(__cinrs_start).wrapping_add(__cinrs_size) {
+                            return true;
+                        }
+                    }
+                    false
+                }
+            }
+            /// Walks the stack from here to the frame of the `setjmp`, as the
+            /// unwind about to start will, and stops the program with a
+            /// message of its own if the unwind could not get there.
+            #[cfg(unix)]
+            #[cold]
+            #[inline(never)]
+            #[allow(unknown_lints, unused_unsafe, clippy::pedantic, clippy::nursery)]
+            fn #reach(__cinrs_target: #usize_ty) {
+                let __cinrs_here: #u8_ty = 0;
+                let mut __cinrs_walk: [#usize_ty; 3] =
+                    [__cinrs_target, ::core::ptr::from_ref(&__cinrs_here).addr(), 0];
+                // SAFETY: the callback reads only the walk's state and the
+                // contexts the unwinder hands it.
+                unsafe {
+                    #uw_backtrace(#uw_step, ::core::ptr::from_mut(&mut __cinrs_walk).cast());
+                }
+                let __cinrs_flags = __cinrs_walk[2];
+                if __cinrs_flags & 4 != 0 {
+                    return;
+                }
+                if __cinrs_flags & 1 != 0 {
+                    #abort(#signal_message);
+                }
+                if __cinrs_flags & 2 != 0 {
+                    #abort(#blocked_message);
+                }
+                #abort(#elsewhere_message);
+            }
             /// `longjmp(buf, value)`: an unwind to the activation the buffer
             /// names.
             #[cold]
@@ -3155,7 +3426,7 @@ impl<'a> Codegen<'a> {
                     )
                 };
                 if __cinrs_magic != #magic && __cinrs_magic != #magic_mask {
-                    #abort("longjmp: the jmp_buf was not filled in by setjmp");
+                    #abort(#unfilled_message);
                 }
                 // SAFETY: the `setjmp` that filled the buffer in wrote its
                 // own unit's check there.
@@ -3165,11 +3436,12 @@ impl<'a> Codegen<'a> {
                     )
                 };
                 if !__cinrs_check(__cinrs_frame, __cinrs_serial) {
-                    #abort(
-                        "longjmp: the function that called setjmp with this jmp_buf has \
-                         already returned (undefined behaviour in C)",
-                    );
+                    #abort(#inactive_message);
                 }
+                // An unwind that cannot get there would end the program with
+                // the unwinder's own words; say ours instead, before starting.
+                #[cfg(unix)]
+                #reach(__cinrs_frame);
                 #[cfg(unix)]
                 if __cinrs_magic == #magic_mask {
                     unsafe {
@@ -4780,15 +5052,32 @@ impl<'a> Codegen<'a> {
     /// over the object's type, so that a `void *`-taking cleanup (the
     /// `_cleanup_free_` idiom) needs nothing special, and over the return
     /// type, which GCC ignores.
+    ///
+    /// The guard runs its function when the scope is left by any of C's own
+    /// ways out, and **not** when an unwind leaves it — a `longjmp`, which is
+    /// an unwind here, or a Rust panic. That is GCC's rule: it registers a
+    /// cleanup with the unwinder only under `-fexceptions`, and a `longjmp`
+    /// never runs one. `std::thread::panicking` is what says which is
+    /// happening, on whichever unit's frame the jump started from; in a
+    /// `no_std` unit, which has neither it nor a `longjmp`, the guard always
+    /// runs.
     fn cleanup_guard_item(&self, span: Span) -> TokenStream {
         let name = cleanup_guard_ty();
         let p = Ident::new("P", Span::mixed_site());
         let r = Ident::new("R", Span::mixed_site());
         let abi = self.abi(span);
+        let unwinding = if self.program.no_std {
+            quote_spanned! {span=> false }
+        } else {
+            quote_spanned! {span=> ::std::thread::panicking() }
+        };
         quote_spanned! {span=>
             struct #name<#p: ::core::marker::Copy, #r>(#p, unsafe extern #abi fn(#p) -> #r);
             impl<#p: ::core::marker::Copy, #r> ::core::ops::Drop for #name<#p, #r> {
                 fn drop(&mut self) {
+                    if #unwinding {
+                        return;
+                    }
                     unsafe {
                         (self.1)(self.0);
                     }

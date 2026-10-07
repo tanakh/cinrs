@@ -262,6 +262,40 @@ fn locals_keep_their_latest_values() {
     }
 }
 
+/// A `cleanup` attribute's function runs when its scope is left the ordinary
+/// ways, and not when a `longjmp` leaves it — GCC's rule, which registers a
+/// cleanup with the unwinder only under `-fexceptions`.
+#[test]
+fn a_longjmp_does_not_run_cleanups() {
+    gnu99! {
+        #include <setjmp.h>
+
+        static jmp_buf env;
+        static int cleaned;
+
+        static void count(int *p) { (void) p; cleaned++; }
+
+        /* No setjmp of its own, so the guard is a drop guard. */
+        static void guarded(int jump) {
+            __attribute__((cleanup(count))) int x = 1;
+            (void) x;
+            if (jump) longjmp(env, 1);
+        }
+
+        int cleanups(int jump) {
+            cleaned = 0;
+            if (setjmp(env) == 0)
+                guarded(jump);
+            return cleaned;
+        }
+    }
+
+    unsafe {
+        assert_eq!(cleanups(0), 1);
+        assert_eq!(cleanups(1), 0);
+    }
+}
+
 #[test]
 fn gcc_builtins() {
     gnu99! {

@@ -8,6 +8,9 @@ mod __cinrs_unit_b4c988d4 {
     struct __cinrs_cleanup<P: ::core::marker::Copy, R>(P, unsafe extern "C" fn(P) -> R);
     impl<P: ::core::marker::Copy, R> ::core::ops::Drop for __cinrs_cleanup<P, R> {
         fn drop(&mut self) {
+            if ::std::thread::panicking() {
+                return;
+            }
             unsafe {
                 (self.1)(self.0);
             }

@@ -393,20 +393,48 @@ pub struct Options {
     /// adds to them rather than replacing them, as in GCC. x86 only.
     pub target_features: Vec<String>,
     /// Whether every function the unit defines, declares or points at has the
-    /// `extern "C-unwind"` ABI rather than `extern "C"`.
+    /// `extern "C-unwind"` ABI rather than `extern "C"`; see [`Unwind`].
     ///
-    /// A Rust unwind — which is what a `longjmp` is here; see
-    /// [`crate::sema`]'s non-local jumps — aborts the program when it leaves
-    /// an `extern "C"` function, so every frame between a `longjmp` and its
-    /// `setjmp` has to be `C-unwind`. The calling convention is the same; what
-    /// changes is the *type* of a function pointer, which Rust code handing a
-    /// callback to the unit then has to match.
-    ///
-    /// **Off by default**: a unit that uses `setjmp` or `longjmp` turns it on
-    /// for itself, and so does `#pragma cinrs unwind`. The command-line
-    /// driver turns it on for every unit, since any of them may be between a
-    /// `longjmp` and its `setjmp`.
-    pub unwind: bool,
+    /// **[`Unwind::Auto`] by default**: `extern "C"`, except in a unit that
+    /// uses `setjmp` or `longjmp` itself or says `#pragma cinrs unwind`. The
+    /// command-line driver asks for [`Unwind::Always`], since any file may be
+    /// between a `longjmp` and its `setjmp`, and for [`Unwind::Never`] under
+    /// `-fno-cinrs-unwind`.
+    pub unwind: Unwind,
+}
+
+/// Which ABI a unit's functions have: `extern "C"` or `extern "C-unwind"`.
+///
+/// A `longjmp` is a Rust unwind here (see the non-local jumps of
+/// [`crate::sema`]), and an unwind that leaves an `extern "C"` function is
+/// undefined behaviour, so every frame between a `longjmp` and its `setjmp`
+/// has to be `C-unwind`. The calling convention is the same; what changes is
+/// the *type* of a function pointer, which Rust code handing a callback to the
+/// unit then has to match — and `nounwind` on every call, which costs about 2 %
+/// of the instructions SQLite runs (see `doc/ccinrs.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Unwind {
+    /// `extern "C"`, unless the unit calls `setjmp` or `longjmp` itself or
+    /// says `#pragma cinrs unwind`. What a `c99!` block gets.
+    #[default]
+    Auto,
+    /// `extern "C-unwind"` for every unit, whatever it uses: what `ccinrs`
+    /// gives every file.
+    Always,
+    /// `extern "C"` for every unit, and `setjmp`, `longjmp` and `#pragma cinrs
+    /// unwind` refused where they are written: `ccinrs -fno-cinrs-unwind`.
+    Never,
+}
+
+impl Unwind {
+    /// Whether `program` is generated with `extern "C-unwind"`.
+    pub fn resolve(self, program: &Program) -> bool {
+        match self {
+            Unwind::Auto => !program.nonlocal_jumps.is_empty(),
+            Unwind::Always => true,
+            Unwind::Never => false,
+        }
+    }
 }
 
 /// One `-D` or `-U` of a command line; see [`Options::macros`].
@@ -452,7 +480,7 @@ impl Options {
             macros: Vec::new(),
             includes: Vec::new(),
             target_features: Vec::new(),
-            unwind: false,
+            unwind: Unwind::Auto,
         }
     }
 
@@ -769,8 +797,11 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         macros: _,
     } = preprocess_unit(&mut ctx, &mut options, &mut diagnostics);
     // `#pragma cinrs unwind` is the unit's own request for what the option
-    // asks for the whole program; see [`Options::unwind`].
-    options.unwind |= unwind;
+    // asks for the whole program; see [`Options::unwind`]. Under
+    // `Unwind::Never` the preprocessor has already refused it.
+    if unwind && options.unwind == Unwind::Auto {
+        options.unwind = Unwind::Always;
+    }
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);
     let unit = parse::parse(
@@ -1380,7 +1411,7 @@ fn lower(analysis: Analysis) -> Lowered {
     program.link_libraries = link_libraries;
     program.export = export || options.export;
     program.no_std = no_std;
-    program.unwind = options.unwind || !program.nonlocal_jumps.is_empty();
+    program.unwind = options.unwind.resolve(&program);
     if let Some(path) = crate_path {
         program.crate_path = path;
     }

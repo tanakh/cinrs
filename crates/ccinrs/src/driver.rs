@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cinrs_core::include::System;
-use cinrs_core::{Arch, Env, Options, Os, TargetModel, TargetSource};
+use cinrs_core::{Arch, Env, Options, Os, TargetModel, TargetSource, Unwind};
 
 use crate::args::{Input, Invocation, LinkerArg, Lto, Query, Stage};
 use crate::runtime::{self, Runtime};
@@ -297,6 +297,8 @@ cinrs, and rustc (RUSTC, or the one on PATH) compiles and links it.
   -l <lib>, -L <dir>, -Wl,<args>
                        Libraries and linker arguments
   -fno-cinrs-checks    Leave out Rust's run-time checks (on by default)
+  -fno-cinrs-unwind    Make functions extern \"C\", not \"C-unwind\" (about 2 %
+                       faster; refuses setjmp and longjmp)
   -w                   Print no warnings
   -v                   Print the commands run
   --version, -dumpversion, -dumpmachine
@@ -397,10 +399,13 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     options.complex = true;
     // Any file may be between a `longjmp` and its `setjmp` — a callback that
     // jumps out through a library — so every function is `extern
-    // "C-unwind"`. `CCINRS_EXP_UNWIND=0` turns that off, for measuring what it
-    // costs; a program that then jumps across a file without `setjmp` or
-    // `longjmp` of its own aborts. (Experimental.)
-    options.unwind = std::env::var_os("CCINRS_EXP_UNWIND").is_none_or(|v| v != "0");
+    // "C-unwind"`, unless `-fno-cinrs-unwind` asked for `extern "C"`, which
+    // then refuses `setjmp` and `longjmp` by name.
+    options.unwind = if inv.unwind {
+        Unwind::Always
+    } else {
+        Unwind::Never
+    };
     options
 }
 
@@ -758,6 +763,39 @@ fn glob_matches(pattern: &str, name: &str) -> bool {
     }
     matches(pattern.as_bytes(), name.as_bytes())
 }
+
+/// What a panic does in a program or a library `ccinrs` links: Rust's own
+/// message, and then `abort`.
+///
+/// A panic is a run-time check that failed, and in a C program nothing can
+/// catch it. Every function is `extern "C-unwind"` — a `longjmp` is an unwind
+/// — so without this a panic would unwind looking for a handler, find none
+/// below `main`, and end with the unwinder's "failed to initiate panic, error
+/// 5". The hook stops it where it happened instead, as a failed `assert` does.
+/// A `longjmp` is unaffected: `resume_unwind` runs no hook.
+///
+/// It is installed by a constructor — `.init_array` on ELF, `__mod_init_func`
+/// on Mach-O — because the C `main` is the program's, and a shared library
+/// has none; one library loaded beside another wraps the hook it finds, which
+/// aborts all the same.
+const PANIC_HOOK: &str = r#"
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd",
+          target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly",
+          target_vendor = "apple"))]
+#[used]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,__mod_init_func"))]
+#[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".init_array"))]
+static CCINRS_PANIC_HOOK: extern "C" fn() = {
+    extern "C" fn install() {
+        let report = ::std::panic::take_hook();
+        ::std::panic::set_hook(::std::boxed::Box::new(move |info| {
+            report(info);
+            ::std::process::abort();
+        }));
+    }
+    install
+};
+"#;
 
 /// `malloc`, `calloc`, `realloc` and `free` for WebAssembly with no C library,
 /// as Rust in the module the objects are linked into: Rust's own allocator,
@@ -1323,6 +1361,10 @@ impl Run<'_> {
         .to_owned();
         if bare {
             text.push_str(&bare_wasm_allocator(&linked.symbols));
+        }
+        // WebAssembly's Rust aborts on a panic already.
+        if self.target.model.arch != Arch::Wasm32 {
+            text.push_str(PANIC_HOOK);
         }
         // A crate is linked when it is loaded, and these load the runtime and
         // each `-flto` object, under the name `rustc` finds it by.

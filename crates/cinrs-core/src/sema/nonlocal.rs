@@ -325,6 +325,17 @@ impl Sema<'_> {
     /// strategy the standard library is built with, and a bare-metal one,
     /// which has no `std` to catch an unwind with.
     fn refuse_nonunwinding_target(&mut self, name: &str, range: SourceRange) -> bool {
+        if self.unwind == crate::Unwind::Never {
+            self.error(
+                range,
+                format!(
+                    "'{name}' is not available under `-fno-cinrs-unwind`: a 'longjmp' is a \
+                     Rust unwind, which needs every function it passes through to be \
+                     `extern \"C-unwind\"`, and the option makes them `extern \"C\"`"
+                ),
+            );
+            return true;
+        }
         let target = self.target;
         let why = if target.arch == Arch::Wasm32 {
             "WebAssembly, whose Rust aborts on a panic rather than unwinding"

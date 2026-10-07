@@ -1422,6 +1422,8 @@ struct Pp<'a> {
     no_std: bool,
     /// Set by `#pragma cinrs unwind`.
     unwind: bool,
+    /// Whether the options refuse the pragma: [`crate::Unwind::Never`].
+    unwind_refused: bool,
     /// The Rust path `#pragma cinrs crate` gave the facade crate.
     crate_path: Option<String>,
     /// Where the data model in force came from, which is what a
@@ -1507,6 +1509,7 @@ impl<'a> Pp<'a> {
             export: false,
             no_std: false,
             unwind: false,
+            unwind_refused: options.unwind == crate::Unwind::Never,
             crate_path: None,
             target_source: options.target_source.clone(),
             target: options.target,
@@ -3329,6 +3332,12 @@ impl Pp<'_> {
                 match name {
                     "export" => self.export = true,
                     "no_std" => self.no_std = true,
+                    _ if self.unwind_refused => self.diags.error(
+                        option.range,
+                        "#pragma cinrs unwind asks for `extern \"C-unwind\"`, and this build \
+                         makes every function `extern \"C\"` (`-fno-cinrs-unwind`)"
+                            .to_owned(),
+                    ),
                     _ => self.unwind = true,
                 }
             }

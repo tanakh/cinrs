@@ -632,6 +632,9 @@ struct Sema<'a> {
     /// reported against it.
     gating: crate::Gating,
     target: TargetModel,
+    /// Which ABI the unit is asked for; [`crate::Unwind::Never`] refuses the
+    /// non-local jumps, which need `C-unwind`.
+    unwind: crate::Unwind,
     program: Program,
     scopes: Vec<Scope>,
     tags: Vec<HashMap<String, TagEntry>>,
@@ -951,6 +954,7 @@ impl<'a> Sema<'a> {
             complex: options.complex,
             gating: options.gating(),
             target: options.target,
+            unwind: options.unwind,
             program: Program {
                 unit_id,
                 // `#pragma cinrs crate` is the preprocessor's and reaches the

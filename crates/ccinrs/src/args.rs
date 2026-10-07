@@ -156,6 +156,11 @@ pub struct Invocation {
     /// cinrs itself writes in a build with debug assertions. **On by
     /// default**; `-fno-cinrs-checks` turns them off.
     pub checks: bool,
+    /// Whether every function is `extern "C-unwind"`, which is what lets a
+    /// `longjmp` — a Rust unwind — pass through it. **On by default**;
+    /// `-fno-cinrs-unwind` makes them `extern "C"`, which is about 2 % of the
+    /// instructions on SQLite, and refuses `setjmp` and `longjmp`.
+    pub unwind: bool,
     /// `-fdollars-in-identifiers`, on by default as in GCC.
     pub dollars: bool,
     /// What `-fsigned-char` or `-funsigned-char` asked for, which the driver
@@ -230,6 +235,7 @@ impl Default for Invocation {
             warnings: true,
             werror: false,
             checks: true,
+            unwind: true,
             dollars: true,
             char_signed: None,
             pointer_bits: None,
@@ -722,6 +728,8 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
         _ if name.starts_with("use-ld=") => inv.fuse_ld = Some(name["use-ld=".len()..].to_owned()),
         "cinrs-checks" => inv.checks = true,
         "no-cinrs-checks" => inv.checks = false,
+        "cinrs-unwind" => inv.unwind = true,
+        "no-cinrs-unwind" => inv.unwind = false,
         "dollars-in-identifiers" => inv.dollars = true,
         "no-dollars-in-identifiers" => inv.dollars = false,
         "signed-char" | "no-unsigned-char" => inv.char_signed = Some(true),
@@ -1037,6 +1045,13 @@ mod tests {
                 .contains("changes what")
         );
         assert!(!parse_all(&["-fno-cinrs-checks", "a.c"]).unwrap().checks);
+        assert!(parse_all(&["a.c"]).unwrap().unwind);
+        assert!(!parse_all(&["-fno-cinrs-unwind", "a.c"]).unwrap().unwind);
+        assert!(
+            parse_all(&["-fno-cinrs-unwind", "-fcinrs-unwind", "a.c"])
+                .unwrap()
+                .unwind
+        );
         assert_eq!(
             parse_all(&["-funsigned-char", "a.c"]).unwrap().char_signed,
             Some(false)

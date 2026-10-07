@@ -195,14 +195,111 @@ int main(void) { arm(); longjmp(env, 1); }
     );
     s.compile(&["dead.c", "-o", "dead"]);
     let out = s.run("dead", &[]);
-    assert!(!out.status.success());
+    assert_aborted(&out);
     assert!(
-        stderr(&out).contains(
-            "longjmp: the function that called setjmp with this jmp_buf has already returned"
+        stderr(&out).starts_with(
+            "cinrs: longjmp to a jmp_buf whose setjmp is not active on this thread: the \
+             function that called setjmp has returned, or it ran on another thread"
         ),
         "{}",
         stderr(&out)
     );
+    assert!(
+        stderr(&out).contains("doc/limitations.md#setjmp-and-longjmp"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A `longjmp` out of a signal handler that interrupted the program's own
+/// code has no call to unwind from; it stops with a message that says so,
+/// before trying. One out of a handler of a signal raised inside a library
+/// call works.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_longjmp_out_of_an_asynchronous_signal_handler_aborts_with_a_message() {
+    let s = Scratch::new("setjmp-signal");
+    s.write(
+        "sig.c",
+        r#"#include <setjmp.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/time.h>
+static sigjmp_buf env;
+static void handler(int sig) { siglongjmp(env, sig); }
+static volatile unsigned long spin;
+int main(int argc, char **argv) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = handler;
+    sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGALRM, &sa, NULL);
+    int r = sigsetjmp(env, 1);
+    if (r == 0 && argc > 1) {
+        struct itimerval t = { { 0, 0 }, { 0, 2000 } };
+        setitimer(ITIMER_REAL, &t, NULL);
+        for (;;) spin = spin * 1103515245u + 12345u;
+    }
+    if (r == 0) raise(SIGUSR1);
+    printf("back with %d\n", r);
+    return 0;
+}
+"#,
+    );
+    s.compile(&["-O2", "sig.c", "-o", "sig"]);
+    let out = s.run("sig", &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "back with 10\n");
+    let out = s.run("sig", &["alarm"]);
+    assert_aborted(&out);
+    assert!(
+        stderr(&out).starts_with(
+            "cinrs: longjmp out of a signal handler that interrupted the program's own code \
+             (an asynchronous signal"
+        ),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!stderr(&out).contains("failed to initiate panic"));
+}
+
+/// `-fno-cinrs-unwind` makes every function `extern "C"`, so `setjmp` and
+/// `longjmp` are refused where they are written, naming the option. (glibc's
+/// `setjmp` is a macro over `_setjmp`, which is the name the error gives.)
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn no_cinrs_unwind_refuses_setjmp() {
+    let s = Scratch::new("setjmp-nounwind");
+    s.write(
+        "jump.c",
+        "#include <setjmp.h>\nstatic jmp_buf env;\nint main(void) {\n    if (setjmp(env)) return 0;\n    longjmp(env, 1);\n}\n",
+    );
+    let out = s.ccinrs(&["-fno-cinrs-unwind", "jump.c", "-o", "jump"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out)
+            .contains("jump.c:4:9: error: '_setjmp' is not available under `-fno-cinrs-unwind`"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("jump.c:5:5: error: 'longjmp' is not available"),
+        "{}",
+        stderr(&out)
+    );
+    s.write("plain.c", "int main(void) { return 0; }\n");
+    s.compile(&["-fno-cinrs-unwind", "plain.c", "-o", "plain"]);
+    assert!(s.run("plain", &[]).status.success());
+}
+
+/// The program stopped by `abort`, as a failed run-time check or a `longjmp`
+/// that cannot be done stops it.
+#[cfg(unix)]
+#[track_caller]
+fn assert_aborted(out: &Output) {
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(out.status.signal(), Some(6), "{}", stderr(out));
 }
 
 /// `-c` makes one object per file, named as GCC names it, and a later run
@@ -440,6 +537,14 @@ int main(int argc, char **argv) {
         "{}",
         stderr(&out)
     );
+    // The panic hook the link installs stops it there: no unwind is tried,
+    // so the unwinder has nothing to say.
+    assert!(
+        !stderr(&out).contains("failed to initiate panic")
+            && !stderr(&out).contains("cannot unwind"),
+        "{}",
+        stderr(&out)
+    );
     // Where it happened is a line of the C: the generated Rust keeps the C's
     // lines, and `rustc` is told to call it by the C file's name. (The column
     // is the Rust's, which is longer than the C.)
@@ -495,6 +600,15 @@ int main(int argc, char **argv) {
     let out = s.run("goto", &[]);
     assert!(
         stderr(&out).contains("panicked at goto.c:10:"),
+        "{}",
+        stderr(&out)
+    );
+    // A panic that could unwind — a division by zero — ends with Rust's
+    // message and `abort`, not an unwind that finds no handler below `main`.
+    #[cfg(unix)]
+    assert_aborted(&out);
+    assert!(
+        !stderr(&out).contains("failed to initiate panic"),
         "{}",
         stderr(&out)
     );
