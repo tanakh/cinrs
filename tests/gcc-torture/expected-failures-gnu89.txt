@@ -134,7 +134,6 @@ execute/pr71626-2                     [not-planned]    compile error: third_part
 execute/pr80692                       [not-planned]    compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
 execute/pr82210                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/pr84521                       [not-planned]    compile error: '__builtin_longjmp' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr85156                       [not-planned]    compile error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
 execute/pr85169                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr85331                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr86659-1                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that

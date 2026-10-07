@@ -23,6 +23,15 @@ c99! {
         return __builtin_expect_with_probability(n, 0, 0.9);
     }
 
+    /* The hint is an argument, and evaluated: GCC's `pr85156` passes `z++`.
+       A constant one changes nothing, so the whole stays a constant. */
+    int expect_evaluates_the_hint(int z) {
+        if (__builtin_expect(z > 100, z++)) return -1;
+        return z;
+    }
+    enum { EXPECTED = __builtin_expect(3, 1) };
+    int expect_folds(void) { return EXPECTED; }
+
     /* Reaching this is undefined behaviour, which is what the C promised. */
     int never(int n) {
         switch (n) {
@@ -40,6 +49,8 @@ fn the_branch_hints_are_transparent() {
     assert_eq!(unsafe { classify(0) }, 0);
     assert_eq!(unsafe { expect_value(7) }, 7);
     assert_eq!(unsafe { expect_probability(7) }, 7);
+    assert_eq!(unsafe { expect_evaluates_the_hint(10) }, 11);
+    assert_eq!(unsafe { expect_folds() }, 3);
     assert_eq!(unsafe { never(0) }, 10);
     assert_eq!(unsafe { never(1) }, 20);
 }

@@ -132,6 +132,8 @@ follows [Semantic Versioning][semver].
   is compatible with an array of any length, so `int (*p)[m] = &B;` with an
   `int B[100]` needs no cast. autoconf's variable-length-array probe writes
   both, and `configure` concluded there were no VLAs.
+* `__builtin_expect`'s second argument is evaluated, so `__builtin_expect(x,
+  z++)` increments `z`; it was checked and dropped (GCC's `execute/pr85156`).
 * An attribute may follow a parameter's whole declarator — `char *argv[]
   __attribute__((unused))` — where it was a syntax error (`execute/stkalign`).
 * An inline-assembly immediate is printed in its operand's width,

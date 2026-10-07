@@ -116,17 +116,41 @@ impl Sema<'_> {
         }
         let result = match rest {
             // `__builtin_expect(value, expected)` is `value`; the hint has
-            // nowhere to go, since `core::hint::likely` is unstable.
+            // nowhere to go, since `core::hint::likely` is unstable. It is
+            // still an argument, though, and evaluated: GCC's torture case
+            // `pr85156` passes `z++` and reads `z` afterwards. A constant —
+            // the hint as everyone writes it — has nothing to evaluate and is
+            // dropped, which keeps `__builtin_expect(1, 1)` a constant.
             "expect" | "expect_with_probability" => {
                 let arity = if rest == "expect" { 2 } else { 3 };
                 self.builtin_arity(name, args, arity, range)?;
                 let value = self.expr(&args[0])?;
+                let mut hints = Vec::new();
                 for arg in &args[1..] {
-                    self.expr(arg);
+                    let Some(hint) = self.expr(arg) else { continue };
+                    let saved = std::mem::take(&mut self.diags);
+                    let constant = self.const_eval(&hint).is_some();
+                    self.diags = saved;
+                    if !constant {
+                        hints.push(hint);
+                    }
                 }
                 // GCC gives the builtin the type `long`, and code that assigns
                 // the result somewhere narrower converts as usual.
-                Some(self.convert(value, Ty::Long))
+                let mut value = self.convert(value, Ty::Long);
+                // The hints first: the order of the arguments' evaluation is
+                // unspecified, and the value is what is left.
+                for hint in hints.into_iter().rev() {
+                    value = Expr::new(
+                        ExprKind::Comma {
+                            lhs: Box::new(hint),
+                            rhs: Box::new(value),
+                        },
+                        Ty::Long,
+                        range,
+                    );
+                }
+                Some(value)
             }
             "trap" => {
                 self.builtin_arity(name, args, 0, range)?;
