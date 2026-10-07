@@ -2887,7 +2887,24 @@ impl<'a> Codegen<'a> {
     ///   `redefine` moves the arena back down to a declaration's previous mark
     ///   when the declaration is reached again, forgetting every mark taken
     ///   after it: those arrays were declared later on the path that got here,
-    ///   so jumping back over this declaration ended their lifetimes too.
+    ///   so jumping back over this declaration ended their lifetimes too;
+    /// * the chunks outlive the call. An arena that is dropped puts its list
+    ///   of chunks on a stack kept per thread, and the next arena's first
+    ///   allocation takes the top list back, so a function that calls
+    ///   `alloca` on every call — QuickJS's interpreter does, for each frame
+    ///   of the program it runs — costs a pointer bump and the zeroing, not
+    ///   an allocation, a zeroed page and a free. The stack is a stack because
+    ///   calls nest: a recursion as deep as the last one finds a list at every
+    ///   level. It keeps at most 64 lists, and a unit under `#pragma cinrs
+    ///   no_std`, which has no thread-local storage, keeps none.
+    ///
+    /// The zeroing stays, chunks reused or not. Every byte handed out is
+    /// initialised, which Rust requires of a byte a C program reads before it
+    /// writes it — indeterminate in C, undefined behaviour through a raw
+    /// pointer in Rust — and which a reused chunk would not otherwise
+    /// guarantee: a struct copied into it earlier leaves its padding
+    /// uninitialised. It costs what the program's own initialisation of the
+    /// same bytes costs.
     ///
     /// Everything is in [`Cell`]s so that any number of frames can hold a
     /// shared borrow of the arena at once. The methods are safe: the only
@@ -2908,7 +2925,76 @@ impl<'a> Codegen<'a> {
             span,
         );
         let void = self.pointee_ty(Ty::Void, span);
+        // The stack of chunk lists a thread's dropped arenas left behind, and
+        // the two ends of it; without `std` there is no thread-local storage,
+        // and every arena frees its chunks as it always did.
+        let spare = Ident::new("__CINRS_VLA_SPARE", Span::mixed_site());
+        let lists_ty = self.vec_ty(chunks_ty.clone(), span);
+        let (spare_item, take_spare, give_back) = if self.program.no_std {
+            (
+                TokenStream::new(),
+                quote_spanned! {span=> false },
+                TokenStream::new(),
+            )
+        } else {
+            (
+                quote_spanned! {span=>
+                    ::std::thread_local! {
+                        static #spare: ::core::cell::UnsafeCell<#lists_ty> =
+                            const { ::core::cell::UnsafeCell::new(#empty) };
+                    }
+                },
+                // SAFETY, here and in `drop`: the stack is this thread's, and
+                // nothing in either closure can reach it again — a `pop`, a
+                // `push`, and a list freed — so the borrow is the only one.
+                quote_spanned! {span=>
+                    #spare
+                        .try_with(|lists| {
+                            match unsafe { (*lists.get()).pop() } {
+                                ::core::option::Option::Some(list) => {
+                                    *chunks = list;
+                                    true
+                                }
+                                ::core::option::Option::None => false,
+                            }
+                        })
+                        .unwrap_or(false)
+                },
+                quote_spanned! {span=>
+                    #[allow(
+                        unknown_lints,
+                        elided_lifetimes_in_paths,
+                        single_use_lifetimes,
+                        unused_qualifications,
+                        clippy::pedantic,
+                        clippy::nursery
+                    )]
+                    impl ::core::ops::Drop for #arena {
+                        #[inline]
+                        fn drop(&mut self) {
+                            // The list is moved straight out of the arena
+                            // into the stack, not through a temporary: a
+                            // three-word value stored and read straight back
+                            // stalls the store forwarding of every call. After
+                            // the thread's storage is gone the chunks are
+                            // simply freed with the arena.
+                            let chunks = self.chunks.get_mut();
+                            if !chunks.is_empty() {
+                                let _ = #spare.try_with(|lists| {
+                                    let kept = unsafe { &mut *lists.get() };
+                                    if kept.len() < 64 {
+                                        kept.push(::core::mem::take(chunks));
+                                    }
+                                });
+                            }
+                        }
+                    }
+                },
+            )
+        };
         quote_spanned! {span=>
+            #spare_item
+            #give_back
             #[allow(
                 unknown_lints,
                 elided_lifetimes_in_paths,
@@ -2985,6 +3071,15 @@ impl<'a> Codegen<'a> {
                 #[cold]
                 #[inline(never)]
                 fn grow(&self, bytes: #usize_ty, align: #usize_ty) -> *mut #u8_ty {
+                    // The first allocation of the call: the chunks a returned
+                    // call left on this thread, from the bottom one up.
+                    {
+                        // SAFETY: as in `bytes`.
+                        let chunks = unsafe { &mut *self.chunks.get() };
+                        if chunks.is_empty() && #take_spare {
+                            return self.bytes(bytes, align);
+                        }
+                    }
                     let need = bytes
                         .checked_add(align)
                         .expect("a variable length array or alloca is larger than the address space");

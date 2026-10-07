@@ -158,7 +158,9 @@ lives until the *function* returns. Both are emulated on the heap, since Rust
 cannot move the stack pointer by an amount chosen at run time: each call of the
 function gets a bump arena, and an array is a bump off it that the end of its
 block gives back, so one declared in a loop costs a pointer bump and a `memset`
-rather than an allocation. The storage is not the stack, and the two of them
+rather than an allocation; and the arena's chunks are kept per thread for the
+next call, so a function that calls `alloca` every time it is called costs the
+same. The storage is not the stack, and the two of them
 are the only constructs whose expansion needs more than `core`. What a C program can observe — the elements, the lifetimes,
 the run-time `sizeof` — is unchanged. A `goto` or a `case` that would jump into
 the scope of one is a located error, as C requires.

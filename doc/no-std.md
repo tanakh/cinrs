@@ -23,11 +23,13 @@ unless the unit says otherwise:
 #pragma cinrs no_std
 ```
 
-which makes them `::alloc::vec::Vec`s instead. The crate then has to contain
-`extern crate alloc;` itself — an expansion is items, and a crate-level
-directive is not one of them. Without the pragma, a variable length array in a
-`#![no_std]` crate is `rustc`'s own "cannot find `std`", with the caret on the
-declaration that needed it.
+which makes them `::alloc::vec::Vec`s instead, and leaves out the `std`
+thread-local in which a returning call keeps its chunks for the next one: each
+call frees its own. The crate then has to contain `extern crate alloc;`
+itself — an expansion is items, and a crate-level directive is not one of
+them. Without the pragma, a variable length array in a `#![no_std]` crate is
+`rustc`'s own "cannot find `std`", with the caret on the declaration that
+needed it, and then the thread-local's name, which that left undefined.
 
 The third is a **thread-local object**, and the pragma does not help there:
 `thread_local!` is a `std` macro and `core` has no thread-local storage at all,

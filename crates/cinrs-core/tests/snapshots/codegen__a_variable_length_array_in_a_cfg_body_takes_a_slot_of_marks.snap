@@ -5,6 +5,34 @@ expression: "generate(r#\"\n        long jumpy(int n) {\n            long total 
 mod __cinrs_unit_58b67d2d {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    ::std::thread_local! {
+        static __CINRS_VLA_SPARE : ::core::cell::UnsafeCell < ::std::vec::Vec <
+        ::std::vec::Vec < ::std::vec::Vec < ::core::primitive::u128 > > > > = const {
+        ::core::cell::UnsafeCell::new(::std::vec::Vec::new()) };
+    }
+    #[allow(
+        unknown_lints,
+        elided_lifetimes_in_paths,
+        single_use_lifetimes,
+        unused_qualifications,
+        clippy::pedantic,
+        clippy::nursery
+    )]
+    impl ::core::ops::Drop for __cinrs_vla_arena {
+        #[inline]
+        fn drop(&mut self) {
+            let chunks = self.chunks.get_mut();
+            if !chunks.is_empty() {
+                let _ = __CINRS_VLA_SPARE
+                    .try_with(|lists| {
+                        let kept = unsafe { &mut *lists.get() };
+                        if kept.len() < 64 {
+                            kept.push(::core::mem::take(chunks));
+                        }
+                    });
+            }
+        }
+    }
     #[allow(
         unknown_lints,
         elided_lifetimes_in_paths,
@@ -93,6 +121,24 @@ mod __cinrs_unit_58b67d2d {
             bytes: ::core::primitive::usize,
             align: ::core::primitive::usize,
         ) -> *mut ::core::primitive::u8 {
+            {
+                let chunks = unsafe { &mut *self.chunks.get() };
+                if chunks.is_empty()
+                    && __CINRS_VLA_SPARE
+                        .try_with(|lists| {
+                            match unsafe { (*lists.get()).pop() } {
+                                ::core::option::Option::Some(list) => {
+                                    *chunks = list;
+                                    true
+                                }
+                                ::core::option::Option::None => false,
+                            }
+                        })
+                        .unwrap_or(false)
+                {
+                    return self.bytes(bytes, align);
+                }
+            }
             let need = bytes
                 .checked_add(align)
                 .expect(

@@ -1,9 +1,23 @@
 error[E0433]: cannot find `std` in the list of imported crates
-  --> tests/ui/no_std_without_the_pragma.rs:16:13
+  --> tests/ui/no_std_without_the_pragma.rs:18:13
    |
-16 |         int a[n];
+18 |         int a[n];
    |             ^ could not find `std` in the list of imported crates
 
-error: aborting due to 1 previous error
+error[E0425]: cannot find value `__CINRS_VLA_SPARE` in this scope
+  --> tests/ui/no_std_without_the_pragma.rs:16:1
+   |
+16 | / cinrs::c99! {
+17 | |     long sum(int n) {
+18 | |         int a[n];
+19 | |         a[0] = 1;
+...  |
+22 | | }
+   | |_^ not found in this scope
+   |
+   = note: this error originates in the macro `cinrs::c99` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-For more information about this error, try `rustc --explain E0433`.
+error: aborting due to 2 previous errors
+
+Some errors have detailed explanations: E0425, E0433.
+For more information about an error, try `rustc --explain E0425`.

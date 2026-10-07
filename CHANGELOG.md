@@ -122,6 +122,12 @@ follows [Semantic Versioning][semver].
   differ: `e - 1 < 0`, a division, a conversion to `long`, and — silently — a
   bit-field of a `typedef` of an anonymous `enum`, which read 4 back from
   QuickJS's 3-bit `closure_type` as -4.
+* The arena behind variable length arrays and `alloca` keeps its chunks per
+  thread when a call returns, for the next call to take, instead of freeing
+  them: a function that `alloca`s on every call — QuickJS's interpreter — no
+  longer pays for an allocation, a zeroed chunk and a free each time (a
+  microbenchmark of it went from 0.85 s to 0.28 s; gcc takes 0.11 s). A unit
+  under `#pragma cinrs no_std` frees them as before.
 
 ### Fixed
 

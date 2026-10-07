@@ -3,15 +3,17 @@
 //!
 //! Nothing in the C says which kind of crate the expansion is going into, and
 //! a procedural macro cannot ask, so the arena behind a variable length array
-//! is made of `::std::vec::Vec`s unless `#pragma cinrs no_std` says otherwise.
-//! What the user then sees is `rustc`'s own "unresolved crate `std`", with the
-//! caret on the C declaration that needed it — which is what this test is
-//! blessing. The fix is the pragma above plus `extern crate alloc;`; see
+//! is made of `::std::vec::Vec`s, and keeps its chunks in a `std`
+//! thread-local, unless `#pragma cinrs no_std` says otherwise. What the user
+//! then sees first is `rustc`'s own "unresolved crate `std`", with the caret on
+//! the C declaration that needed it — which is what this test is blessing —
+//! and after it the thread-local's name, which that same missing crate left
+//! undefined. The fix is the pragma above plus `extern crate alloc;`; see
 //! `doc/no-std.md`.
 
 #![no_std]
 
-cinrs::c99! {
+cinrs::c99! { //~ ERROR: cannot find value `__CINRS_VLA_SPARE`
     long sum(int n) {
         int a[n]; //~ ERROR: cannot find `std`
         a[0] = 1;

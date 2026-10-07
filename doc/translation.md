@@ -677,6 +677,19 @@ call to the allocator, for a new chunk at least twice as large — or the next
 one along, if an earlier pass left one big enough. A recursive call has an
 arena of its own.
 
+The chunks outlive the call. A returning function's arena puts its list of
+chunks on a stack kept per thread, and the next call's first array or
+`alloca` takes the top list back, so a function that allocates on every call —
+QuickJS's interpreter `alloca`s each JavaScript frame — pays for a bump and the
+zeroing of what it asked for, not for an allocation, a fresh zeroed chunk and a
+free. It is a stack because calls nest, so a recursion finds a list at every
+level it reached before; it keeps at most 64 lists. A unit under
+`#pragma cinrs no_std` has no thread-local storage and frees its chunks at
+the `return`, as before. The zeroing stays: a reused chunk holds whatever an
+earlier call left there, padding a struct copy left uninitialised included,
+and every byte handed out has to be initialised for a read before a write to
+be defined in Rust.
+
 A variable length array asked to be over-aligned —
 `double v[n] __attribute__((aligned(32)))` — pads the arena's position up to the
 next multiple of the alignment *by address*, so any alignment works in a
