@@ -358,6 +358,7 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "huge_valf64",
     "huge_valf64x",
     "huge_vall",
+    "ia32_pause",
     "inf",
     "inff",
     "inff32",

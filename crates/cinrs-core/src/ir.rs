@@ -2684,6 +2684,11 @@ pub enum BuiltinOp {
     /// frame pointer itself, nor the stack pointer, and nothing may be read
     /// through it.
     FrameAddress,
+    /// `__builtin_ia32_pause()`: GCC's own name for x86's `pause`, which
+    /// curl's spin lock (`easy_lock.h`) calls directly when `__GNUC__` is
+    /// defined and `__clang__` is not. It is `core::hint::spin_loop()`, which
+    /// on x86 is that instruction — `_mm_pause`.
+    Pause,
     /// `__builtin_cproj(z)`: C99 7.3.9.5's projection onto the Riemann sphere.
     ///
     /// Everything is itself except a value with an infinite part, which becomes

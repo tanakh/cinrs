@@ -4418,7 +4418,11 @@ impl<'a> Codegen<'a> {
                 params.extend(quote_spanned! {span=> #pname: #pty });
                 // The same cast a direct call's pointer argument gets.
                 let cast = self.intrinsic_pointer_arg(*ty, span).unwrap_or_default();
-                args.extend(quote_spanned! {span=> #pname #cast });
+                args.extend(intrinsic_reference(
+                    quote_spanned! {span=> #pname #cast },
+                    intr.reference_at(index),
+                    span,
+                ));
             }
             let ret = if function.sig.ret.is_void() {
                 TokenStream::new()
@@ -5684,6 +5688,11 @@ impl<'a> Codegen<'a> {
                     prec::BLOCK,
                 )
             }
+            // x86's `pause`; see [`BuiltinOp::Pause`].
+            BuiltinOp::Pause => Value::new(
+                quote_spanned! {span=> ::core::hint::spin_loop() },
+                prec::CALL,
+            ),
             // Sixteen-byte aligned bytes off the function's arena, which no
             // variable length array's frame gives back: they live until the
             // function returns. See [`Codegen::arena_items`].
@@ -6902,7 +6911,11 @@ impl<'a> Codegen<'a> {
             match param.and_then(|ty| self.intrinsic_pointer_arg(ty, span)) {
                 Some(cast) => {
                     let value = self.expr(arg).at(prec::CAST, span);
-                    tokens.extend(quote_spanned! {span=> #value #cast });
+                    tokens.extend(intrinsic_reference(
+                        quote_spanned! {span=> #value #cast },
+                        intr.reference_at(index),
+                        span,
+                    ));
                 }
                 None => tokens.extend(self.expr_at(arg, arg.ty)),
             }
@@ -8932,6 +8945,18 @@ fn message_literal(text: &str, span: Span) -> TokenStream {
     let mut literal = Literal::string(text);
     literal.set_span(span);
     TokenStream::from(TokenTree::Literal(literal))
+}
+
+/// An intrinsic's pointer argument, `pointer` (already cast to `*mut _`), as
+/// what `core::arch` takes: the pointer itself, or `&mut *pointer` where the
+/// parameter is a reference — RDRAND's and RDSEED's output; see
+/// [`crate::x86::Intrinsic::reference_at`].
+fn intrinsic_reference(pointer: TokenStream, reference: bool, span: Span) -> TokenStream {
+    if !reference {
+        return pointer;
+    }
+    let pointer = parenthesize(pointer, span);
+    quote_spanned! {span=> &mut *#pointer }
 }
 
 /// An array length, which Rust counts in `usize`.

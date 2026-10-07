@@ -64,6 +64,10 @@ const FAMILIES: &[Family] = &[
     Family::new("bmi1", "immintrin.h", "bmi1").also("bmi"),
     Family::new("bmi2", "immintrin.h", "bmi2"),
     Family::new("abm", "immintrin.h", "lzcnt"),
+    // RDRAND and RDSEED share `rdrand.rs`, and each declaration keeps the
+    // feature its own attribute names. Their operand is a `&mut` in
+    // `core::arch`; see [`Intrinsic::refs`].
+    Family::new("rdrand", "immintrin.h", "rdrand"),
     // AVX-512 and what arrived with it. GCC splits each AVX-512 family's
     // 128- and 256-bit forms — the ones that also need AVX512VL — into a
     // second header, and `stdarch` keeps AVX-VNNI and AVX-IFMA in the AVX-512
@@ -629,6 +633,9 @@ struct Intrinsic {
     /// `(argument index, Rust const type)` for every operand that is a
     /// `const` generic in Rust and an integer constant expression in C.
     imm: Vec<(usize, String)>,
+    /// The arguments that are a `&mut T` in `core::arch` and a `T *` in C —
+    /// RDRAND's and RDSEED's output — which a call passes as `&mut *p`.
+    refs: Vec<usize>,
     /// Whether the declaration only exists in `core::arch::x86_64`.
     x86_64_only: bool,
 }
@@ -877,11 +884,22 @@ fn convert(attrs: &[String], sig: &str, x86_64_only: bool) -> Result<Intrinsic, 
         return skip(&format!("return type '{ret_text}' has no C spelling"));
     };
     let mut params = Vec::new();
+    let mut refs = Vec::new();
     for param in split_top(params_text) {
         let Some((_, ty)) = param.split_once(':') else {
             return skip("unreadable parameter");
         };
-        match c_type(ty) {
+        // An output written through a `&mut` is a pointer in C. Only the
+        // RDRAND family is read here so far; a `&mut` anywhere else would
+        // need its call site looked at before it is let in.
+        let ty = match ty.trim().strip_prefix("&mut ") {
+            Some(pointee) if name.starts_with("_rdrand") || name.starts_with("_rdseed") => {
+                refs.push(params.len());
+                format!("*mut {pointee}")
+            }
+            _ => ty.to_owned(),
+        };
+        match c_type(&ty) {
             Some(c) => params.push(c),
             None => return skip(&format!("parameter type '{}' has no C spelling", ty.trim())),
         }
@@ -934,6 +952,11 @@ fn convert(attrs: &[String], sig: &str, x86_64_only: bool) -> Result<Intrinsic, 
                 return skip("an immediate past the end of the argument list");
             }
             params.insert(*index, spelling.to_owned());
+            for at in &mut refs {
+                if *at >= *index {
+                    *at += 1;
+                }
+            }
         }
     }
 
@@ -956,6 +979,7 @@ fn convert(attrs: &[String], sig: &str, x86_64_only: bool) -> Result<Intrinsic, 
         params,
         ret,
         imm,
+        refs,
         x86_64_only,
     })
 }
@@ -1342,6 +1366,17 @@ fn table_source(all: &[Intrinsic]) -> String {
         );
     }
     out.push_str("];\n");
+    out.push_str(
+        "\n/// The intrinsics with an argument that `core::arch` takes as a `&mut T`\n\
+         /// and C as a `T *`, with the arguments' indices, sorted by name.\n\
+         #[rustfmt::skip]\n\
+         pub(super) static REFERENCES: &[(&str, &[u8])] = &[\n",
+    );
+    for intr in all.iter().filter(|intr| !intr.refs.is_empty()) {
+        let refs: Vec<String> = intr.refs.iter().map(usize::to_string).collect();
+        let _ = writeln!(out, "    (\"{}\", &[{}]),", intr.name, refs.join(", "));
+    }
+    out.push_str("];\n");
     out
 }
 
@@ -1391,7 +1426,7 @@ fn header_and_table_agree() {
     // here so that the prose cannot quietly go out of date.
     assert_eq!(
         from_table.len(),
-        6075,
+        6081,
         "the intrinsics table changed size: update the table in doc/features.md, \
          \"SIMD intrinsics\", and this number"
     );
@@ -1446,6 +1481,8 @@ fn header_and_table_agree() {
             ("lzcnt", 2),
             ("pclmulqdq", 1),
             ("popcnt", 2),
+            ("rdrand", 3),
+            ("rdseed", 3),
             ("sha", 7),
             ("sha512,avx", 3),
             ("sm3,avx", 3),

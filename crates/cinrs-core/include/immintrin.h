@@ -3,8 +3,8 @@
  * This is the header everyone includes. It pulls in the whole SSE chain —
  * <xmmintrin.h> through <nmmintrin.h>, and <wmmintrin.h> — and adds the
  * 256-bit types `__m256`, `__m256i` and `__m256d`, the AVX and AVX2
- * intrinsics, FMA, SHA, and the scalar bit-manipulation ones: POPCNT, LZCNT,
- * BMI1 and BMI2.
+ * intrinsics, FMA, SHA, the scalar bit-manipulation ones — POPCNT, LZCNT,
+ * BMI1 and BMI2 — and RDRAND and RDSEED.
  *
  * A call is generated as `::core::arch::x86_64::_mm256_add_ps(a, b)` — the
  * function of the same name and signature in Rust's own `core::arch` — rather
@@ -540,6 +540,20 @@ int _popcnt32(int);
 #ifdef __x86_64__
 unsigned long long _lzcnt_u64(unsigned long long);
 int _popcnt64(long long);
+#endif
+/* @generated end */
+
+/* RDRAND and RDSEED: 1 and the random value stored through the pointer, or 0
+ * when the processor had none ready. `core::arch` takes the output as a
+ * `&mut`, which the call makes of the pointer. */
+/* @generated rdrand — see crates/cinrs-core/tests/x86_intrinsics.rs */
+int _rdrand16_step(unsigned short *);
+int _rdrand32_step(unsigned int *);
+int _rdseed16_step(unsigned short *);
+int _rdseed32_step(unsigned int *);
+#ifdef __x86_64__
+int _rdrand64_step(unsigned long long *);
+int _rdseed64_step(unsigned long long *);
 #endif
 /* @generated end */
 

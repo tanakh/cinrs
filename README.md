@@ -72,8 +72,8 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   kinds `asm!` has. What has no honest translation (`setjmp`) is a located
   error, never a guess.
 * **The SIMD intrinsics, by name.** `#include <immintrin.h>` and write
-  `_mm_add_epi32(a, b)`: 6,075 of Intel's intrinsics, SSE through AVX2 and
-  AVX-512 with FMA, AES, GFNI, VAES, SHA and the BMI scalar ones, mapped
+  `_mm_add_epi32(a, b)`: 6,081 of Intel's intrinsics, SSE through AVX2 and
+  AVX-512 with FMA, AES, GFNI, VAES, SHA, RDRAND and the BMI scalar ones, mapped
   straight onto `core::arch::x86_64`, whose
   signatures the bundled headers were generated from. `__m128i` punnes through a
   `union` like any 16-byte type, GCC's `a * b`, `v[i]` and `{a, b}` on the vector

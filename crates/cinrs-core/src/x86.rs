@@ -80,6 +80,20 @@ impl Intrinsic {
     pub fn immediate_at(&self, index: usize) -> Option<&'static Imm> {
         self.imm.iter().find(|imm| usize::from(imm.index) == index)
     }
+
+    /// Whether the argument at `index` is a `&mut T` in `core::arch`, where C
+    /// passes a `T *`: RDRAND's and RDSEED's output, which a call passes as
+    /// `&mut *p`. The pointer has to be valid, as it has to be in C.
+    pub fn reference_at(&self, index: usize) -> bool {
+        table::REFERENCES
+            .binary_search_by(|(name, _)| name.cmp(&self.name))
+            .is_ok_and(|at| {
+                table::REFERENCES[at]
+                    .1
+                    .iter()
+                    .any(|i| usize::from(*i) == index)
+            })
+    }
 }
 
 /// The intrinsic of this name, if there is one.

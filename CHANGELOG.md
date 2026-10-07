@@ -64,6 +64,12 @@ follows [Semantic Versioning][semver].
 * `__builtin_frame_address(0)` and `__builtin_stack_address()`, as an address
   in the current function's frame, which is what QuickJS's stack-overflow
   check compares; another level is refused.
+* `__builtin_ia32_pause()`, GCC's own name for `_mm_pause`, which curl's spin
+  lock calls under GCC: `core::hint::spin_loop()`.
+* RDRAND and RDSEED: `_rdrand16_step` … `_rdseed64_step` in `<immintrin.h>`,
+  mapped onto `core::arch` like every other intrinsic, the output pointer
+  passed as the `&mut` it takes there. libsodium's `configure` probes for
+  them.
 * `__attribute__((transparent_union))`: a parameter of such a union takes an
   argument of any member's type, or a null pointer constant, and is passed as
   the first member, which is GCC's ABI. glibc's `bind`, `accept` and

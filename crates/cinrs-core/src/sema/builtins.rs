@@ -160,6 +160,30 @@ impl Sema<'_> {
                 self.library_call("abort", &[], range)
             }
             "frame_address" | "stack_address" => self.frame_address(name, args, range),
+            // GCC's internal name for `_mm_pause`, which is the one
+            // `__builtin_ia32_*` real code calls by hand: a spin lock's back-off.
+            // See [`BuiltinOp::Pause`].
+            "ia32_pause" => {
+                self.builtin_arity(name, args, 0, range)?;
+                if !matches!(self.target.arch, Arch::X86 | Arch::X86_64) {
+                    self.error(
+                        range,
+                        format!(
+                            "'{name}' is an x86 builtin, and this unit is being translated for {}",
+                            self.target.arch.as_str()
+                        ),
+                    );
+                    return None;
+                }
+                Some(Expr::new(
+                    ExprKind::Builtin {
+                        op: BuiltinOp::Pause,
+                        args: Vec::new(),
+                    },
+                    Ty::Void,
+                    range,
+                ))
+            }
             "constant_p" => {
                 self.builtin_arity(name, args, 1, range)?;
                 let value = self.expr(&args[0])?;

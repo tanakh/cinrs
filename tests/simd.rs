@@ -570,6 +570,68 @@ fn the_scalar_bit_intrinsics() {
 }
 
 // ---------------------------------------------------------------------------
+// RDRAND and RDSEED: the output is a `&mut` in `core::arch` and a pointer in C
+// ---------------------------------------------------------------------------
+
+gnu11! {
+    #include <immintrin.h>
+
+    /* libsodium's configure probe, as its source writes it: the instruction
+       set opened for the rest of the unit, which also defines the macro. */
+    #pragma GCC target("rdrnd")
+    #ifndef __RDRND__
+    #error "#pragma GCC target(\"rdrnd\") defines __RDRND__"
+    #endif
+
+    /* RDRAND may run dry for a moment and answer 0; it is retried, as
+       Intel's own guidance says. Two 64-bit draws are equal with
+       probability 2^-64. */
+    int draws_rdrand(void) {
+        unsigned long long a = 0, b = 0;
+        unsigned int c = 0;
+        unsigned short d = 0;
+        int ok = 0;
+        for (int i = 0; i < 100 && !ok; i++) ok = _rdrand64_step(&a);
+        if (!ok) return 0;
+        ok = 0;
+        for (int i = 0; i < 100 && !ok; i++) ok = _rdrand64_step(&b);
+        if (!ok || a == b) return 0;
+        ok = 0;
+        for (int i = 0; i < 100 && !ok; i++) ok = _rdrand32_step(&c);
+        if (!ok) return 0;
+        ok = 0;
+        for (int i = 0; i < 100 && !ok; i++) ok = _rdrand16_step(&d);
+        if (!ok) return 0;
+        /* Through a function pointer, which is a shim of the same signature. */
+        int (*step)(unsigned int *) = _rdrand32_step;
+        ok = 0;
+        for (int i = 0; i < 100 && !ok; i++) ok = step(&c);
+        return ok;
+    }
+
+    __attribute__((target("rdseed"))) int draws_rdseed(void) {
+        unsigned long long a = 0;
+        unsigned int b = 0;
+        int ok = 0;
+        for (int i = 0; i < 1000 && !ok; i++) ok = _rdseed64_step(&a);
+        if (!ok) return 0;
+        ok = 0;
+        for (int i = 0; i < 1000 && !ok; i++) ok = _rdseed32_step(&b);
+        return ok;
+    }
+}
+
+#[test]
+fn rdrand_and_rdseed_store_through_the_pointer() {
+    if is_x86_feature_detected!("rdrand") {
+        assert_eq!(unsafe { draws_rdrand() }, 1);
+    }
+    if is_x86_feature_detected!("rdseed") {
+        assert_eq!(unsafe { draws_rdseed() }, 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the vector types as objects: unions, members, arrays, locals, statics
 // ---------------------------------------------------------------------------
 

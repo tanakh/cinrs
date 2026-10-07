@@ -386,6 +386,45 @@ fn trap_is_reachable_only_when_asked_for() {
 }
 
 // ---------------------------------------------------------------------------
+// `__builtin_ia32_pause`
+// ---------------------------------------------------------------------------
+
+/// curl's spin lock (`lib/easy_lock.h`) backs off with GCC's own name for
+/// `_mm_pause` whenever `__GNUC__` is defined and `__clang__` is not.
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+mod pause {
+    cinrs::gnu99! {
+        #include <stdatomic.h>
+
+        static atomic_int flag;
+
+        int spin_until_free(void) {
+            int spins = 0;
+            atomic_store(&flag, 1);
+            while (atomic_exchange(&flag, 1)) {
+                __builtin_ia32_pause();
+                if (++spins == 3) atomic_store(&flag, 0);
+            }
+            return spins;
+        }
+
+        #if __has_builtin(__builtin_ia32_pause)
+        int pause_is_a_builtin(void) { return 1; }
+        #else
+        int pause_is_a_builtin(void) { return 0; }
+        #endif
+    }
+
+    #[test]
+    fn the_x86_pause_builtin_is_spin_loop() {
+        unsafe {
+            assert_eq!(spin_until_free(), 3);
+            assert_eq!(pause_is_a_builtin(), 1);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the frame address
 // ---------------------------------------------------------------------------
 

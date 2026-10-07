@@ -461,6 +461,7 @@ older compiler would include it from:
 | BMI1 | 17 | `<immintrin.h>` |
 | BMI2 | 6 | `<immintrin.h>` |
 | POPCNT, LZCNT | 4 | `<immintrin.h>` |
+| RDRAND, RDSEED | 6 | `<immintrin.h>` |
 | none (`_mm_pause`) | 1 | `<emmintrin.h>` |
 | AVX-512F | 1,421 | `<avx512fintrin.h>` |
 | AVX-512F + VL | 1,212 | `<avx512vlintrin.h>` |
@@ -489,7 +490,7 @@ older compiler would include it from:
 | SHA-512 | 3 | `<sha512intrin.h>` |
 | SM3 | 3 | `<sm3intrin.h>` |
 | SM4 | 4 | `<sm4intrin.h>` |
-| **total** | **6,075** | |
+| **total** | **6,081** | |
 
 `<immintrin.h>` includes the whole chain, so it is the only one most programs
 need; `<x86intrin.h>`, `<avxintrin.h>`, `<avx2intrin.h>` and `<popcntintrin.h>`
@@ -730,7 +731,9 @@ The only Rust an intrinsic produces is the call.
   Fifty-one are **not stable**: the fifty in the bullet above, and
   `_MM_SHUFFLE`, which is a macro in the header anyway. And two take a Rust
   *reference* for an output: `_mulx_u32` and `_mulx_u64`, whose high half goes
-  through `&mut`.
+  through `&mut`. RDRAND's and RDSEED's six `_rd…_step` take one too, and are
+  the exception the generator lets in: their output pointer is the only
+  operand, so the call passes `&mut *p` and the C reads as GCC's.
 
   Six more that C cannot spell come back as **macros** instead, because each is
   defined in terms of something that is here: `_mm256_broadcast_ss`,

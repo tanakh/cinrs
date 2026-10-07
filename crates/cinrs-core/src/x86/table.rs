@@ -6085,6 +6085,12 @@ pub(super) static INTRINSICS: &[Intrinsic] = &[
     Intrinsic { name: "_pext_u64", feature: "bmi2", arity: 2, imm: &[], x86_64_only: true },
     Intrinsic { name: "_popcnt32", feature: "popcnt", arity: 1, imm: &[], x86_64_only: false },
     Intrinsic { name: "_popcnt64", feature: "popcnt", arity: 1, imm: &[], x86_64_only: true },
+    Intrinsic { name: "_rdrand16_step", feature: "rdrand", arity: 1, imm: &[], x86_64_only: false },
+    Intrinsic { name: "_rdrand32_step", feature: "rdrand", arity: 1, imm: &[], x86_64_only: false },
+    Intrinsic { name: "_rdrand64_step", feature: "rdrand", arity: 1, imm: &[], x86_64_only: true },
+    Intrinsic { name: "_rdseed16_step", feature: "rdseed", arity: 1, imm: &[], x86_64_only: false },
+    Intrinsic { name: "_rdseed32_step", feature: "rdseed", arity: 1, imm: &[], x86_64_only: false },
+    Intrinsic { name: "_rdseed64_step", feature: "rdseed", arity: 1, imm: &[], x86_64_only: true },
     Intrinsic { name: "_store_mask16", feature: "avx512f", arity: 2, imm: &[], x86_64_only: false },
     Intrinsic { name: "_store_mask32", feature: "avx512bw", arity: 2, imm: &[], x86_64_only: false },
     Intrinsic { name: "_store_mask64", feature: "avx512bw", arity: 2, imm: &[], x86_64_only: false },
@@ -6092,4 +6098,16 @@ pub(super) static INTRINSICS: &[Intrinsic] = &[
     Intrinsic { name: "_tzcnt_u16", feature: "bmi1", arity: 1, imm: &[], x86_64_only: false },
     Intrinsic { name: "_tzcnt_u32", feature: "bmi1", arity: 1, imm: &[], x86_64_only: false },
     Intrinsic { name: "_tzcnt_u64", feature: "bmi1", arity: 1, imm: &[], x86_64_only: true },
+];
+
+/// The intrinsics with an argument that `core::arch` takes as a `&mut T`
+/// and C as a `T *`, with the arguments' indices, sorted by name.
+#[rustfmt::skip]
+pub(super) static REFERENCES: &[(&str, &[u8])] = &[
+    ("_rdrand16_step", &[0]),
+    ("_rdrand32_step", &[0]),
+    ("_rdrand64_step", &[0]),
+    ("_rdseed16_step", &[0]),
+    ("_rdseed32_step", &[0]),
+    ("_rdseed64_step", &[0]),
 ];
