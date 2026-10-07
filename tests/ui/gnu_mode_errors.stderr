@@ -1,31 +1,31 @@
 error: 'mode(XF)' names a floating format with no stable Rust type; `f16` and `f128` are unstable and x87's extended double has no Rust counterpart
-  --> tests/ui/gnu_mode_errors.rs:16:44
+  --> tests/ui/gnu_mode_errors.rs:18:44
    |
-16 |     typedef double extended __attribute__((mode(XF)));
+18 |     typedef double extended __attribute__((mode(XF)));
    |                                            ^^^^
 
 error: 'mode(TC)' names a complex type whose parts have a floating format with no stable Rust type; write 'double _Complex'
-  --> tests/ui/gnu_mode_errors.rs:21:48
+  --> tests/ui/gnu_mode_errors.rs:23:48
    |
-21 |     typedef double complex_quad __attribute__((mode(TC)));
+23 |     typedef double complex_quad __attribute__((mode(TC)));
    |                                                ^^^^
 
-error: 'mode(V4SI)' names a vector type: the vector extensions need `core::simd`, which is unstable
-  --> tests/ui/gnu_mode_errors.rs:24:42
+error: unknown machine mode 'V4ZZ'
+  --> tests/ui/gnu_mode_errors.rs:26:51
    |
-24 |     typedef int four_ints __attribute__((mode(V4SI)));
-   |                                          ^^^^
+26 |     typedef int vector_of_nonsense __attribute__((mode(V4ZZ)));
+   |                                                   ^^^^
 
 error: unknown machine mode 'ZZ'
-  --> tests/ui/gnu_mode_errors.rs:27:41
+  --> tests/ui/gnu_mode_errors.rs:29:41
    |
-27 |     typedef int nonsense __attribute__((mode(ZZ)));
+29 |     typedef int nonsense __attribute__((mode(ZZ)));
    |                                         ^^^^
 
 error: 'mode' applies to an arithmetic type, and 'struct s' is not one
-  --> tests/ui/gnu_mode_errors.rs:31:49
+  --> tests/ui/gnu_mode_errors.rs:33:49
    |
-31 |     typedef struct s wide_struct __attribute__((mode(DI)));
+33 |     typedef struct s wide_struct __attribute__((mode(DI)));
    |                                                 ^^^^
 
 error: aborting due to 5 previous errors

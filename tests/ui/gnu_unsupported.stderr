@@ -1,14 +1,8 @@
-error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable. The Intel intrinsics are the SIMD cinrs has: <immintrin.h> declares them and a call becomes the `core::arch` function of the same name
-  --> tests/ui/gnu_unsupported.rs:17:37
-   |
-17 |     typedef int v4si __attribute__((vector_size(16)));
-   |                                     ^^^^^^^^^^^
-
 error: 'alias' is not supported: write a function that forwards to the other one instead
-  --> tests/ui/gnu_unsupported.rs:19:38
+  --> tests/ui/gnu_unsupported.rs:17:38
    |
-19 |     int aliased(void) __attribute__((alias("declared_weak")));
+17 |     int aliased(void) __attribute__((alias("declared_weak")));
    |                                      ^^^^^
 
-error: aborting due to 2 previous errors
+error: aborting due to 1 previous error
 

@@ -2190,12 +2190,13 @@ fn pragma_operator_with_a_bad_operand_is_one_error() {
 
 #[test]
 fn the_has_family_answers_from_this_implementations_tables() {
-    // `packed` and `cleanup` are honoured, `vector_size` is refused, and the
-    // answers say so.
+    // `packed`, `cleanup` and `vector_size` are honoured, `alias` is refused,
+    // and the answers say so.
     assert_eq!(pp("#if __has_attribute(packed)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_attribute(__packed__)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_attribute(cleanup)\n1\n#endif"), "1");
-    assert_eq!(pp("#if __has_attribute(vector_size)\n1\n#endif"), "");
+    assert_eq!(pp("#if __has_attribute(vector_size)\n1\n#endif"), "1");
+    assert_eq!(pp("#if __has_attribute(alias)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_attribute(no_such_thing)\n1\n#endif"), "");
     assert_eq!(pp("#if __has_builtin(__builtin_popcount)\n1\n#endif"), "1");
     assert_eq!(pp("#if __has_builtin(__builtin_apply)\n1\n#endif"), "");

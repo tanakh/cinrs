@@ -246,8 +246,8 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 
 * Not supported, each as a located error: the memory
   operands and `asm goto` of inline assembly (which is otherwise
-  `core::arch::asm!`, x86 only), the GNU vector extensions (the Intel
-  intrinsics are the SIMD that is here),
+  `core::arch::asm!`, x86 only), a GNU vector passed by value to a function
+  the unit does not define (the vector extensions themselves are here),
   `_BitInt`, `_Imaginary`, an `_Atomic` aggregate.
 * `long double` is `double`.
 * The SIMD intrinsics are x86's, and only the baseline instruction set is

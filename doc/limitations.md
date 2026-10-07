@@ -5,9 +5,10 @@
   (`_Complex int`, which is a GNU extension), an `_Atomic` *aggregate* (legal
   C, and there is nothing in the generated Rust to be the lock it needs), and
   C23's *named* universal character `\N{LATIN SMALL LETTER E WITH ACUTE}`. On
-  the GNU side: the vector extensions — for which the
-  [Intel SIMD intrinsics](features.md#simd-intrinsics) are the answer, and the
-  diagnostic says so — and the parts of inline assembly listed below.
+  the GNU side: a vector type passed by value to a function the unit does not
+  define, whose convention GCC's vector extensions put in a vector register
+  (the [extensions themselves](gnu-extensions.md#language-extensions) are
+  here), and the parts of inline assembly listed below.
   Two of C11's four `__STDC_NO_*` macros depend on how the expansion was
   configured, which is the standard's own way of saying that a part is left
   out. `__STDC_NO_THREADS__` follows the *target*: `<threads.h>` declares the

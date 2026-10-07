@@ -531,6 +531,26 @@ impl Sema<'_> {
             unreachable!("vector_index_place is only called with a vector")
         };
         let shape = self.vector_shape(vec, "[]", range)?;
+        let (lane, lane_bits) = match shape.lane {
+            Lane::F32 => (Ty::Float, 32),
+            Lane::F64 => (Ty::Double, 64),
+            Lane::I64 => (Ty::LongLong, 64),
+        };
+        let lanes = i128::from(shape.bits / lane_bits);
+        self.lane_place(vector, index, lane, lanes, range)
+    }
+
+    /// One of the `lanes` lanes of type `lane` of a vector of either kind:
+    /// `*((lane *)&v + i)`, with a vector that is not an object held in a
+    /// hidden local first. See [`Sema::vector_index_place`].
+    pub(super) fn lane_place(
+        &mut self,
+        vector: Expr,
+        index: Expr,
+        lane: Ty,
+        lanes: i128,
+        range: SourceRange,
+    ) -> Option<Place> {
         if !index.ty.is_integer() {
             self.error(
                 index.range,
@@ -541,12 +561,6 @@ impl Sema<'_> {
             );
             return None;
         }
-        let (lane, lane_bits) = match shape.lane {
-            Lane::F32 => (Ty::Float, 32),
-            Lane::F64 => (Ty::Double, 64),
-            Lane::I64 => (Ty::LongLong, 64),
-        };
-        let lanes = i128::from(shape.bits / lane_bits);
         if let Some(ir::ConstValue::Int(at)) = self.const_eval(&index)
             && !(0..lanes).contains(&at)
         {
@@ -554,7 +568,7 @@ impl Sema<'_> {
                 index.range,
                 format!(
                     "index {at} is out of range for '{}', which has {lanes} lanes of '{}'",
-                    vec.name(),
+                    self.tyname(vector.ty),
                     self.tyname(lane)
                 ),
             );

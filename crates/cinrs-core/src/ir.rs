@@ -166,6 +166,25 @@ pub struct EnumId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct AtomicId(pub u32);
 
+/// A GCC vector type in the [`Types`] arena; see [`Ty::GnuVector`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GnuVecId(pub u32);
+
+/// A GCC vector type: `T __attribute__((vector_size(N)))`, `N / sizeof(T)`
+/// elements of the arithmetic type `T`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GnuVecType {
+    /// The element type: an integer type of up to 64 bits or `float` or
+    /// `double`.
+    pub elem: Ty,
+    /// How many elements, a power of two.
+    pub len: u32,
+    /// The alignment: the size by default, as GCC gives a vector type, or
+    /// what an `aligned` attribute on a `typedef` of one said — glibc's
+    /// `<bits/link.h>` lowers its 32- and 64-byte vectors to 16.
+    pub align: u64,
+}
+
 /// A resolved C type.
 ///
 /// `long double` is mapped onto [`Ty::Double`] when the type is resolved,
@@ -253,6 +272,20 @@ pub enum Ty {
     /// the thing a `union { __m128i v; int i[4]; }` punnes. Code generation
     /// writes `::core::arch::x86_64::__m128i`, whose layout is the same.
     Vector(VecTy),
+    /// A GCC vector type of the program's own, `T
+    /// __attribute__((vector_size(N)))` (GCC's "Vector Extensions").
+    ///
+    /// Unlike [`Ty::Vector`] it has arithmetic of its own — element-wise
+    /// operators with a scalar broadcast, comparisons giving a vector of 0 and
+    /// -1, `v[i]`, brace initialisers, `__builtin_shuffle` and
+    /// `__builtin_convertvector` — written out over its elements, since
+    /// `core::simd` is unstable. Code generation writes a `#[repr(C,
+    /// align(A))]` struct over `[T; K]` of the unit's own, which LLVM
+    /// vectorises: the size and the alignment are GCC's, and it is passed by
+    /// value between cinrs functions as that struct — which is *not* how GCC
+    /// passes a vector to a function of the platform's (in a vector
+    /// register), so such a call is refused.
+    GnuVector(GnuVecId),
     /// `_Atomic T`, for a scalar `T` (C11 6.7.2.4).
     ///
     /// It is the type of an *object*, never of a value: reading an atomic
@@ -691,10 +724,12 @@ pub struct Types {
     records: Vec<RecordDef>,
     enums: Vec<EnumDef>,
     atomics: Vec<Ty>,
+    gnu_vectors: Vec<GnuVecType>,
     pointer_index: HashMap<PointerType, PointerId>,
     array_index: HashMap<ArrayType, ArrayId>,
     func_index: HashMap<FuncType, FuncTyId>,
     atomic_index: HashMap<Ty, AtomicId>,
+    gnu_vector_index: HashMap<GnuVecType, GnuVecId>,
 }
 
 impl Types {
@@ -933,6 +968,31 @@ impl Types {
     /// Panics if `id` did not come from this arena.
     pub fn array_type(&self, id: ArrayId) -> ArrayType {
         self.arrays[id.0 as usize]
+    }
+
+    /// The GCC vector type of `len` elements of `elem`, aligned to `align`.
+    pub fn gnu_vector(&mut self, elem: Ty, len: u32, align: u64) -> Ty {
+        let key = GnuVecType { elem, len, align };
+        if let Some(id) = self.gnu_vector_index.get(&key) {
+            return Ty::GnuVector(*id);
+        }
+        let id = GnuVecId(self.gnu_vectors.len() as u32);
+        self.gnu_vectors.push(key);
+        self.gnu_vector_index.insert(key, id);
+        Ty::GnuVector(id)
+    }
+
+    /// The GCC vector type behind a [`Ty::GnuVector`].
+    pub fn gnu_vector_type(&self, id: GnuVecId) -> GnuVecType {
+        self.gnu_vectors[id.0 as usize]
+    }
+
+    /// Every GCC vector type the unit made, with its id.
+    pub fn gnu_vectors(&self) -> impl Iterator<Item = (GnuVecId, GnuVecType)> + '_ {
+        self.gnu_vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (GnuVecId(i as u32), *v))
     }
 
     /// The function type behind a [`Ty::Func`].
@@ -1269,6 +1329,15 @@ impl Types {
                 size: vec.bytes(),
                 align: vec.bytes(),
             },
+            // GCC's: the elements side by side, aligned to the whole — or to
+            // what a `typedef`'s `aligned` said; see [`GnuVecType::align`].
+            Ty::GnuVector(id) => {
+                let vec = self.gnu_vector_type(id);
+                Layout {
+                    size: vec.elem.size_bytes(target) * u64::from(vec.len),
+                    align: vec.align,
+                }
+            }
             scalar => {
                 let size = scalar.size_bytes(target);
                 // A scalar is aligned to its own width, up to whatever the ABI
@@ -1333,6 +1402,11 @@ impl Types {
                 }
             }
             Ty::Atomic(id) => format!("_Atomic({})", self.name(self.atomic_inner(id))),
+            // GCC's own spelling in a diagnostic.
+            Ty::GnuVector(id) => {
+                let vec = self.gnu_vector_type(id);
+                format!("__vector({}) {}", vec.len, self.name(vec.elem))
+            }
             Ty::Error => "<error>".to_owned(),
             scalar => scalar.scalar_name().to_owned(),
         }
@@ -1386,9 +1460,16 @@ impl Ty {
             Ty::Enum(_) => "enum",
             Ty::VaList => "va_list",
             Ty::Vector(vec) => vec.name(),
+            Ty::GnuVector(_) => "__vector",
             Ty::Atomic(_) => "_Atomic",
             Ty::Error => "<error>",
         }
+    }
+
+    /// Whether this is a [GCC vector type](Ty::GnuVector) of the program's
+    /// own.
+    pub fn is_gnu_vector(self) -> bool {
+        matches!(self, Ty::GnuVector(_))
     }
 
     /// Whether this is `void`.
@@ -1570,9 +1651,13 @@ impl Ty {
             // An atomic type's width is its underlying one's, which needs the
             // arena; nothing asks this about one, because every value has
             // already had the `_Atomic` taken off it.
-            Ty::Array(_) | Ty::Func(_) | Ty::Record(_) | Ty::VaList | Ty::Atomic(_) | Ty::Error => {
-                0
-            }
+            Ty::Array(_)
+            | Ty::Func(_)
+            | Ty::Record(_)
+            | Ty::VaList
+            | Ty::Atomic(_)
+            | Ty::GnuVector(_)
+            | Ty::Error => 0,
         }
     }
 
@@ -2820,6 +2905,59 @@ pub enum BuiltinOp {
     /// is a function of its own instead, which is what lets its address be
     /// taken.
     LongJmp,
+    /// GCC's vector extensions, from here to [`BuiltinOp::VecShuffle`]: an
+    /// operation that makes a [`Ty::GnuVector`] value — the expression's own
+    /// type — written out over its elements.
+    ///
+    /// This one is the vector with its one operand, a scalar already
+    /// converted to the element type, in every element: what a scalar operand
+    /// of a vector operator is broadcast to.
+    VecSplat,
+    /// The vector whose elements are the operands, one per element, in order,
+    /// each already of the element type: a brace initialiser.
+    VecLanes,
+    /// Element-wise arithmetic on two operands of the expression's own type.
+    /// Each element is computed as the scalar operator computes a value of the
+    /// element type, so integer elements wrap.
+    VecBinary(BinOp),
+    /// Element-wise `-`.
+    VecNeg,
+    /// Element-wise `~`, on integer elements.
+    VecBitNot,
+    /// Element-wise comparison of two operands of one vector type: -1 where it
+    /// holds and 0 where it does not, in the expression's type — the signed
+    /// integer vector as wide, and with as many elements, as the operands.
+    VecCompare(CmpOp),
+    /// `__builtin_convertvector(v, T)`: each element converted, as C converts
+    /// a scalar, to the element type of `T`, which has as many.
+    VecConvert,
+    /// The bytes of the one operand — a vector of either kind, or a scalar —
+    /// reread as the expression's type, which is as wide: a cast between two
+    /// vector types, or between a vector and an integer.
+    VecBitcast,
+    /// `__builtin_shuffle(a, mask)` and `__builtin_shuffle(a, b, mask)`, whose
+    /// operands are those: element `i` is element `mask[i]` of `a` — or of
+    /// `a` and `b` side by side — the index taken modulo the number there is.
+    VecShuffle,
+}
+
+impl BuiltinOp {
+    /// Whether this is one of the operations of GCC's vector extensions,
+    /// [`BuiltinOp::VecSplat`] to [`BuiltinOp::VecShuffle`].
+    pub fn is_gnu_vector(self) -> bool {
+        matches!(
+            self,
+            BuiltinOp::VecSplat
+                | BuiltinOp::VecLanes
+                | BuiltinOp::VecBinary(_)
+                | BuiltinOp::VecNeg
+                | BuiltinOp::VecBitNot
+                | BuiltinOp::VecCompare(_)
+                | BuiltinOp::VecConvert
+                | BuiltinOp::VecBitcast
+                | BuiltinOp::VecShuffle
+        )
+    }
 }
 
 /// The `float` bit pattern of a NaN that travels through the IR as a `double`.

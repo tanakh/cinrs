@@ -2151,6 +2151,26 @@ fn a_weak_definition_is_an_assembler_alias() {
     ));
 }
 
+/// A GCC vector type is a `#[repr(C, align(N))]` struct over its elements,
+/// and each operator is written out over them: a scalar broadcast with
+/// `[x; N]`, the operation through `core::array::from_fn`, and a read
+/// through a pointer unaligned.
+#[test]
+fn a_gcc_vector_is_a_struct_over_its_elements() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r#"
+        typedef unsigned long long v2du __attribute__((vector_size(16)));
+        static v2du masks[2] = { {0, 0}, {-1, 0} };
+        unsigned long long f(const v2du *p, int i) {
+            v2du sum = *p & masks[i & 1];
+            sum += 1;
+            return sum[0] ^ sum[1];
+        }
+        "#
+    ));
+}
+
 /// A thread-local object with external linkage in a unit that gives it a
 /// symbol: the `thread_local!` item and the accessor `x.cinrs_tls` another
 /// unit reaches it through. An `extern` one is that accessor, declared, and

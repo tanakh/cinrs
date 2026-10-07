@@ -1473,6 +1473,11 @@ impl<'a> Codegen<'a> {
                 let name = Ident::new(vec.name(), span);
                 return quote_spanned! {span=> ::core::arch::#module::#name };
             }
+            // The unit's own struct for it; see [`Codegen::gnu_vector_items`].
+            Ty::GnuVector(id) => {
+                let name = self.gnu_vector_ident(id, span);
+                return quote_spanned! {span=> #name };
+            }
             Ty::Pointer(id) => {
                 let pointer = self.program.types.pointer_type(id);
                 if let Ty::Func(func) = pointer.pointee {
@@ -1658,9 +1663,51 @@ impl<'a> Codegen<'a> {
 
     // -- items --------------------------------------------------------------
 
+    /// The name of the struct a [GCC vector type](Ty::GnuVector) is
+    /// generated as: `__cinrs_vec_4x_int`, with the alignment after it where
+    /// a `typedef` changed it.
+    fn gnu_vector_ident(&self, id: ir::GnuVecId, span: Span) -> Ident {
+        let vec = self.program.types.gnu_vector_type(id);
+        let size = self
+            .program
+            .types
+            .size_of(Ty::GnuVector(id), &self.options.target)
+            .unwrap_or(0);
+        let elem = vec.elem.scalar_name().replace(' ', "_");
+        let name = if vec.align == size {
+            format!("__cinrs_vec_{}x_{elem}", vec.len)
+        } else {
+            format!("__cinrs_vec_{}x_{elem}_a{}", vec.len, vec.align)
+        };
+        Ident::new(&name, span)
+    }
+
+    /// One `#[repr(C, align(A))]` struct over `[T; K]` per GCC vector type
+    /// the unit has: GCC's size and alignment, `Copy`, and a public field so
+    /// that Rust code reaches the elements. Every operator on one is written
+    /// out over the elements; see [`Codegen::gnu_vector_binary`].
+    fn gnu_vector_items(&self) -> TokenStream {
+        let mut out = TokenStream::new();
+        let span = Span::call_site();
+        for (id, vec) in self.program.types.gnu_vectors() {
+            let name = self.gnu_vector_ident(id, span);
+            let elem = self.ty(vec.elem, span);
+            let len = Literal::usize_unsuffixed(vec.len as usize);
+            let align = Literal::usize_unsuffixed(vec.align as usize);
+            out.extend(quote_spanned! {span=>
+                #[repr(C, align(#align))]
+                #[derive(Copy, Clone)]
+                #[allow(non_camel_case_types, missing_debug_implementations)]
+                pub struct #name(pub [#elem; #len]);
+            });
+        }
+        out
+    }
+
     /// The `struct`, `union`, `enum` and `typedef` items of the unit.
     fn type_items(&mut self) -> TokenStream {
         let mut out = self.align_wrapper_items();
+        out.extend(self.gnu_vector_items());
         for record in self.program.types.records() {
             if !record.emit {
                 continue;
@@ -6253,6 +6300,9 @@ impl<'a> Codegen<'a> {
                 };
                 Value::new(quote_spanned! {span=> { #body #tail } }, prec::BLOCK)
             }
+            ExprKind::Builtin { op, args } if op.is_gnu_vector() => {
+                self.gnu_vector_op(*op, args, expr.ty, span)
+            }
             ExprKind::Builtin { op, args } => self.builtin(*op, args, span),
             ExprKind::Atomic(atomic) => self.atomic(atomic, span),
             ExprKind::VaListPristine => Value::new(self.va_pristine(span), prec::CALL),
@@ -6741,6 +6791,17 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> ::core::hint::spin_loop() },
                 prec::CALL,
             ),
+            BuiltinOp::VecSplat
+            | BuiltinOp::VecLanes
+            | BuiltinOp::VecBinary(_)
+            | BuiltinOp::VecNeg
+            | BuiltinOp::VecBitNot
+            | BuiltinOp::VecCompare(_)
+            | BuiltinOp::VecConvert
+            | BuiltinOp::VecBitcast
+            | BuiltinOp::VecShuffle => {
+                unreachable!("Codegen::gnu_vector_op generates the vector operations")
+            }
             // Sixteen-byte aligned bytes off the function's arena, which no
             // variable length array's frame gives back: they live until the
             // function returns. See [`Codegen::arena_items`].
@@ -8658,6 +8719,10 @@ impl<'a> Codegen<'a> {
     }
 
     fn binary(&mut self, op: BinOp, lhs: Value, rhs: Value, ty: Ty, span: Span) -> Value {
+        // `v += w` on a GCC vector arrives here from a compound assignment.
+        if ty.is_gnu_vector() {
+            return self.gnu_vector_binary(op, lhs, rhs, ty, span);
+        }
         if ty.is_floating() {
             let (level, tokens) = match op {
                 BinOp::Add => (prec::SUM, quote_spanned! {span=> + }),
@@ -8839,6 +8904,19 @@ impl<'a> Codegen<'a> {
 
     /// The value `++place` or `--place` stores.
     fn step_value(&mut self, current: Value, ty: Ty, dec: bool, span: Span) -> TokenStream {
+        // GCC's `v++` steps every element of a vector.
+        if ty.is_gnu_vector() {
+            let name = self.ty(ty, span);
+            let elem = self.gnu_vector_shape(ty).elem;
+            let (vector, index) = (self.temporary(), self.temporary());
+            let operand = current.at(prec::LOWEST, span);
+            let element = Value::atom(quote_spanned! {span=> #vector.0[#index] });
+            let lane = self.step_value(element, elem, dec, span);
+            return quote_spanned! {span=> {
+                let #vector: #name = #operand;
+                #name(::core::array::from_fn(|#index| #lane))
+            } };
+        }
         if ty.is_pointer() {
             let access = current.at(prec::CALL, span);
             let pointee = self.program.types.pointee(ty).unwrap_or(Ty::Void);
@@ -8984,6 +9062,206 @@ impl<'a> Codegen<'a> {
         Value::new(quote_spanned! {span=> #tokens as #target }, prec::CAST).type_end(true)
     }
 
+    // -- GCC vectors --------------------------------------------------------
+
+    /// The elements and the alignment of a [GCC vector type](Ty::GnuVector).
+    fn gnu_vector_shape(&self, ty: Ty) -> ir::GnuVecType {
+        let Ty::GnuVector(id) = ty else {
+            unreachable!("only a GCC vector type has a vector shape")
+        };
+        self.program.types.gnu_vector_type(id)
+    }
+
+    /// One of the operations of GCC's vector extensions, `ty` being the vector
+    /// — or, for a [reinterpretation](ir::BuiltinOp::VecBitcast), the
+    /// integer — it makes.
+    ///
+    /// Each is written out over the elements of the struct the vector is
+    /// generated as: `V(::core::array::from_fn(|i| …))` over operands bound
+    /// once, the element operation exactly the scalar one. LLVM turns the
+    /// loop back into vector instructions.
+    fn gnu_vector_op(&mut self, op: ir::BuiltinOp, args: &[Expr], ty: Ty, span: Span) -> Value {
+        use ir::BuiltinOp;
+        let name = self.ty(ty, span);
+        match op {
+            BuiltinOp::VecSplat => {
+                let shape = self.gnu_vector_shape(ty);
+                let value = self.expr_at(&args[0], shape.elem);
+                let len = usize_literal(u64::from(shape.len), span);
+                Value::new(quote_spanned! {span=> #name([#value; #len]) }, prec::CALL)
+            }
+            BuiltinOp::VecLanes => {
+                let elem = self.gnu_vector_shape(ty).elem;
+                let mut tokens = TokenStream::new();
+                for (index, arg) in args.iter().enumerate() {
+                    if index > 0 {
+                        tokens.extend(quote_spanned! {span=> , });
+                    }
+                    tokens.extend(self.expr_at(arg, elem));
+                }
+                let lanes = bracketed(tokens, span);
+                Value::new(quote_spanned! {span=> #name(#lanes) }, prec::CALL)
+            }
+            BuiltinOp::VecBinary(bin) => {
+                let lhs = self.expr(&args[0]);
+                let rhs = self.expr(&args[1]);
+                self.gnu_vector_binary(bin, lhs, rhs, ty, span)
+            }
+            BuiltinOp::VecNeg | BuiltinOp::VecBitNot => {
+                let elem = self.gnu_vector_shape(ty).elem;
+                let operand = self.expr(&args[0]).at(prec::LOWEST, span);
+                let (vector, index) = (self.temporary(), self.temporary());
+                let lane = if op == BuiltinOp::VecBitNot {
+                    quote_spanned! {span=> !#vector.0[#index] }
+                } else if elem.is_floating() {
+                    quote_spanned! {span=> -#vector.0[#index] }
+                } else {
+                    quote_spanned! {span=> #vector.0[#index].wrapping_neg() }
+                };
+                Value::new(
+                    quote_spanned! {span=> {
+                        let #vector: #name = #operand;
+                        #name(::core::array::from_fn(|#index| #lane))
+                    } },
+                    prec::BLOCK,
+                )
+            }
+            BuiltinOp::VecCompare(cmp) => {
+                let operands = self.ty(args[0].ty, span);
+                let lhs = self.expr(&args[0]).at(prec::LOWEST, span);
+                let rhs = self.expr(&args[1]).at(prec::LOWEST, span);
+                let (a, b, index) = (self.temporary(), self.temporary(), self.temporary());
+                let test = match cmp {
+                    CmpOp::Eq => quote_spanned! {span=> == },
+                    CmpOp::Ne => quote_spanned! {span=> != },
+                    CmpOp::Lt => quote_spanned! {span=> < },
+                    CmpOp::Le => quote_spanned! {span=> <= },
+                    CmpOp::Gt => quote_spanned! {span=> > },
+                    CmpOp::Ge => quote_spanned! {span=> >= },
+                };
+                Value::new(
+                    quote_spanned! {span=> {
+                        let #a: #operands = #lhs;
+                        let #b: #operands = #rhs;
+                        #name(::core::array::from_fn(|#index| {
+                            if #a.0[#index] #test #b.0[#index] { -1 } else { 0 }
+                        }))
+                    } },
+                    prec::BLOCK,
+                )
+            }
+            BuiltinOp::VecConvert => {
+                let from = args[0].ty;
+                let source = self.ty(from, span);
+                let (from_elem, to_elem) = (
+                    self.gnu_vector_shape(from).elem,
+                    self.gnu_vector_shape(ty).elem,
+                );
+                let operand = self.expr(&args[0]).at(prec::LOWEST, span);
+                let (vector, index) = (self.temporary(), self.temporary());
+                let element = Value::atom(quote_spanned! {span=> #vector.0[#index] });
+                let lane = self
+                    .cast(element, from_elem, to_elem, span)
+                    .at(prec::LOWEST, span);
+                Value::new(
+                    quote_spanned! {span=> {
+                        let #vector: #source = #operand;
+                        #name(::core::array::from_fn(|#index| #lane))
+                    } },
+                    prec::BLOCK,
+                )
+            }
+            BuiltinOp::VecBitcast => {
+                let source = self.ty(args[0].ty, span);
+                let operand = self.expr_at(&args[0], args[0].ty);
+                Value::new(
+                    quote_spanned! {span=>
+                        ::core::mem::transmute::<#source, #name>(#operand)
+                    },
+                    prec::CALL,
+                )
+            }
+            BuiltinOp::VecShuffle => self.gnu_vector_shuffle(args, ty, span),
+            _ => unreachable!("gnu_vector_op is only called with a vector operation"),
+        }
+    }
+
+    /// `lhs op rhs` on two values of the GCC vector type `ty`, element by
+    /// element: each element is [`Codegen::binary`]'s scalar operation on
+    /// the element type, so integer elements wrap and divide as `int`s do.
+    fn gnu_vector_binary(
+        &mut self,
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+        ty: Ty,
+        span: Span,
+    ) -> Value {
+        let name = self.ty(ty, span);
+        let elem = self.gnu_vector_shape(ty).elem;
+        let lhs = lhs.at(prec::LOWEST, span);
+        let rhs = rhs.at(prec::LOWEST, span);
+        let (a, b, index) = (self.temporary(), self.temporary(), self.temporary());
+        let left = Value::atom(quote_spanned! {span=> #a.0[#index] });
+        let right = Value::atom(quote_spanned! {span=> #b.0[#index] });
+        let lane = self
+            .binary(op, left, right, elem, span)
+            .at(prec::LOWEST, span);
+        Value::new(
+            quote_spanned! {span=> {
+                let #a: #name = #lhs;
+                let #b: #name = #rhs;
+                #name(::core::array::from_fn(|#index| #lane))
+            } },
+            prec::BLOCK,
+        )
+    }
+
+    /// `__builtin_shuffle(a, mask)` or `__builtin_shuffle(a, b, mask)`: the
+    /// element `mask[i]` names, the index masked to the number of elements
+    /// there are — a power of two, so that is GCC's "modulo".
+    fn gnu_vector_shuffle(&mut self, args: &[Expr], ty: Ty, span: Span) -> Value {
+        let name = self.ty(ty, span);
+        let len = u64::from(self.gnu_vector_shape(ty).len);
+        let (vectors, mask) = args.split_at(args.len() - 1);
+        let mask_ty = self.ty(mask[0].ty, span);
+        let mut bindings = TokenStream::new();
+        let mut names = Vec::new();
+        for vector in vectors {
+            let tmp = self.temporary();
+            let value = self.expr(vector).at(prec::LOWEST, span);
+            bindings.extend(quote_spanned! {span=> let #tmp: #name = #value; });
+            names.push(tmp);
+        }
+        let m = self.temporary();
+        let value = self.expr(&mask[0]).at(prec::LOWEST, span);
+        bindings.extend(quote_spanned! {span=> let #m: #mask_ty = #value; });
+        let (index, at) = (self.temporary(), self.temporary());
+        let usize_ty = primitive_ty("usize", span);
+        let lane = match names.as_slice() {
+            [a] => {
+                let modulo = usize_literal(len - 1, span);
+                quote_spanned! {span=> #a.0[(#m.0[#index] as #usize_ty) & #modulo] }
+            }
+            [a, b] => {
+                let modulo = usize_literal(2 * len - 1, span);
+                let half = usize_literal(len, span);
+                quote_spanned! {span=> {
+                    let #at = (#m.0[#index] as #usize_ty) & #modulo;
+                    if #at < #half { #a.0[#at] } else { #b.0[#at - #half] }
+                } }
+            }
+            _ => unreachable!("sema gives a shuffle one or two vectors"),
+        };
+        Value::new(
+            quote_spanned! {span=> {
+                #bindings
+                #name(::core::array::from_fn(|#index| #lane))
+            } },
+            prec::BLOCK,
+        )
+    }
+
     // -- places -------------------------------------------------------------
 
     /// A place, ready to be read from or written to.
@@ -9028,6 +9306,17 @@ impl<'a> Codegen<'a> {
     /// given and reads such a member unaligned by itself.
     fn place_underaligned(&self, place: &Place) -> bool {
         match &place.kind {
+            // A GCC vector read through a pointer is read as though it might
+            // be anywhere its elements could be. GCC gives every array of 16
+            // bytes or more 16-byte alignment, as the x86-64 psABI asks, and
+            // vector code leans on it — Redis's `crccombine.c` reads a
+            // `uint64_t [64]` as `v2uq`s — while a Rust array is aligned to
+            // its elements only. An unaligned vector load costs nothing on any
+            // processor that has vector loads at all.
+            PlaceKind::Deref(_) | PlaceKind::Index { .. } if place.ty.is_gnu_vector() => {
+                let elem = self.gnu_vector_shape(place.ty).elem;
+                self.type_align(elem) < self.type_align(place.ty)
+            }
             PlaceKind::Deref(_) | PlaceKind::Index { .. } => {
                 self.place_align(place) < self.type_align(place.ty)
             }
@@ -9898,6 +10187,13 @@ fn needs_unsafe(types: &ir::Types, expr: &Expr) -> bool {
         ExprKind::UnionLit { value, .. } => recurse(value),
         ExprKind::ArrayLit(items) => items.iter().any(recurse),
         ExprKind::ArrayRepeat { value, .. } => recurse(value),
+        // A GCC vector's elements are an array's, and rereading one's bytes
+        // is a `transmute`.
+        ExprKind::Builtin {
+            op: ir::BuiltinOp::VecBitcast,
+            ..
+        } => true,
+        ExprKind::Builtin { op, args } if op.is_gnu_vector() => args.iter().any(recurse),
         _ => false,
     }
 }

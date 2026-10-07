@@ -147,8 +147,9 @@ pub fn parse(
     }
     // The x86 vector types, which the bundled `<xmmintrin.h>` and
     // `<immintrin.h>` `typedef` to `__m128` and the rest. GCC writes them as
-    // `__attribute__((vector_size(16)))`, which this front end has no
-    // equivalent of, so they are the compiler's names here — and only on an x86
+    // `__attribute__((vector_size(16)))`; here they are `core::arch`'s own
+    // types rather than GCC vectors of the program's (`Ty::GnuVector`), so
+    // they are the compiler's names — and only on an x86
     // target, where there is a `core::arch` type to generate them as. On any
     // other one the name means nothing, which is the honest answer: the header
     // that would introduce it is an `#error` there.
@@ -602,8 +603,8 @@ impl Parser<'_> {
         } else {
             gnu::attribute(&name)
         };
-        // Only three attributes have arguments this front end reads; every
-        // other clause may hold anything at all — `format(printf, 1, 2)` names
+        // Only a handful of attributes have arguments this front end reads;
+        // every other clause may hold anything at all — `format(printf, 1, 2)` names
         // a *mode* rather than a value — and is skipped as balanced tokens.
         match known {
             Some(gnu::Attribute::Aligned) => {
@@ -681,6 +682,21 @@ impl Parser<'_> {
                         attrs.target.push(Spanned::new(part.to_owned(), range));
                     }
                 }
+                return Ok(());
+            }
+            Some(gnu::Attribute::VectorSize) => {
+                // `vector_size(N)`, the size an integer constant expression
+                // sema evaluates.
+                if !self.at_punct(Punct::LParen) {
+                    let range = self.span_to_here(start);
+                    self.error(range, "'vector_size' takes one argument, the size in bytes");
+                    return Ok(());
+                }
+                self.advance();
+                let expr = self.parse_conditional_expr()?;
+                self.expect_punct(Punct::RParen, " after the vector size")?;
+                let range = self.span_to_here(start);
+                attrs.vector_size = Some(Spanned::new(Box::new(expr), range));
                 return Ok(());
             }
             _ => {}
@@ -4087,8 +4103,36 @@ impl Parser<'_> {
         if self.at_builtin("__builtin_choose_expr") {
             return self.parse_choose_expr();
         }
+        if self.at_builtin("__builtin_convertvector") {
+            return self.parse_convertvector();
+        }
 
         self.parse_postfix_expr()
+    }
+
+    /// `__builtin_convertvector(v, T)`, whose second operand is a type name.
+    fn parse_convertvector(&mut self) -> PResult<Expr> {
+        let start = self.cur_range();
+        self.advance(); // the name
+        self.advance(); // `(`
+        let expr = self.parse_assignment_expr()?;
+        self.expect_punct(
+            Punct::Comma,
+            " after the vector of '__builtin_convertvector'",
+        )?;
+        let ty = self.parse_type_name()?;
+        self.expect_punct(
+            Punct::RParen,
+            " after the type of '__builtin_convertvector'",
+        )?;
+        let expr = Expr {
+            kind: ExprKind::ConvertVector {
+                expr: Box::new(expr),
+                ty: Box::new(ty),
+            },
+            range: self.span_to_here(start),
+        };
+        self.parse_postfix_suffixes(expr)
     }
 
     /// `__builtin_types_compatible_p(T1, T2)`, whose operands are type names.

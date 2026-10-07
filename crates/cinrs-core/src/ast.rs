@@ -600,6 +600,9 @@ pub struct Attributes {
     /// of the type takes an argument of any member's type, and is passed as
     /// the first member is.
     pub transparent_union: Option<SourceRange>,
+    /// `vector_size(N)`: the size in bytes, an integer constant expression,
+    /// and where the attribute was written. See [`crate::ir::Ty::GnuVector`].
+    pub vector_size: Option<Spanned<Box<Expr>>>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -642,6 +645,7 @@ impl Attributes {
         self.safe = self.safe.or(other.safe);
         self.weak = self.weak.or(other.weak);
         self.transparent_union = self.transparent_union.or(other.transparent_union);
+        self.vector_size = self.vector_size.take().or(other.vector_size);
     }
 }
 
@@ -1261,6 +1265,14 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         /// Chosen otherwise.
         else_expr: Box<Expr>,
+    },
+    /// `__builtin_convertvector(v, T)`: the vector `v` with each element
+    /// converted to the element type of the vector type `T`.
+    ConvertVector {
+        /// The vector converted.
+        expr: Box<Expr>,
+        /// The vector type it is converted to.
+        ty: Box<TypeName>,
     },
     /// `__real__ e` / `__imag__ e`, which need complex arithmetic.
     ComplexPart {

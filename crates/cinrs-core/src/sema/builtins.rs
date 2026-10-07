@@ -160,6 +160,8 @@ impl Sema<'_> {
                 self.library_call("abort", &[], range)
             }
             "frame_address" | "stack_address" => self.frame_address(name, args, range),
+            // GCC's vector extensions; see [`super::gnu_vector`].
+            "shuffle" => self.gnu_vector_shuffle(name, args, range),
             // GCC's internal name for `_mm_pause`, which is the one
             // `__builtin_ia32_*` real code calls by hand: a spin lock's back-off.
             // See [`BuiltinOp::Pause`].

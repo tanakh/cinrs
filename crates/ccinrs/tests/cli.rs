@@ -447,6 +447,45 @@ fn a_weak_definition_is_overridden_by_a_strong_one() {
     assert_eq!(stdout(&s.run("lto", &[])), "2 3 (null)\n1\n");
 }
 
+/// GCC's vector extensions: a vector type's alignment follows `-mavx` as
+/// GCC's does, glibc's `<link.h>` — whose vectors an `aligned` lowers to 16
+/// bytes — compiles, and a vector passed by value to a function of another
+/// file is refused with the reason.
+#[cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))]
+#[test]
+fn gcc_vectors_follow_the_target_and_the_platform_headers() {
+    let s = Scratch::new("gcc-vectors");
+    s.write(
+        "align.c",
+        "#define _GNU_SOURCE\n#include <link.h>\n#include <stdio.h>\n\
+         typedef float v8sf __attribute__((vector_size(32)));\n\
+         typedef unsigned long long v2du __attribute__((vector_size(16)));\n\
+         int main(void) {\n\
+           v2du a = {1, 2}, b = {3, 4}, c = a ^ b;\n\
+           printf(\"%zu %zu %zu %llu %llu\\n\", _Alignof(v8sf), _Alignof(La_x86_64_ymm),\n\
+                  sizeof(La_x86_64_zmm), c[0], c[1]);\n\
+           return 0;\n\
+         }\n",
+    );
+    s.compile(&["-O2", "align.c", "-o", "plain"]);
+    assert_eq!(stdout(&s.run("plain", &[])), "16 16 64 2 6\n");
+    s.compile(&["-O2", "-mavx", "align.c", "-o", "avx"]);
+    assert_eq!(stdout(&s.run("avx", &[])), "32 16 64 2 6\n");
+    s.write(
+        "call.c",
+        "typedef int v4si __attribute__((vector_size(16)));\n\
+         v4si twice(v4si);\n\
+         v4si call(v4si a) { return twice(a); }\n",
+    );
+    let refused = s.ccinrs(&["-c", "call.c", "-o", "call.o"]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("GCC passes a vector in a vector register"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
 /// GCC's `-ftrivial-auto-var-init=`: `zero`, the default, clears a local
 /// array nothing initialised; `uninitialized` leaves it a `MaybeUninit`, and
 /// the program that writes before it reads behaves the same; `pattern` is

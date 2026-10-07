@@ -18,9 +18,9 @@
  * nothing, because SSE2 is the x86-64 baseline. AVX-512 is included last.
  *
  * What is **not** here: MMX and `__m64` (see <mmintrin.h>), the AVX-512
- * intrinsics core::arch keeps unstable, and the GNU vector extensions —
- * `vector_size` and arithmetic on vectors — which cinrs refuses with a
- * diagnostic. The intrinsics are the API.
+ * intrinsics core::arch keeps unstable, and GCC's internal `__v4si`-style
+ * `typedef`s. A vector type of the program's own, `vector_size`, is GCC's
+ * vector extension, which cinrs has apart from these types.
  */
 #ifndef _CINRS_IMMINTRIN_H
 #define _CINRS_IMMINTRIN_H

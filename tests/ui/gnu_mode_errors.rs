@@ -8,8 +8,10 @@ cinrs::gnu99! {
     typedef unsigned int u8 __attribute__((mode(QI)));
     typedef int s16 __attribute__((mode(__HI__)));
     typedef int word __attribute__((mode(word)));
+    /* A vector mode is a vector of the mode after the count. */
+    typedef int four_ints __attribute__((mode(V4SI)));
     unsigned long widths(void) {
-        return sizeof(u8) + sizeof(s16) * 10 + sizeof(word) * 100;
+        return sizeof(u8) + sizeof(s16) * 10 + sizeof(word) * 100 + sizeof(four_ints) * 1000;
     }
 
     /* An extended or a quad floating format. */
@@ -20,8 +22,8 @@ cinrs::gnu99! {
     typedef double complex_double __attribute__((mode(DC)));
     typedef double complex_quad __attribute__((mode(TC))); //~ ERROR: names a complex type
 
-    /* A vector mode. */
-    typedef int four_ints __attribute__((mode(V4SI))); //~ ERROR: names a vector type
+    /* A vector of a mode nobody has. */
+    typedef int vector_of_nonsense __attribute__((mode(V4ZZ))); //~ ERROR: unknown machine mode
 
     /* A mode nobody has. */
     typedef int nonsense __attribute__((mode(ZZ))); //~ ERROR: unknown machine mode

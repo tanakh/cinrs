@@ -703,9 +703,10 @@ impl Sema<'_> {
     ///
     /// Only the modes that name a type this crate has are accepted. The
     /// floating ones are `SF` and `DF`; `XF` and `TF` are the extended and
-    /// quad formats, the `V…` ones are vectors and the `…C` ones complex, and
-    /// each of those is refused with the reason rather than rounded to
-    /// something else.
+    /// quad formats and the `…C` ones complex, and each of those is refused
+    /// with the reason rather than rounded to something else. A `V…` mode is
+    /// a vector of the mode after the count — `V4SI` is four `SI`s, the
+    /// [GCC vector](Ty::GnuVector) `vector_size(16)` makes of an `int`.
     pub(super) fn apply_mode(&mut self, ty: Ty, attrs: &ast::Attributes) -> Ty {
         let Some(mode) = &attrs.mode else {
             return ty;
@@ -729,9 +730,44 @@ impl Sema<'_> {
             );
             return ty;
         }
+        if let Some(count) = name
+            .strip_prefix('V')
+            .map(|rest| rest.trim_end_matches(|c: char| !c.is_ascii_digit()))
+            .filter(|digits| !digits.is_empty())
+        {
+            let elem_mode = &name[1 + count.len()..];
+            let Some(elem) = self.machine_mode(ty, elem_mode, &spelling, range) else {
+                return ty;
+            };
+            let Ok(count) = count.parse::<u64>() else {
+                self.error(range, format!("unknown machine mode '{spelling}'"));
+                return ty;
+            };
+            if elem.is_complex() {
+                self.error(
+                    range,
+                    format!("'mode({name})' names a vector of complex numbers, which GCC has not"),
+                );
+                return ty;
+            }
+            let bytes = elem.size_bytes(&self.target) * count;
+            return self.vector_of_bytes(elem, bytes, range);
+        }
+        self.machine_mode(ty, name, &spelling, range).unwrap_or(ty)
+    }
+
+    /// The type the scalar machine mode `name` makes of `ty`; `None` once the
+    /// reason it makes none has been reported.
+    fn machine_mode(
+        &mut self,
+        ty: Ty,
+        name: &str,
+        spelling: &str,
+        range: SourceRange,
+    ) -> Option<Ty> {
         match name {
-            "SF" => return Ty::Float,
-            "DF" => return Ty::Double,
+            "SF" => return Some(Ty::Float),
+            "DF" => return Some(Ty::Double),
             "XF" | "TF" | "KF" | "IF" | "HF" | "BF" => {
                 self.error(
                     range,
@@ -741,21 +777,21 @@ impl Sema<'_> {
                          Rust counterpart"
                     ),
                 );
-                return ty;
+                return None;
             }
             // The complex machine modes. `SC` and `DC` are `float _Complex`
             // and `double _Complex`; the wider ones name formats this
             // implementation does not have, exactly as `XF` and `TF` do.
             "SC" | "DC" if self.complex => {
-                return if name == "SC" {
+                return Some(if name == "SC" {
                     Ty::ComplexFloat
                 } else {
                     Ty::ComplexDouble
-                };
+                });
             }
             "SC" | "DC" => {
                 self.error(range, COMPLEX_UNSUPPORTED.to_owned());
-                return ty;
+                return None;
             }
             "XC" | "TC" | "KC" | "HC" => {
                 self.error(
@@ -765,17 +801,7 @@ impl Sema<'_> {
                          format with no stable Rust type; write 'double _Complex'"
                     ),
                 );
-                return ty;
-            }
-            _ if name.starts_with('V') && name[1..].starts_with(|c: char| c.is_ascii_digit()) => {
-                self.error(
-                    range,
-                    format!(
-                        "'mode({name})' names a vector type: the vector extensions need \
-                         `core::simd`, which is unstable"
-                    ),
-                );
-                return ty;
+                return None;
             }
             _ => {}
         }
@@ -789,7 +815,7 @@ impl Sema<'_> {
             "word" | "pointer" | "unwind_word" => word,
             _ => {
                 self.error(range, format!("unknown machine mode '{spelling}'"));
-                return ty;
+                return None;
             }
         };
         if bytes == 16 && !self.target.has_int128 {
@@ -798,7 +824,7 @@ impl Sema<'_> {
                 "'mode(TI)' asks for a 128-bit integer, which this target model does not \
                  have; see the data model in `doc/c-status.md`",
             );
-            return ty;
+            return None;
         }
         let signed = ty.is_signed(&self.target);
         let candidates: &[Ty] = if signed {
@@ -826,13 +852,13 @@ impl Sema<'_> {
             .copied()
             .find(|candidate| candidate.size_bytes(&target) == bytes)
         {
-            Some(found) => found,
+            Some(found) => Some(found),
             None => {
                 self.error(
                     range,
                     format!("no integer type of this target model is {bytes} bytes wide"),
                 );
-                ty
+                None
             }
         }
     }
@@ -1344,7 +1370,7 @@ impl Sema<'_> {
                 }
             } else {
                 match self.ty_of(&field.ty) {
-                    Some(ty) => self.apply_mode(ty, &field.attrs),
+                    Some(ty) => self.apply_type_attrs(ty, &field.attrs),
                     None => continue,
                 }
             };

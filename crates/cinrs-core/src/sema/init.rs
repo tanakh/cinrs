@@ -223,7 +223,7 @@ impl Sema<'_> {
             let elem_const = elem.qualifiers.is_const;
             self.init_array_inferred(&init, element, elem_const, "compound literal")?
         } else {
-            let ty = self.ty_of(&type_name.ty)?;
+            let ty = self.type_name_ty(type_name)?;
             // C99 6.5.2.5p1: the type name may not be a variable length array,
             // and an initialiser could not say how many elements it has.
             if self.types().is_vm(ty) {
@@ -388,11 +388,17 @@ impl Sema<'_> {
             // GCC's `__m128d v = { a, b }`: the lanes in memory order, each
             // converted as an initialiser is, the rest zero. See
             // [`Sema::vector_from_lanes`].
-            Ty::Vector(vec) if !elided => {
+            // With its braces left out, it takes as many of the enclosing
+            // list's values as it has lanes, up to a designator, which names
+            // something of the enclosing object.
+            Ty::Vector(vec) => {
                 let (lane, lanes) = self.vector_lanes(vec, range)?;
                 let mut values = Vec::with_capacity(lanes);
                 while values.len() < lanes {
                     let Some(item) = cursor.peek() else { break };
+                    if elided && !item.designators.is_empty() {
+                        break;
+                    }
                     if !item.designators.is_empty() {
                         self.error(
                             item.range,
@@ -409,6 +415,33 @@ impl Sema<'_> {
                     values.push(value?);
                 }
                 self.vector_from_lanes(vec, values, range)
+            }
+            // GCC's `v4si v = { 1, 2 }`: the elements in order, each converted
+            // as an initialiser is, the rest zero.
+            Ty::GnuVector(_) => {
+                let (elem, lanes) = self.gnu_vector_lanes(ty);
+                let mut values = Vec::with_capacity(lanes);
+                while values.len() < lanes {
+                    let Some(item) = cursor.peek() else { break };
+                    if elided && !item.designators.is_empty() {
+                        break;
+                    }
+                    if !item.designators.is_empty() {
+                        self.error(
+                            item.range,
+                            format!(
+                                "a designator in the initializer of the vector type '{}' is not \
+                                 supported; list the elements in order",
+                                self.tyname(ty)
+                            ),
+                        );
+                        return None;
+                    }
+                    let value = self.checked_initializer(cursor, &item.init, elem, name);
+                    cursor.advance();
+                    values.push(value?);
+                }
+                Some(self.gnu_vector_from_lanes(ty, values, range))
             }
             _ => {
                 let Some(item) = cursor.peek() else {
@@ -511,22 +544,30 @@ impl Sema<'_> {
         // own type do the elided braces of p9 apply and the element go to the
         // first member instead, so the element's type has to be known first.
         // `Cursor::checked` is what keeps that from checking it twice.
+        // A vector is an aggregate to brace elision as well, in GCC: `__m128i
+        // m[4] = { 0U };` — HACL*'s Blake2 — gives `m[0]` a first lane of 0
+        // and the rest zero, while a whole vector still initialises one.
+        let vector = ty.is_vector() || ty.is_gnu_vector();
         if !braced
             && !whole
-            && ty.is_record()
+            && (ty.is_record() || vector)
             && let ast::InitializerKind::Expr(expr) = &item.init.kind
         {
             let value = self.check_item(cursor, expr);
-            if value
-                .as_ref()
-                .is_some_and(|value| value.ty.is_record() && self.compatible(value.ty, ty))
-            {
+            let fits = |sema: &Self, value: &Expr| {
+                if vector {
+                    value.ty == ty || sema.gnu_vector_convertible(value, ty)
+                } else {
+                    value.ty.is_record() && sema.compatible(value.ty, ty)
+                }
+            };
+            if value.as_ref().is_some_and(|value| fits(self, value)) {
                 cursor.advance();
                 let value = value.expect("checked just above");
                 return Some(self.convert_for(value, ty, ConvContext::Init(name.to_owned())));
             }
         }
-        if braced || string || whole || !(ty.is_array() || ty.is_record()) {
+        if braced || string || whole || !(ty.is_array() || ty.is_record() || vector) {
             let value = self.checked_initializer(cursor, &item.init, ty, name);
             cursor.advance();
             return value;

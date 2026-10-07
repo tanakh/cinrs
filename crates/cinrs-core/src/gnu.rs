@@ -63,6 +63,10 @@ pub enum Attribute {
     /// `<sys/socket.h>` declares `accept` and the rest with one under
     /// `_GNU_SOURCE`.
     TransparentUnion,
+    /// `vector_size(N)`: the declared arithmetic type becomes a vector of
+    /// `N / sizeof(T)` of it, GCC's vector extensions; see
+    /// [`crate::ir::Ty::GnuVector`].
+    VectorSize,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -87,12 +91,6 @@ pub const UNSUPPORTED_ATTRIBUTES: &[(&str, &str)] = &[
     (
         "ifunc",
         "is not supported: choosing an implementation at load time has no stable Rust counterpart",
-    ),
-    (
-        "vector_size",
-        "is not supported: the vector extensions need `core::simd`, which is unstable. \
-         The Intel intrinsics are the SIMD cinrs has: <immintrin.h> declares them and a call \
-         becomes the `core::arch` function of the same name",
     ),
     (
         "scalar_storage_order",
@@ -129,6 +127,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "mode" => Attribute::Mode,
         "weak" => Attribute::Weak,
         "transparent_union" => Attribute::TransparentUnion,
+        "vector_size" => Attribute::VectorSize,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,
@@ -322,6 +321,7 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "conjf",
     "conjl",
     "constant_p",
+    "convertvector",
     "copysign",
     "copysignf",
     "copysignl",
@@ -407,6 +407,7 @@ pub const SPECIAL_BUILTINS: &[&str] = &[
     "popcountl",
     "popcountll",
     "prefetch",
+    "shuffle",
     "signbit",
     "signbitf",
     "signbitl",

@@ -701,12 +701,13 @@ The only Rust an intrinsic produces is the call.
 
 **What is not here.**
 
-* **The GNU vector extensions' own types.** `__attribute__((vector_size(16)))`
-  on a `typedef` of the program's own, `__builtin_shuffle` and
-  `__builtin_ia32_*` are refused, with a diagnostic that names the Intel
-  intrinsic to write instead: an arbitrary vector type would need `core::simd`,
-  which is unstable. The operators on the Intel types themselves are here; see
-  above.
+* **`__builtin_ia32_*`**, GCC's internal names for the instructions, are
+  refused with a diagnostic that names the Intel intrinsic to write instead.
+  The GNU vector extensions' own types — `__attribute__((vector_size(16)))` on
+  a `typedef` of the program's own, `__builtin_shuffle`,
+  `__builtin_convertvector` — are a separate feature, with arithmetic of their
+  own rather than `core::arch`'s; see the [vector extensions
+  row](gnu-extensions.md#language-extensions).
 * **What `core::arch` still keeps unstable.** AVX512-VP2INTERSECT's six
   `_mm*_2intersect_*` — its target feature is stable, so `target(
   "avx512vp2intersect")` and `__builtin_cpu_supports("avx512vp2intersect")`

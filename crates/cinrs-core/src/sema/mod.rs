@@ -98,6 +98,7 @@ mod builtins;
 mod decl;
 mod expr;
 mod float128;
+mod gnu_vector;
 mod init;
 mod long_double;
 mod nonlocal;
@@ -728,6 +729,9 @@ struct Sema<'a> {
     /// of its lanes is read — `(a * b)[0]` — which, unlike a compound
     /// literal's, may not be assigned to: GCC's "lvalue required".
     rvalue_lanes: HashSet<ObjectId>,
+    /// The widest alignment a GCC vector type gets by default; see
+    /// [`gnu_vector::vector_align_cap`].
+    vector_align_cap: u64,
     /// The bounds the array type being resolved was given, in the order they
     /// were resolved (innermost dimension first), for the ones that were not
     /// constant expressions.
@@ -993,6 +997,7 @@ impl<'a> Sema<'a> {
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
             rvalue_lanes: HashSet::new(),
+            vector_align_cap: gnu_vector::vector_align_cap(options),
             vm_bounds: Vec::new(),
             bound_mode: BoundMode::Expression,
             vm_name: String::new(),
@@ -1534,6 +1539,15 @@ impl<'a> Sema<'a> {
                     && (x.vla || y.vla || x.incomplete || y.incomplete || x.len == y.len)
             }
             (Ty::Record(x), Ty::Record(y)) => self.records_compatible(x, y, comparing),
+            // A vector `typedef` with an `aligned` of its own is a variant of
+            // the vector type, as GCC has it, not another type.
+            (Ty::GnuVector(x), Ty::GnuVector(y)) => {
+                let (x, y) = (
+                    self.types().gnu_vector_type(x),
+                    self.types().gnu_vector_type(y),
+                );
+                x.elem == y.elem && x.len == y.len
+            }
             _ => false,
         }
     }

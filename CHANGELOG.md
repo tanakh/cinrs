@@ -169,6 +169,24 @@ follows [Semantic Versioning][semver].
   WebAssembly — it is an ordinary definition with a warning, where it used to
   be refused; a second definition is then a duplicate symbol rather than an
   override. `Options::weak_definitions` is the switch.
+* **GCC's vector extensions** on vector types of the program's own:
+  `typedef int v4si __attribute__((vector_size(16)));`, `vector_size` on an
+  object, a member or through pointers and arrays, and the `V4SI`-style
+  machine modes. A vector is a `#[repr(C, align(N))]` struct over its
+  elements — `core::simd` is unstable — with GCC's size and alignment (capped
+  at 16 bytes, 32 under `-mavx` and 64 under `-mavx512f`; an `aligned`
+  `typedef` replaces it, which is what glibc's `<link.h>` needs), and every
+  operator is written out over the elements: the arithmetic, bitwise and shift
+  operators with GCC's scalar broadcast, comparisons giving -1 and 0, `v[i]`
+  as an lvalue, `++`, `--` and the compound assignments, brace initialisers
+  (static ones too), casts that keep the bytes, `__builtin_convertvector` and
+  `__builtin_shuffle`. `__m128i` and the other Intel types convert to the GCC
+  vector GCC defines them as, and an array of them may leave its braces out
+  (`__m128i m[4] = { 0U }`, HACL*'s Blake2). Redis's `crccombine.h`,
+  CPython's `<link.h>`, and 43 gcc-torture cases that were refused now build.
+  A vector passed by value to a function the unit does not define, or through
+  `...`, is refused: GCC passes one in a vector register, and the struct does
+  not go there.
 * Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
   compiles position-independent code, `__PIE__` and `__pie__` (2) where it
   links position-independent executables, `__FXSR__` with the rest of the

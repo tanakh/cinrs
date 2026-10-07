@@ -6,8 +6,8 @@ use crate::ast;
 use crate::capture::SourceRange;
 use crate::diag::Diagnostic;
 use crate::ir::{
-    self, ConstValue, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind, Signature,
-    StaticVar, Stmt, Storage, Ty, TypedefItem,
+    self, BuiltinOp, ConstValue, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind,
+    Signature, StaticVar, Stmt, Storage, Ty, TypedefItem,
 };
 use crate::target::{Arch, Os};
 
@@ -412,7 +412,7 @@ impl Sema<'_> {
         }
         if storage == Some(ast::StorageClass::Extern) {
             let objects_before = self.program.objects.len();
-            self.declare_extern_object(name, declarator);
+            self.declare_extern_object(name, declarator, &attrs);
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 let fresh = id.0 as usize >= objects_before;
                 self.extern_thread_local(id, name, thread_local == ThreadLocal::Yes, fresh);
@@ -483,7 +483,7 @@ impl Sema<'_> {
                 self.incomplete_enum_objects
                     .push((name.name.clone(), tag, declarator.range));
             }
-            (self.apply_mode(ty, &attrs), None)
+            (self.apply_type_attrs(ty, &attrs), None)
         };
         // `typedef int A[]; A a = { 1, 2 };` — an incomplete array type reached
         // through a `typedef` takes its length from the initialiser too
@@ -1839,7 +1839,12 @@ impl Sema<'_> {
     }
 
     /// Declares an object defined outside the translation unit.
-    fn declare_extern_object(&mut self, name: &ast::Ident, declarator: &ast::InitDeclarator) {
+    fn declare_extern_object(
+        &mut self,
+        name: &ast::Ident,
+        declarator: &ast::InitDeclarator,
+        attrs: &ast::Attributes,
+    ) {
         // `extern int j[];` is the canonical incomplete array type, and
         // `extern struct incomplete es;` (WG14 DR047) is the same rule for a
         // tag: the object is defined in another unit, so neither its size nor
@@ -1849,6 +1854,11 @@ impl Sema<'_> {
         else {
             return;
         };
+        // `extern int v __attribute__((vector_size(16)));`
+        let ty = self.apply_type_attrs(ty, attrs);
+        if ty.is_error() {
+            return;
+        }
         if self.types().is_vm(ty) {
             self.error(
                 declarator.range,
@@ -1938,9 +1948,16 @@ impl Sema<'_> {
         // what `BoundMode::Object` asks for; at file scope there is no moment
         // at which the bound could be evaluated at all.
         let resolved = match self.resolve_declared_ty(ty, &name.name) {
-            Ok(ty) => Ok(self.apply_mode(ty, attrs)),
+            Ok(ty) => Ok(self.apply_type_attrs(ty, attrs)),
             Err(err) if err.message.is_empty() => return Vec::new(),
             Err(err) => Err(err.message),
+        };
+        // `typedef float T __attribute__((vector_size(32), aligned(16)))` —
+        // glibc's `La_x86_64_ymm` — is the vector type of that alignment,
+        // weaker or stricter; see `ir::GnuVecType::align`.
+        let resolved = match resolved {
+            Ok(ty @ Ty::GnuVector(_)) => Ok(self.realign_gnu_vector(ty, attrs)),
+            other => other,
         };
         let mut out = self.take_vm_bounds();
         // `typedef union { … } T __attribute__((transparent_union));` — glibc's
@@ -2354,6 +2371,15 @@ impl Sema<'_> {
             self.error(
                 packed,
                 "'packed' is only meaningful on a record or a member",
+            );
+        }
+        // GCC would make the *return* type a vector; this front end only
+        // reads `vector_size` where it declares an object or a type.
+        if let Some(size) = &attrs.vector_size {
+            self.error(
+                size.range,
+                "'vector_size' on a function declaration is not supported; declare the vector \
+                 type with a 'typedef' and return that",
             );
         }
         self.reject_cleanup(attrs, "a function");
@@ -3567,6 +3593,30 @@ impl Sema<'_> {
                 self.error(
                     range,
                     format!("{what} is not a compile-time constant expression"),
+                );
+                None
+            }
+            // `static v2du masks[] = { { 0, -1 } };` — Redis's `crccombine.c`.
+            // A GCC vector is a struct over an array, so its elements are
+            // constants as an array's are, and so is a broadcast of one and a
+            // reinterpretation of a constant vector's bytes.
+            ExprKind::Builtin {
+                op: op @ (BuiltinOp::VecLanes | BuiltinOp::VecSplat | BuiltinOp::VecBitcast),
+                args,
+            } => {
+                let args: Option<Vec<Expr>> = args
+                    .into_iter()
+                    .map(|arg| self.static_init(arg, what))
+                    .collect();
+                Some(Expr::new(ExprKind::Builtin { op, args: args? }, ty, range))
+            }
+            _ if ty.is_gnu_vector() => {
+                self.error(
+                    range,
+                    format!(
+                        "{what} is not a compile-time constant expression: a vector with static \
+                         storage duration is initialised with its elements, '{{ 1, 2, 3, 4 }}'"
+                    ),
                 );
                 None
             }

@@ -14,8 +14,6 @@ cinrs::c99! {
     /* Accepted with a warning, as an ordinary definition. */
     __attribute__((weak)) int defined_weak(void) { return 1; }
 
-    typedef int v4si __attribute__((vector_size(16))); //~ ERROR: the vector extensions need `core::simd`
-
     int aliased(void) __attribute__((alias("declared_weak"))); //~ ERROR: write a function that forwards
 }
 

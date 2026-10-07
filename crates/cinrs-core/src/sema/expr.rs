@@ -242,7 +242,7 @@ impl Sema<'_> {
                 // what keeps a bound belonging to an enclosing declarator —
                 // `int a[sizeof(int[k])]` — out of this one's product.
                 let mark = self.vm_bounds.len();
-                let target = self.ty_of(&ty.ty);
+                let target = self.type_name_ty(ty);
                 let supplied: Vec<_> = self.vm_bounds.drain(mark..).collect();
                 if self.reject_incomplete_enum(&ty.ty, "sizeof", ty.range) {
                     return None;
@@ -265,7 +265,7 @@ impl Sema<'_> {
                 self.alignof(ty, operand.range, range)
             }
             ast::ExprKind::AlignofType(name) => {
-                let ty = self.ty_of(&name.ty)?;
+                let ty = self.type_name_ty(name)?;
                 if self.reject_incomplete_enum(&name.ty, "_Alignof", name.range) {
                     return None;
                 }
@@ -305,8 +305,8 @@ impl Sema<'_> {
             }
             ast::ExprKind::StmtExpr(block) => self.stmt_expr(block, range),
             ast::ExprKind::TypesCompatible { lhs, rhs } => {
-                let lhs = self.ty_of(&lhs.ty)?;
-                let rhs = self.ty_of(&rhs.ty)?;
+                let lhs = self.type_name_ty(lhs)?;
+                let rhs = self.type_name_ty(rhs)?;
                 // The types are compared after the adjustments C makes to a
                 // type name, which is `Ty` equality here — `Ty` is interned,
                 // and it carries no top-level qualifiers — plus the one case
@@ -323,6 +323,7 @@ impl Sema<'_> {
                 then_expr,
                 else_expr,
             } => self.choose_expr(cond, then_expr, else_expr, range),
+            ast::ExprKind::ConvertVector { expr, ty } => self.convert_vector(expr, ty, range),
             ast::ExprKind::ComplexPart { real, operand } => {
                 self.complex_part(!*real, operand, range)
             }
@@ -1088,10 +1089,13 @@ impl Sema<'_> {
             return None;
         }
         // GCC's `v[i]` on a vector: one lane, as an lvalue when `v` is one.
+        if lhs.ty.is_gnu_vector() {
+            return self.gnu_vector_index_place(lhs, rhs, range);
+        }
         if lhs.ty.is_vector() {
             return self.vector_index_place(lhs, rhs, range);
         }
-        if rhs.ty.is_vector() {
+        if rhs.ty.is_vector() || rhs.ty.is_gnu_vector() {
             self.error(
                 range,
                 "a vector is subscripted as 'v[i]'; the reversed 'i[v]' GCC also takes is not \
@@ -1316,6 +1320,9 @@ impl Sema<'_> {
             },
             ast::UnaryOp::Plus | ast::UnaryOp::Minus => {
                 let value = self.expr(operand)?;
+                if value.ty.is_gnu_vector() {
+                    return self.gnu_vector_unary(op, value, range);
+                }
                 if value.ty.is_vector() {
                     return self.vector_unary(op, value, range);
                 }
@@ -1353,6 +1360,9 @@ impl Sema<'_> {
                 if value.ty.is_complex() {
                     let ty = value.ty;
                     return Some(Expr::new(ExprKind::BitNot(Box::new(value)), ty, range));
+                }
+                if value.ty.is_gnu_vector() {
+                    return self.gnu_vector_unary(op, value, range);
                 }
                 if value.ty.is_vector() {
                     return self.vector_unary(op, value, range);
@@ -1575,6 +1585,12 @@ impl Sema<'_> {
         }
 
         let rhs_value = self.expr(rhs)?;
+
+        // GCC's vector extensions on a vector type of the program's own; see
+        // [`super::gnu_vector`].
+        if lhs_value.ty.is_gnu_vector() || rhs_value.ty.is_gnu_vector() {
+            return self.gnu_vector_binary(op, lhs_value, rhs_value, range);
+        }
 
         // GCC's vector extension on the Intel types: `a * b`, `v * 2.0`,
         // `a < b` — each is the intrinsic that does the same; see
@@ -2207,6 +2223,9 @@ impl Sema<'_> {
         if self.refuse_float128_call(&name, &sig, callee.range) {
             return None;
         }
+        if self.refuse_vector_call(&target, &name, &sig, range) {
+            return None;
+        }
         // C11 6.5.2.2p1: the called function returns `void` or a *complete*
         // object type. A declaration may name a tag that is never completed
         // (see `Sema::declare_function`); a call is where it has to be.
@@ -2296,6 +2315,10 @@ impl Sema<'_> {
                     // call through a type with no prototype (C99 6.5.2.2p6):
                     // `float` widens to `double` and the small integer types
                     // to `int`.
+                    if self.refuse_variadic_vector(&value, arg.range) {
+                        failed = true;
+                        continue;
+                    }
                     variadic_depths.push((arg.range, self.long_double_depth_of(&value)));
                     let promoted = self.promoted_argument(&value);
                     let value = self.convert(value, promoted);
@@ -2628,6 +2651,10 @@ impl Sema<'_> {
             ));
         };
 
+        if ty.is_gnu_vector() {
+            return self.gnu_vector_compound(op, place, value, range);
+        }
+
         // `v += w` on a vector is `v = v + w`, the operator lowered as it is
         // anywhere else.
         if ty.is_vector() {
@@ -2711,7 +2738,8 @@ impl Sema<'_> {
         let ty = self.types().unatomic(place.ty);
         if ty.is_pointer() {
             self.check_pointee_arithmetic(ty, range)?;
-        } else if !ty.is_arithmetic() {
+        } else if !ty.is_arithmetic() && !ty.is_gnu_vector() {
+            // A GCC vector steps every element, as GCC's does.
             self.error(
                 range,
                 format!(
@@ -2776,7 +2804,7 @@ impl Sema<'_> {
         // `(_Atomic int) x` is a conversion to `int`, which is what C11 makes
         // it too — the result of a cast is not an lvalue, so there is nothing
         // for the qualifier to qualify.
-        let target = self.ty_of(&type_name.ty)?;
+        let target = self.type_name_ty(type_name)?;
         let target = self.types().unatomic(target);
         let value = self.expr(operand)?;
         if value.ty.is_error() || target.is_error() {
@@ -2784,6 +2812,11 @@ impl Sema<'_> {
         }
         if target.is_void() {
             return Some(Expr::new(ExprKind::Cast(Box::new(value)), Ty::Void, range));
+        }
+        // A cast to or from a GCC vector rereads the bytes; see
+        // [`super::gnu_vector`].
+        if target.is_gnu_vector() || value.ty.is_gnu_vector() {
+            return self.gnu_vector_cast(value, target, range);
         }
         if !target.is_scalar() {
             // A cast to the type the operand already has does nothing, and
@@ -3496,6 +3529,9 @@ impl Sema<'_> {
         }
         if to.is_bool() && expr.ty.is_pointer() {
             return self.convert(expr, to);
+        }
+        if self.gnu_vector_convertible(&expr, to) {
+            return Self::gnu_vector_retyped(expr, to);
         }
 
         let message = context.message(&self.tyname(expr.ty), &self.tyname(to));

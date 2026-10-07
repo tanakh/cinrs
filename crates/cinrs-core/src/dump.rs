@@ -647,6 +647,11 @@ impl<'a> Dumper<'a> {
                 d.under("then", |dd| dd.expr(then_expr));
                 d.under("else", |dd| dd.expr(else_expr));
             }),
+            ExprKind::ConvertVector { expr, ty } => {
+                self.under(&format!("convertvector {}", self.ty(&ty.ty)), |d| {
+                    d.expr(expr)
+                });
+            }
             ExprKind::ComplexPart { real, operand } => {
                 let name = if *real { "__real__" } else { "__imag__" };
                 self.under(name, |d| d.expr(operand));

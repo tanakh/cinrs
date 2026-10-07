@@ -1,0 +1,110 @@
+error: invalid vector type for attribute 'vector_size': the elements of a vector are an integer or a real floating type, and 'struct s' is neither
+  --> tests/ui/gnu_vector_errors.rs:16:40
+   |
+16 |     typedef struct s vs __attribute__((vector_size(16)));
+   |                                        ^^^^^^^^^^^
+
+error: number of vector components 3 is not a power of two
+  --> tests/ui/gnu_vector_errors.rs:17:37
+   |
+17 |     typedef int v3si __attribute__((vector_size(12)));
+   |                                     ^^^^^^^^^^^
+
+error: vector size 12 is not an integral multiple of the size of 'double', 8
+  --> tests/ui/gnu_vector_errors.rs:18:39
+   |
+18 |     typedef double odd __attribute__((vector_size(12)));
+   |                                       ^^^^^^^^^^^
+
+error: zero vector size
+  --> tests/ui/gnu_vector_errors.rs:19:37
+   |
+19 |     typedef int none __attribute__((vector_size(0)));
+   |                                     ^^^^^^^^^^^
+
+error: cannot convert 'double' to the integer vector '__vector(4) int': GCC broadcasts a scalar to a vector only when it converts without losing anything
+  --> tests/ui/gnu_vector_errors.rs:22:36
+   |
+22 |     v4si fraction(v4si a) { return a + 1.5; }
+   |                                    ^
+
+error: conversion of scalar 'int' to vector '__vector(16) char' involves truncation
+  --> tests/ui/gnu_vector_errors.rs:23:43
+   |
+23 |     v16qi narrow(v16qi a, int i) { return a + i; }
+   |                                           ^
+
+error: conversion of scalar 'double' to vector '__vector(4) float' involves truncation
+  --> tests/ui/gnu_vector_errors.rs:24:35
+   |
+24 |     v4sf inexact(v4sf a) { return a * 0.1; }
+   |                                   ^
+
+error: invalid operands to binary '+' (have '__vector(4) int' and '__vector(4) unsigned int'): the two vectors have different types, and GCC converts one to the other only with a cast
+  --> tests/ui/gnu_vector_errors.rs:28:41
+   |
+28 |     v4si mixed(v4si a, v4su b) { return a + b; }
+   |                                         ^
+
+error: invalid operands to binary '%' (have '__vector(4) float' and '__vector(4) float'): the elements are floating
+  --> tests/ui/gnu_vector_errors.rs:29:45
+   |
+29 |     v4sf remainder(v4sf a, v4sf b) { return a % b; }
+   |                                             ^
+
+error: wrong type argument to unary '~' ('__vector(4) float')
+  --> tests/ui/gnu_vector_errors.rs:30:38
+   |
+30 |     v4sf complement(v4sf a) { return ~a; }
+   |                                      ^
+
+error: invalid operand of type '__vector(4) int' to unary operator '!'
+  --> tests/ui/gnu_vector_errors.rs:33:31
+   |
+33 |     int not(v4si a) { return !a; }
+   |                               ^
+
+error: value of type '__vector(4) int' is not contextually convertible to a condition
+  --> tests/ui/gnu_vector_errors.rs:34:28
+   |
+34 |     int cond(v4si a) { if (a) return 1; return 0; }
+   |                            ^
+
+error: cannot convert a value of type '__vector(4) int' to '__vector(4) short', which has a different size (16 and 8 bytes)
+  --> tests/ui/gnu_vector_errors.rs:37:34
+   |
+37 |     v4hi shrink(v4si a) { return (v4hi)a; }
+   |                                  ^
+
+error: index 4 is out of range for '__vector(4) int', which has 4 lanes of 'int'
+  --> tests/ui/gnu_vector_errors.rs:40:41
+   |
+40 |     int past_the_end(v4si a) { return a[4]; }
+   |                                         ^
+
+error: '__builtin_convertvector' number of elements of the first argument vector (16) and the second argument vector type (4) should be the same
+  --> tests/ui/gnu_vector_errors.rs:43:36
+   |
+43 |     v4sf convert(v16qi a) { return __builtin_convertvector(a, v4sf); }
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: '__builtin_shuffle' last argument must be an integer vector, not '__vector(4) float'
+  --> tests/ui/gnu_vector_errors.rs:44:64
+   |
+44 |     v4si shuffle(v4si a, v4sf m) { return __builtin_shuffle(a, m); }
+   |                                                                ^
+
+error: 'elsewhere' passes or returns the vector type '__vector(4) int' by value, and this unit does not define it: GCC passes a vector in a vector register, while cinrs passes its vector types as a struct of their elements, so a function compiled elsewhere would not find the value where it looks. Pass a pointer to it instead
+  --> tests/ui/gnu_vector_errors.rs:50:36
+   |
+50 |     v4si call_out(v4si a) { return elsewhere(a); }
+   |                                    ^^^^^^^^^
+
+error: passing the vector type '__vector(4) int' as a variadic argument is not supported: GCC passes it in a vector register, and 'va_arg' has no way to read it back here. Pass a pointer to it instead
+  --> tests/ui/gnu_vector_errors.rs:51:39
+   |
+51 |     void print(v4si a) { printf("%d", a); }
+   |                                       ^
+
+error: aborting due to 18 previous errors
+

@@ -1,0 +1,64 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr#\"\n        typedef unsigned long long v2du __attribute__((vector_size(16)));\n        static v2du masks[2] = { {0, 0}, {-1, 0} };\n        unsigned long long f(const v2du *p, int i) {\n            v2du sum = *p & masks[i & 1];\n            sum += 1;\n            return sum[0] ^ sum[1];\n        }\n        \"#)"
+---
+mod __cinrs_unit_e93ec3d8 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    #[allow(non_camel_case_types, missing_debug_implementations)]
+    pub struct __cinrs_vec_2x_unsigned_long_long(pub [::core::ffi::c_ulonglong; 2]);
+    pub type v2du = __cinrs_vec_2x_unsigned_long_long;
+    static mut masks: [__cinrs_vec_2x_unsigned_long_long; 2] = [
+        __cinrs_vec_2x_unsigned_long_long([0, 0]),
+        __cinrs_vec_2x_unsigned_long_long([18446744073709551615, 0]),
+    ];
+    pub unsafe extern "C" fn f(
+        mut p: *const __cinrs_vec_2x_unsigned_long_long,
+        mut i: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_ulonglong {
+        unsafe {
+            let mut sum: __cinrs_vec_2x_unsigned_long_long = {
+                let __cinrs_tmp1: __cinrs_vec_2x_unsigned_long_long = (&raw const (*p))
+                    .read_unaligned();
+                let __cinrs_tmp2: __cinrs_vec_2x_unsigned_long_long = {
+                    let __cinrs_tmp0 = (&raw mut masks)
+                        .cast::<__cinrs_vec_2x_unsigned_long_long>()
+                        .offset((i & 1) as ::core::primitive::isize);
+                    (&raw const (*__cinrs_tmp0)).read_unaligned()
+                };
+                __cinrs_vec_2x_unsigned_long_long(
+                    ::core::array::from_fn(|__cinrs_tmp3| {
+                        __cinrs_tmp1.0[__cinrs_tmp3] & __cinrs_tmp2.0[__cinrs_tmp3]
+                    }),
+                )
+            };
+            sum = {
+                let __cinrs_tmp4: __cinrs_vec_2x_unsigned_long_long = sum;
+                let __cinrs_tmp5: __cinrs_vec_2x_unsigned_long_long = __cinrs_vec_2x_unsigned_long_long(
+                    [1; 2],
+                );
+                __cinrs_vec_2x_unsigned_long_long(
+                    ::core::array::from_fn(|__cinrs_tmp6| {
+                        __cinrs_tmp4
+                            .0[__cinrs_tmp6]
+                            .wrapping_add(__cinrs_tmp5.0[__cinrs_tmp6])
+                    }),
+                )
+            };
+            return ({
+                let __cinrs_tmp7 = ((&raw mut sum) as *mut ::core::ffi::c_ulonglong)
+                    .offset(0);
+                (*__cinrs_tmp7)
+            })
+                ^ ({
+                    let __cinrs_tmp8 = ((&raw mut sum) as *mut ::core::ffi::c_ulonglong)
+                        .offset(1);
+                    (*__cinrs_tmp8)
+                });
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_e93ec3d8::*;

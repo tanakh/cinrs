@@ -113,8 +113,8 @@ c99! {
     int has_attributes(void) { return 0; }
     #endif
 
-    /* `cleanup` is honoured, so the answer has to be yes; `vector_size` is
-       known and refused, so that one is still no. */
+    /* `cleanup` and `vector_size` are honoured, so the answer has to be yes;
+       `alias` is known and refused, so that one is still no. */
     #if __has_attribute(cleanup)
     int has_cleanup(void) { return 1; }
     #else
@@ -125,6 +125,12 @@ c99! {
     int has_vector_size(void) { return 1; }
     #else
     int has_vector_size(void) { return 0; }
+    #endif
+
+    #if __has_attribute(alias)
+    int has_alias(void) { return 1; }
+    #else
+    int has_alias(void) { return 0; }
     #endif
 
     #if __has_builtin(__builtin_add_overflow)
@@ -153,7 +159,8 @@ fn the_has_family_answers_about_this_implementation() {
     assert_eq!(unsafe { has_nonsense() }, 0);
     assert_eq!(unsafe { has_attributes() }, 1);
     assert_eq!(unsafe { has_cleanup() }, 1);
-    assert_eq!(unsafe { has_vector_size() }, 0);
+    assert_eq!(unsafe { has_vector_size() }, 1);
+    assert_eq!(unsafe { has_alias() }, 0);
     assert_eq!(unsafe { has_overflow() }, 1);
     assert_eq!(unsafe { has_features() }, 1);
     assert_eq!(unsafe { has_atomic_builtins() }, 1);
