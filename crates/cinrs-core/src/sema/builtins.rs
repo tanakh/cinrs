@@ -135,6 +135,7 @@ impl Sema<'_> {
                 // is what a translated program should call anyway.
                 self.library_call("abort", &[], range)
             }
+            "frame_address" | "stack_address" => self.frame_address(name, args, range),
             "constant_p" => {
                 self.builtin_arity(name, args, 1, range)?;
                 let value = self.expr(&args[0])?;
@@ -349,6 +350,58 @@ impl Sema<'_> {
             }
         };
         Some(result)
+    }
+
+    /// `__builtin_frame_address(0)` and GCC 14's `__builtin_stack_address()`:
+    /// an address in the current function's frame, which is what a
+    /// stack-depth check needs; see [`BuiltinOp::FrameAddress`] for what it
+    /// is not.
+    ///
+    /// Any other level of `__builtin_frame_address` is refused: Rust has no
+    /// way to walk the callers' frames, and an address that is merely
+    /// somewhere above the current one would answer a different question.
+    fn frame_address(
+        &mut self,
+        name: &str,
+        args: &[ast::Expr],
+        range: SourceRange,
+    ) -> Option<Expr> {
+        if name == "__builtin_stack_address" {
+            self.builtin_arity(name, args, 0, range)?;
+        } else {
+            self.builtin_arity(name, args, 1, range)?;
+            let level = self.expr(&args[0])?;
+            match self.const_eval(&level) {
+                Some(ir::ConstValue::Int(0)) => {}
+                Some(ir::ConstValue::Int(_)) => {
+                    self.error(
+                        args[0].range,
+                        format!(
+                            "'{name}' of a level other than 0 is not supported: Rust has no way \
+                             to walk the callers' frames. Level 0, an address in the current \
+                             frame, is"
+                        ),
+                    );
+                    return None;
+                }
+                _ => {
+                    self.error(
+                        args[0].range,
+                        format!("the argument of '{name}' must be an integer constant"),
+                    );
+                    return None;
+                }
+            }
+        }
+        let void_ptr = self.ptr_to(Ty::Void, false);
+        Some(Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::FrameAddress,
+                args: Vec::new(),
+            },
+            void_ptr,
+            range,
+        ))
     }
 
     /// `__builtin_complex(re, im)` — C11's `CMPLX`, and the only way to write

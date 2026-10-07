@@ -2672,6 +2672,18 @@ pub enum BuiltinOp {
     /// is. Several Rust features for one GCC name (`abm` is LZCNT and POPCNT)
     /// are `&&`ed together; [`crate::x86::detect_features`] is the lookup.
     CpuSupports(u8),
+    /// `__builtin_frame_address(0)` and `__builtin_stack_address()`: *an
+    /// address in the current function's frame*, as a `void *`, which is the
+    /// address of a byte-sized local of the function.
+    ///
+    /// Rust has no stable way to name the frame pointer or the stack pointer,
+    /// and what C does with either is almost always a stack-depth check —
+    /// QuickJS's `js_get_stack_pointer`, compared against a limit set from
+    /// another frame — for which any address inside the frame answers: it is
+    /// below every caller's frame and above every callee's. It is not the
+    /// frame pointer itself, nor the stack pointer, and nothing may be read
+    /// through it.
+    FrameAddress,
     /// `__builtin_cproj(z)`: C99 7.3.9.5's projection onto the Riemann sphere.
     ///
     /// Everything is itself except a value with an infinite part, which becomes

@@ -171,7 +171,6 @@ execute/complex-6                     [not-planned]    compile error: a complex 
 !execute/dbra-1                                        error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/divmod-1                                      error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/eeprof-1                      [not-planned]    runtime: killed by signal 6 — it needs `-finstrument-functions`, so that every function calls `__cyg_profile_func_enter`/`_exit` around its body. No entry point can ask for it and the harness passes no options
-execute/frame-address                 [not-planned]    compile error: '__builtin_frame_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 !execute/inst-check                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/int-compare                                   error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 !execute/loop-2                                        error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!

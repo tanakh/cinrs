@@ -61,6 +61,9 @@ follows [Semantic Versioning][semver].
   mbedtls's bignum loops and its zeroize barrier; `%c` and `%P` print an
   immediate without its `$`, as xz's range decoder needs; and basic asm at
   file scope, `__asm__("…");`, is `global_asm!`.
+* `__builtin_frame_address(0)` and `__builtin_stack_address()`, as an address
+  in the current function's frame, which is what QuickJS's stack-overflow
+  check compares; another level is refused.
 * `__attribute__((transparent_union))`: a parameter of such a union takes an
   argument of any member's type, or a null pointer constant, and is passed as
   the first member, which is GCC's ABI. glibc's `bind`, `accept` and

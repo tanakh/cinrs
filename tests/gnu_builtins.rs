@@ -375,6 +375,66 @@ fn trap_is_reachable_only_when_asked_for() {
 }
 
 // ---------------------------------------------------------------------------
+// the frame address
+// ---------------------------------------------------------------------------
+
+c99! {
+    #include <stdint.h>
+
+    /* QuickJS's stack-overflow check (`js_get_stack_pointer`, quickjs.c)
+     * reads `__builtin_frame_address(0)` and compares it with a limit taken in
+     * another frame, for which an address in the current frame is enough. */
+    unsigned long long frame_here(void) {
+        return (unsigned long long)(uintptr_t)__builtin_frame_address(0);
+    }
+    unsigned long long stack_here(void) {
+        return (unsigned long long)(uintptr_t)__builtin_stack_address();
+    }
+    /* A `void *`, which the result is, as it is and not through a cast. */
+    void *frame_pointer_here(void) {
+        return __builtin_frame_address(0);
+    }
+
+    /* Each level records where its frame is; the addition after the call
+     * keeps it from being a tail call that would reuse the frame. */
+    int frame_depths(unsigned long long *out, int n) {
+        out[0] = (unsigned long long)(uintptr_t)__builtin_frame_address(0);
+        if (n > 1) return frame_depths(out + 1, n - 1) + 1;
+        return 1;
+    }
+
+    #if __has_builtin(__builtin_frame_address) && __has_builtin(__builtin_stack_address)
+    int frame_address_is_a_builtin(void) { return 1; }
+    #else
+    int frame_address_is_a_builtin(void) { return 0; }
+    #endif
+}
+
+#[test]
+fn the_frame_address_is_an_address_in_the_current_frame() {
+    let mut depths = [0u64; 8];
+    unsafe {
+        assert_eq!(frame_depths(depths.as_mut_ptr(), 8), 8);
+        assert_eq!(frame_address_is_a_builtin(), 1);
+    }
+    assert!(depths.iter().all(|&address| address != 0), "{depths:x?}");
+    // The stack grows down on x86-64, so every deeper frame is lower, and a
+    // callee's frame is below a local of its caller.
+    #[cfg(target_arch = "x86_64")]
+    {
+        assert!(
+            depths.windows(2).all(|pair| pair[1] < pair[0]),
+            "{depths:x?}"
+        );
+        let local = 0u8;
+        let here = (&raw const local) as u64;
+        assert!(unsafe { frame_here() } < here);
+        assert!(unsafe { stack_here() } < here);
+        assert!((unsafe { frame_pointer_here() } as u64) < here);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the quiet comparisons (C99 7.12.14)
 // ---------------------------------------------------------------------------
 

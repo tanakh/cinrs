@@ -35,6 +35,13 @@ cinrs::c99! {
         __builtin_prefetch(rw); //~ ERROR: must be a pointer
     }
 
+    /* Level 0 is an address in the current frame; Rust cannot walk the
+       callers' frames for any other. */
+    void *frames(int n) {
+        void *up = __builtin_frame_address(1); //~ ERROR: of a level other than 0 is not supported
+        return __builtin_frame_address(n); //~ ERROR: the argument of '__builtin_frame_address' must be an integer constant
+    }
+
     int backwards_designator(void) {
         static const int table[8] = { [5 ... 1] = 3 }; //~ ERROR: empty range designator
         return table[0];

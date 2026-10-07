@@ -5666,6 +5666,24 @@ impl<'a> Codegen<'a> {
                 }
                 Value::new(quote_spanned! {span=> ((#test) as #int) }, prec::LOWEST)
             }
+            // The address of a byte of the function's own frame: a local the
+            // block declares, which LLVM gives a stack slot in the frame
+            // because its address is taken. `black_box` keeps the optimiser
+            // from reasoning about where it is, and nothing reads through it.
+            // See [`BuiltinOp::FrameAddress`].
+            BuiltinOp::FrameAddress => {
+                let byte = Ident::new("__cinrs_frame_byte", Span::mixed_site());
+                let void = self.pointee_ty(Ty::Void, span);
+                Value::new(
+                    quote_spanned! {span=> {
+                        let #byte: ::core::primitive::u8 = 0;
+                        ::core::hint::black_box(&raw const #byte)
+                            .cast_mut()
+                            .cast::<#void>()
+                    } },
+                    prec::BLOCK,
+                )
+            }
             // Sixteen-byte aligned bytes off the function's arena, which no
             // variable length array's frame gives back: they live until the
             // function returns. See [`Codegen::arena_items`].
