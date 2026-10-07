@@ -1628,7 +1628,9 @@ impl<'a> Codegen<'a> {
             let name = self.c_ident(&def.rust_name, span);
             let int = self.ty(Ty::Int, span);
             // C says an enumerated type is compatible with an implementation
-            // defined integer type; every ABI this targets picks `int`.
+            // defined integer type. GCC and Clang pick `int` for one with a
+            // negative enumerator, which is what is still a `Ty::Enum` here;
+            // the `unsigned int` of the others is a `typedef` item.
             out.extend(quote_spanned! {span=> pub type #name = #int; });
         }
         for constant in &self.program.enum_constants {

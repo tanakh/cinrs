@@ -259,6 +259,48 @@ fn union_type_punning() {
     }
 }
 
+/// An enumeration with no negative enumerator is compatible with `unsigned
+/// int`, which is what GCC and Clang make it ("Normally, the type is unsigned
+/// int if there are no negative values in the enumeration, otherwise int"), and
+/// an object of the type behaves as one: it promotes to `unsigned int`, so `e -
+/// 1 < 0` is false where `e` is 0, and a stored `-1` is 4294967295. The
+/// enumerators themselves stay `int`. Every value is what gcc and clang print.
+#[test]
+fn an_enum_with_no_negative_enumerator_is_unsigned() {
+    c99! {
+        enum pos { PA, PB, PC };
+        enum neg { NA = -1, NB };
+        typedef enum { TA, TB } anon_t;
+
+        void facts(int *out) {
+            enum pos p = PA;
+            enum neg n = NB;
+            anon_t t = TA;
+            enum pos q = (enum pos)-1;
+            enum blk { BA, BB } b = BA;
+            out[0] = p - 1 < 0;
+            out[1] = t - 1 < 0;
+            out[2] = b - 1 < 0;
+            out[3] = n - 1 < 0;
+            out[4] = PA - 1 < 0;
+            out[5] = q < 0;
+            out[6] = (long long)q == 4294967295LL;
+            out[7] = q / 2 == 2147483647u;
+            out[8] = p > -1;
+        }
+
+        unsigned pos_value(enum pos p) { return p; }
+    }
+
+    let mut out = [0; 9];
+    unsafe { facts(out.as_mut_ptr()) };
+    assert_eq!(out, [0, 0, 0, 1, 1, 0, 1, 1, 0]);
+    // The Rust alias is the compatible type, and the enumerators are `int`.
+    let p: pos = PC as pos;
+    assert_eq!(unsafe { pos_value(p) }, 2u32);
+    assert_eq!(PC, 2i32);
+}
+
 #[test]
 fn enums_with_explicit_values() {
     c99! {
@@ -340,7 +382,9 @@ fn typedefs_of_aggregates() {
         let mut z = Complex { re: 3.0, im: 4.0 };
         assert_eq!(magnitude_squared(&raw mut z), 25.0);
         assert_eq!(grid_corner(), 4);
-        assert_eq!(toggle(OFF), ON);
+        // `Switch` is `unsigned int`, which an enumeration with no negative
+        // enumerator is; `OFF` and `ON` are C's `int`s.
+        assert_eq!(toggle(OFF as Switch), ON);
         assert_eq!((OFF, ON), (0, 1));
         // `Point` and `struct Point` are the same Rust type.
         let q: Point = origin();

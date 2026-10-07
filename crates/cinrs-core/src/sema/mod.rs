@@ -437,12 +437,14 @@ struct TypedefEntry {
 enum TagEntry {
     Record(RecordId),
     Enum {
-        /// The type `enum X` names: [`Ty::Enum`] for a file-scope tag that
-        /// becomes a named alias, the fixed underlying type of a C23
-        /// enumeration, and `int` for everything else.
+        /// The type `enum X` names once its list has been seen: `unsigned
+        /// int` when no enumerator is negative, the fixed underlying type of a
+        /// C23 enumeration or the type a wide one widened to, and otherwise
+        /// [`Ty::Enum`] for a file-scope tag that becomes a named alias and
+        /// `int` for everything else.
         ty: Ty,
-        /// Whether the enumeration's underlying type is unsigned, which is
-        /// only observable through a bit-field of the type.
+        /// Whether the enumeration's underlying type is unsigned, which a
+        /// bit-field of the type asks before the list is complete.
         unsigned: bool,
         /// Whether the type above was *written* — C23's fixed underlying type
         /// (N3030) — rather than the `int` this crate gives an enumeration
@@ -1444,7 +1446,10 @@ impl<'a> Sema<'a> {
     /// 6.2.7p1 makes compatible when their members are (N3037). Keeping the
     /// difference this narrow is deliberate — an enumerated type is compatible
     /// with an implementation-defined integer type too, and opening *that*
-    /// here would change what `_Generic` selects.
+    /// here would change what `_Generic` selects. An enumeration with no
+    /// negative enumerator *is* `unsigned int` here, as GCC makes it, so only
+    /// a [`Ty::Enum`] — one with a negative enumerator, compatible with `int`
+    /// in GCC — still differs from its integer type.
     fn compatible(&self, a: Ty, b: Ty) -> bool {
         self.compatible_in(a, b, &mut Vec::new())
     }

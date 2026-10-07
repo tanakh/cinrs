@@ -130,6 +130,43 @@ fn an_enum_with_a_negative_enumerator_makes_the_field_signed() {
     }
 }
 
+/// QuickJS's `JSClosureVar` (quickjs.c:625) keeps `JSClosureTypeEnum
+/// closure_type : 3`, whose values run 0 to 7, and the type is a `typedef` of
+/// an anonymous enumeration. That enumeration is `unsigned int`, as GCC and
+/// Clang make it, so 4 reads back as 4 and the `switch` finds its `case`; read
+/// as signed it was -4, and QuickJS aborted on its first closure. A
+/// block-scope enumeration declared in the member itself is the same.
+#[test]
+fn a_typedef_of_an_anonymous_enum_makes_the_field_unsigned() {
+    c99! {
+        typedef enum { A, B, C, D, E, F, G, H } E8;
+
+        struct S { E8 kind : 3; unsigned char flag : 1; };
+
+        int kind_of(struct S s) { return (int)s.kind; }
+        int is_e(struct S s) {
+            switch (s.kind) {
+            case E: return 1;
+            default: return 0;
+            }
+        }
+        struct S make(E8 kind) { struct S s = { kind, 1 }; return s; }
+
+        int block_scope(int v) {
+            struct { enum { P, Q, R, T } f : 2; } b;
+            b.f = v;
+            return b.f;
+        }
+    }
+
+    unsafe {
+        assert_eq!(kind_of(make(E as E8)), 4);
+        assert_eq!(is_e(make(E as E8)), 1);
+        assert_eq!(kind_of(make(H as E8)), 7);
+        assert_eq!(block_scope(3), 3);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the integer promotions
 // ---------------------------------------------------------------------------

@@ -246,7 +246,9 @@ fn a_union_bit_field_accessor_is_reachable_from_a_safe_function() {
 #[test]
 fn records_enums_and_bit_fields_are_safe() {
     assert_eq!(manhattan(Point { x: -3, y: 4 }), 7);
-    assert_eq!((tag_of(LOW), tag_of(HIGH)), (0, 1));
+    // `enum Level` has no negative enumerator, so it is `unsigned int` — a
+    // `c_uint` — while its enumerators are C's `int`s.
+    assert_eq!((tag_of(LOW as Level), tag_of(HIGH as Level)), (0, 1));
 
     let mut f = Flags {
         __cinrs_bits0: [0; 3],

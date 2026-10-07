@@ -323,6 +323,55 @@ fn bit_fields_are_checked_against_their_type() {
     );
 }
 
+/// An enumeration with no negative enumerator is `unsigned int`, the type GCC
+/// and Clang make it compatible with, whether it has a tag, a `typedef` or
+/// neither, and at file scope or in a block; one with a negative enumerator
+/// stays an `int`-like `enum`. A bit-field of the first kind reads back
+/// unsigned — QuickJS's `closure_type : 3` is `typedef enum { … }` — and its
+/// enumerators are still `int`.
+#[test]
+fn an_enum_with_no_negative_enumerator_is_unsigned_int() {
+    let (program, messages) = analysed(
+        "enum pos { PA, PB };\n\
+         enum neg { NA = -1, NB };\n\
+         typedef enum { TA, TB, TC, TD, TE } anon_t;\n\
+         enum pos p; enum neg n; anon_t t;\n\
+         struct S { anon_t kind : 3; enum neg signed_kind : 3; } s;\n\
+         int f(void) { enum blk { BA } b = BA; return b + PA; }",
+        &Options::new(Standard::C99),
+    );
+    assert!(messages.is_empty(), "{messages:#?}");
+    let object_ty = |name: &str| {
+        program
+            .objects
+            .iter()
+            .find(|object| object.name == name)
+            .unwrap_or_else(|| panic!("no object '{name}'"))
+            .ty
+    };
+    assert_eq!(object_ty("p"), ir::Ty::UInt);
+    assert_eq!(object_ty("t"), ir::Ty::UInt);
+    assert_eq!(object_ty("b"), ir::Ty::UInt);
+    assert!(object_ty("n").is_enum());
+    let ir::Ty::Record(record) = object_ty("s") else {
+        panic!("'s' is not a struct");
+    };
+    let signed: Vec<bool> = program
+        .types
+        .record(record)
+        .fields
+        .iter()
+        .map(|field| field.bits.as_ref().expect("a bit-field").signed)
+        .collect();
+    assert_eq!(signed, [false, true]);
+    assert!(
+        program
+            .enum_constants
+            .iter()
+            .all(|constant| constant.ty == ir::Ty::Int)
+    );
+}
+
 #[test]
 fn a_bit_field_has_neither_an_address_nor_a_size() {
     rejected(

@@ -5,9 +5,9 @@ expression: "generate(r\"\n        int counter;\n        enum Level { Low, High 
 mod __cinrs_unit_679b7a79 {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
-    pub type Level = ::core::ffi::c_int;
     pub const Low: ::core::ffi::c_int = 0;
     pub const High: ::core::ffi::c_int = 1;
+    pub type Level = ::core::ffi::c_uint;
     pub static mut counter: ::core::ffi::c_int = 0;
     pub unsafe extern "C" fn bump(
         mut counter_1: ::core::ffi::c_int,

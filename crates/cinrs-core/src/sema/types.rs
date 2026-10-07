@@ -1864,18 +1864,19 @@ impl Sema<'_> {
 
     /// Whether reading a bit-field of this type sign-extends.
     ///
-    /// It is the signedness of the declared type, except for an enumeration:
-    /// there the implementation picks the underlying type, and GCC and Clang
-    /// make it unsigned when no enumerator is negative — which is observable
-    /// exactly here and nowhere else. `enum E { A, B, C, D } f : 2;` therefore
-    /// holds `D`, where a *signed* two-bit field would read it back as `-1`.
+    /// It is the signedness of the declared type, and for an enumeration that
+    /// is the signedness of the type the implementation makes it compatible
+    /// with: GCC and Clang make it unsigned when no enumerator is negative.
+    /// `enum E { A, B, C, D } f : 2;` therefore holds `D`, where a *signed*
+    /// two-bit field would read it back as `-1`.
     ///
-    /// The answer is taken from the resolved type rather than from what was
-    /// written, so that a `typedef` of the enumeration gets it too — which is
-    /// how the C in gcc.c-torture's `execute/20030714-1` spells it.
-    /// `self.enum_unsigned` is consulted first all the same: a member declared
-    /// with an `enum` specifier that is being defined right here is answered
-    /// there before the [`ir::EnumDef`] is complete.
+    /// Such an enumeration resolves to `unsigned int` itself (see
+    /// [`Sema::enum_ty`]), so the resolved type answers for a `typedef`
+    /// of it — the spelling of gcc.c-torture's `execute/20030714-1` and of
+    /// QuickJS's `closure_type : 3`. A [`Ty::Enum`] is one with a negative
+    /// enumerator. `self.enum_unsigned` is consulted first all the same: a
+    /// member declared with an `enum` specifier that is being defined right
+    /// here is answered there.
     fn bit_field_signed(&self, written: &ast::Type, ty: Ty) -> bool {
         if let ast::TypeKind::Enum(id) = &written.kind
             && let Some(unsigned) = self.enum_unsigned[id.index()]
@@ -2757,13 +2758,15 @@ impl Sema<'_> {
                 at,
             ));
         }
-        // The enumeration widened, so every enumerator has the widened type
-        // and so does the enumeration itself. It stops being a `Ty::Enum` at
-        // that point: `Ty::Enum` *is* `int` everywhere in this crate's type
-        // model, and the honest answer for an enumeration whose underlying
-        // type C23 made implementation-defined is the integer type it widened
-        // to. The tag keeps its Rust alias, now an alias for that type.
-        if constant_ty != underlying.unwrap_or(Ty::Int) {
+        // The type the enumeration ends up compatible with, when that is not
+        // `int`. `Ty::Enum` *is* `int` everywhere in this crate's type model,
+        // so an enumeration that is anything else stops being one here, and
+        // the tag keeps its Rust alias, now an alias for that type.
+        let compatible = if constant_ty != underlying.unwrap_or(Ty::Int) {
+            // It widened (C23 6.7.2.2p13), so every enumerator has the widened
+            // type and so does the enumeration itself: the honest answer for
+            // an enumeration whose underlying type C23 made
+            // implementation-defined is the integer type it widened to.
             for (name, value, range, at) in &placed {
                 self.insert(
                     name,
@@ -2777,17 +2780,34 @@ impl Sema<'_> {
                     self.program.enum_constants[*at].ty = constant_ty;
                 }
             }
+            Some(constant_ty)
+        } else if underlying.is_none() && declared.is_none() && unsigned {
+            // No enumerator is negative, and GCC and Clang then make the
+            // compatible type `unsigned int` (GCC's manual, "Structures,
+            // Unions, Enumerations, and Bit-Fields"). That is observable well
+            // beyond a bit-field: an object of the type promotes to `unsigned
+            // int`, so `e - 1 < 0` is false, `(long)e` of a stored `-1` is
+            // 4294967295 and `_Generic(e, unsigned: …)` picks `unsigned`. The
+            // enumerators themselves stay `int`, as C says. QuickJS's 3-bit
+            // `closure_type` holds 4 only because of this. A tag declared
+            // before its list (GNU's forward reference) keeps the `int` its
+            // earlier mentions had, so that the two never disagree.
+            Some(Ty::UInt)
+        } else {
+            None
+        };
+        if let Some(compatible) = compatible {
             if let Ty::Enum(id) = ty {
                 let def = self.program.types.enum_mut(id);
                 def.emit = false;
                 let rust_name = def.rust_name.clone();
                 self.program.typedefs.push(ir::TypedefItem {
                     rust_name,
-                    ty: constant_ty,
+                    ty: compatible,
                     range: spec.range,
                 });
             }
-            ty = constant_ty;
+            ty = compatible;
             self.enum_by_spec[spec_id.index()] = Some(ty);
         }
         if let Some(name) = &spec.name {

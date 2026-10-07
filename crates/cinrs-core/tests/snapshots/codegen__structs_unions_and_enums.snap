@@ -20,13 +20,13 @@ mod __cinrs_unit_7fd40f37 {
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct Shape {
-        pub kind: Kind,
+        pub kind: ::core::ffi::c_uint,
         pub origin: Point,
         pub tag: Bits,
     }
-    pub type Kind = ::core::ffi::c_int;
     pub const EMPTY: ::core::ffi::c_int = 0;
     pub const FULL: ::core::ffi::c_int = 4;
+    pub type Kind = ::core::ffi::c_uint;
     static mut current: Shape = unsafe {
         Shape {
             kind: 4,

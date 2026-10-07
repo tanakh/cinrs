@@ -229,8 +229,12 @@ pub enum Ty {
     Func(FuncTyId),
     /// A `struct` or `union`, complete or not.
     Record(RecordId),
-    /// A file-scope `enum` with a tag, which becomes a named `c_int` alias.
-    /// Every other `enum` is simply [`Ty::Int`].
+    /// A file-scope `enum` with a tag and a negative enumerator, which becomes
+    /// a named `c_int` alias. An enumeration with no negative enumerator is
+    /// [`Ty::UInt`] — the type GCC and Clang make it compatible with — one
+    /// with a fixed or widened underlying type is that type, and every other
+    /// `enum` is simply [`Ty::Int`]; a tag of any of them still names a Rust
+    /// alias.
     Enum(EnumId),
     /// `va_list` (and its `__builtin_va_list` / `__gnuc_va_list` spellings),
     /// which becomes [`core::ffi::VaList`].
@@ -643,14 +647,19 @@ pub struct Enumerator {
 }
 
 /// A file-scope `enum` tag, which becomes a named `c_int` alias.
+///
+/// One that turns out not to be `int` — no negative enumerator, or a fixed or
+/// widened underlying type — is not [`Ty::Enum`] once its list is complete:
+/// its definition is no longer emitted, and the alias is a
+/// [`TypedefItem`] for the type it is.
 #[derive(Clone, Debug)]
 pub struct EnumDef {
     /// Whether the enumeration's underlying type is unsigned, which is what GCC
     /// and Clang pick when no enumerator is negative.
     ///
-    /// The choice is implementation defined and only observable through a
-    /// bit-field of the type, which is where this is used; everywhere else an
-    /// enumeration is `int`, as [`Ty::Enum`] says.
+    /// Set when the list is complete. A definition that is still a
+    /// [`Ty::Enum`] then has a negative enumerator and this is false; one for
+    /// which it is true has become `unsigned int`.
     pub unsigned: bool,
     /// The C tag, if one was written.
     pub tag: Option<String>,

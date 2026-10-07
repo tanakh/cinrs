@@ -83,6 +83,12 @@ follows [Semantic Versioning][semver].
   later definition stands, as in GCC and Clang; a redefinition in a system
   header — glibc's `<assert.h>` after a program's own `assert` — says nothing.
   It used to be an error, which stopped zstd.
+* **An enumeration with no negative enumerator is `unsigned int`**, the type
+  GCC and Clang make it compatible with, and its Rust alias is a `c_uint`; the
+  enumerators stay `c_int`. It was `int`, which was wrong wherever the two
+  differ: `e - 1 < 0`, a division, a conversion to `long`, and — silently — a
+  bit-field of a `typedef` of an anonymous `enum`, which read 4 back from
+  QuickJS's 3-bit `closure_type` as -4.
 
 ### Fixed
 

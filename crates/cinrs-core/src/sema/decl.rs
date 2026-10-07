@@ -1804,7 +1804,14 @@ impl Sema<'_> {
         let same_name = match resolved {
             Ty::Record(id) => self.types().record(id).rust_name == name.name,
             Ty::Enum(id) => self.types().enum_def(id).rust_name == name.name,
-            _ => false,
+            // An enumeration that is not `int` — `unsigned int`, or the type
+            // it widened to — is an alias under its tag already, so
+            // `typedef enum E { … } E;` needs no second one.
+            _ => self
+                .program
+                .typedefs
+                .iter()
+                .any(|item| item.rust_name == name.name && item.ty == resolved),
         };
         if same_name {
             return out;

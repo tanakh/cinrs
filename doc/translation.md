@@ -185,7 +185,7 @@ FILE *get_stdout(void) { return stdout; }
 | `T *`, `const T *`, `void *` | `*mut T`, `*const T`, `*mut c_void` — raw pointers, and pointer arithmetic goes through `offset`, so nothing generated holds a reference |
 | `T a[N]` | `[T; N]` |
 | `struct S`, `union U` | `#[repr(C)] #[derive(Copy, Clone)]` items with `pub` members |
-| `enum E` | `pub type E = c_int;` plus one `pub const` per enumerator |
+| `enum E` | `pub type E = c_uint;` when no enumerator is negative and `c_int` when one is — the types GCC and Clang make an enumeration compatible with — plus one `pub const` per enumerator, which is a `c_int` in either case (a C23 fixed underlying type, or a value too wide for `int`, is the type of both instead) |
 | `int (*)(void *)` | `Option<unsafe extern "C" fn(*mut c_void) -> c_int>`, so that a null function pointer is representable |
 | `__m128`, `__m128i`, `__m256d`, … | `::core::arch::x86_64::__m128` and its relatives — `core`'s own types, sixteen or thirty-two bytes and aligned to themselves, which is what lets a `union` punne one |
 
