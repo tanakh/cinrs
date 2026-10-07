@@ -4,11 +4,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast;
 use crate::capture::SourceRange;
+use crate::diag::Diagnostic;
 use crate::ir::{
     self, ConstValue, Expr, ExprKind, FuncId, Function, ObjectId, Place, PlaceKind, Signature,
     StaticVar, Stmt, Storage, Ty, TypedefItem,
 };
-use crate::target::Arch;
+use crate::target::{Arch, Os};
 
 use super::types::Completeness;
 use super::{ConvContext, Entry, FuncScope, NestFrame, SavedFunc, Sema, TypedefEntry};
@@ -377,10 +378,20 @@ impl Sema<'_> {
         } {
             self.reject_cleanup(&attrs, what);
         }
-        // An `extern` declaration reserves no storage, so there is no
-        // definition for the linker to make weak; anything else here does.
-        if storage != Some(ast::StorageClass::Extern) {
-            self.reject_weak(&attrs, "an object this unit defines");
+        // An `extern` declaration reserves no storage, so it is a weak
+        // reference (below); anything else here defines the object, which GCC
+        // allows only where the object has a symbol at all.
+        if storage != Some(ast::StorageClass::Extern)
+            && let Some(range) = attrs.weak
+        {
+            if file_scope && storage != Some(ast::StorageClass::Static) {
+                self.warn_weak_definition(range, &name.name, None);
+            } else {
+                self.error(
+                    range,
+                    format!("weak declaration of '{}' must be public", name.name),
+                );
+            }
         }
 
         let thread_local = self.check_thread_local(decl, storage, file_scope);
@@ -396,6 +407,19 @@ impl Sema<'_> {
             self.declare_extern_object(name, declarator);
             if let Some(Entry::Object(id)) = self.lookup(&name.name).cloned() {
                 self.apply_object_attributes(id, &attrs, declarator);
+                if let Some(range) = attrs.weak {
+                    if matches!(self.program.object(id).storage, Storage::Extern { .. }) {
+                        // A definition later in the unit takes the object out
+                        // of the `extern` block again, and the weakness with
+                        // it; see `Sema::define_here`.
+                        self.check_weak_reference(range, &name.name);
+                        let object = &mut self.program.objects[id.0 as usize];
+                        object.weak = object.weak.or(Some(range));
+                    } else {
+                        let defined = self.program.object(id).range;
+                        self.warn_weak_definition(range, &name.name, Some((defined, "defined")));
+                    }
+                }
             }
             return Vec::new();
         }
@@ -792,29 +816,85 @@ impl Sema<'_> {
         }
     }
 
-    /// Refuses `__attribute__((weak))` where it would mean something.
-    ///
-    /// Weak linkage is two things at once: a *definition* the linker may
-    /// replace with a strong one, and a *reference* that may go unresolved and
-    /// whose address is then null. Neither is expressible in stable Rust —
-    /// `#[linkage]` is unstable — so the definition is refused with the reason.
-    ///
-    /// A plain declaration is another matter: the only thing lost is the null
-    /// address, the call itself is exactly the call a strong declaration makes,
-    /// and refusing it would make glibc's `<pthread.h>` unreadable over one
-    /// internal function nobody calls. So it is accepted, and
-    /// `__has_attribute(weak)` still answers *no*, which is what keeps a
-    /// program that guards on the answer from taking the branch that tests the
-    /// address; see [`crate::gnu::has_attribute`].
+    /// Refuses `__attribute__((weak))` on a `typedef`, where it names no
+    /// symbol at all.
     pub(super) fn reject_weak(&mut self, attrs: &ast::Attributes, what: &str) {
         if let Some(range) = attrs.weak {
             self.error(
                 range,
                 format!(
-                    "'weak' is not supported on {what}: Rust's `#[linkage]` is unstable, so weak \
-                     linkage cannot be asked for. Only a declaration of something defined \
-                     elsewhere may carry it, where it is accepted and ignored — the symbol then \
-                     having to be there at link time"
+                    "'weak' is not supported on {what}: it asks for weak linkage, and only a \
+                     function or an object has a symbol to give it"
+                ),
+            );
+        }
+    }
+
+    /// Answers `__attribute__((weak))` on a function or an object the unit
+    /// *defines* — written on the definition, or on any declaration of it.
+    ///
+    /// Weak linkage is two things at once: a *definition* the linker may
+    /// replace with a strong one, and a *reference* that may go unresolved and
+    /// whose address is then null. The reference is made weak without Rust's
+    /// unstable `#[linkage]`: see [`Sema::check_weak_reference`]. The
+    /// definition cannot be — the assembler alias that would carry it meets
+    /// an overriding definition in one object under `-flto`, a shared library
+    /// built by `rustc` would not export it, and Mach-O has no such alias — so
+    /// it is an **ordinary definition**, with a warning. That is never a
+    /// silent difference: with no other definition the program is GCC's, and
+    /// with a strong one elsewhere the link fails on a duplicate symbol rather
+    /// than quietly picking one. zstd's CLI defines the tracing hooks its
+    /// library header declares weak, which is the common case.
+    ///
+    /// Each name is warned about once, whichever of its declarations carries
+    /// the attribute. `note` points at the other half when the attribute and
+    /// the definition are apart, phrased to be completed by its location.
+    pub(super) fn warn_weak_definition(
+        &mut self,
+        range: SourceRange,
+        name: &str,
+        note: Option<(SourceRange, &str)>,
+    ) {
+        if !self.weak_definitions.insert(name.to_owned()) {
+            return;
+        }
+        let message = format!(
+            "'{name}' is defined weakly, which Rust cannot express: it is an ordinary \
+             definition, and another definition of it elsewhere is a duplicate symbol at link \
+             time"
+        );
+        let diagnostic = Diagnostic::warning(range, message);
+        let diagnostic = match note {
+            Some((at, what)) => diagnostic.with_note_at(at, what),
+            None => diagnostic,
+        };
+        self.diags.push(diagnostic);
+    }
+
+    /// Checks `__attribute__((weak))` on a declaration of a function or an
+    /// object the unit does not define, which makes every reference to it
+    /// weak.
+    ///
+    /// The reference is made weak with the assembler's `.weakref` (Mach-O's
+    /// `.weak_reference`), which needs an object format that has weak
+    /// undefined symbols and an architecture with stable inline assembly:
+    /// WebAssembly and Windows have neither here, and a strong reference
+    /// instead would be a program that does not link without the symbol — or
+    /// one that calls through null — so the declaration is refused where the
+    /// target is known to be one of them. Where the unit is translated for the
+    /// host's model and compiled for another target, the generated code
+    /// carries the same check; see `Codegen::weak_guard`.
+    pub(super) fn check_weak_reference(&mut self, range: SourceRange, name: &str) {
+        let target = self.target;
+        if target.arch == Arch::Wasm32 || target.os == Os::Windows {
+            self.error(
+                range,
+                format!(
+                    "'weak' is not supported when translating for {}-{}: a weak reference needs \
+                     an ELF or Mach-O object and inline assembly to mark the symbol with, and a \
+                     strong one instead would not link without '{name}'",
+                    target.arch.as_str(),
+                    target.os.as_str()
                 ),
             );
         }
@@ -1662,6 +1742,13 @@ impl Sema<'_> {
         if !matches!(self.program.object(id).storage, Storage::Extern { .. }) {
             return;
         }
+        // `extern int w __attribute__((weak)); int w;` is a weak *definition*
+        // in GCC, and an ordinary one here, with the warning that says so; the
+        // references to it are to this definition, and none of them is weak.
+        if let Some(weak) = self.program.objects[id.0 as usize].weak.take() {
+            let name = self.program.object(id).name.clone();
+            self.warn_weak_definition(declarator.range, &name, Some((weak, "declared weak")));
+        }
         let ty = self.program.object(id).ty;
         let name = self.program.object(id).name.clone();
         let item_name = self.reserve_item_name(&name);
@@ -2193,8 +2280,24 @@ impl Sema<'_> {
             );
         }
         self.reject_cleanup(attrs, "a function");
-        if definition.is_some() {
-            self.reject_weak(attrs, "a function definition");
+        // `weak` on a function the unit defines — on the definition, or on
+        // any declaration of it, before or after — asks for a weak
+        // definition, which is an ordinary one here; on one it never defines
+        // it is a weak reference. `defined_functions` knows which, whatever
+        // the order.
+        if let Some(range) = attrs.weak {
+            if is_static {
+                self.error(
+                    range,
+                    format!("weak declaration of '{}' must be public", name.name),
+                );
+            } else if definition.is_some()
+                || (scope == FuncScope::File && self.defined_functions.contains(&name.name))
+            {
+                self.warn_weak_definition(range, &name.name, None);
+            } else {
+                self.check_weak_reference(range, &name.name);
+            }
         }
         // C23 has no `constexpr` functions, and neither has this: a constant
         // here is a value, folded wherever its name is used.
@@ -2445,6 +2548,7 @@ impl Sema<'_> {
                 // range kept is the first one, which is where the diagnostics
                 // about it point.
                 entry.safe = entry.safe.or(attrs.safe);
+                entry.weak = entry.weak.or(attrs.weak);
                 entry.inline_hint = entry.inline_hint.or(inline_hint);
                 entry.init_kind = entry.init_kind.or(init_kind);
                 entry.deprecated = entry
@@ -2507,6 +2611,7 @@ impl Sema<'_> {
                     deprecated: attrs.deprecated.as_ref().map(|d| d.node.clone()),
                     section: attrs.section.as_ref().map(|s| s.node.clone()),
                     asm_label: asm_label.map(|label| label.node.clone()),
+                    weak: attrs.weak,
                     init_kind,
                     target_features,
                     address_taken: false,
@@ -3333,6 +3438,21 @@ impl Sema<'_> {
                     return Some(folded);
                 }
                 if self.is_address_constant(&expr) {
+                    // A weak symbol's address may be null, and a `static`
+                    // holding it is a constant LLVM may fold a load of — into
+                    // the symbol's address, which it takes as non-null. The
+                    // test `if (p)` would then pass on a missing symbol.
+                    if let Some(weak) = self.weak_root(&expr) {
+                        self.error(
+                            range,
+                            format!(
+                                "{what} takes the address of '{weak}', which is declared weak, and \
+                                 cinrs can only test such an address where it is used: assign \
+                                 it at run time instead"
+                            ),
+                        );
+                        return None;
+                    }
                     return Some(expr);
                 }
                 self.error(
@@ -3567,6 +3687,42 @@ impl Sema<'_> {
                 self.is_address_constant(ptr) && matches!(index.kind, ExprKind::Int(_))
             }
             _ => false,
+        }
+    }
+
+    /// The name of the weak function or object an address constant is the
+    /// address of, or an offset from, if it is one; see
+    /// [`ir::Function::weak`].
+    fn weak_root(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::FuncAddr(id) => {
+                // One the unit defines later is an ordinary definition, and
+                // its address an ordinary constant.
+                let function = self.program.function(*id);
+                (function.weak.is_some()
+                    && function.is_extern()
+                    && !self.defined_functions.contains(&function.name))
+                .then(|| function.name.clone())
+            }
+            ExprKind::Cast(inner) => self.weak_root(inner),
+            ExprKind::PtrOffset { ptr, .. } => self.weak_root(ptr),
+            ExprKind::AddrOf(place) => self.weak_place_root(place),
+            _ => None,
+        }
+    }
+
+    fn weak_place_root(&self, place: &Place) -> Option<String> {
+        match &place.kind {
+            PlaceKind::Object(id) => {
+                let object = self.program.object(*id);
+                (object.weak.is_some() && matches!(object.storage, Storage::Extern { .. }))
+                    .then(|| object.name.clone())
+            }
+            PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+                self.weak_place_root(base)
+            }
+            PlaceKind::Index { base, .. } | PlaceKind::Deref(base) => self.weak_root(base),
+            PlaceKind::Str(_) | PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => None,
         }
     }
 

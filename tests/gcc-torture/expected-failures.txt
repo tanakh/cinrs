@@ -52,7 +52,6 @@ execute/20010122-1                    [not-planned]    compile error: '__builtin
 execute/20020412-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 !execute/20020819-1                                    error: "type specifier missing"  C89 implicit 'int', which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!
 execute/20021127-1                    [not-planned]    runtime: killed by signal 6 — the case *defines* `long long llabs(long long)` as a function that aborts and requires the builtin to be expanded inline rather than called. Defining a standard library function is undefined behaviour (7.1.3p2), and cinrs calls what the program defined
-execute/20030125-1                    [not-planned]    compile error: 'weak' is not supported: Rust's `#[linkage]` is unstable, so weak linkage cannot be asked for
 execute/20030323-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/20030811-1                    [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 !execute/20031211-2                                    error: "implicit declaration of function"  C89's implicit function declaration, which C99 removed; gcc -std=gnu11 refuses it too. Passes under gnu89!

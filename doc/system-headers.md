@@ -458,9 +458,10 @@ beyond the search rules:
 * **`#include_next`**, which was refused outright before, on the grounds that
   there was nothing to reach. `/usr/include/limits.h` ends with one.
 * **`__attribute__((weak))` on a declaration.** glibc's `<pthread.h>` writes it
-  on `__pthread_unwind_next`. It is now refused on a *definition* only; see the
-  [attribute table](gnu-extensions.md#__attribute__-forms) for why
-  `__has_attribute(weak)` still answers 0.
+  on `__pthread_unwind_next`. It is now refused on a *definition* only, and a
+  declaration is a weak reference; see the
+  [attribute table](gnu-extensions.md#__attribute__-forms) for both, and for
+  why `__has_attribute(weak)` still answers 0.
 * **A clean refusal for the extended floating types**, as above.
 * **A refusal on `setjmp`/`longjmp` calls by name.** The bundled `<setjmp.h>`
   is an `#error`, so before this the refusal came from the header; the

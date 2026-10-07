@@ -55,8 +55,8 @@ pub enum Attribute {
     Safe,
     /// `weak`: the symbol may be missing at link time, and its address is then
     /// null. Refused on a *definition*, where Rust's unstable `#[linkage]`
-    /// would be the only way to say it, and ignored on a declaration; see
-    /// [`crate::sema`].
+    /// would be the only way to say it, and a weak reference on a declaration
+    /// of something the unit does not define; see [`crate::ir::Function::weak`].
     Weak,
     /// `transparent_union`: a parameter of the union type takes an argument
     /// of any member's type and is passed as the first member; glibc's
@@ -218,12 +218,14 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
 
 /// Whether `__has_attribute(name)` answers yes.
 ///
-/// `weak` answers **no** although a declaration carrying it is accepted: what
-/// the question is really asked for is whether a weak *reference* can be
-/// tested for null, and here it cannot — the symbol has to be there at link
-/// time. A program that guards on the answer therefore takes the portable
-/// branch, and one that writes the attribute unguarded on a declaration — as
-/// glibc's `<pthread.h>` does — is not stopped by it.
+/// `weak` answers **no** although a declaration carrying it is honoured — a
+/// weak reference, whose address is null when nothing defines the symbol.
+/// What a program usually asks the question before is whether it may write a
+/// weak *definition* — an overridable default, as Unity's `setUp` is — and
+/// that is refused here. A program that guards on the answer therefore takes
+/// the portable branch, and one that writes the attribute unguarded on a
+/// declaration — glibc's `<pthread.h>`, zstd's tracing hooks — gets the weak
+/// reference it asked for.
 pub fn has_attribute(name: &str) -> bool {
     attribute(name).is_some_and(|a| !matches!(a, Attribute::Unsupported | Attribute::Weak))
 }

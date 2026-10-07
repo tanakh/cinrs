@@ -1,16 +1,18 @@
 //! The GNU extensions `cinrs` knows about and cannot honour. Each is refused
 //! with the reason, because ignoring one would change what the program means.
 //!
-//! `weak` is the one with two answers: on a *declaration* of something defined
-//! elsewhere it costs nothing and is accepted, which is what lets glibc's
-//! `<pthread.h>` be read; on a definition it is refused, since that is where
-//! Rust's unstable `#[linkage]` would be needed.
+//! `weak` is not among them: on a *declaration* of something defined
+//! elsewhere it is a weak reference, which is what glibc's `<pthread.h>` and
+//! zstd's tracing hooks write, and on a definition it is an ordinary
+//! definition with a warning, since Rust's `#[linkage]` is unstable.
+//! `tests/ui/gnu_weak_errors.rs` has what it does refuse.
 
 cinrs::c99! {
-    /* Accepted: nothing here defines it, so there is no linkage to weaken. */
+    /* Accepted: nothing here defines it, so every reference is a weak one. */
     int declared_weak(void) __attribute__((weak));
 
-    __attribute__((weak)) int defined_weak(void) { return 1; } //~ ERROR: weak linkage cannot be asked for
+    /* Accepted with a warning, as an ordinary definition. */
+    __attribute__((weak)) int defined_weak(void) { return 1; }
 
     typedef int v4si __attribute__((vector_size(16))); //~ ERROR: the vector extensions need `core::simd`
 

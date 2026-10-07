@@ -2989,9 +2989,9 @@ impl Pp<'_> {
             // `#pragma message`, `#pragma region` / `#pragma endregion`,
             // `#pragma weak` and everything else are ignored, which 6.10.6 is
             // explicit about. `weak` is the one worth knowing about: it asks
-            // for weak linkage, which stable Rust cannot express at all, so
-            // ignoring it is the same answer `__attribute__((weak))` gets —
-            // see `doc/gnu-extensions.md`.
+            // for weak linkage, and unlike `__attribute__((weak))` on a
+            // declaration it is not honoured yet, so the reference stays a
+            // strong one — see `doc/gnu-extensions.md`.
             _ => {}
         }
     }

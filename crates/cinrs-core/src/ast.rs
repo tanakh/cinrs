@@ -594,7 +594,7 @@ pub struct Attributes {
     /// spelled in this crate's namespace both ways.
     pub safe: Option<SourceRange>,
     /// `weak`, which only sema can answer: it is refused on a definition and
-    /// accepted on a declaration.
+    /// makes every reference to a declared function or object a weak one.
     pub weak: Option<SourceRange>,
     /// `transparent_union`, on a `union` or on a `typedef` of one: a parameter
     /// of the type takes an argument of any member's type, and is passed as

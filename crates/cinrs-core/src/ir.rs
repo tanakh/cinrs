@@ -2009,6 +2009,10 @@ pub struct Object {
     pub asm_label: Option<String>,
     /// The section `__attribute__((section("…")))` asked for.
     pub section: Option<String>,
+    /// Where `__attribute__((weak))` was written on an `extern` declaration
+    /// of the object: every reference to it is a weak one, and `&w` may be
+    /// null. See [`Function::weak`], which is the same thing for a function.
+    pub weak: Option<SourceRange>,
     /// Set for a function pointer with static storage duration whose constant
     /// initialiser is not a function's address or null: libwebp's
     /// `static volatile VP8CPUInfo last = (VP8CPUInfo)&last;`, a sentinel no
@@ -2120,6 +2124,17 @@ pub struct Function {
     pub section: Option<String>,
     /// The symbol `__asm__("name")` renamed the function to.
     pub asm_label: Option<String>,
+    /// Where `__attribute__((weak))` was written, on whichever declaration of
+    /// the function had it first.
+    ///
+    /// On a function the unit only declares, it makes every reference a
+    /// *weak* one: the symbol may be missing at link time, and its address is
+    /// then null. Code generation makes each reference through an alias the
+    /// assembler's `.weakref` turns into a weak one (`.weak_reference` on
+    /// Mach-O), and reads the address through `core::hint::black_box`,
+    /// because LLVM takes the address of anything it was told about as
+    /// non-null and would fold `f != NULL` to true.
+    pub weak: Option<SourceRange>,
     /// Whether `__attribute__((constructor))` asked for it to run before
     /// `main`, or `destructor` for after it.
     pub init_kind: Option<InitKind>,

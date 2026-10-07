@@ -2153,6 +2153,25 @@ fn a_function_pointer_holding_a_data_address_is_stored_as_one() {
     ));
 }
 
+/// `weak` on a declaration: each use goes through a private alias that a
+/// `.weakref` beside it makes a weak reference to the symbol in the object it
+/// is assembled into, a call goes to the alias as to any item, and the address
+/// goes through `black_box` so that a null test survives LLVM, which takes the
+/// address of anything declared to it as non-null. A weak object is reached
+/// through its address the same way. The unit carries the check that refuses
+/// a target with no weak undefined symbols.
+#[test]
+fn a_weak_declaration_is_a_weak_reference() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        __attribute__((weak)) int hook(int x);
+        extern int count __attribute__((weak));
+        int call(void) { return hook != 0 ? hook(1) : -1; }
+        int read(void) { return &count ? count : -1; }
+        "#
+    ));
+}
+
 /// Extended asm: named operands in GCC's order, a tied input folded into its
 /// output as `inout … =>`, explicit registers at the operand's width (and
 /// written into the template where `%0` named one), modifiers, an immediate

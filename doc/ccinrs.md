@@ -206,9 +206,11 @@ which CMake links with `c++` — see below.
 Everything [cinrs's own limitations](limitations.md) lists applies; the ones a
 C project meets first:
 
-* **`setjmp` and `longjmp`** are refused, and so is a **weak definition**
-  (`__attribute__((weak))` on a function with a body). Lua, Tcl-style
-  interpreters and test frameworks such as Unity use them by default.
+* **`setjmp` and `longjmp`** are refused, and a **weak definition**
+  (`__attribute__((weak))` on a function with a body) is an ordinary one, with
+  a warning: a second definition elsewhere is a duplicate symbol rather than
+  an override. Lua, Tcl-style interpreters and test frameworks such as Unity
+  use them by default.
 * **`long double` is `double`.** A literal `printf` or `scanf` format that
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`
   for the platform's C library, which then reads the `double` it is given;

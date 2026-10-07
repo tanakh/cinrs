@@ -249,6 +249,9 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> G
     // [`Codegen::address_taken`]. Collected while the bodies were generated,
     // so this has to come after them.
     items.extend(cg.intrinsic_shim_items());
+    if let Some(span) = cg.weak_span.get() {
+        items.extend(Codegen::weak_guard(span));
+    }
     items.extend(out);
     GeneratedUnit {
         items,
@@ -1153,6 +1156,10 @@ struct Codegen<'a> {
     /// crate that did not say `#pragma cinrs no_std`, `rustc`'s "cannot find
     /// `std`" then points at the C that needed it.
     arena_span: Cell<Option<Span>>,
+    /// Where the first weak reference the unit generates was declared weak,
+    /// which is what [`Codegen::weak_guard`] is spanned with; see
+    /// [`ir::Function::weak`].
+    weak_span: Cell<Option<Span>>,
     /// In a [CFG-mode](crate::cfg) function, the slot of the function's array
     /// of arena marks each variable length array's hidden frame object is;
     /// see [`Codegen::vla_def`].
@@ -1256,6 +1263,7 @@ impl<'a> Codegen<'a> {
             uses_cleanup: Cell::new(false),
             uses_arena: Cell::new(false),
             arena_span: Cell::new(None),
+            weak_span: Cell::new(None),
             vla_slots: HashMap::new(),
             address_taken: RefCell::new(Vec::new()),
             label_states,
@@ -2219,6 +2227,11 @@ impl<'a> Codegen<'a> {
             symbols.push(symbol);
             let link = link_name(symbol, ospan);
             items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
+            if object.weak.is_some() {
+                let alias = self.weak_alias_ident(&rust_name);
+                let link = self.weak_alias_link(symbol, ospan);
+                items.extend(quote_spanned! {ospan=> #link static mut #alias: #ty; });
+            }
         }
         for func in &self.program.functions {
             if !func.is_extern() {
@@ -2259,6 +2272,11 @@ impl<'a> Codegen<'a> {
             symbols.push(symbol);
             let link = link_name(symbol, fspan);
             items.extend(quote_spanned! {fspan=> #link pub fn #rust_name(#params) #ret; });
+            if func.weak.is_some() {
+                let alias = self.weak_alias_ident(&rust_name);
+                let link = self.weak_alias_link(symbol, fspan);
+                items.extend(quote_spanned! {fspan=> #link fn #alias(#params) #ret; });
+            }
         }
         let links = self.link_blocks(&symbols, span);
         quote_spanned! {span=> #links unsafe extern "C" { #items } }
@@ -3278,6 +3296,21 @@ impl<'a> Codegen<'a> {
     /// wrapper and the flexible-array companion when the binding has them.
     fn object_access(&self, id: ir::ObjectId, span: Span) -> TokenStream {
         let name = self.object_ident(id, span);
+        let object = self.program.object(id);
+        if let Some(declared) = object.weak
+            && matches!(object.storage, Storage::Extern { .. })
+        {
+            // A weak object may be missing, and `&w` is then null — which LLVM
+            // would not believe of a `static` it was told about, so the
+            // address goes through `black_box` and the object is reached
+            // through that. See [`Codegen::weak_mark`].
+            let alias = self.weak_alias_ident(&name);
+            let mark = self.weak_mark(&alias, &name, declared, span);
+            return parenthesize(
+                quote_spanned! {span=> *{ #mark ::core::hint::black_box(&raw mut #alias) } },
+                span,
+            );
+        }
         self.through_storage(id, quote_spanned! {span=> #name }, span)
     }
 
@@ -4302,7 +4335,22 @@ impl<'a> Codegen<'a> {
             self.function_path(function, span)
         };
         let signature = self.function_pointer_ty(function, span);
-        let value = quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) };
+        let value = if function.weak.is_some() && function.is_extern() {
+            // A weak symbol's address is null when nothing defines it, and
+            // LLVM takes the address of any function it was told about as
+            // non-null: `f != NULL` would fold to true and the call would go
+            // to address zero. `black_box` hides where the integer came from,
+            // and the `Option` is made from the integer, so `None` is null.
+            quote_spanned! {span=>
+                (unsafe {
+                    ::core::mem::transmute::<usize, ::core::option::Option<#signature>>(
+                        ::core::hint::black_box(#name as *const () as usize)
+                    )
+                })
+            }
+        } else {
+            quote_spanned! {span=> ::core::option::Option::Some(#name as #signature) }
+        };
         let wanted = self.ty(ty, span);
         let have = quote_spanned! {span=> ::core::option::Option<#signature> };
         if have.to_string() == wanted.to_string() {
@@ -6964,7 +7012,124 @@ impl<'a> Codegen<'a> {
     /// it was lifted under.
     fn function_path(&self, function: &Function, span: Span) -> TokenStream {
         let name = self.c_ident(function.item_name(), span);
+        if let Some(declared) = function.weak
+            && function.is_extern()
+            && function.intrinsic.is_none()
+        {
+            // The weak alias, after the statement that makes it one in this
+            // object; a call is `({ … alias })(x)`.
+            let alias = self.weak_alias_ident(&name);
+            let mark = self.weak_mark(&alias, &name, declared, span);
+            return quote_spanned! {span=> ({ #mark #alias }) };
+        }
         quote_spanned! {span=> #name }
+    }
+
+    /// The private item a [weak reference](ir::Function::weak) is made
+    /// through: a second declaration in the unit's `extern` block, under a
+    /// name of the unit's own that the assembler turns into a weak reference
+    /// to the real symbol; see [`Codegen::weak_mark`].
+    ///
+    /// `Span::mixed_site()` keeps it out of reach of anything the C declares,
+    /// as the intrinsic shims are.
+    fn weak_alias_ident(&self, target: &Ident) -> Ident {
+        let target = target.to_string();
+        let target = target.trim_start_matches("r#");
+        Ident::new(&format!("__cinrs_weak_{target}"), Span::mixed_site())
+    }
+
+    /// The `#[link_name]` of a [weak alias](Codegen::weak_alias_ident):
+    /// `__cinrs_weak_<unit>_<symbol>` on ELF, where `.weakref` resolves it,
+    /// and the symbol itself on Mach-O, where `.weak_reference` marks the
+    /// symbol directly. The unit's number keeps two units in one object from
+    /// sharing an alias.
+    fn weak_alias_link(&self, symbol: &str, span: Span) -> TokenStream {
+        let mut elf = Literal::string(&format!(
+            "__cinrs_weak_{:08x}_{symbol}",
+            self.program.unit_id as u32
+        ));
+        elf.set_span(span);
+        let mut apple = Literal::string(symbol);
+        apple.set_span(span);
+        quote_spanned! {span=>
+            #[cfg_attr(not(target_vendor = "apple"), link_name = #elf)]
+            #[cfg_attr(target_vendor = "apple", link_name = #apple)]
+        }
+    }
+
+    /// The statement that makes the references next to it, through `alias`,
+    /// weak references to `target`'s symbol.
+    ///
+    /// On ELF it is `.weakref alias, target`: the assembler resolves every
+    /// reference to the alias to the target, as a weak undefined symbol
+    /// unless the same object defines or strongly references the target —
+    /// which is what makes it safe where `.weak target` is not: under `-flto`,
+    /// or in one crate's codegen unit, the definition and the reference can
+    /// end up in one object, and a plain `.weak` on a defined global is an
+    /// assembler error. On Mach-O it is `.weak_reference`, on the target
+    /// itself (the alias links by the same name there).
+    ///
+    /// The directive goes beside every reference rather than once per unit,
+    /// because a function that uses the symbol may be inlined into another
+    /// codegen unit, and the alias is resolved per object. A use before the
+    /// directive is accepted; a *repeated* `.weakref` is too, except once the
+    /// object has defined the target, where it is "already defined" — so each
+    /// one stands inside `.ifndef alias`, which an alias of a defined target
+    /// fails and one of an undefined target passes. `sym` names each symbol
+    /// exactly as its item links to it. The statement reads and writes
+    /// nothing, so it is no barrier to the code around it.
+    fn weak_mark(
+        &self,
+        alias: &Ident,
+        target: &Ident,
+        declared: SourceRange,
+        span: Span,
+    ) -> TokenStream {
+        if self.weak_span.get().is_none() {
+            self.weak_span.set(Some(self.sp(declared)));
+        }
+        // An `unsafe` block of its own, so that a `[[cinrs::safe]]` function
+        // may take the address too.
+        quote_spanned! {span=>
+            unsafe {
+                #[cfg(not(target_vendor = "apple"))]
+                ::core::arch::asm!(
+                    ".ifndef {0}", ".weakref {0}, {1}", ".endif", sym #alias, sym #target,
+                    options(nomem, nostack, preserves_flags)
+                );
+                #[cfg(target_vendor = "apple")]
+                ::core::arch::asm!(
+                    ".weak_reference {}", sym #alias,
+                    options(nomem, nostack, preserves_flags)
+                );
+            }
+        }
+    }
+
+    /// The check a unit that makes a weak reference carries: a target whose
+    /// objects have no weak undefined symbol, or whose inline assembly is
+    /// not stable, is refused at the declaration rather than given a strong
+    /// reference the program would not link — or would call through null —
+    /// without. Sema says the same where it knows the target; a procedural
+    /// macro is compiled for the host and does not, so this is part of the
+    /// expansion.
+    fn weak_guard(span: Span) -> TokenStream {
+        quote_spanned! {span=>
+            const _: () = {
+                #[cfg(not(all(
+                    any(target_arch = "x86", target_arch = "x86_64", target_arch = "arm",
+                        target_arch = "aarch64", target_arch = "riscv32", target_arch = "riscv64",
+                        target_arch = "loongarch64", target_arch = "s390x"),
+                    any(target_os = "linux", target_os = "android", target_os = "freebsd",
+                        target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly",
+                        target_os = "illumos", target_os = "solaris", target_os = "none",
+                        target_vendor = "apple"),
+                )))]
+                ::core::compile_error!(
+                    "'weak' needs an ELF or Mach-O target with stable inline assembly: a weak reference is made with the assembler's '.weakref', and a strong one instead would not link without the symbol"
+                );
+            };
+        }
     }
 
     /// `unsafe extern "C" fn(…) -> R` for a named function, which is what its

@@ -451,8 +451,9 @@ Silently ignored, which is what 6.10.6 asks for. That includes
 `#pragma message("…")`, `#pragma weak`, `#pragma redefine_extname`,
 `#pragma region` / `#pragma endregion`, `#pragma omp …`, and every other
 vendor's pragma. `#pragma weak` is the one worth knowing about: it asks for weak
-linkage, which stable Rust cannot express at all, so ignoring it is the same
-answer `__attribute__((weak))` gets.
+linkage, and unlike `__attribute__((weak))` on a declaration — which is a weak
+reference, see [`doc/gnu-extensions.md`](gnu-extensions.md#__attribute__-forms)
+— it is not honoured yet, so the reference stays a strong one.
 
 The standard `#pragma STDC` pragmas — `FP_CONTRACT`, `FENV_ACCESS` and
 `CX_LIMITED_RANGE` — are ignored too, in either state. What the generated code

@@ -3183,6 +3183,81 @@ fn a_data_address_in_a_function_pointer_is_held_by_a_whole_object_only() {
 }
 
 #[test]
+fn a_weak_definition_is_an_ordinary_one_with_a_warning() {
+    let weakly = |name: &str| {
+        format!(
+            "warning: '{name}' is defined weakly, which Rust cannot express: it is an ordinary \
+             definition, and another definition of it elsewhere is a duplicate symbol at link \
+             time"
+        )
+    };
+    // zstd's shape — the header declares the hook weak and the program defines
+    // it — a plain weak definition, both halves weak (one warning), the
+    // attribute after the definition, and the same three for objects.
+    let (program, messages) = analysed(
+        "__attribute__((weak)) int declared_first(int x);\n\
+         int declared_first(int x) { return x + 1; }\n\
+         __attribute__((weak)) int plain(void) { return 1; }\n\
+         __attribute__((weak)) int both(void);\n\
+         __attribute__((weak)) int both(void) { return 2; }\n\
+         int after(void) { return 3; }\n\
+         int after(void) __attribute__((weak));\n\
+         extern int counter __attribute__((weak));\n\
+         int counter = 4;\n\
+         int object __attribute__((weak)) = 5;\n\
+         int use(void) { return declared_first(1) + plain() + both() + after() + counter; }",
+        &Options::gnu(Standard::C11),
+    );
+    assert_eq!(
+        messages,
+        [
+            weakly("declared_first"),
+            weakly("plain"),
+            weakly("both"),
+            weakly("after"),
+            weakly("counter"),
+            weakly("object"),
+        ]
+    );
+    // Every one of them is an ordinary definition: nothing is left for the
+    // weak-reference machinery, which only an undefined symbol takes.
+    for f in &program.functions {
+        assert!(f.body.is_some() || f.weak.is_none(), "{}", f.name);
+    }
+    assert!(program.objects.iter().all(|o| o.weak.is_none()));
+}
+
+#[test]
+fn a_weak_reference_needs_an_object_format_that_has_one() {
+    let source = "__attribute__((weak)) int hook(int);\n\
+                  extern int counter __attribute__((weak));\n\
+                  int f(void) { return hook ? hook(counter) : 0; }";
+    // ELF and Mach-O have weak undefined symbols, and the assembler marks one.
+    for triple in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "riscv64gc-unknown-linux-gnu",
+    ] {
+        let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+        let errors = errors_with(source, &Options::gnu(Standard::C11).for_target(target));
+        assert!(errors.is_empty(), "{triple}: {errors:#?}");
+    }
+    // WebAssembly and Windows do not here, and a strong reference instead
+    // would not link without the symbol, so the declaration is refused.
+    for triple in ["wasm32-wasip1", "x86_64-pc-windows-msvc"] {
+        let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+        let errors = errors_with(source, &Options::gnu(Standard::C11).for_target(target));
+        assert_eq!(errors.len(), 2, "{triple}: {errors:#?}");
+        assert!(
+            errors
+                .iter()
+                .all(|e| e.starts_with("'weak' is not supported when translating for")),
+            "{triple}: {errors:#?}"
+        );
+    }
+}
+
+#[test]
 fn an_implicit_library_function_is_still_an_error_in_c99() {
     assert_eq!(
         errors("int f(char *p) { return strcmp(p, \"x\"); }"),

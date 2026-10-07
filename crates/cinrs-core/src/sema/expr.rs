@@ -2447,6 +2447,7 @@ impl Sema<'_> {
             deprecated: None,
             section: None,
             asm_label: None,
+            weak: None,
             init_kind: None,
             target_features: Vec::new(),
             address_taken: false,

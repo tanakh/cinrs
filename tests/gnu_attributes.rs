@@ -544,3 +544,100 @@ mod exported {
         assert_eq!(unsafe { user::use_it(20, 22) }, 42);
     }
 }
+
+/// `weak` on a declaration: every reference is a weak one, so a symbol
+/// nothing defines has a null address, and `if (hook)` — zstd's tracing hooks
+/// — is a real test even at `-O2`, where LLVM would otherwise take any
+/// declared function's address as non-null. One the program does define, in
+/// another unit here, is found and called as usual.
+mod weak {
+    mod hooks {
+        cinrs::gnu99! {
+            #pragma cinrs export
+            int cinrs_weak_test_present(int x) { return x + 41; }
+            int cinrs_weak_test_present_obj = 7;
+        }
+    }
+
+    mod user {
+        cinrs::gnu99! {
+            #include <stddef.h>
+
+            __attribute__((__weak__)) int cinrs_weak_test_absent(int x);
+            int cinrs_weak_test_present(int x) __attribute__((weak));
+            extern int cinrs_weak_test_absent_obj __attribute__((weak));
+            extern int cinrs_weak_test_present_obj __attribute__((weak));
+
+            int absent_hook(void) {
+                if (cinrs_weak_test_absent != NULL)
+                    return cinrs_weak_test_absent(1);
+                return -1;
+            }
+            int present_hook(void) {
+                return cinrs_weak_test_present ? cinrs_weak_test_present(1) : -1;
+            }
+            int (*hook_pointer(void))(int) { return cinrs_weak_test_absent; }
+            int absent_obj(void) {
+                return &cinrs_weak_test_absent_obj == NULL ? -1 : cinrs_weak_test_absent_obj;
+            }
+            int present_obj(void) {
+                int *p = &cinrs_weak_test_present_obj;
+                if (!p) return -1;
+                cinrs_weak_test_present_obj += 1;
+                return *p;
+            }
+        }
+    }
+
+    #[test]
+    fn a_weak_reference_is_null_when_nothing_defines_the_symbol() {
+        unsafe {
+            assert_eq!(user::absent_hook(), -1);
+            assert!(user::hook_pointer().is_none());
+            assert_eq!(user::absent_obj(), -1);
+        }
+    }
+
+    #[test]
+    fn a_weak_reference_reaches_a_definition_in_another_unit() {
+        unsafe {
+            assert_eq!(user::present_hook(), 42);
+            assert_eq!(user::present_obj(), 8);
+        }
+        let _ = hooks::cinrs_weak_test_present;
+    }
+
+    /// `weak` on something the unit *defines* — zstd's CLI defining the hooks
+    /// its library header declared weak, or a plain weak default — is an
+    /// ordinary definition, with a warning: with no other definition the
+    /// program is GCC's. (A second, strong definition elsewhere would be a
+    /// duplicate symbol at link time rather than an override.)
+    mod defined {
+        cinrs::gnu99! {
+            #include <stddef.h>
+
+            __attribute__((__weak__)) int cinrs_weak_test_hook(int x);
+            extern int cinrs_weak_test_count __attribute__((weak));
+
+            int call_hook(void) {
+                return cinrs_weak_test_hook != NULL
+                    ? cinrs_weak_test_hook(1) + cinrs_weak_test_count
+                    : -1;
+            }
+
+            int cinrs_weak_test_hook(int x) { return x + 1; }
+            int cinrs_weak_test_count = 40;
+
+            __attribute__((weak)) int cinrs_weak_test_default(void) { return 7; }
+            int call_default(void) { return cinrs_weak_test_default(); }
+        }
+    }
+
+    #[test]
+    fn a_weak_definition_is_the_definition() {
+        unsafe {
+            assert_eq!(defined::call_hook(), 42);
+            assert_eq!(defined::call_default(), 7);
+        }
+    }
+}

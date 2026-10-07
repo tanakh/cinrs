@@ -1,0 +1,124 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_asm(r#\"\n        __attribute__((weak)) int hook(int x);\n        extern int count __attribute__((weak));\n        int call(void) { return hook != 0 ? hook(1) : -1; }\n        int read(void) { return &count ? count : -1; }\n        \"#)"
+---
+mod __cinrs_unit_fcbe3ebb {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "count"]
+        pub static mut __cinrs_fcbe3ebb_count: ::core::ffi::c_int;
+        #[cfg_attr(
+            not(target_vendor = "apple"),
+            link_name = "__cinrs_weak_fcbe3ebb_count"
+        )]
+        #[cfg_attr(target_vendor = "apple", link_name = "count")]
+        static mut __cinrs_weak___cinrs_fcbe3ebb_count: ::core::ffi::c_int;
+        #[link_name = "hook"]
+        pub fn hook(x: ::core::ffi::c_int) -> ::core::ffi::c_int;
+        #[cfg_attr(
+            not(target_vendor = "apple"),
+            link_name = "__cinrs_weak_fcbe3ebb_hook"
+        )]
+        #[cfg_attr(target_vendor = "apple", link_name = "hook")]
+        fn __cinrs_weak_hook(x: ::core::ffi::c_int) -> ::core::ffi::c_int;
+    }
+    pub unsafe extern "C" fn call() -> ::core::ffi::c_int {
+        unsafe {
+            return if !(unsafe {
+                ::core::mem::transmute::<
+                    usize,
+                    ::core::option::Option<
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >,
+                >(
+                    ::core::hint::black_box(
+                        ({
+                            unsafe {
+                                #[cfg(not(target_vendor = "apple"))]
+                                ::core::arch::asm!(
+                                    ".ifndef {0}", ".weakref {0}, {1}", ".endif", sym
+                                    __cinrs_weak_hook, sym hook, options(nomem, nostack,
+                                    preserves_flags)
+                                );
+                                #[cfg(target_vendor = "apple")]
+                                ::core::arch::asm!(
+                                    ".weak_reference {}", sym __cinrs_weak_hook, options(nomem,
+                                    nostack, preserves_flags)
+                                );
+                            }
+                            __cinrs_weak_hook
+                        }) as *const () as usize,
+                    ),
+                )
+            })
+                .is_none()
+            {
+                ({
+                    unsafe {
+                        #[cfg(not(target_vendor = "apple"))]
+                        ::core::arch::asm!(
+                            ".ifndef {0}", ".weakref {0}, {1}", ".endif", sym
+                            __cinrs_weak_hook, sym hook, options(nomem, nostack,
+                            preserves_flags)
+                        );
+                        #[cfg(target_vendor = "apple")]
+                        ::core::arch::asm!(
+                            ".weak_reference {}", sym __cinrs_weak_hook, options(nomem,
+                            nostack, preserves_flags)
+                        );
+                    }
+                    __cinrs_weak_hook
+                })(1)
+            } else {
+                -1
+            };
+        }
+    }
+    pub unsafe extern "C" fn read() -> ::core::ffi::c_int {
+        unsafe {
+            return if !(&raw mut (*{
+                unsafe {
+                    #[cfg(not(target_vendor = "apple"))]
+                    ::core::arch::asm!(
+                        ".ifndef {0}", ".weakref {0}, {1}", ".endif", sym
+                        __cinrs_weak___cinrs_fcbe3ebb_count, sym __cinrs_fcbe3ebb_count,
+                        options(nomem, nostack, preserves_flags)
+                    );
+                    #[cfg(target_vendor = "apple")]
+                    ::core::arch::asm!(
+                        ".weak_reference {}", sym __cinrs_weak___cinrs_fcbe3ebb_count,
+                        options(nomem, nostack, preserves_flags)
+                    );
+                }
+                ::core::hint::black_box(&raw mut __cinrs_weak___cinrs_fcbe3ebb_count)
+            }))
+                .is_null()
+            {
+                (*{
+                    unsafe {
+                        #[cfg(not(target_vendor = "apple"))]
+                        ::core::arch::asm!(
+                            ".ifndef {0}", ".weakref {0}, {1}", ".endif", sym
+                            __cinrs_weak___cinrs_fcbe3ebb_count, sym
+                            __cinrs_fcbe3ebb_count, options(nomem, nostack,
+                            preserves_flags)
+                        );
+                        #[cfg(target_vendor = "apple")]
+                        ::core::arch::asm!(
+                            ".weak_reference {}", sym
+                            __cinrs_weak___cinrs_fcbe3ebb_count, options(nomem, nostack,
+                            preserves_flags)
+                        );
+                    }
+                    ::core::hint::black_box(&raw mut __cinrs_weak___cinrs_fcbe3ebb_count)
+                })
+            } else {
+                -1
+            };
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_fcbe3ebb::*;

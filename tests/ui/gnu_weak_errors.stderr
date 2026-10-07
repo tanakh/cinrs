@@ -1,0 +1,20 @@
+error: weak declaration of 'hidden' must be public
+ --> tests/ui/gnu_weak_errors.rs:9:43
+  |
+9 |     static int hidden(int) __attribute__((weak));
+  |                                           ^^^^
+
+error: weak declaration of 'local' must be public
+  --> tests/ui/gnu_weak_errors.rs:12:41
+   |
+12 |         static int local __attribute__((weak)) = 1;
+   |                                         ^^^^
+
+error: initializer takes the address of 'hook', which is declared weak, and cinrs can only test such an address where it is used: assign it at run time instead
+  --> tests/ui/gnu_weak_errors.rs:17:29
+   |
+17 |     int (*table[])(int) = { hook };
+   |                             ^^^^
+
+error: aborting due to 3 previous errors
+

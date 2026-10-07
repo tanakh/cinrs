@@ -69,6 +69,18 @@ follows [Semantic Versioning][semver].
   keeps GCC's warning and is an ordinary union. A function type with such a
   parameter is compatible with one that has a member's type there, so libuv
   passes `getsockname` as an `int (*)(int, struct sockaddr *, socklen_t *)`.
+* `__attribute__((weak))` on a declaration is a weak reference, as in GCC:
+  zstd's `if (ZSTD_trace_compress_begin != NULL)` is a real test at every
+  optimisation level, a program that does not define the hook links, and one
+  that does — in another object, under `-flto` or in a shared library — calls
+  it. It used to be ignored, and every program without the hook failed to
+  link. WebAssembly and Windows refuse the declaration instead.
+* A weak *definition* — `__attribute__((weak))` on a function or an object the
+  unit defines, or on any declaration of one, as zstd's CLI defines the hooks
+  its library header declares weak — is an ordinary definition with a
+  warning, where it used to be refused. With no other definition the program
+  is GCC's; a second, strong definition elsewhere is a duplicate symbol at link
+  time rather than an override.
 * `cinrs-core`, for a command-line driver: `translate_file` and
   `translate_source`, which hand back the Rust, the diagnostics, the headers
   read and the symbols defined; `preprocess_file` and `preprocess_source`,
