@@ -56,12 +56,6 @@ execute/20041124-1                    [not-planned]    compile error: a complex 
 execute/20041201-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
 execute/20041218-2                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20050121-1                    [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/20050316-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20050316-2                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20050316-3                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20050604-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20050607-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/20060420-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/20070919-1                    [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/20101011-1                    [not-planned]    runtime: killed by signal 6 — the case installs a SIGFPE handler and divides by zero, requiring the *hardware* to trap. Integer division by zero is undefined in C and a panic in Rust, so the generated program aborts before the handler can run. <signal.h> is bundled now; this is the second gap behind it
 execute/20230630-2                    [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
@@ -91,26 +85,13 @@ execute/nestfunc-5                    [not-planned]    compile error: 'goto l1' 
 execute/nestfunc-6                    [not-planned]    compile error: 'goto nonlocal' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/packed-aligned                [not-planned]    compile error: a record cannot be both packed and given a stricter alignment; Rust has no representation for that combination
 execute/pr104604                      [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/pr105613                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr105777                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr105777.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-execute/pr108292                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr109040                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr109938                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr109938.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
 execute/pr109986                      [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr109986.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-execute/pr110817-1                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr110817-2                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr110817-3                    [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 !execute/pr117432                                      error: "macro 'va_start' requires 2 arguments"  C23's one-argument va_start, in a function with nothing before its '...'; gcc -std=gnu89 refuses it too, with the same message
-execute/pr121957                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr123625                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr123625-2                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr123625-3                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr123753                      [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr126405                      [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr126405-2                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr126405-3                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
+execute/pr121957                      [unimplemented]  compile error: 'asm goto' is not supported yet: Rust's 'asm!' has 'label' blocks, but the jump to a C label has to go through the function's control flow, which this release does not do. Write the branch in C on a flag the 'asm' sets
+execute/pr123625-3                    [unimplemented]  compile error: 'asm goto' is not supported yet: Rust's 'asm!' has 'label' blocks, but the jump to a C label has to go through the function's control flow, which this release does not do. Write the branch in C on a flag the 'asm' sets
 execute/pr17377                       [not-planned]    compile error: '__builtin_return_address' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
-execute/pr23135                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr24135                       [not-planned]    compile error: 'goto xlab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
 execute/pr28865                       [unimplemented]  compile error: initialization of flexible array member in a nested context — GCC takes it inside a `union` whose other member already makes the object big enough, which cinrs does not
 execute/pr30314                       [not-planned]    compile error: "../../gcc.dg/tree-ssa/pr30314.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
@@ -118,36 +99,14 @@ execute/pr38151                       [not-planned]    compile error: a complex 
 execute/pr41935                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
 execute/pr47237                       [not-planned]    compile error: '__builtin_apply' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 execute/pr51447                       [not-planned]    compile error: 'goto nonlocal_lab' leaves this nested function for a label of the enclosing one; GNU C calls that a nonlocal goto and reaches it through the enclosing frame, which cinrs cannot do. Return a value the enclosing function can branch on instead
-execute/pr53645                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr53645-2                     [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr56837                       [not-planned]    compile error: a complex integer type is a GNU extension that cinrs does not support; the complex types are 'float _Complex', 'double _Complex' and 'long double _Complex'
-execute/pr60960                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr65427                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr70903                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr71626-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr71626-2                     [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/pr71626-1.c:3:42: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr80692                       [not-planned]    compile error: expected ';' after expression, found identifier 'd64' — `_Decimal64`, which is not a type here; the `0.DD` suffix on the next token says so in as many words
 execute/pr82210                       [not-planned]    compile error: a member of a struct cannot have a variably modified type
-execute/pr85169                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr85331                       [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr86659-1                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr86659-2                     [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
 execute/pr87623                       [not-planned]    compile error: 'scalar_storage_order' is not supported: it reverses the byte order of every scalar in the record, and nothing in the generated Rust could carry that
-execute/pr92618                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr92904                       [not-planned]    compile error: va_arg with '__int128' is not supported: Rust's `VaArgSafe` covers the 128-bit types only behind the unstable `c_variadic_int128` feature
-execute/pr94412                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr94524-1                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr94524-2                     [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/pr94591                       [not-planned]    compile error: '__vector_size__' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/pr98304-2                     [not-planned]    compile error: "../../gcc.dg/pr98304-1.c" file not found; searched: target/gcc-torture/gnu89/execute, third_party/gcc/gcc/testsuite/gcc.c-torture/execute, ., <cinrs> — the sparse checkout of the corpus is `gcc.c-torture/execute` and nothing else, so a case that includes a sibling out of `gcc.dg` has nothing to include
-execute/scal-to-vec1                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/scal-to-vec2                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/scal-to-vec3                  [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-1                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-2                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-4                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-5                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-execute/simd-6                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
 execute/stdarg-1                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-2                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
 execute/stdarg-3                      [not-planned]    compile error: va_list is only supported as a local variable or parameter
@@ -163,5 +122,3 @@ ieee/float128-builtin-issignaling-1   [not-planned]    compile error: third_part
 ieee/float128x-builtin-issignaling-1  [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf128x' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/float16-builtin-issignaling-1    [not-planned]    compile error: third_party/gcc/gcc/testsuite/gcc.c-torture/execute/ieee/builtin-issignaling-1.c:73:33: '__builtin_nansf16' is not a builtin this crate implements, and a '__builtin_' name is never implicitly declared
 ieee/fp-cmp-7                         [not-planned]    compile error: linking with `cc` failed: exit status: 1 — the case calls a `link_error()` that nothing defines and expects the optimiser to delete the call: `if (x > __builtin_inf()) link_error();` with `x` a parameter LLVM does not fold that far
-ieee/fp-cmp-cond-1                    [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable
-ieee/pr72824-2                        [not-planned]    compile error: 'vector_size' is not supported: the vector extensions need `core::simd`, which is unstable

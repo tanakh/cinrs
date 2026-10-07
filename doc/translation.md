@@ -1086,7 +1086,17 @@ __cinrs_goto = (*ip++ as c_ulong).wrapping_add(1);
 
 The dispatch is shared rather than copied to every `goto *` (GCC calls this
 *factoring* the computed gotos), which keeps an interpreter with a hundred
-handlers one `match` rather than a hundred.
+handlers one `match` rather than a hundred. GCC copies its dispatch back into
+every handler late (*threaded code*), so that each ends in an indirect jump of
+its own. Doing the same here was tried on CPython 3.14's eval loop: with the
+dispatch made one block that ends in its jump table — the out-of-range check
+moved into each `goto *` — and LLVM's tail duplication allowed past its limit
+of sixteen predecessors (`-tail-dup-pred-size`, `-tail-dup-succ-size`), the
+loop had 194 indirect jumps to gcc's 248, and ran fib, nbody and
+spectral-norm in −6 % to +6 % of the time of the shared jump on a Ryzen 9
+9950X — inside the noise, with branch misses at 0.05 % either way, and
+`ceval.c` taking twice as long to compile. The jump the profiler points at
+is a well-predicted one; the time is in the handlers.
 
 Two things make that `match` the one a `switch` would have given. The table is
 **folded**: `dispatch` is only ever read, so its labels are numbered in its

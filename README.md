@@ -269,7 +269,7 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 | Corpus | Correct | Entry point |
 | --- | --- | --- |
 | [c-testsuite] — whole programs with expected output | **215 of 218 (98.6 %)** | `c99!` |
-| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,654 of 1,769 (93.5 %)** | `gnu11!` |
+| [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,697 of 1,769 (95.9 %)** | `gnu11!` |
 | [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **169 of 203 (83.3 %)** | per test |
 | glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
 
