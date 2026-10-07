@@ -664,6 +664,80 @@ fn version_script_patterns(linker_args: &[LinkerArg]) -> Vec<String> {
     patterns
 }
 
+/// A version script with each wildcard of a `global:` list — libjpeg-turbo's
+/// `LIBJPEG_6.2 { global: *; };` — replaced by the C symbols it matches, or
+/// `None` when the script has no such wildcard.
+///
+/// In a library GCC links, `*` is the C symbols; in one `rustc` links it is
+/// Rust's standard library and ccinrs's marks as well, some two thousand
+/// symbols nothing should bind to. Everything else is left as written: the
+/// names, the `local:` lists, the nodes and their order, `extern "C++"`
+/// blocks, the comments.
+fn narrow_wildcards(text: &str, symbols: &[String]) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut changed = false;
+    let mut global = false;
+    let mut extern_depth = 0usize;
+    let mut extern_next = false;
+    let mut drop_semicolon = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &text[i..];
+        let end = if rest.starts_with("/*") {
+            rest.find("*/").map_or(rest.len(), |at| at + 2)
+        } else if rest.starts_with('#') {
+            rest.find('\n').unwrap_or(rest.len())
+        } else if let Some(quoted) = rest.strip_prefix('"') {
+            quoted.find('"').map_or(rest.len(), |at| at + 2)
+        } else if rest.starts_with(|c: char| c.is_whitespace() || "{};:".contains(c)) {
+            rest.chars().next().map_or(1, char::len_utf8)
+        } else {
+            rest.find(|c: char| c.is_whitespace() || "{};:\"#".contains(c) || c == '/')
+                .filter(|&at| at > 0)
+                .unwrap_or(rest.len())
+        };
+        let token = &rest[..end];
+        i += end;
+        match token {
+            ";" if drop_semicolon => {
+                drop_semicolon = false;
+                continue;
+            }
+            "{" if extern_next => {
+                extern_next = false;
+                extern_depth += 1;
+            }
+            "}" if extern_depth > 0 => extern_depth -= 1,
+            "}" => global = false,
+            "global" => global = true,
+            "local" => global = false,
+            "extern" => extern_next = true,
+            _ if global
+                && extern_depth == 0
+                && token.contains(['*', '?', '['])
+                && !token.starts_with("/*") =>
+            {
+                let names: Vec<&str> = symbols
+                    .iter()
+                    .filter(|symbol| glob_matches(token, symbol))
+                    .map(String::as_str)
+                    .collect();
+                changed = true;
+                if names.is_empty() {
+                    drop_semicolon = true;
+                } else {
+                    out.push_str(&names.join(";\n    "));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        out.push_str(token);
+    }
+    changed.then_some(out)
+}
+
 /// Whether `name` matches a version script's pattern, whose `*` and `?` are
 /// a shell's.
 fn glob_matches(pattern: &str, name: &str) -> bool {
@@ -1034,6 +1108,47 @@ impl Run<'_> {
         Ok(())
     }
 
+    /// The command line's linker words, each version script with a wildcard
+    /// in a `global:` list replaced by a narrowed copy in the work directory.
+    fn narrowed_scripts(
+        &self,
+        args: &[LinkerArg],
+        symbols: &[String],
+    ) -> Result<Vec<LinkerArg>, String> {
+        let mut out = Vec::with_capacity(args.len());
+        let mut script_next = false;
+        for arg in args {
+            let LinkerArg::Linker(word) = arg else {
+                out.push(arg.clone());
+                continue;
+            };
+            let option = word.trim_start_matches('-');
+            // The script's file, and what comes before it in the word.
+            let file = if std::mem::take(&mut script_next) {
+                Some(("", word.as_str()))
+            } else if let Some(file) = option.strip_prefix("version-script=") {
+                Some((&word[..word.len() - file.len()], file))
+            } else {
+                script_next = option == "version-script";
+                None
+            };
+            let narrowed = file.and_then(|(lead, file)| {
+                let text = std::fs::read_to_string(file).ok()?;
+                Some((lead, narrow_wildcards(&text, symbols)?))
+            });
+            match narrowed {
+                Some((lead, text)) => {
+                    let path = self.work.path(&format!("script-{}.map", out.len()));
+                    std::fs::write(&path, text)
+                        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+                    out.push(LinkerArg::Linker(format!("{lead}{}", path.display())));
+                }
+                None => out.push(arg.clone()),
+            }
+        }
+        Ok(out)
+    }
+
     /// One linker argument of the command line, as `rustc` is to pass it on.
     /// Through a C compiler, in its spelling — `-Wl,word`, or `-Xlinker word`
     /// for a word with a comma in it; to `rust-lld` itself (musl), the word
@@ -1186,6 +1301,13 @@ impl Run<'_> {
         if inv.shared && !bare {
             self.check_shared()?;
         }
+        // A build's own version script, with its wildcards narrowed to the C
+        // symbols where it has any; see `narrow_wildcards`.
+        let linker_args = if inv.shared && !bare {
+            self.narrowed_scripts(&inv.linker_args, &linked.symbols)?
+        } else {
+            inv.linker_args.clone()
+        };
         let stub = self.work.path("ccinrs_main.rs");
         let mut text = if library {
             "// A shared library of the C objects linked into it.\n"
@@ -1267,7 +1389,7 @@ impl Run<'_> {
             // and hides `_*` — and naming one here too would take that away.
             // What it does not mention, GCC's linker exports, and so does
             // this; `rustc`'s own script would hide it.
-            let patterns = version_script_patterns(&inv.linker_args);
+            let patterns = version_script_patterns(&linker_args);
             let exported: Vec<&String> = linked
                 .symbols
                 .iter()
@@ -1352,13 +1474,38 @@ impl Run<'_> {
                 None => cmd.arg("-l").arg(lib),
             };
         }
-        for arg in &inv.linker_args {
+        for arg in &linker_args {
             for arg in self.linker_arg(arg) {
                 cmd.arg("-C").arg(format!("link-arg={arg}"));
             }
         }
         if self.target.self_contained {
             cmd.args(["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld"]);
+        } else if let Some(ld) = inv.fuse_ld.as_ref().filter(|ld| *ld != "lld")
+            && inv.shared
+        {
+            // `rustc` gives a shared library a version script of its own, and
+            // the C symbols are a second; LLD takes the union of the two, and
+            // GNU ld, gold and mold refuse two anonymous version tags.
+            if inv.warnings {
+                eprintln!(
+                    "ccinrs: warning: ignoring '-fuse-ld={ld}': a shared library is linked by \
+                     LLD, which alone takes rustc's version script and ccinrs's together"
+                );
+            }
+        } else if !bare && let Some(ld) = &inv.fuse_ld {
+            // `rustc` links x86-64 Linux with its own `rust-lld` through the C
+            // compiler, and `-C linker-features=-lld` puts the platform's
+            // back, which is what a build asks for with `-fuse-ld=bfd` — and
+            // needs for an option only GNU ld has. Another linker is the C
+            // compiler's `-fuse-ld` after that.
+            let lld_default = self.target.triple == "x86_64-unknown-linux-gnu";
+            if lld_default && ld != "lld" {
+                cmd.args(["-C", "linker-features=-lld"]);
+            }
+            if ld != "bfd" && !(lld_default && ld == "lld") {
+                cmd.arg("-C").arg(format!("link-arg=-fuse-ld={ld}"));
+            }
         }
         if inv.strip {
             cmd.args(["-C", "strip=symbols"]);
@@ -1636,6 +1783,34 @@ impl Drop for WorkDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// libjpeg-turbo's `global: *`, a prefix pattern, one that matches
+    /// nothing, and everything a narrowing leaves alone: a `local:` list, an
+    /// `extern "C++"` block, comments.
+    #[test]
+    fn a_version_scripts_wildcards_are_the_c_symbols() {
+        let symbols = [
+            "jpeg_read".to_owned(),
+            "jpeg_write".to_owned(),
+            "tj_init".to_owned(),
+        ];
+        let script = "LIBJPEG_6.2 { global: *; };\n";
+        assert_eq!(
+            narrow_wildcards(script, &symbols).unwrap(),
+            "LIBJPEG_6.2 { global: jpeg_read;\n    jpeg_write;\n    tj_init; };\n"
+        );
+        let script = "/* api */ V_1 {\n  global:\n    jpeg_*; # the library\n    zz*;\n    \
+                      extern \"C++\" { ns::*; };\n  local:\n    *;\n};\n";
+        assert_eq!(
+            narrow_wildcards(script, &symbols).unwrap(),
+            "/* api */ V_1 {\n  global:\n    jpeg_read;\n    jpeg_write; # the library\n    \n    \
+             extern \"C++\" { ns::*; };\n  local:\n    *;\n};\n"
+        );
+        assert_eq!(
+            narrow_wildcards("V { global: tj_init; local: *; };", &symbols),
+            None
+        );
+    }
 
     /// zlib's way of saying it: a soname and a script in one `-Wl,`, the
     /// script's own nodes and locals, a wildcard, a comment.

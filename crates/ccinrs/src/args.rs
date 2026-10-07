@@ -182,6 +182,8 @@ pub struct Invocation {
     pub libs: Vec<String>,
     /// `-Wl,…`, `-Xlinker` and `-rdynamic`, in order.
     pub linker_args: Vec<LinkerArg>,
+    /// `-fuse-ld=`: which linker the C compiler `rustc` links with is to run.
+    pub fuse_ld: Option<String>,
     /// Which of `inputs` were named between `-Wl,--whole-archive` and
     /// `-Wl,--no-whole-archive`, as libtool links a convenience library into
     /// a shared one. `rustc` lays out the link line itself, so the two are
@@ -238,6 +240,7 @@ impl Default for Invocation {
             lib_dirs: Vec::new(),
             libs: Vec::new(),
             linker_args: Vec::new(),
+            fuse_ld: None,
             whole_archives: Vec::new(),
             lto: None,
             strip: false,
@@ -716,6 +719,7 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
         // `-flto=auto`, `-flto=8`: how many jobs, which is `rustc`'s to say.
         _ if name.starts_with("lto=") => inv.lto = Some(Lto::Fat),
         "no-lto" => inv.lto = None,
+        _ if name.starts_with("use-ld=") => inv.fuse_ld = Some(name["use-ld=".len()..].to_owned()),
         "cinrs-checks" => inv.checks = true,
         "no-cinrs-checks" => inv.checks = false,
         "dollars-in-identifiers" => inv.dollars = true,
@@ -1020,6 +1024,13 @@ mod tests {
             "unrecognized command-line option '-ffrobnicate'"
         );
         assert!(parse_all(&["-Werror", "a.c"]).unwrap().werror);
+        assert_eq!(
+            parse_all(&["-fuse-ld=bfd", "a.c"])
+                .unwrap()
+                .fuse_ld
+                .as_deref(),
+            Some("bfd")
+        );
         assert!(
             parse_all(&["-fshort-enums", "a.c"])
                 .unwrap_err()

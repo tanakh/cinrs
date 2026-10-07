@@ -80,6 +80,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-mavx2`, `-mno-avx512f`, … | `rustc`'s `-C target-feature`, in GCC's names, and the macros with them (x86) |
 | `--target=`, `--sysroot=` | another machine; see [Targets](#targets) |
 | `-l`, `-l:file`, `-L`, `-Wl,…`, `-Xlinker`, `-pthread`, `-s`, `-pie`, `-no-pie` | as GCC's; `-pthread` also defines `_REENTRANT`; the program is position-independent either way |
+| `-fuse-ld=bfd`, `gold`, `mold`, `lld` | the linker the C compiler runs for `rustc` — whose own default on x86-64 Linux is LLD — for a program; a shared library is always linked by LLD, the one linker that takes `rustc`'s version script beside the one for the C symbols |
 | `-Werror`, `-Wno-error`, `-w` | every warning an error, as GCC has it — `#warning` included; no warnings |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |

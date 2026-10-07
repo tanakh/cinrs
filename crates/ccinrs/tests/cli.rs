@@ -818,6 +818,29 @@ fn a_shared_library() {
         assert_eq!(out.status.code(), Some(0), "{name}");
     }
 
+    // `-fuse-ld=bfd` links a program with GNU ld, which takes an option LLD
+    // does not; a shared library stays with LLD, saying so.
+    #[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+    {
+        s.compile(&[
+            "-fuse-ld=bfd",
+            "main.c",
+            "-L.",
+            "-lcounter",
+            "-Wl,--default-symver",
+            "-o",
+            "with-bfd",
+        ]);
+        assert_eq!(run("with-bfd"), "43 42 1\n");
+        let out = s.ccinrs(&["-shared", "-fuse-ld=bfd", "counter.o", "-o", "libbfd.so"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(
+            stderr(&out).starts_with("ccinrs: warning: ignoring '-fuse-ld=bfd'"),
+            "{}",
+            stderr(&out)
+        );
+    }
+
     // A version script decides what is exported, given the way libtool gives
     // it — one `-Wl,` per word — or through `-Xlinker`: `use_one` is not.
     s.write(

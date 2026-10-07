@@ -48,7 +48,10 @@ follows [Semantic Versioning][semver].
     and an error under `-Werror`, which is what a `configure` probe looks
     for, and which makes every warning an error, `#warning` included. A
     version script is found however it is given, libtool's
-    `-Wl,--version-script -Wl,file` included. `-E` takes a header, and
+    `-Wl,--version-script -Wl,file` included, and a wildcard in its `global:`
+    list stands for the C symbols, not for Rust's standard library linked in
+    beside them. `-E` takes a header. `-fuse-ld=` chooses a
+    program's linker (GNU ld for `bfd`, where `rustc`'s own is LLD), and
     `-pie`, `-no-pie` and the hardening options distributions pass are taken.
     `/dev/null` is a C file like any other, and a file for the linker that
     does not exist is an error even when nothing is linked, as in GCC 15.
