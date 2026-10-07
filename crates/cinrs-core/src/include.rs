@@ -1147,7 +1147,11 @@ pub fn read_source(path: &Path) -> Result<Resolved, Error> {
 /// which means it does not.
 fn read_file(path: &Path) -> Result<Option<Resolved>, Error> {
     match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => {}
+        // A file, or anything else that reads as one, as GCC reads it:
+        // `/dev/null` is how a `configure` script asks whether an option is
+        // taken (`$CC -Werror -S -o /dev/null -xc /dev/null`), and a FIFO
+        // works too.
+        Ok(meta) if !meta.is_dir() => {}
         // A directory of that name, or nothing at all: keep looking.
         _ => return Ok(None),
     }
