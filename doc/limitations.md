@@ -105,16 +105,16 @@
   [What works](features.md#simd-intrinsics).
 * [Inline assembly](features.md#inline-assembly) is x86's and x86-64's, and
   only what Rust's `asm!` can say; the rest is refused by name, with the
-  rewrite. **No memory operands** (`"m"`, `"+m"`, `"o"`, …): pass the address
-  in a register, `"r"(&x)`, and write `(%0)` in the template. **No `rbx`
-  clobber**, since rustc keeps rbx for LLVM: give the value a `"=b"` operand,
-  which cinrs carries in and out of rbx with an `xchg` around the template. **No flag outputs** (`"=@ccz"`): `setz %b0` with `"=q"`. **No `%=`**:
-  a GNU as local label, `1:` … `1b`. **No `asm goto`** in this release: branch
-  in C on a value the `asm` sets. **No x87 or MMX operands**, no `"A"` pair
-  (use `"=a"` and `"=d"`), no range-checked immediates (`"I"`: write `"i"`),
-  **no Intel syntax** (`.intel_syntax`, `{att|intel}`), and no register
-  variables (`register int x asm("eax")`: write `"a"(x)`). `asm!` is unsafe, so
-  a `[[cinrs::safe]]` function cannot contain one. A register-or-memory
+  rewrite. A memory operand (`"m"`, `"+m"`) is its address in a register, so
+  **no bit-field** can be one and **no modifier** applies to one; `%a0` is
+  refused: pass the address in a register and write `(%0)` in the template.
+  **No flag outputs** (`"=@ccz"`): `setz %b0` with `"=q"`. **No `%=`**: a GNU
+  as local label, `1:` … `1b`. **No `asm goto`** in this release: branch in C
+  on a value the `asm` sets. **No x87 or MMX operands**, no `"A"` pair (use
+  `"=a"` and `"=d"`), no range-checked immediates (`"I"`: write `"i"`), **no
+  Intel syntax** (`.intel_syntax`, `{att|intel}`), and no register variables
+  (`register int x asm("eax")`: write `"a"(x)`). `asm!` is unsafe, so a
+  `[[cinrs::safe]]` function cannot contain one. A register-or-memory
   constraint (`"rm"`, `"g"`) always gets the register, which may change the
   instruction GCC would have chosen but not the meaning.
 * `va_list` is `core::ffi::VaList`, which cannot be stored in a `struct` or

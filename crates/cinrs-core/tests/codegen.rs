@@ -2040,6 +2040,51 @@ fn a_b_operand_is_swapped_with_rbx() {
     ));
 }
 
+/// An rbx clobber is a hidden `rbx_save = out(reg) _` that rbx is copied into
+/// before the template and back from after it — `movq` and `:r` on x86-64,
+/// `movl` and `:e` on 32-bit x86 — and every spelling of rbx, however often,
+/// saves it once. zstd's `cpu.h` is the first statement.
+#[test]
+fn an_rbx_clobber_is_kept_in_a_scratch_register() {
+    let source = r#"
+        unsigned max_leaf(void) {
+            unsigned n;
+            __asm__("cpuid" : "=a"(n) : "a"(0) : "ebx", "ecx", "edx");
+            return n;
+        }
+        unsigned spellings(unsigned x) {
+            __asm__("xorl %%ebx, %%ebx; addl %1, %0" : "+r"(x) : "i"(3) : "bl", "rbx", "ebx");
+            return x;
+        }
+        "#;
+    let i686 = cinrs_core::target::TargetModel::from_triple("i686-unknown-linux-gnu")
+        .expect("a known triple");
+    insta::assert_snapshot!(format!(
+        "// x86_64-unknown-linux-gnu\n{}\n// i686-unknown-linux-gnu\n{}",
+        generate_asm(source),
+        generate_with(Options::gnu(Standard::C99).for_target(i686), source)
+    ));
+}
+
+/// `%c` and `%P` on an immediate are the bare `{oN}`, without the `$` a plain
+/// `%N` has: xz's range decoder writes a displacement that way.
+#[test]
+fn c_prints_an_immediate_without_its_dollar() {
+    insta::assert_snapshot!(generate_asm(
+        r#"
+        struct rec { int pad[3]; int field; };
+        int field(const struct rec *p, int x) {
+            int out;
+            __asm__("movl %c[off](%q[p]), %[out]"
+                    : [out] "=r"(out)
+                    : [p] "r"(p), [off] "i"(__builtin_offsetof(struct rec, field)));
+            __asm__("leal %c1(%0,%0,2), %0; addl $(%P2 + 1), %0" : "+r"(x) : "n"(-5), "n"(41));
+            return out + x;
+        }
+        "#
+    ));
+}
+
 /// Extended asm: named operands in GCC's order, a tied input folded into its
 /// output as `inout … =>`, explicit registers at the operand's width (and
 /// written into the template where `%0` named one), modifiers, an immediate

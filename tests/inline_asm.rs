@@ -7,9 +7,10 @@
 //! says the generated `asm!` does what GCC's `asm` does, not what someone
 //! expected it to. None of that needs gcc at test time.
 //!
-//! What must *not* compile — memory operands, the x87 and MMX constraints,
-//! an rbx clobber, `%=`, `asm goto`, asm in a safe function or on another architecture —
-//! is in `tests/ui/inline_asm_refused.rs`.
+//! What must *not* compile — a bit-field as a memory operand, the x87 and MMX
+//! constraints, an rbx clobber beside a `"b"` operand, `%=`, `asm goto`, asm
+//! in a safe function or on another architecture — is in
+//! `tests/ui/inline_asm_refused.rs`.
 #![cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 
 use cinrs::gnu99;
@@ -59,6 +60,34 @@ gnu99! {
     }
     int fences(void) { asm("mfence"); asm volatile("pause"); __asm__("nop"); return 7; }
     int shl_imm(int x) { asm("shll %1, %0" : "+r"(x) : "i"(3)); return x; }
+    /* `%c` and `%P` print an immediate without its '$': a displacement, as in
+       xz's range decoder, and a constant inside an expression. */
+    struct rec { int pad[3]; int field; long long wide; };
+    int c_displacement(const struct rec *p) {
+        int out;
+        __asm__("movl %c[off](%[p]), %[out]"
+                : [out] "=r"(out)
+                : [p] "r"(p), [off] "i"(__builtin_offsetof(struct rec, field)));
+        return out;
+    }
+    int c_negative(int x) { int r; __asm__("leal %c2(%1,%1,2), %0" : "=r"(r) : "r"(x), "n"(-5)); return r; }
+    int p_immediate(void) { int r; __asm__("movl $(%P1 + 1), %0" : "=r"(r) : "n"(41)); return r; }
+    /* An immediate is printed in its operand's mode, sign-extended, as GCC
+       and Clang print one: xz's `"n"(UINT32_C(31) - UINT32_C(2048))` is the
+       displacement -2017, not 4294965279, which no addressing mode takes. */
+    unsigned unsigned_displacement(unsigned base) {
+        unsigned r;
+        __asm__("leal %c[off](%q[b]), %[r]" : [r] "=r"(r) : [b] "r"(base), [off] "n"(31u - 2048u));
+        return r;
+    }
+    long long imm_uchar(void) { long long r; __asm__("movq %1, %0" : "=r"(r) : "n"((unsigned char)255)); return r; }
+    long long imm_ushort(void) { long long r; __asm__("movq %1, %0" : "=r"(r) : "n"((unsigned short)65535)); return r; }
+    long long imm_u32max(void) { long long r; __asm__("movq %1, %0" : "=r"(r) : "n"(0xFFFFFFFFu)); return r; }
+    long long imm_u32min(void) { long long r; __asm__("movq %1, %0" : "=r"(r) : "n"(0x80000000u)); return r; }
+    long long imm_u64max(void) { long long r; __asm__("movq %1, %0" : "=r"(r) : "n"(0xFFFFFFFFFFFFFFFFull)); return r; }
+    long long imm_u64big(void) { long long r; __asm__("movabsq %1, %0" : "=r"(r) : "n"(0x8000000000000001ull)); return r; }
+    int p_u32max(void) { int r; __asm__("movl $(%P1 + 2), %0" : "=r"(r) : "n"(0xFFFFFFFFu)); return r; }
+    int c_uchar(const char *p) { int r; __asm__("movsbl %c1(%2), %0" : "=r"(r) : "n"((unsigned char)255), "r"(p + 1)); return r; }
     int times_four(int x) {
         asm("movl %1, %%eax\n\tshll $2, %%eax\n\tmovl %%eax, %0" : "=r"(x) : "r"(x) : "eax");
         return x;
@@ -70,8 +99,8 @@ gnu99! {
         asm("movl $-5, %0" : "=r"(p->y));
         return p->x * 100 + p->y;
     }
-    /* The rewrite the memory-operand refusal recommends: the address in a
-     * register, and the memory reference written in the template. */
+    /* The address in a register, and the memory reference written in the
+     * template: the long way round to what a "m" operand says. */
     int pointer_in(int *q) {
         int r;
         asm("movl (%1), %0\n\taddl $1, (%1)" : "=&r"(r) : "r"(q) : "memory");
@@ -151,6 +180,35 @@ fn read_write_operands_and_immediates() {
 }
 
 #[test]
+fn c_and_p_print_an_immediate_without_its_dollar() {
+    unsafe {
+        let r = rec {
+            pad: [1, 2, 3],
+            field: 42,
+            wide: 7,
+        };
+        assert_eq!(c_displacement(&r), 42);
+        assert_eq!((c_negative(10), c_negative(-1)), (25, -8));
+        assert_eq!(p_immediate(), 42);
+    }
+}
+
+#[test]
+fn an_immediate_is_sign_extended_from_its_type() {
+    unsafe {
+        // What `gcc -O2` and `clang -O2` print for the same functions.
+        assert_eq!(unsigned_displacement(5000), 2983);
+        assert_eq!((imm_uchar(), imm_ushort(), imm_u32max()), (-1, -1, -1));
+        assert_eq!(imm_u32min(), -2_147_483_648);
+        assert_eq!(imm_u64max(), -1);
+        assert_eq!(imm_u64big(), -9_223_372_036_854_775_807);
+        assert_eq!(p_u32max(), 1);
+        let bytes = *b"ab";
+        assert_eq!(c_uchar(bytes.as_ptr().cast()), 97);
+    }
+}
+
+#[test]
 fn sub_register_modifiers() {
     unsafe {
         // `%b1` on a `"q"` operand: the low byte of a 32-bit register.
@@ -209,6 +267,54 @@ fn explicit_register_pairs_and_sse() {
 }
 
 // ---------------------------------------------------------------------------
+// Memory operands: the lvalue's address goes in a register, the template's
+// `%N` is `(%reg)`, and one the template never names is still memory the
+// statement reads and writes.
+// ---------------------------------------------------------------------------
+
+gnu99! {
+    #include <string.h>
+
+    struct mpt { int x; int y; };
+    void m_store(int *p, int v) { __asm__("movl %1, %0" : "=m"(*p) : "r"(v)); }
+    int m_load(const int *p) { int r; __asm__("movl %1, %0" : "=r"(r) : "m"(*p)); return r; }
+    int m_member_and_element(struct mpt *s) {
+        int a[3] = { 1, 2, 3 };
+        __asm__("incl %0" : "+m"(s->y));
+        __asm__("addl $5, %0" : "+m"(a[1]));
+        return s->y * 100 + a[1];
+    }
+    int m_local(void) { int v = 41; __asm__("incl %0" : "+m"(v)); return v; }
+    /* mbedtls's mbedtls_platform_zeroize: an empty template whose operand
+       says the buffer is read, so the memset before it stays. The type is a
+       pointer to a variable length array. */
+    void m_zeroize(void *buf, unsigned long len) {
+        memset(buf, 0, len);
+        __asm__ volatile("" : : "m"(*(char (*)[len])buf));
+    }
+    /* Memory in one alternative and a register in another: the register. */
+    int m_or_r(int x) { __asm__("addl $1, %0" : "+m,r"(x)); return x; }
+}
+
+#[test]
+fn memory_operands_are_reached_through_their_address() {
+    unsafe {
+        let mut i = 0;
+        m_store(&mut i, 77);
+        assert_eq!(i, 77);
+        assert_eq!(m_load(&i), 77);
+        let mut s = mpt { x: 1, y: 2 };
+        assert_eq!(m_member_and_element(&mut s), 307);
+        assert_eq!(s.y, 3);
+        assert_eq!(m_local(), 42);
+        let mut secret = *b"hunter2\0";
+        m_zeroize(secret.as_mut_ptr().cast(), secret.len() as _);
+        assert_eq!(secret, [0; 8]);
+        assert_eq!(m_or_r(9), 10);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // x86-64 only: 64-bit operands. `long long` rather than `long`, because a
 // `q`-suffixed instruction needs a 64-bit operand and Windows's `long` is 32.
 // ---------------------------------------------------------------------------
@@ -225,6 +331,12 @@ mod x86_64_only {
             *hi = h;
             return lo;
         }
+        /* mbedtls's bn_mul.h (MULADDC_X1_STOP): "+m" names the memory the
+           loop writes through %rdi, and the template never mentions it. */
+        void m_add_one(unsigned long long *d, unsigned long long n) {
+            __asm__("1:\n\taddq $1, (%%rdi)\n\taddq $8, %%rdi\n\tdecq %%rcx\n\tjnz 1b"
+                    : "+D"(d), "+c"(n), "+m"(*(unsigned long long (*)[4])d));
+        }
     }
 
     #[test]
@@ -238,6 +350,9 @@ mod x86_64_only {
             let mut hi = 0;
             assert_eq!(mul_wide64(0x8000_0000_0000_0001, 6, &mut hi), 6);
             assert_eq!(hi, 3);
+            let mut v = [1u64, 2, 3, 4];
+            m_add_one(v.as_mut_ptr(), 4);
+            assert_eq!(v, [2, 3, 4, 5]);
         }
     }
 }
@@ -428,5 +543,113 @@ fn the_b_constraint_goes_through_rbx() {
         assert_eq!(b_high(0xabcd), 0xab);
         assert_eq!(b_tied(5), 5u32.wrapping_neg());
         assert_eq!(b_with_others(1, 20, 300), 321);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// An rbx clobber: rbx is copied into a scratch register before the template
+// and back after it, since rustc refuses rbx as a clobber.
+// ---------------------------------------------------------------------------
+
+gnu99! {
+    /* zstd's lib/common/cpu.h, verbatim but for the names. */
+    unsigned clobber_max_leaf(void) {
+        unsigned n;
+        __asm__("cpuid" : "=a"(n) : "a"(0) : "ebx", "ecx", "edx");
+        return n;
+    }
+    void clobber_leaf1(unsigned out[3]) {
+        unsigned f1a, f1c, f1d;
+        __asm__("cpuid" : "=a"(f1a), "=c"(f1c), "=d"(f1d) : "a"(1) : "ebx");
+        out[0] = f1a;
+        out[1] = f1c;
+        out[2] = f1d;
+    }
+    /* Leaf 0's ebx, copied out by the template itself under the clobber. */
+    unsigned clobber_vendor_ebx(void) {
+        unsigned a = 0, b;
+        __asm__("cpuid\n\tmovl %%ebx, %1" : "+a"(a), "=r"(b) : : "ebx", "ecx", "edx");
+        return b;
+    }
+    /* Every spelling, some twice: rbx is saved once. */
+    unsigned clobber_spellings(unsigned x) {
+        __asm__("xorl %%ebx, %%ebx\n\taddl $3, %0" : "+r"(x) : : "bl", "bx", "ebx", "rbx", "bh");
+        return x;
+    }
+    /* mbedtls's aesni.c clobbers "0" and "1", GCC's numbers for ax and dx;
+       "3" is bx, which goes through the rbx save. */
+    unsigned clobber_numbers(unsigned x) {
+        __asm__("movl $1, %%eax\n\tmovl $2, %%edx\n\txorl %%ebx, %%ebx\n\t"
+                "addl %%eax, %0\n\taddl %%edx, %0"
+                : "+r"(x) : : "cc", "0", "1", "3");
+        return x;
+    }
+}
+
+#[test]
+fn an_rbx_clobber_keeps_rbx() {
+    unsafe {
+        let leaf0 = rust_cpuid(0);
+        assert!(clobber_max_leaf() >= 1);
+        assert_eq!(clobber_max_leaf(), leaf0.eax);
+        // The vendor word a "=b" operand reads is the one the template copies
+        // out of ebx itself.
+        let mut out = [0u32; 4];
+        cpuid_b(out.as_mut_ptr(), 0);
+        assert_eq!(clobber_vendor_ebx(), out[1]);
+        assert_eq!(clobber_vendor_ebx(), leaf0.ebx);
+        let leaf1 = rust_cpuid(1);
+        let mut words = [0u32; 3];
+        clobber_leaf1(words.as_mut_ptr());
+        assert_eq!(words, [leaf1.eax, leaf1.ecx, leaf1.edx]);
+        assert_eq!(clobber_spellings(39), 42);
+        assert_eq!(clobber_numbers(39), 42);
+        assert_eq!(clobber_numbers(0xffff_fffe), 1);
+    }
+}
+
+// What rbx held before the statement is what it holds after it. A debug build
+// keeps every C local on the stack, so the function reads rbx itself on either
+// side of the statement that destroys it; an optimised one also has fourteen
+// values live across it, some of which the register allocator keeps in rbx.
+#[cfg(target_arch = "x86_64")]
+mod rbx_clobber_x86_64 {
+    cinrs::gnu99! {
+        long long rbx_survives(long long seed) {
+            long long a = seed + 1, b = seed * 3, c = seed ^ 0x55, d = seed - 7, e = seed * seed,
+                      f = seed << 3, g = seed | 0x100, h = ~seed, i = seed * 11, j = seed + 1000,
+                      k = seed * 5 - 2, l = seed ^ 0x3c3c, m = seed + seed / 3, n = seed * 7 + 1;
+            unsigned long long before, after;
+            __asm__ volatile("movq %%rbx, %0" : "=r"(before));
+            __asm__ volatile("movq $-1, %%rbx" ::: "rbx");
+            __asm__ volatile("movq %%rbx, %0" : "=r"(after));
+            if (before != after) return -1;
+            return a + b + c + d + e + f + g + h + i + j + k + l + m + n;
+        }
+    }
+
+    #[test]
+    fn rbx_held_values_survive_the_clobber() {
+        for seed in [0i64, 1, 12345, -98765, 1 << 20] {
+            let expected = [
+                seed + 1,
+                seed * 3,
+                seed ^ 0x55,
+                seed - 7,
+                seed * seed,
+                seed << 3,
+                seed | 0x100,
+                !seed,
+                seed * 11,
+                seed + 1000,
+                seed * 5 - 2,
+                seed ^ 0x3c3c,
+                seed + seed / 3,
+                seed * 7 + 1,
+            ]
+            .iter()
+            .sum::<i64>();
+            assert_eq!(unsafe { rbx_survives(seed) }, expected, "seed {seed}");
+        }
     }
 }

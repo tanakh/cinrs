@@ -814,13 +814,17 @@ because `asm!` calls an unused named operand an error and GCC does not.
 | `"a"`, `"c"`, `"d"`, `"S"`, `"D"` | that register at the operand's width: `in("al")`, `in("eax")`, `in("rax")`, … |
 | `"x"`, `"v"` | by the operand's width: `xmm_reg` (scalars and 128-bit vectors), `ymm_reg` (`__m256*`), `zmm_reg` (`__m512*`) |
 | `"i"`, `"n"` | `const`, folded to a constant, and written `${oN}` in the template |
+| `"m"`, `"=m"`, `"+m"`, `"o"` | the lvalue's address as `in(reg)`, whatever the direction, and `({oN})` in the template (below) |
 | `"0"` … `"9"` (tied to an output) | `inout(…) input => output` |
 | `%0`, `%[name]` | `{o0}` at the operand's width — `{o0:e}` for 32 bits, `{o0:x}` for 16 — or the register itself for an explicit one |
 | `%k0`, `%w0`, `%b0`, `%h0`, `%q0` | `{o0:e}`, `{o0:x}`, `{o0:l}`, `{o0:h}` (in `reg_abcd`), `{o0:r}` |
 | `%x0`, `%t0`, `%g0` (a vector operand) | `{o0:x}`, `{o0:y}`, `{o0:z}`: its xmm, ymm, zmm register |
+| `%c0`, `%P0` (an `"i"` or `"n"` operand) | `{o0}`: the constant without its `$`, as a displacement wants it — `%c1(%0)` |
 | `%%`, `%{`, `%}`, `%\|` | `%`, `{{`, `}}`, `\|` |
 | clobber `"rax"`, `"ecx"`, `"xmm0"`, … | `out("rax") _` |
+| clobber `"rbx"`, `"ebx"`, `"bx"`, `"bl"` | a scratch `out(reg) _` that rbx is copied into before the template and back from after it (below) |
 | clobber `"memory"`, `"cc"` | nothing: `asm!` assumes both |
+| clobber `"0"` … `"75"` | the register GCC numbers so — `"0"` is ax, `"1"` dx, `"3"` bx, `"20"` xmm0, as mbedtls's `aesni.c` writes them — and then as its name |
 
 Where a constraint offers a register *or* memory, the register is chosen, which
 may change the instruction GCC would have picked but not what the statement
@@ -841,6 +845,51 @@ effects — the `i++` in `a[i++]` — happen once. **Basic asm**, with no colon,
 is its template and `options(att_syntax)`: `asm("mfence")`,
 `__asm__ __volatile__("pause")`.
 
+**rbx.** rustc keeps rbx for LLVM and refuses it as an `asm!` operand or
+clobber, so cinrs carries it for you, both ways round. The `"b"` constraint
+(`"b"`, `"=b"`, `"+b"`, `"=&b"`, and a `"0"` tied to one) is carried in a
+scratch register that an `xchg` swaps with rbx on either side of the template
+(`xchgq %rbx, {oN:r}` on x86-64, `xchgl %ebx, {oN:e}` on 32-bit x86) — what
+GCC's own `<cpuid.h>` does by hand for 32-bit PIC code — so the template runs
+with the input in rbx, the output is what it left there, and rbx is restored
+afterwards. `%0` naming the operand is written as `%ebx`, `%rbx`, `%bx`, `%bl`
+or `%bh` as the width and modifier ask. An **rbx clobber** — `"rbx"`, `"ebx"`,
+`"bx"`, `"bl"` or `"bh"`, which is what zstd's `cpu.h` writes beside its
+`cpuid` — is a hidden scratch `rbx_save = out(reg) _` that rbx is copied into
+before the template and back from after it (`movq %rbx, {rbx_save:r}` and
+back; `movl` and `:e` on 32-bit x86). The template may destroy rbx, and the
+code around it never sees it; the scratch is an early clobber, so it shares a
+register with no input, and like any operand with no output or other clobber.
+
+**Memory operands.** `asm!` has none, but it has what one is for: without
+`nomem`, an `asm!` may read and write any memory it is given a pointer to. So
+`"m"(x)` — and `"=m"(x)` and `"+m"(x)` alike — passes the address of `x` in a
+register, and a template that names the operand gets the AT&T memory
+reference, `({oN})`: `asm("movl %1, %0" : "=m"(*p) : "r"(v))` is `movl
+{o1:e}, ({o0})`. One the template never names only says which memory the
+statement reads or writes, and is mentioned in the trailing comment like any
+unnamed operand — mbedtls's `bn_mul.h` writes `"+m"(*(uint64_t (*)[4])d)` that
+way, and its `mbedtls_platform_zeroize` ends with `asm volatile("" : :
+"m"(*(char (*)[len])buf))`, a pointer to a variable length array, so that the
+`memset` before it stays. The lvalue may be an array, a member, an element or
+`*p`; a bit-field, which has no address, is refused, and so are a `const`
+object as an output, a modifier on the operand (the instruction carries its
+size suffix instead) and a tie to it. `"o"` is `"m"`; `"V"`, `"<"`, `">"` and
+`"p"` are refused. Where the constraint offers a register as well — `"rm"`,
+`"g"`, `"m,r"` — the register is chosen.
+
+**`%c` and `%P`** print an immediate without its `$`, which is what an
+addressing mode's displacement needs: xz's range decoder writes
+`lea %c[bit_model_offset](%q[prob]), %[t0]` with `[bit_model_offset]
+"i"(offsetof(…))`, and `%c[bit_model_offset]` is written `{oN}` where a plain
+`%[bit_model_offset]` would be `${oN}`. On a register operand they are refused.
+An immediate is printed as GCC and Clang print one, in its operand's width and
+**sign-extended** from it: xz's `"n"(UINT32_C(31) - UINT32_C(2048))` is the
+displacement `-2017`, `(unsigned char)255` is `$-1`, `0x80000000u` is
+`$-2147483648`, and a 64-bit constant above `INT64_MAX` is its negative
+two's-complement value — which `movabsq` takes, and which GCC itself refuses
+under `%c`.
+
 `asm!` is `unsafe`, which every generated function body already is, so inline
 assembly works in any function **but a `[[cinrs::safe]]` one**, where it is
 refused by name. It needs only `core`, so it works under `#pragma cinrs
@@ -850,23 +899,13 @@ target is a located error.
 
 **What is refused, and what to write instead.**
 
-* **A memory operand** — `"m"`, `"+m"`, `"=m"`, `"o"`, `"V"`, `"p"`. `asm!` has
-  none. Pass the address in a register and write the memory reference in the
-  template: `asm("incl (%0)" : : "r"(&x) : "memory")`. The template is not
-  rewritten for you.
-* **`rbx` as a clobber** — `rbx`, `ebx`, `bx` or `bl`. rustc keeps rbx for LLVM
-  and refuses it as an `asm!` operand or clobber. The `"b"` constraint (`"b"`,
-  `"=b"`, `"+b"`, `"=&b"`, and a `"0"` tied to one) *is* accepted: the value is
-  carried in a scratch register that an `xchg` swaps with rbx on either side
-  of the template (`xchgq %rbx, {oN:r}` on x86-64, `xchgl %ebx, {oN:e}` on
-  32-bit x86) — what GCC's own `<cpuid.h>` does by hand for 32-bit PIC code —
-  so the template runs with the input in rbx, the output is what it left
-  there, and rbx is restored afterwards. `%0` naming the operand is written as
-  `%ebx`, `%rbx`, `%bx`, `%bl` or `%bh` as the width and modifier ask. So
-  `"=b"(x)` is the way to read a register an instruction writes to rbx; an
-  `rbx` clobber stays refused (and one beside a `"b"` operand is an error, as
-  in GCC), as does a second `"b"` operand in one statement and a one-byte
-  one. `rsp` and `rbp` are refused too.
+* **A bit-field as a memory operand**, which has no address: copy it to a
+  local. `"V"`, `"<"`, `">"` and `"p"`, which x86 has no use for: write `"m"`,
+  or `"r"` for an address.
+* **rbx as a `"b"` operand and a clobber at once** — an error in GCC too
+  ("asm-specifier … conflicts with asm clobber list"): drop the clobber. A
+  second `"b"` operand in one statement and a one-byte one are refused as
+  well, and so are `rsp` and `rbp`, as operands or clobbers.
 * **`%=`**, the number unique to each instance of a statement. `asm!` has no
   such number; a GNU as local label is the same thing: `1:` … `jnz 1b`.
 * **`asm goto`**, and `%l0`. Not in this release: the jump to a C label has to
@@ -878,8 +917,9 @@ target is a located error.
 * **The x87 and MMX registers** — `"f"`, `"t"`, `"u"`, `"y"` — which `asm!`
   has no operand for, and `"X"`, `"R"` and the `"Y…"` family.
 * **The range-checked immediates** `"I"` … `"O"`, `"e"`, `"Z"`: write `"i"`.
-* **`%c0`, `%P0`, `%a0`**, which print a constant or an address bare: write the
-  operand with `"i"` and `%0`, or pass the address in a register.
+* **`%a0`**, which prints an operand as a memory reference: pass the address
+  in a register and write `(%0)`. **`%c0` and `%P0` on a register operand**,
+  which has no constant to print: give it `"i"`, or drop the modifier.
 * **Intel syntax**: a template that opens with `.intel_syntax`. Write the
   AT&T form. GCC's dialect alternatives `{att|intel}` *are* taken — cinrs
   always gives `asm!` `options(att_syntax)`, so the first, AT&T, alternative is
@@ -908,8 +948,9 @@ ask about one instruction set.
 
 `tests/inline_asm.rs` runs all of this — every operand kind, the modifiers,
 member and pointer outputs, `asm` in a loop, a `switch` and a function with a
-`goto`, and `<cpuid.h>` against Rust's own `__cpuid` — with the values `gcc -O2`
-printed for the same C.
+`goto`, `<cpuid.h>` against Rust's own `__cpuid`, an rbx clobber with values
+live across it, and memory operands named and unnamed — with the values `gcc
+-O2` printed for the same C.
 
 ## Thread-local objects
 

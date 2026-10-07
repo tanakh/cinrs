@@ -1749,6 +1749,107 @@ fn each_operand_kind_maps_onto_asm() {
     );
 }
 
+/// An rbx clobber, in any spelling and however often, is one scratch
+/// `rbx_save = out(reg)` that rbx is copied into before the template and back
+/// from after it; `%c` and `%P` on an immediate are its bare number.
+#[test]
+fn an_rbx_clobber_and_a_bare_immediate_map_onto_asm() {
+    assert_eq!(
+        asm_ir(
+            r#"void f(unsigned n, int *p) {
+                asm("cpuid" : "+a"(n) : : "ebx", "ecx", "edx");
+                asm("xorl %%ebx, %%ebx" : : : "bl", "rbx", "ebx");
+                asm("movl %c1(%0), %%eax; addl $%P2, %%eax" : : "r"(p), "i"(8), "n"(-1) : "eax");
+            }"#
+        ),
+        [
+            "movq %rbx, {rbx_save:r}\ncpuid\nmovq {rbx_save:r}, %rbx | inout(\"eax\"), \
+             rbx_save = out(reg) | rcx, rdx",
+            "movq %rbx, {rbx_save:r}\nxorl %ebx, %ebx\nmovq {rbx_save:r}, %rbx | \
+             rbx_save = out(reg) | ",
+            "movl {o1}({o0}), %eax; addl ${o2}, %eax | o0 = in(reg), o1 = const, o2 = const | rax",
+        ]
+    );
+}
+
+/// A memory operand is the address of its lvalue as an input, whatever its
+/// direction, and `%N` is `({oN})`; one the template never names is in the
+/// trailing comment. A register alternative beside it wins, in one
+/// alternative or across several.
+#[test]
+fn a_memory_operand_is_its_address_in_a_register() {
+    assert_eq!(
+        asm_ir(
+            r#"void f(int *p, int v, int a[4], unsigned long long *d) {
+                asm("movl %1, %0" : "=m"(*p) : "r"(v));
+                asm("incl %0" : "+m"(a[2]));
+                asm("" : : "m"(*(char (*)[v])p));
+                asm("decq %%rcx" : "+c"(v), "+m"(*(unsigned long long (*)[4])d));
+                asm("incl %0" : "+rm"(v));
+                asm("incl %0" : "+m,r"(v));
+            }"#
+        ),
+        [
+            "movl {o1:e}, ({o0}) | o0 = in(reg), o1 = in(reg) | ",
+            "incl ({o0}) | o0 = in(reg) | ",
+            " /* ({o0}) */ | o0 = in(reg) | ",
+            "decq %rcx /* ({o1}) */ | inout(\"ecx\"), o1 = in(reg) | ",
+            "incl {o0:e} | o0 = inout(reg) | ",
+            "incl {o0:e} | o0 = inout(reg) | ",
+        ]
+    );
+}
+
+/// A clobber may be GCC's number for a register, and then means what the
+/// register's name does: `"0"` and `"1"` are ax and dx (mbedtls's `aesni.c`),
+/// `"3"` is bx and goes through the rbx save, and `"6"` is bp, refused as
+/// `"bp"` is. GCC numbers the registers up to 91 and refuses 76 to 91, APX's
+/// r16 to r31, without APX.
+#[test]
+fn a_clobber_may_be_gccs_number_for_a_register() {
+    assert_eq!(
+        asm_ir(
+            r#"void f(void) {
+                asm("" : : : "cc", "0", "1", "02", "20", "36", "17", "18");
+                asm("" : : : "3");
+            }"#
+        ),
+        [
+            " |  | rax, rdx, rcx, xmm0, r8",
+            "movq %rbx, {rbx_save:r}\n\nmovq {rbx_save:r}, %rbx | rbx_save = out(reg) | ",
+        ]
+    );
+    let cases: &[(&str, &str)] = &[
+        (
+            r#"void f(void) { asm("" : : : "6"); }"#,
+            "the clobber \"6\" (GCC's register bp) is not supported: the frame pointer cannot \
+             be an 'asm!' operand",
+        ),
+        (
+            r#"void f(void) { asm("" : : : "9"); }"#,
+            "the clobber \"9\" (GCC's register st(1)) is not a register cinrs can map: 'asm!' \
+             cannot clobber the x87 or MMX registers from here",
+        ),
+        (
+            r#"void f(int x) { asm("" : "+a"(x) : : "0"); }"#,
+            "the clobber \"0\" (GCC's register ax) is also an operand of this 'asm' statement",
+        ),
+        (
+            r#"void f(void) { asm("" : : : "91"); }"#,
+            "the register \"91\" (GCC's r31, one of APX's r16 to r31) cannot be clobbered for \
+             this target: Rust's 'asm!' has no APX registers",
+        ),
+        (
+            r#"void f(void) { asm("" : : : "100"); }"#,
+            "unknown register name \"100\" in the clobber list: GCC numbers the x86 registers \
+             from 0 to 91",
+        ),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(asm_errors(source), [*expected], "for:\n{source}");
+    }
+}
+
 /// GCC's `"x"` and `"v"` are a vector register as wide as the operand's type:
 /// `asm!`'s `xmm_reg`, `ymm_reg` or `zmm_reg`. `%x`, `%t`, `%g` name the
 /// operand's xmm, ymm, zmm register, which is `:x`, `:y`, `:z` on any of them.
@@ -1840,16 +1941,29 @@ fn asm_is_carried_by_the_control_flow_graph() {
 fn what_asm_cannot_express_is_refused_by_name() {
     let cases: &[(&str, &str)] = &[
         (
-            r#"void f(int x) { asm("incl %0" : "+m"(x)); }"#,
-            "the constraint \"+m\" asks for a memory operand, and Rust's 'asm!' has none: pass \
-             the address in a register (\"r\"(&x)) and write the memory reference in the \
-             template, such as '(%0)'",
+            r#"struct S { int b : 3; }; void f(struct S *s) { asm("" : : "m"(s->b)); }"#,
+            "a bit-field cannot be a memory operand (\"m\"): it has no address of its own. Copy \
+             it to a local, and for an output the local back",
         ),
         (
-            r#"void f(int x) { asm("" : : "m"(x)); }"#,
-            "the constraint \"m\" asks for a memory operand, and Rust's 'asm!' has none: pass \
-             the address in a register (\"r\"(&x)) and write the memory reference in the \
-             template, such as '(%0)'",
+            r#"void f(const int *p) { asm("" : "=m"(*p)); }"#,
+            "a 'const' object cannot be a memory output (\"=m\"): the 'asm' writes it",
+        ),
+        (
+            r#"void f(int x) { asm("incl %b0" : "+m"(x)); }"#,
+            "the operand modifier '%b' cannot apply to a memory (\"m\") operand: cinrs writes \
+             one as the memory reference '(%reg)' and nothing else. Write '%N' without the \
+             modifier, and give the instruction its size suffix",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "V"(x)); }"#,
+            "the constraint \"V\" (a memory operand that is not offsettable) is not supported: \
+             x86 has no such operand. Write \"m\"",
+        ),
+        (
+            r#"void f(int x) { asm("" : : "<"(x)); }"#,
+            "the constraint \"<\" (an autoincrement or autodecrement memory operand) is not \
+             supported: x86 has no such operand. Write \"m\"",
         ),
         (
             r#"void f(unsigned long long x) { asm("rdtsc" : "=A"(x)); }"#,
@@ -1897,8 +2011,9 @@ fn what_asm_cannot_express_is_refused_by_name() {
         ),
         (
             r#"void f(int x) { asm("cpuid" : "=b"(x) : : "ebx"); }"#,
-            "the clobber \"ebx\" is also operand 0 (\"b\") of this 'asm' statement: drop the \
-             clobber, as cinrs restores rbx after the template anyway",
+            "the clobber \"ebx\" is also operand 0 (\"b\") of this 'asm' statement, and a \
+             register that holds an operand cannot be clobbered as well (GCC refuses this too): \
+             drop the clobber",
         ),
         (
             r#"void f(unsigned char x) { asm("" : "+b"(x)); }"#,
@@ -1917,10 +2032,16 @@ fn what_asm_cannot_express_is_refused_by_name() {
              local label ('1:' with '1b' or '1f') instead",
         ),
         (
-            r#"void f(void) { asm(".byte %c0" : : "i"(1)); }"#,
-            "the operand modifier '%c' is not supported: it prints a constant or an address \
-             without its '$', which 'asm!' has no spelling for. Write the operand with \"i\" \
-             and '%0', or pass the address in a register",
+            r#"void f(int x) { asm(".byte %c0" : : "r"(x)); }"#,
+            "the operand modifier '%c' prints a constant without its '$', and only an immediate \
+             (\"i\" or \"n\") operand is a constant in 'asm!': this one is in a register. Give \
+             it the constraint \"i\", or drop the 'c'",
+        ),
+        (
+            r#"void f(int *p) { asm("incl %a0" : : "r"(p)); }"#,
+            "the operand modifier '%a' is not supported: it prints the operand as a memory \
+             reference, '(%rax)' for a register, which 'asm!' has no spelling for. Pass the \
+             address in a register and write '(%0)'",
         ),
         (
             r#"void f(int x) { asm("" : : "i"(x)); }"#,
@@ -1932,13 +2053,6 @@ fn what_asm_cannot_express_is_refused_by_name() {
             r#"struct S { int b : 3; }; void f(struct S *s) { asm("" : "=r"(s->b)); }"#,
             "a bit-field cannot be an 'asm' output: it has no register-sized storage of its own. \
              Write the output to a local and assign the bit-field from it",
-        ),
-        (
-            r#"void f(void) { asm("cpuid" : : : "rbx"); }"#,
-            "the clobber \"rbx\" is not supported: rustc reserves rbx (LLVM uses it \
-             internally) and refuses it as an 'asm!' clobber; give the value the instruction \
-             leaves in rbx a \"=b\" operand instead, which cinrs carries in and out of rbx with \
-             an 'xchg' around the template",
         ),
         (
             r#"void f(void) { asm("" : : : "rsp"); }"#,

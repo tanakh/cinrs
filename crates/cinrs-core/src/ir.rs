@@ -3584,9 +3584,9 @@ impl AsmOperand {
     /// lateout(reg)`, `inout("eax")`, `o2 = const`.
     pub fn head(&self) -> String {
         let dir = match &self.kind {
-            AsmOperandKind::In(_) => "in",
+            AsmOperandKind::In(_) | AsmOperandKind::Memory(_) => "in",
             AsmOperandKind::Out { late: true, .. } => "lateout",
-            AsmOperandKind::Out { late: false, .. } => "out",
+            AsmOperandKind::Out { late: false, .. } | AsmOperandKind::Discard => "out",
             AsmOperandKind::InOut { .. } | AsmOperandKind::Scratch(_) => "inout",
             AsmOperandKind::Const(_) => "const",
         };
@@ -3640,6 +3640,17 @@ pub enum AsmOperandKind {
     /// input with the constraint `"b"`, carried through a scratch register
     /// that the `xchg` around the template swaps with rbx (see `sema/asm.rs`).
     Scratch(Expr),
+    /// A register the statement writes and nobody reads afterwards:
+    /// `out(reg) _`, an early clobber so that it shares no register with an
+    /// input. This is the scratch an rbx clobber keeps rbx's value in while
+    /// the template runs (see `sema/asm.rs`); it has no C operand behind it.
+    Discard,
+    /// A memory operand, GCC's `"m"`, `"=m"` or `"+m"`: the address of the
+    /// lvalue, an input `in(reg)` whatever the direction. `asm!` may read and
+    /// write memory through a pointer it is given, which is what makes the
+    /// write of an output — and the read a barrier asks for — visible to the
+    /// compiler; the template names it as `({oN})` (see `sema/asm.rs`).
+    Memory(Expr),
     /// An immediate, folded: `"i"(3)` is `const 3`.
     Const(i128),
 }

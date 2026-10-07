@@ -4416,12 +4416,15 @@ impl<'a> Codegen<'a> {
             let op_span = self.sp(operand.range);
             let head = asm_operand_head(operand, op_span);
             let value = match &operand.kind {
-                ir::AsmOperandKind::In(expr) => self.expr(expr).at(prec::LOWEST, op_span),
+                ir::AsmOperandKind::In(expr) | ir::AsmOperandKind::Memory(expr) => {
+                    self.expr(expr).at(prec::LOWEST, op_span)
+                }
                 ir::AsmOperandKind::Scratch(expr) => {
                     let value = self.expr(expr).at(prec::LOWEST, op_span);
                     quote_spanned! {op_span=> #value => _ }
                 }
                 ir::AsmOperandKind::Const(value) => asm_const_literal(*value, op_span),
+                ir::AsmOperandKind::Discard => quote_spanned! {op_span=> _ },
                 ir::AsmOperandKind::Out { place, .. } => {
                     self.asm_output(place, None, index, &mut setup, &mut store_back)
                 }
@@ -8692,9 +8695,9 @@ fn usize_literal(value: u64, span: Span) -> TokenStream {
 /// `inout("eax")`, `o2 = const`.
 fn asm_operand_head(operand: &ir::AsmOperand, span: Span) -> TokenStream {
     let dir = match &operand.kind {
-        ir::AsmOperandKind::In(_) => "in",
+        ir::AsmOperandKind::In(_) | ir::AsmOperandKind::Memory(_) => "in",
         ir::AsmOperandKind::Out { late: true, .. } => "lateout",
-        ir::AsmOperandKind::Out { late: false, .. } => "out",
+        ir::AsmOperandKind::Out { late: false, .. } | ir::AsmOperandKind::Discard => "out",
         ir::AsmOperandKind::InOut { .. } | ir::AsmOperandKind::Scratch(_) => "inout",
         ir::AsmOperandKind::Const(_) => "const",
     };

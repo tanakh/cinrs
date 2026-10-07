@@ -1,164 +1,212 @@
-error: the constraint "+m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
-  --> tests/ui/inline_asm_refused.rs:15:25
+error: a bit-field cannot be a memory operand ("+m"): it has no address of its own. Copy it to a local, and for an output the local back
+  --> tests/ui/inline_asm_refused.rs:18:30
    |
-15 |         asm("incl %0" : "+m"(x));
-   |                         ^^^^
+18 |         asm("incl %0" : "+m"(s->b));
+   |                              ^
 
-error: the constraint "m" asks for a memory operand, and Rust's 'asm!' has none: pass the address in a register ("r"(&x)) and write the memory reference in the template, such as '(%0)'
-  --> tests/ui/inline_asm_refused.rs:16:20
+error: the operand modifier '%k' cannot apply to a memory ("m") operand: cinrs writes one as the memory reference '(%reg)' and nothing else. Write '%N' without the modifier, and give the instruction its size suffix
+  --> tests/ui/inline_asm_refused.rs:19:13
    |
-16 |         asm("" : : "m"(x));
+19 |         asm("incl %k0" : "+m"(x));
+   |             ^^^^^^^^^^
+
+error: the constraint "m" asks for memory, and this operand is not an lvalue: it has no address for the 'asm' to reach it through. Store it in a local first
+  --> tests/ui/inline_asm_refused.rs:20:24
+   |
+20 |         asm("" : : "m"(x + 1));
+   |                        ^
+
+error: operand 0 is a memory operand, which the 'asm' reads and writes in place, so no input can be tied to it: give the input its own operand
+  --> tests/ui/inline_asm_refused.rs:21:28
+   |
+21 |         asm("" : "=m"(x) : "0"(1));
+   |                            ^^^
+
+error: the constraint "p" (an operand that is an address) is not supported: pass the address with "r", or the object itself with "m"
+  --> tests/ui/inline_asm_refused.rs:22:20
+   |
+22 |         asm("" : : "p"(&x));
    |                    ^^^
 
 error: the constraint "A" (the edx:eax pair) is not supported: 'asm!' has no operand that spans two registers. Use "=a" and "=d" with two variables and combine them
-  --> tests/ui/inline_asm_refused.rs:17:23
+  --> tests/ui/inline_asm_refused.rs:23:23
    |
-17 |         asm("rdtsc" : "=A"(u));
+23 |         asm("rdtsc" : "=A"(u));
    |                       ^^^^
 
 error: the constraint "f" (an x87 stack register) is not supported: 'asm!' has no operand on the x87 register stack
-  --> tests/ui/inline_asm_refused.rs:18:18
+  --> tests/ui/inline_asm_refused.rs:24:18
    |
-18 |         asm("" : "=f"(d));
+24 |         asm("" : "=f"(d));
    |                  ^^^^
 
 error: the constraint "y" (an MMX register) is not supported: Rust has no MMX
-  --> tests/ui/inline_asm_refused.rs:19:20
+  --> tests/ui/inline_asm_refused.rs:25:20
    |
-19 |         asm("" : : "y"(x));
+25 |         asm("" : : "y"(x));
    |                    ^^^
 
 error: the constraint "X" (any operand at all) is not supported: say which register class, such as "r"
-  --> tests/ui/inline_asm_refused.rs:20:20
+  --> tests/ui/inline_asm_refused.rs:26:20
    |
-20 |         asm("" : : "X"(x));
+26 |         asm("" : : "X"(x));
    |                    ^^^
 
 error: the constraint "I" (a range-checked immediate) is not supported: write "i", which 'asm!' takes as a 'const' operand
-  --> tests/ui/inline_asm_refused.rs:21:20
+  --> tests/ui/inline_asm_refused.rs:27:20
    |
-21 |         asm("" : : "I"(x));
+27 |         asm("" : : "I"(x));
    |                    ^^^
 
 error: the constraint "R" (a legacy register) is not supported: 'asm!' has no class for it. Use "r", or name the register
-  --> tests/ui/inline_asm_refused.rs:22:20
+  --> tests/ui/inline_asm_refused.rs:28:20
    |
-22 |         asm("" : : "R"(x));
+28 |         asm("" : : "R"(x));
    |                    ^^^
 
 error: the constraint "Yz" is not supported: 'asm!' has no class for it. Use "x" for an SSE register
-  --> tests/ui/inline_asm_refused.rs:23:20
+  --> tests/ui/inline_asm_refused.rs:29:20
    |
-23 |         asm("" : : "Yz"(x));
+29 |         asm("" : : "Yz"(x));
    |                    ^^^^
 
-error: the clobber "rbx" is also operand 0 ("b") of this 'asm' statement: drop the clobber, as cinrs restores rbx after the template anyway
-  --> tests/ui/inline_asm_refused.rs:24:35
+error: the clobber "rbx" is also operand 0 ("b") of this 'asm' statement, and a register that holds an operand cannot be clobbered as well (GCC refuses this too): drop the clobber
+  --> tests/ui/inline_asm_refused.rs:30:35
    |
-24 |         asm("cpuid" : "=b"(x) : : "rbx");
+30 |         asm("cpuid" : "=b"(x) : : "rbx");
    |                                   ^^^^^
 
-error: the flag output "=@ccz" is not supported: 'asm!' has no flag outputs. Set a byte register from the flag in the template ('setz %b0') and use "=q"
-  --> tests/ui/inline_asm_refused.rs:25:25
+error: the clobber "bl" is also operand 1 ("b") of this 'asm' statement, and a register that holds an operand cannot be clobbered as well (GCC refuses this too): drop the clobber
+  --> tests/ui/inline_asm_refused.rs:31:37
    |
-25 |         asm("sete %0" : "=@ccz"(c));
+31 |         asm("" : : "a"(0), "b"(x) : "bl");
+   |                                     ^^^^
+
+error: the flag output "=@ccz" is not supported: 'asm!' has no flag outputs. Set a byte register from the flag in the template ('setz %b0') and use "=q"
+  --> tests/ui/inline_asm_refused.rs:32:25
+   |
+32 |         asm("sete %0" : "=@ccz"(c));
    |                         ^^^^^^^
 
 error: '%=' is not supported: 'asm!' has no number unique to each instance. Use a GNU as local label ('1:' with '1b' or '1f') instead
-  --> tests/ui/inline_asm_refused.rs:26:13
+  --> tests/ui/inline_asm_refused.rs:33:13
    |
-26 |         asm("1: jmp 1b%=" : :);
+33 |         asm("1: jmp 1b%=" : :);
    |             ^^^^^^^^^^^^^
 
-error: the operand modifier '%c' is not supported: it prints a constant or an address without its '$', which 'asm!' has no spelling for. Write the operand with "i" and '%0', or pass the address in a register
-  --> tests/ui/inline_asm_refused.rs:27:13
+error: the operand modifier '%c' prints a constant without its '$', and only an immediate ("i" or "n") operand is a constant in 'asm!': this one is in a register. Give it the constraint "i", or drop the 'c'
+  --> tests/ui/inline_asm_refused.rs:34:13
    |
-27 |         asm(".byte %c0" : : "i"(1));
-   |             ^^^^^^^^^^^
+34 |         asm("movl %c0, %%eax" : : "r"(x));
+   |             ^^^^^^^^^^^^^^^^^
+
+error: the operand modifier '%P' prints a constant without its '$', and only an immediate ("i" or "n") operand is a constant in 'asm!': this one is in a register. Give it the constraint "i", or drop the 'P'
+  --> tests/ui/inline_asm_refused.rs:35:13
+   |
+35 |         asm("movl %P0, %%eax" : : "a"(x));
+   |             ^^^^^^^^^^^^^^^^^
+
+error: the operand modifier '%a' is not supported: it prints the operand as a memory reference, '(%rax)' for a register, which 'asm!' has no spelling for. Pass the address in a register and write '(%0)'
+  --> tests/ui/inline_asm_refused.rs:36:13
+   |
+36 |         asm("movl %a0, %%eax" : : "r"(&x));
+   |             ^^^^^^^^^^^^^^^^^
 
 error: the constraint "i" asks for an immediate, and this operand is not an integer constant expression: 'asm!' takes an immediate as a 'const' operand. Write a constant, or use "r" to pass the value in a register
-  --> tests/ui/inline_asm_refused.rs:28:24
+  --> tests/ui/inline_asm_refused.rs:37:24
    |
-28 |         asm("" : : "i"(x));
+37 |         asm("" : : "i"(x));
    |                        ^
 
 error: a bit-field cannot be an 'asm' output: it has no register-sized storage of its own. Write the output to a local and assign the bit-field from it
-  --> tests/ui/inline_asm_refused.rs:29:23
+  --> tests/ui/inline_asm_refused.rs:38:23
    |
-29 |         asm("" : "=r"(s->b));
+38 |         asm("" : "=r"(s->b));
    |                       ^
 
-error: the clobber "rbx" is not supported: rustc reserves rbx (LLVM uses it internally) and refuses it as an 'asm!' clobber; give the value the instruction leaves in rbx a "=b" operand instead, which cinrs carries in and out of rbx with an 'xchg' around the template
-  --> tests/ui/inline_asm_refused.rs:30:27
-   |
-30 |         asm("cpuid" : : : "rbx");
-   |                           ^^^^^
-
 error: the clobber "rsp" is not supported: the stack pointer cannot be an 'asm!' operand
-  --> tests/ui/inline_asm_refused.rs:31:22
+  --> tests/ui/inline_asm_refused.rs:39:22
    |
-31 |         asm("" : : : "rsp");
+39 |         asm("" : : : "rsp");
    |                      ^^^^^
 
-error: a '{' with no '}' after it in an 'asm' template: braces there are GCC's assembler dialect alternatives, '{att|intel}', which cannot nest and must be closed; write '%{' and '%}' for a literal brace
-  --> tests/ui/inline_asm_refused.rs:32:13
+error: the clobber "7" (GCC's register sp) is not supported: the stack pointer cannot be an 'asm!' operand
+  --> tests/ui/inline_asm_refused.rs:40:22
    |
-32 |         asm("{movl|mov %%eax, %%ebx" : :);
+40 |         asm("" : : : "7");
+   |                      ^^^
+
+error: the register "76" (GCC's r16, one of APX's r16 to r31) cannot be clobbered for this target: Rust's 'asm!' has no APX registers
+  --> tests/ui/inline_asm_refused.rs:41:22
+   |
+41 |         asm("" : : : "76");
+   |                      ^^^^
+
+error: unknown register name "92" in the clobber list: GCC numbers the x86 registers from 0 to 91
+  --> tests/ui/inline_asm_refused.rs:42:22
+   |
+42 |         asm("" : : : "92");
+   |                      ^^^^
+
+error: a '{' with no '}' after it in an 'asm' template: braces there are GCC's assembler dialect alternatives, '{att|intel}', which cannot nest and must be closed; write '%{' and '%}' for a literal brace
+  --> tests/ui/inline_asm_refused.rs:43:13
+   |
+43 |         asm("{movl|mov %%eax, %%ebx" : :);
    |             ^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: a template that switches to Intel syntax with '.intel_syntax' is not supported: GCC's x86 templates are AT&T, and cinrs gives 'asm!' options(att_syntax) to match. Write the instructions in AT&T syntax
-  --> tests/ui/inline_asm_refused.rs:33:13
+  --> tests/ui/inline_asm_refused.rs:44:13
    |
-33 |         asm(".intel_syntax noprefix\n mov eax, ebx");
+44 |         asm(".intel_syntax noprefix\n mov eax, ebx");
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: an 'asm' operand has to have integer, floating or pointer type, not 'struct Pair'
-  --> tests/ui/inline_asm_refused.rs:34:24
+  --> tests/ui/inline_asm_refused.rs:45:24
    |
-34 |         asm("" : : "r"(p));
+45 |         asm("" : : "r"(p));
    |                        ^
 
 error: the operand modifier '%k' cannot apply to an 8-bit operand: 'asm!' has no wider name for a byte register. Widen the operand to 'unsigned int'
-  --> tests/ui/inline_asm_refused.rs:35:13
+  --> tests/ui/inline_asm_refused.rs:46:13
    |
-35 |         asm("incl %k0" : "+r"(c));
+46 |         asm("incl %k0" : "+r"(c));
    |             ^^^^^^^^^^
 
 error: '%1' names operand 1 that this 'asm' statement does not have (1 operands)
-  --> tests/ui/inline_asm_refused.rs:36:13
+  --> tests/ui/inline_asm_refused.rs:47:13
    |
-36 |         asm("mov %1, %0" : "=r"(x));
+47 |         asm("mov %1, %0" : "=r"(x));
    |             ^^^^^^^^^^^^
 
 error: an 'asm' label on a local variable is not supported: GCC's register variable has no counterpart in Rust's 'asm!'. Write the register as a constraint of the 'asm' statement instead, such as "a"(x) for eax
-  --> tests/ui/inline_asm_refused.rs:37:24
+  --> tests/ui/inline_asm_refused.rs:48:24
    |
-37 |         register int r asm("eax") = 1;
+48 |         register int r asm("eax") = 1;
    |                        ^^^
 
 error: 'asm goto' is not supported yet: Rust's 'asm!' has 'label' blocks, but the jump to a C label has to go through the function's control flow, which this release does not do. Write the branch in C on a flag the 'asm' sets
-  --> tests/ui/inline_asm_refused.rs:42:9
+  --> tests/ui/inline_asm_refused.rs:53:9
    |
-42 |         asm goto ("jmp %l0" : : : : out);
+53 |         asm goto ("jmp %l0" : : : : out);
    |         ^^^
 
 error: inline assembly cannot be written in the safe function 'fence': Rust's 'asm!' is unsafe, and a safe function has no 'unsafe' block to put it in. Drop [[cinrs::safe]] from 'fence'
-  --> tests/ui/inline_asm_refused.rs:52:9
+  --> tests/ui/inline_asm_refused.rs:63:9
    |
-52 |         __asm__ __volatile__("mfence");
+63 |         __asm__ __volatile__("mfence");
    |         ^^^^^^^
 
 error: inline assembly is only supported on x86 and x86-64: the template is assembly for one architecture and the operands are mapped onto x86's registers, and the target here is aarch64
-  --> tests/ui/inline_asm_refused.rs:69:9
+  --> tests/ui/inline_asm_refused.rs:80:9
    |
-69 |         asm volatile ("yield");
+80 |         asm volatile ("yield");
    |         ^^^
 
 error: register class `ymm_reg` requires the `avx` target feature
-  --> tests/ui/inline_asm_refused.rs:62:27
+  --> tests/ui/inline_asm_refused.rs:73:27
    |
-62 |         __asm__("" : "+x"(v));
+73 |         __asm__("" : "+x"(v));
    |                           ^
 
-error: aborting due to 27 previous errors
+error: aborting due to 35 previous errors
 

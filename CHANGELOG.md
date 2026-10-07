@@ -54,6 +54,12 @@ follows [Semantic Versioning][semver].
   argument with `L`, the `L`s become `l` — `%lf` is `%f` to `printf` and a
   `double *` to `scanf` — and the platform reads the `double` it is given. Any
   other way of passing one is refused as before.
+* **More of GCC's assembly.** An rbx clobber — zstd's `cpuid` with `"ebx"` —
+  keeps rbx in a scratch register around the template; a clobber may be GCC's
+  register number, as mbedtls's `"0", "1"`; `"m"`, `"=m"` and `"+m"` pass the
+  lvalue's address, named in the template as `(%reg)` or not at all, as in
+  mbedtls's bignum loops and its zeroize barrier; and `%c` and `%P` print an
+  immediate without its `$`, as xz's range decoder needs.
 * `cinrs-core`, for a command-line driver: `translate_file` and
   `translate_source`, which hand back the Rust, the diagnostics, the headers
   read and the symbols defined; `preprocess_file` and `preprocess_source`,
@@ -83,6 +89,10 @@ follows [Semantic Versioning][semver].
   handler(int); static handler f, g;` — is a function. It was read as an
   object of an incomplete type and refused; expat declares its parser's state
   handlers that way.
+* An inline-assembly immediate is printed in its operand's width,
+  sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
+  UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler
+  takes, and not `4294965279`, which it refused.
 
 ## 0.2.0 — 2026-10-02
 

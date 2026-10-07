@@ -1386,7 +1386,7 @@ impl Sema<'_> {
         }
     }
 
-    fn address_of(&mut self, operand: &ast::Expr, range: SourceRange) -> Option<Expr> {
+    pub(super) fn address_of(&mut self, operand: &ast::Expr, range: SourceRange) -> Option<Expr> {
         // C99 6.5.3.2p3: "if the operand is the result of a unary `*`
         // operator, neither that operator nor the `&` operator is evaluated
         // and the result is as if both were omitted, except that the
@@ -1430,39 +1430,7 @@ impl Sema<'_> {
             if place.ty.is_error() {
                 return None;
             }
-            if self.bit_field_of(&place).is_some() {
-                // A bit-field has no address: it may share a byte with its
-                // neighbours, and it need not start on one.
-                self.error(range, "cannot take the address of a bit-field");
-                return None;
-            }
-            if rooted_in_temporary(&place) {
-                self.error(
-                    range,
-                    "cannot take the address of a temporary; the object does not outlive \
-                     the expression",
-                );
-                return None;
-            }
-            // C11 6.5.3.2p1: the operand of `&` shall be "an lvalue that
-            // designates an object that is not a bit-field and is not declared
-            // with the `register` storage-class specifier", and 6.7.1p6 puts
-            // *any part* of such an object out of reach too.
-            if let Some(name) = self.register_root(&place) {
-                self.error(
-                    range,
-                    format!("cannot take the address of '{name}', which is declared 'register'"),
-                );
-                return None;
-            }
-            // `&a` on an array is a pointer *to the array*, not to its first
-            // element, which is exactly what the place's own type gives. An
-            // array type is never itself qualified (6.7.3p9) — the `const` of
-            // `const A a;` is on the elements, and `Sema::ptr_to` reads it
-            // from there — so the object's own flag says nothing here, and
-            // taking it would make the two spellings of one type two types.
-            let ty = self.ptr_to(place.ty, place.is_const && !place.ty.is_array());
-            return Some(Expr::new(ExprKind::AddrOf(place), ty, range));
+            return self.place_address(place, range);
         }
         let value = self.expr(operand)?;
         self.error(
@@ -1473,6 +1441,44 @@ impl Sema<'_> {
             ),
         );
         None
+    }
+
+    /// The address of the object `place` designates, as `&` takes it — which
+    /// is refused for a bit-field, a temporary and a `register` object.
+    pub(super) fn place_address(&mut self, place: Place, range: SourceRange) -> Option<Expr> {
+        if self.bit_field_of(&place).is_some() {
+            // A bit-field has no address: it may share a byte with its
+            // neighbours, and it need not start on one.
+            self.error(range, "cannot take the address of a bit-field");
+            return None;
+        }
+        if rooted_in_temporary(&place) {
+            self.error(
+                range,
+                "cannot take the address of a temporary; the object does not outlive the \
+                 expression",
+            );
+            return None;
+        }
+        // C11 6.5.3.2p1: the operand of `&` shall be "an lvalue that
+        // designates an object that is not a bit-field and is not declared
+        // with the `register` storage-class specifier", and 6.7.1p6 puts *any
+        // part* of such an object out of reach too.
+        if let Some(name) = self.register_root(&place) {
+            self.error(
+                range,
+                format!("cannot take the address of '{name}', which is declared 'register'"),
+            );
+            return None;
+        }
+        // `&a` on an array is a pointer *to the array*, not to its first
+        // element, which is exactly what the place's own type gives. An array
+        // type is never itself qualified (6.7.3p9) — the `const` of `const A
+        // a;` is on the elements, and `Sema::ptr_to` reads it from there — so
+        // the object's own flag says nothing here, and taking it would make
+        // the two spellings of one type two types.
+        let ty = self.ptr_to(place.ty, place.is_const && !place.ty.is_array());
+        Some(Expr::new(ExprKind::AddrOf(place), ty, range))
     }
 
     fn require_arithmetic(&mut self, value: &Expr, op: &str, range: SourceRange) -> Option<Ty> {
