@@ -348,6 +348,24 @@ fn a_macro_may_expand_to_its_own_name() {
     );
 }
 
+/// C17 6.10.3p11 leaves a directive among a macro's arguments undefined, and
+/// GCC processes it as if the invocation were not there; CPython's
+/// `perf_jit_trampoline.c` writes an `#ifdef` … `#endif` between the
+/// parentheses of a macro call. A skipped group is no part of any argument,
+/// and a `#define` among them has been undone again by the time the
+/// arguments are expanded, as `gcc -E` shows.
+#[test]
+fn a_directive_among_the_arguments_is_processed() {
+    assert_eq!(
+        pp("#define S(x, y) [x|y]\nS(1,\n#ifdef NOPE\n2\n#else\n3\n#endif\n)"),
+        "[ 1 | 3 ]"
+    );
+    assert_eq!(
+        pp("#define S(x) <x>\nS(a\n#define B b\nB\n#undef B\nB)"),
+        "< a B B >"
+    );
+}
+
 #[test]
 fn an_argument_may_span_several_lines() {
     assert_eq!(

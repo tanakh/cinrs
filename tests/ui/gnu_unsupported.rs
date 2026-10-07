@@ -15,6 +15,12 @@ cinrs::c99! {
     __attribute__((weak)) int defined_weak(void) { return 1; }
 
     int aliased(void) __attribute__((alias("declared_weak"))); //~ ERROR: write a function that forwards
+
+    /* Microsoft's bit-field layout for every record after it; the attribute
+     * on one record is honoured, the pragma is not. `off` asks for what is
+     * in force anyway. */
+    #pragma ms_struct off
+    #pragma ms_struct on //~ ERROR: write '__attribute__((ms_struct))'
 }
 
 fn main() {}

@@ -67,6 +67,11 @@ pub enum Attribute {
     /// `N / sizeof(T)` of it, GCC's vector extensions; see
     /// [`crate::ir::Ty::GnuVector`].
     VectorSize,
+    /// `ms_struct`: the record's bit-fields are laid out by Microsoft's rules,
+    /// as GCC's `-mms-bitfields` lays them out.
+    MsStruct,
+    /// `gcc_struct`: by the System V rules, which is the default here.
+    GccStruct,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -128,6 +133,8 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "weak" => Attribute::Weak,
         "transparent_union" => Attribute::TransparentUnion,
         "vector_size" => Attribute::VectorSize,
+        "ms_struct" => Attribute::MsStruct,
+        "gcc_struct" => Attribute::GccStruct,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,

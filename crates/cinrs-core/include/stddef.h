@@ -34,6 +34,17 @@ typedef __WCHAR_TYPE__ wchar_t;
  * item really has is checked against Rust's `core::mem::offset_of!`. */
 #define offsetof(type, member) __builtin_offsetof(type, member)
 
+#if __STDC_VERSION__ >= 201112L
+/* C11's `max_align_t`, with the platform's size and alignment — 32 and 16
+ * on x86-64 Linux — which other code allocates by, so it does not follow
+ * cinrs's eight-byte `long double`. The front end predefines the two
+ * numbers for the target. */
+typedef struct {
+    __attribute__((__aligned__(__CINRS_MAX_ALIGN__)))
+    char __cinrs_max_align[__CINRS_SIZEOF_MAX_ALIGN__];
+} max_align_t;
+#endif
+
 #if __STDC_VERSION__ >= 202311L
 /* C23's `nullptr_t`. cinrs gives `nullptr` the type `void *` rather than a
  * type of its own, so this is what the name stands for; the difference shows

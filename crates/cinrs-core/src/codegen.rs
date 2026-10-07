@@ -9719,7 +9719,16 @@ impl<'a> Codegen<'a> {
             PlaceKind::Str(id) => {
                 let konst = self.program.types.points_to_const(want);
                 let tokens = self.string_pointer(*id, konst, span);
-                return Value::new(tokens, prec::CALL);
+                // A wide literal is a block holding its `static`, which an
+                // `as` after it — `sep ? sep + 1 : L""` with a `const`
+                // pointer wanted — would turn into a statement.
+                let element = self.program.string(*id).elem;
+                let level = if element.size_bytes(&self.options.target) > 1 {
+                    prec::BLOCK
+                } else {
+                    prec::CALL
+                };
+                return Value::new(tokens, level);
             }
             _ => {}
         }

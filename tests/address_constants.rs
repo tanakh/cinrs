@@ -311,6 +311,29 @@ fn a_pointer_into_an_object_defined_later() {
     }
 }
 
+/// A conditional whose condition is an integer constant is the address its
+/// chosen arm is, which GCC folds: CPython's `_Py_LATIN1_CHR(ch)` picks one
+/// of two tables by `ch < 128` and stands in static keyword tables.
+#[test]
+fn a_constant_condition_chooses_an_address() {
+    cinrs::c11! {
+        static struct { char ascii[128]; char latin1[128]; } strings;
+
+        #define LATIN1_CHR(CH) ((CH) < 128 ? &strings.ascii[(CH)] : &strings.latin1[(CH) - 128])
+
+        static char *const letter = LATIN1_CHR('p');
+        static char *const table[] = { LATIN1_CHR('n'), LATIN1_CHR(200) };
+
+        int chosen(void) {
+            return (letter == &strings.ascii['p'])
+                + (table[0] == &strings.ascii['n']) * 2
+                + (table[1] == &strings.latin1[72]) * 4;
+        }
+    }
+
+    assert_eq!(unsafe { chosen() }, 7);
+}
+
 // ---------------------------------------------------------------------------
 // block scope
 // ---------------------------------------------------------------------------

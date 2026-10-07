@@ -1583,7 +1583,10 @@ impl Sema<'_> {
         }
 
         let flexible = members.last().is_some_and(|m| m.flexible);
-        let mut laid_out = self.lay_out(kind, &members, packing);
+        // `__attribute__((ms_struct))`: Microsoft's bit-field layout, which
+        // CPython's ctypes tests compare against its own `_layout_ = 'ms'`.
+        let ms = spec.attrs.ms_struct.as_ref().is_some_and(|m| m.node);
+        let mut laid_out = self.lay_out(kind, &members, packing, ms);
         // `__attribute__((aligned(N)))` on the record raises its alignment,
         // and the size with it.
         if let Some(want) = record_align
@@ -2112,7 +2115,14 @@ impl Sema<'_> {
     ///
     /// `packing` is the maximum member alignment; see [`Packing`] for the two
     /// things it changes.
-    fn lay_out(&self, kind: RecordKind, members: &[Member], packing: Packing) -> LaidOut {
+    ///
+    /// `ms` asks for Microsoft's bit-field rules, which `ms_struct` and GCC's
+    /// `-mms-bitfields` do: a bit-field is allocated in a unit of its declared
+    /// type, adjacent bit-fields share one only when their types are the same
+    /// size and the next fits, a different size or a member that is not a
+    /// bit-field starts after the whole unit, every bit-field's type aligns
+    /// the record, and a zero-width bit-field counts only after a bit-field.
+    fn lay_out(&self, kind: RecordKind, members: &[Member], packing: Packing, ms: bool) -> LaidOut {
         let target = &self.target;
         let mut align = 1u64;
         let mut raised: Option<u64> = None;
@@ -2165,6 +2175,10 @@ impl Sema<'_> {
         let mut run_of: Vec<usize> = vec![usize::MAX; members.len()];
         let mut off = 0u64;
         let mut union_bytes = 0u64;
+        // Under Microsoft's rules, the allocation unit the last bit-field went
+        // into: where it starts and how many bits it has, both in bits.
+        let ms = ms && kind == RecordKind::Struct;
+        let mut ms_unit: Option<(u64, u64)> = None;
         for (index, member) in members.iter().enumerate() {
             let item = self
                 .types()
@@ -2173,6 +2187,12 @@ impl Sema<'_> {
             let want = effective(member, item);
             if kind == RecordKind::Union {
                 off = 0;
+            }
+            if ms && member.bits.is_none() {
+                // The unit a run of bit-fields was allocated in is all theirs.
+                if let Some((start, bits)) = ms_unit.take() {
+                    off = off.max(start + bits);
+                }
             }
             let Some((width, _)) = member.bits else {
                 align = align.max(want);
@@ -2198,7 +2218,30 @@ impl Sema<'_> {
             let unit = item.size.saturating_mul(8).max(1);
             let w = u64::from(width);
             let unit_rule = packing.is_none() && !member.packed && member.align_request.is_none();
-            if w == 0 {
+            // Whether the field makes the record stricter: only a named one
+            // under System V; under Microsoft's rules any with a width, and a
+            // zero-width one right after another bit-field.
+            let mut strictens = member.name.is_some();
+            if ms {
+                let want_bits = want.saturating_mul(8);
+                if w == 0 {
+                    strictens = ms_unit.is_some();
+                    if let Some((start, bits)) = ms_unit.take() {
+                        off = round_up(start + bits, want_bits);
+                    }
+                } else {
+                    strictens = true;
+                    let fits = ms_unit
+                        .is_some_and(|(start, bits)| bits == unit && off + w <= start + bits);
+                    if !fits {
+                        if let Some((start, bits)) = ms_unit {
+                            off = off.max(start + bits);
+                        }
+                        off = round_up(off, want_bits);
+                        ms_unit = Some((off, unit));
+                    }
+                }
+            } else if w == 0 {
                 off = round_up(off, unit);
             } else if let Some(request) = member.align_request {
                 off = round_up(off, request.saturating_mul(8));
@@ -2207,8 +2250,7 @@ impl Sema<'_> {
             }
             let (start, end) = (off, off + w);
             off = end;
-            // Only a named bit-field makes the record stricter.
-            if member.name.is_some() {
+            if strictens {
                 align = align.max(want);
                 if want > item.align {
                     raised = Some(raised.unwrap_or(1).max(want));
@@ -2234,6 +2276,10 @@ impl Sema<'_> {
             if kind == RecordKind::Union {
                 union_bytes = union_bytes.max(end.div_ceil(8));
             }
+        }
+        // A struct that ends in a run of bit-fields ends after their unit.
+        if let Some((start, bits)) = ms_unit {
+            off = off.max(start + bits);
         }
         let bytes = match kind {
             RecordKind::Struct => off.div_ceil(8),

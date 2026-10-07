@@ -603,6 +603,9 @@ pub struct Attributes {
     /// `vector_size(N)`: the size in bytes, an integer constant expression,
     /// and where the attribute was written. See [`crate::ir::Ty::GnuVector`].
     pub vector_size: Option<Spanned<Box<Expr>>>,
+    /// `ms_struct` (`true`) or `gcc_struct` (`false`) on a record: whether its
+    /// bit-fields are laid out by Microsoft's rules or by System V's.
+    pub ms_struct: Option<Spanned<bool>>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -646,6 +649,7 @@ impl Attributes {
         self.weak = self.weak.or(other.weak);
         self.transparent_union = self.transparent_union.or(other.transparent_union);
         self.vector_size = self.vector_size.take().or(other.vector_size);
+        self.ms_struct = self.ms_struct.take().or(other.ms_struct);
     }
 }
 

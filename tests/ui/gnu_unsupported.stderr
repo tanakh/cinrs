@@ -4,5 +4,11 @@ error: 'alias' is not supported: write a function that forwards to the other one
 17 |     int aliased(void) __attribute__((alias("declared_weak")));
    |                                      ^^^^^
 
-error: aborting due to 1 previous error
+error: '#pragma ms_struct on' is not supported: write '__attribute__((ms_struct))' on the records it is meant for
+  --> tests/ui/gnu_unsupported.rs:23:5
+   |
+23 |     #pragma ms_struct on
+   |     ^
+
+error: aborting due to 2 previous errors
 

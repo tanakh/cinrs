@@ -566,6 +566,17 @@ fn wide_string_literals_and_pointers_to_arrays() {
             int (*whole)[3] = &values;
             return (*whole)[1] + sizeof(*whole);
         }
+
+        /* A wide literal as an arm of `?:` that needs a `const` pointer:
+           CPython's `return sep ? sep + 1 : L"";`. */
+        static const wchar_t *after(const wchar_t *s, int at) {
+            const wchar_t *sep = at >= 0 ? s + at : 0;
+            return sep ? sep + 1 : L"";
+        }
+
+        int wide_in_a_conditional(void) {
+            return after(L"k=v", 1)[0] + after(L"flag", -1)[0];
+        }
     "# }
 
     unsafe {
@@ -573,6 +584,7 @@ fn wide_string_literals_and_pointers_to_arrays() {
         assert_eq!(wide_at(1), i32::from(b'i'));
         assert_eq!(wide_at(2), 0);
         assert_eq!(wide_length(), 4);
+        assert_eq!(wide_in_a_conditional(), i32::from(b'v'));
         // 5 plus `sizeof(int[3])`.
         assert_eq!(
             through_array_pointer(),

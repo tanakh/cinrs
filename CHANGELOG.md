@@ -187,6 +187,18 @@ follows [Semantic Versioning][semver].
   A vector passed by value to a function the unit does not define, or through
   `...`, is refused: GCC passes one in a vector register, and the struct does
   not go there.
+* **`__attribute__((ms_struct))`** lays a record's bit-fields out by
+  Microsoft's rules, as GCC's `-mms-bitfields` does, and `gcc_struct` by the
+  System V ones. It used to be ignored, which moved fields without a word —
+  1,560 of CPython's `test_ctypes` failures. `#pragma ms_struct on` is
+  refused, naming the attribute.
+* `max_align_t` in the bundled `<stddef.h>` (C11), with the platform's size
+  and alignment — 32 and 16 on x86-64 Linux — rather than one built on
+  cinrs's eight-byte `long double`. autoconf's `AC_CHECK_ALIGNOF(max_align_t)`
+  found none, and CPython fell back to an alignment of 8.
+* A directive among a function-like macro's arguments is processed, as GCC
+  does: CPython's `perf_jit_trampoline.c` writes an `#ifdef` between the
+  parentheses of a macro call, which was "expected expression, found '#'".
 * Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
   compiles position-independent code, `__PIE__` and `__pie__` (2) where it
   links position-independent executables, `__FXSR__` with the rest of the
@@ -241,6 +253,18 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* A wide string literal as an arm of `?:` that needs a `const` pointer —
+  CPython's `return sep ? sep + 1 : L"";` — compiles; the block holding the
+  literal's `static` was read as a statement before its `as`.
+* A conditional with an integer constant condition is the address constant
+  its chosen arm is, in a static initialiser: CPython's `_Py_LATIN1_CHR` in
+  Argument Clinic's keyword tables.
+* `static T x[64];` followed by `static T x[] = { … };` defines one object of
+  64 elements, as C11 6.9.2 and 6.2.7 make it, rather than "redefinition of
+  'x'" (CPython's `pyexpat.c`).
+* `__m128i m[4] = { 0U };` leaves the inner braces out, as GCC allows for a
+  vector: the scalar is the first lane of the first element (HACL*'s Blake2
+  in CPython).
 * `s.a = s.b = 1` on two bit-fields of one record compiles; the setter's
   borrow of the record overlapped the inner assignment's (E0499, in libpng's
   pngfix).

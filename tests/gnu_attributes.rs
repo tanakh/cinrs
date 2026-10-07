@@ -158,6 +158,70 @@ fn aligned_on_a_typedef_of_an_anonymous_record_is_honoured() {
     assert_eq!(unsafe { octet_is_aligned() }, 1);
 }
 
+// `ms_struct` lays the bit-fields out by Microsoft's rules, as GCC's
+// `-mms-bitfields` does: a unit of each field's own type, shared only with
+// fields of a type the same size. CPython's ctypes tests compare it with
+// their own `_layout_ = 'ms'`. The numbers are `gcc -O1`'s (gcc 15.2): the
+// size, the alignment, and the first byte each field occupies.
+cinrs::gnu11! {
+    #include <string.h>
+    #define MS __attribute__((ms_struct))
+    struct MS ms_t1 { char foo : 4; short : 0; char bar; };
+    struct MS ms_t2 { char foo; long : 0; char bar; };
+    struct MS ms_t3 { char a : 3; int b : 5; char c : 2; };
+    struct MS ms_t4 { int a : 10; char b; int c : 3; };
+    struct MS ms_t5 { short a : 9; short b : 9; };
+    struct MS ms_t6 { long long a : 40; int b : 10; long long c : 30; };
+    #pragma pack(push, 1)
+    struct MS ms_t8 { char a : 3; int b : 20; short c : 4; };
+    #pragma pack(pop)
+    struct MS ms_bits {
+        signed int A : 1, B : 2, C : 3, D : 4, E : 5, F : 6, G : 7, H : 8, I : 9;
+        signed short M : 1, N : 2, O : 3, P : 4, Q : 5, R : 6, S : 7;
+    };
+    struct __attribute__((gcc_struct)) gcc_t1 { char foo : 4; short : 0; char bar; };
+
+    static unsigned long first_set(const void *p, unsigned long n) {
+        const unsigned char *bytes = p;
+        unsigned long i = 0;
+        while (i < n && !bytes[i]) i++;
+        return i;
+    }
+    #define FIRST(T, F) { struct T v; memset(&v, 0, sizeof v); v.F = -1; out = out * 100 + first_set(&v, sizeof v); }
+    #define SHAPE(T) (sizeof(struct T) * 100 + _Alignof(struct T))
+
+    unsigned long long ms_layout(int which) {
+        unsigned long long out = 0;
+        switch (which) {
+        case 1: out = SHAPE(ms_t1); FIRST(ms_t1, foo); FIRST(ms_t1, bar); break;
+        case 2: out = SHAPE(ms_t2); FIRST(ms_t2, foo); FIRST(ms_t2, bar); break;
+        case 3: out = SHAPE(ms_t3); FIRST(ms_t3, a); FIRST(ms_t3, b); FIRST(ms_t3, c); break;
+        case 4: out = SHAPE(ms_t4); FIRST(ms_t4, a); FIRST(ms_t4, b); FIRST(ms_t4, c); break;
+        case 5: out = SHAPE(ms_t5); FIRST(ms_t5, a); FIRST(ms_t5, b); break;
+        case 6: out = SHAPE(ms_t6); FIRST(ms_t6, a); FIRST(ms_t6, b); FIRST(ms_t6, c); break;
+        case 8: out = SHAPE(ms_t8); FIRST(ms_t8, a); FIRST(ms_t8, b); FIRST(ms_t8, c); break;
+        case 9: out = SHAPE(ms_bits); FIRST(ms_bits, H); FIRST(ms_bits, M); FIRST(ms_bits, R); break;
+        case 10: out = SHAPE(gcc_t1); FIRST(gcc_t1, foo); FIRST(gcc_t1, bar); break;
+        }
+        return out;
+    }
+}
+
+#[test]
+fn ms_struct_lays_bit_fields_out_as_msvc_does() {
+    let layout = |which| unsafe { ms_layout(which) };
+    assert_eq!(layout(1), 4_02_00_02);
+    assert_eq!(layout(2), 2_01_00_01);
+    assert_eq!(layout(3), 12_04_00_04_08);
+    assert_eq!(layout(4), 12_04_00_04_08);
+    assert_eq!(layout(5), 4_02_00_02);
+    assert_eq!(layout(6), 24_08_00_08_16);
+    assert_eq!(layout(8), 7_01_00_01_05);
+    assert_eq!(layout(9), 12_04_04_08_10);
+    // `gcc_struct` is the System V layout, which is the default.
+    assert_eq!(layout(10), 3_01_00_02);
+}
+
 #[test]
 fn aligned_raises_a_records_alignment_and_moves_a_member() {
     assert_eq!(unsafe { cache_line_size() }, 32);

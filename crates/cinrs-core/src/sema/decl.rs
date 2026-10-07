@@ -459,6 +459,21 @@ impl Sema<'_> {
         // them are this declaration's to take.
         self.vm_bounds.clear();
         let mut inferred = type_from_initializer(declarator);
+        // `static T x[64]; … static T x[] = { … };` — CPython's `pyexpat.c` —
+        // declares one object: the composite type has the earlier size
+        // (6.2.7p3), and the initialiser fills that rather than deciding one.
+        let earlier = self.earlier_sized_array(&name.name, file_scope);
+        if earlier.is_some()
+            && matches!(
+                declarator.ty.kind,
+                ast::TypeKind::Array {
+                    size: ast::ArraySize::Unspecified,
+                    ..
+                }
+            )
+        {
+            inferred = false;
+        }
         let (mut ty, mut init) = if inferred {
             self.typed_initializer(declarator, &name.name)
                 .unwrap_or((Ty::Error, None))
@@ -485,6 +500,13 @@ impl Sema<'_> {
             }
             (self.apply_type_attrs(ty, &attrs), None)
         };
+        if !inferred
+            && let Some(earlier) = earlier
+            && self.types().is_incomplete_array(ty)
+            && let Some(composite) = self.composite_object_ty(earlier, ty)
+        {
+            ty = composite;
+        }
         // `typedef int A[]; A a = { 1, 2 };` — an incomplete array type reached
         // through a `typedef` takes its length from the initialiser too
         // (6.7.9p22), exactly as the `int a[] = { … }` spelling does. It is the
@@ -1758,6 +1780,26 @@ impl Sema<'_> {
     /// which C allows; a second initialiser does not. The object to give the
     /// initialiser to comes back, or `None` when this declaration wrote none
     /// or is the second one that did.
+    /// The type of an earlier file-scope declaration of `name` in this scope,
+    /// when it is an array of known size, which a later `T name[] = { … }`
+    /// completes rather than redefines.
+    fn earlier_sized_array(&self, name: &str, file_scope: bool) -> Option<Ty> {
+        if !file_scope {
+            return None;
+        }
+        let Some(Entry::Object(existing)) = self.declared_here(name) else {
+            return None;
+        };
+        let ty = self.visible_object_ty(*existing);
+        match ty {
+            Ty::Array(id) => {
+                let array = self.types().array_type(id);
+                (!array.incomplete && !array.vla).then_some(ty)
+            }
+            _ => None,
+        }
+    }
+
     fn complete_tentative_definition(
         &mut self,
         name: &ast::Ident,
@@ -3490,6 +3532,21 @@ impl Sema<'_> {
             // this crate's strict entry points do everywhere.
             ExprKind::Comma { lhs, rhs } if self.const_eval(&lhs).is_some() => {
                 self.static_init(*rhs, what)
+            }
+            // `c ? &a[i] : &b[j]` with an integer constant `c` is the arm it
+            // chooses, which GCC folds — CPython's `_Py_LATIN1_CHR` in a
+            // static table. An arithmetic one folds whole below; this is for
+            // the arms only an address constant can be.
+            ExprKind::Cond {
+                cond,
+                then_expr,
+                else_expr,
+            } if !ty.is_arithmetic() && self.const_scalar(&cond).is_some() => {
+                let chosen = match self.const_scalar(&cond) {
+                    Some(value) if super::is_true(value) => then_expr,
+                    _ => else_expr,
+                };
+                self.static_init(*chosen, what)
             }
             ExprKind::RecordLit { record, fields } => {
                 let fields: Option<Vec<Expr>> = fields

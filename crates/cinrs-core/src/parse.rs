@@ -726,6 +726,9 @@ impl Parser<'_> {
             Some(gnu::Attribute::TransparentUnion) => {
                 attrs.transparent_union = attrs.transparent_union.or(Some(range));
             }
+            // The last of the two written is the one that counts, as in GCC.
+            Some(gnu::Attribute::MsStruct) => attrs.ms_struct = Some(Spanned::new(true, range)),
+            Some(gnu::Attribute::GccStruct) => attrs.ms_struct = Some(Spanned::new(false, range)),
             // A statement attribute with nothing to say here: a `switch` group
             // falls through in the generated Rust either way.
             Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}

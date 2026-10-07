@@ -584,6 +584,28 @@ fn offsetof_agrees_with_rusts_offset_of() {
     }
 }
 
+/// C11's `max_align_t` has the *platform's* size and alignment — what
+/// `malloc` and every allocator built on it hand out — whatever cinrs's own
+/// `long double` is: 32 and 16 bytes on x86-64 and AArch64 Linux.
+#[test]
+fn max_align_t_is_the_platforms() {
+    cinrs::c11! {
+        #include <stddef.h>
+        size_t max_align(void) { return _Alignof(max_align_t); }
+        size_t max_align_size(void) { return sizeof(max_align_t); }
+    }
+
+    unsafe {
+        assert_eq!(max_align() as usize, core::mem::align_of::<max_align_t>());
+        if cfg!(all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )) {
+            assert_eq!((max_align(), max_align_size()), (16, 32));
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // <assert.h>
 // ---------------------------------------------------------------------------

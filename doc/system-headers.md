@@ -198,7 +198,7 @@ with the platform, and why it costs nothing:
 | bundled | shares | why it is free |
 | --- | --- | --- |
 | `<stdint.h>`, `<inttypes.h>` | `int8_t` … `uint64_t`, `intptr_t`, `intmax_t` with `<sys/types.h>` and `<unistd.h>` | glibc guards none of them, but a repeated `typedef` with the same type is legal C11 and the bundled header spells them as glibc does |
-| `<stddef.h>` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL` | nothing to share: these come from the *compiler*'s `<stddef.h>`, whose directory is never searched, so glibc's own `#define __need_size_t` reaches the bundled copy — one `size_t`, from one place |
+| `<stddef.h>` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, and in C11 `max_align_t` with the platform's size and alignment (32 and 16 on x86-64 Linux) rather than one of cinrs's eight-byte `long double` | nothing to share: these come from the *compiler*'s `<stddef.h>`, whose directory is never searched, so glibc's own `#define __need_size_t` reaches the bundled copy — one `size_t`, from one place |
 | `<signal.h>` | `sig_atomic_t` with `<sys/wait.h>` | repeated identical `typedef`; the bundled header defines no `sigset_t` or `struct sigaction`, which are the two glibc does not guard |
 | `<stdio.h>` | `FILE` | both spell it `typedef struct _IO_FILE FILE;` over an *incomplete* tag, so the `typedef` is repeated identically and only glibc — behind its own `__struct_FILE_defined` — ever completes the tag |
 | `<errno.h>` | `errno` and the `E*` set | spelled exactly as glibc spells them — `(*__errno_location ())` with the space, and `EWOULDBLOCK`/`ENOTSUP`/`EDEADLOCK` as aliases rather than numbers — so a redefinition is identical |

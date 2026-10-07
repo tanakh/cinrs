@@ -106,6 +106,28 @@ fn a_file_scope_redeclaration_completes_the_object_for_the_rest_of_the_unit() {
     }
 }
 
+/// The other order: a tentative definition with a size, then the definition
+/// with `[]` and fewer initialisers — CPython's `pyexpat.c` declares
+/// `static struct HandlerInfo handler_info[64];` and defines it thirty
+/// entries long further down. The composite type has the size (6.2.7p3), and
+/// the initialiser fills the first elements of that.
+#[test]
+fn a_sized_tentative_definition_is_completed_by_a_later_list() {
+    c11! {
+        struct info { const char *name; int value; };
+
+        static struct info handlers[8];
+
+        static int count(void) { return (int)(sizeof handlers / sizeof handlers[0]); }
+
+        static struct info handlers[] = { { "a", 1 }, { "b", 2 }, { "c", 3 } };
+
+        int handler_count(void) { return count() * 100 + handlers[2].value * 10 + handlers[7].value; }
+    }
+
+    assert_eq!(unsafe { handler_count() }, 830);
+}
+
 // ---------------------------------------------------------------------------
 // DR103: a tag written in a parameter list belongs to that list
 // ---------------------------------------------------------------------------

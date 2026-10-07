@@ -2150,6 +2150,22 @@ impl Pp<'_> {
         let mut args: Vec<Vec<PTok>> = vec![Vec::new()];
         let mut depth = 0u32;
         loop {
+            // A directive among the arguments, read from the file: C17
+            // 6.10.3p11 leaves it undefined, and GCC processes it exactly as
+            // it would have without the invocation around it — CPython's
+            // `perf_jit_trampoline.c` writes an `#ifdef __x86_64__` …
+            // `#endif` between the parentheses of a macro call — and a
+            // group it skips is not part of any argument.
+            if allow_input && self.pending.is_empty() && !self.ahead().is_eof() {
+                if self.at_directive() {
+                    self.directive();
+                    continue;
+                }
+                if self.skipping() {
+                    self.cur_mut().pos += 1;
+                    continue;
+                }
+            }
             // Running out of tokens is the same failure whether the file ended
             // or the argument being pre-expanded did.
             let Some(mut tok) = self.bump(allow_input).filter(|t| !t.is_eof()) else {
@@ -3000,6 +3016,18 @@ impl Pp<'_> {
             }
             Some("cinrs") => self.cinrs_pragma(&rest[1..], range),
             Some("pack") => self.pack_pragma(&rest[1..], range),
+            // GCC's `#pragma ms_struct on` switches every record after it to
+            // Microsoft's bit-field layout. Ignoring it would lay them out
+            // differently without a word, so it is refused; `off` and
+            // `reset` ask for what is in force anyway.
+            Some("ms_struct") => match rest.get(1).and_then(PTok::name) {
+                Some("off" | "reset") => {}
+                _ => self.diags.error(
+                    range,
+                    "'#pragma ms_struct on' is not supported: write \
+                     '__attribute__((ms_struct))' on the records it is meant for",
+                ),
+            },
             Some("push_macro") => self.push_macro_pragma(&rest[1..], range, true),
             Some("pop_macro") => self.push_macro_pragma(&rest[1..], range, false),
             Some("GCC") => self.gcc_pragma(&rest[1..], range),
@@ -5955,6 +5983,21 @@ fn limit_macros(target: &TargetModel, out: &mut Vec<(&'static str, String)>) {
     push("__SIZEOF_FLOAT__", "4".to_owned());
     push("__SIZEOF_DOUBLE__", "8".to_owned());
     push("__SIZEOF_LONG_DOUBLE__", "8".to_owned());
+    // The *platform's* `max_align_t`, for the bundled `<stddef.h>`: its
+    // alignment and size are an ABI fact other code allocates by, whatever
+    // `long double` is here. GCC's is a `long long` and a `long double` (and,
+    // on i386, a `__float128`); Microsoft's is a `double`.
+    let (max_align, max_align_size) = if target.is_msvc() {
+        (8, 8)
+    } else if target.platform_long_double_is_double() {
+        (target.max_scalar_align, 16)
+    } else if target.arch == crate::target::Arch::X86 {
+        (16, 48)
+    } else {
+        (16, 32)
+    };
+    push("__CINRS_MAX_ALIGN__", max_align.to_string());
+    push("__CINRS_SIZEOF_MAX_ALIGN__", max_align_size.to_string());
     // Everything `<float.h>` says about a floating type, under the names GCC
     // gives it: a great deal of portable C tests `__DBL_MIN_EXP__` rather than
     // including the header, and a program that finds one of these undefined
