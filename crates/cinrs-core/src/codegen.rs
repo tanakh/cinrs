@@ -5834,8 +5834,33 @@ impl<'a> Codegen<'a> {
                 )
                 .type_end(true)
             }
+            // On x86-64 an operand narrower than 64 bits is counted in a 64-bit
+            // register with a bit set just above it — the same answer for
+            // every value, zero included (the bit is the operand's width).
+            // What it buys is an instruction that writes the register it
+            // reads: LLVM's generic x86-64 code is `tzcnt` (`rep bsf`) into
+            // whatever register is free, and the processor waits for that
+            // register's *previous* value before writing it — a false
+            // dependency GCC breaks with an `xor` and LLVM does not. In
+            // libwebp's `CombinedShannonEntropy_SSE2`, `ctz` of a bit mask
+            // in a loop landed in the register of the previous iteration's
+            // table lookup, and the loop ran at a third of GCC's speed; the
+            // widened count is computed in place, and matches GCC's.
             BuiltinOp::Ctz => {
+                let width = args[0].ty.bits(&self.options.target);
                 let value = self.unsigned_operand(&args[0], span);
+                if self.options.target.arch == crate::target::Arch::X86_64 && width < 64 {
+                    let u64_ty = primitive_ty("u64", span);
+                    let mut above = Literal::u64_suffixed(1u64 << width);
+                    above.set_span(span);
+                    return Value::new(
+                        quote_spanned! {span=>
+                            ((#value as #u64_ty) | #above).trailing_zeros() as #int
+                        },
+                        prec::CAST,
+                    )
+                    .type_end(true);
+                }
                 Value::new(
                     quote_spanned! {span=> #value.trailing_zeros() as #int },
                     prec::CAST,

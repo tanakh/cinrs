@@ -128,6 +128,13 @@ follows [Semantic Versioning][semver].
   longer pays for an allocation, a zeroed chunk and a free each time (a
   microbenchmark of it went from 0.85 s to 0.28 s; gcc takes 0.11 s). A unit
   under `#pragma cinrs no_std` frees them as before.
+* `__builtin_ctz` on x86-64 counts its 32-bit operand in a 64-bit register
+  with bit 32 set — the same answer for every value — so that `tzcnt` writes
+  the register it reads. LLVM's generic x86-64 code wrote whichever register
+  was free and so waited for that register's previous value, a false
+  dependency GCC breaks with an `xor`; libwebp's lossless entropy loop, whose
+  `ctz` landed in the register of the previous iteration's table lookup, ran
+  at 2.7× GCC's time and now runs at 1.05× (0.200 s → 0.075 s; gcc 0.071 s).
 
 ### Fixed
 

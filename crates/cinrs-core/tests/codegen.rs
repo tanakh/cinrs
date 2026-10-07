@@ -2130,6 +2130,18 @@ fn file_scope_asm_becomes_global_asm() {
     ));
 }
 
+/// `__builtin_ctz` on x86-64 counts a 32-bit operand in a 64-bit register
+/// with bit 32 set — the same answer for every value, 32 for zero — so that
+/// `tzcnt` writes the register it reads and carries no false dependency on
+/// whatever that register held before; `__builtin_ctzll` is the plain count.
+#[test]
+fn ctz_counts_a_narrow_operand_in_place_on_x86_64() {
+    insta::assert_snapshot!(generate_asm(
+        "int lowest(unsigned m) { return __builtin_ctz(m); }\n\
+         int lowest_ll(unsigned long long m) { return __builtin_ctzll(m); }"
+    ));
+}
+
 /// A function pointer with static storage whose constant is an object's
 /// address or an integer — libwebp's `(VP8CPUInfo)&last`, `SIG_IGN` — is a
 /// `*mut c_void` item, which Rust's constant evaluation lets hold either, and
