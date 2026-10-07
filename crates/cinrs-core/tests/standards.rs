@@ -657,7 +657,24 @@ fn constexpr_objects_fold_to_their_value() {
         "struct P { int a; }; constexpr struct P p = { 1 };",
         &[
             "a 'constexpr' object of type 'struct P' is not supported yet; only the \
-           arithmetic types are",
+           arithmetic types and the pointers are",
+        ],
+    );
+    // A pointer may be one, as long as it is null (C23 6.7.1p5); autoconf
+    // 2.72's C23 probe declares the `nullptr_t` one.
+    accepted(
+        Standard::C23,
+        "#include <stddef.h>\n\
+         constexpr nullptr_t null_pointer = nullptr;\n\
+         constexpr int *none = 0;\n\
+         int f(void) { int *p = null_pointer; return !null_pointer + (none == p); }",
+    );
+    rejected(
+        Standard::C23,
+        "constexpr int *four = (int *)4;",
+        &[
+            "the initializer of a 'constexpr' pointer has to be a null pointer: C23 allows no \
+           other value for one",
         ],
     );
     // A constant is not an object: it cannot be assigned to.

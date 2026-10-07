@@ -2079,6 +2079,8 @@ impl<'a> Sema<'a> {
 
     fn const_to_expr(&self, value: ConstValue, ty: Ty, range: SourceRange) -> Expr {
         match value {
+            // A `constexpr` pointer, which is always null.
+            ConstValue::Int(_) if ty.is_pointer() => Expr::new(ExprKind::Zeroed, ty, range),
             ConstValue::Int(v) => Expr::int(v, ty, range),
             ConstValue::Float(v) => Expr::new(ExprKind::Float(v), ty, range),
             ConstValue::Complex(re, im) => {
@@ -2218,10 +2220,12 @@ impl<'a> Sema<'a> {
             }
             ExprKind::Compare { op, lhs, rhs } => {
                 // Both operands have already been converted to their common
-                // type, so either one says how the pair is ordered.
+                // type, so either one says how the pair is ordered. A pair of
+                // pointers compares by address, which is how `!p` — `p == 0`
+                // to sema — folds too.
                 let operand_ty = lhs.ty;
-                let lhs = self.const_eval(lhs)?;
-                let rhs = self.const_eval(rhs)?;
+                let lhs = self.const_scalar(lhs)?;
+                let rhs = self.const_scalar(rhs)?;
                 let result = match (lhs, rhs) {
                     // An `unsigned __int128` above `i128::MAX` is carried as
                     // its bit pattern, which orders wrongly as a signed value;
@@ -2247,11 +2251,11 @@ impl<'a> Sema<'a> {
                 Some(ConstValue::Int(i128::from(result)))
             }
             ExprKind::Logical { op, lhs, rhs } => {
-                let lhs = is_true(self.const_eval(lhs)?);
+                let lhs = is_true(self.const_scalar(lhs)?);
                 let result = match (op, lhs) {
                     (ir::LogicalOp::And, false) => false,
                     (ir::LogicalOp::Or, true) => true,
-                    _ => is_true(self.const_eval(rhs)?),
+                    _ => is_true(self.const_scalar(rhs)?),
                 };
                 Some(ConstValue::Int(i128::from(result)))
             }
@@ -2260,7 +2264,7 @@ impl<'a> Sema<'a> {
                 then_expr,
                 else_expr,
             } => {
-                if is_true(self.const_eval(cond)?) {
+                if is_true(self.const_scalar(cond)?) {
                     self.const_eval(then_expr)
                 } else {
                     self.const_eval(else_expr)
@@ -2269,6 +2273,29 @@ impl<'a> Sema<'a> {
             ExprKind::Builtin { op, args } => self.const_bit_builtin(*op, args, expr),
             _ => None,
         }
+    }
+
+    /// [`Sema::const_eval`] for an operand that is only *tested* — compared,
+    /// or taken as a truth value by `!`, `&&`, `||` or `?:` — where a pointer
+    /// may stand as well as a number.
+    ///
+    /// A pointer is a constant here when its address is an integer: a null
+    /// pointer, which `nullptr`, `(void *)0` and `(char *)0` all are, or an
+    /// integer cast to a pointer (see [`Sema::integer_pointer_value`]). Its
+    /// value is that address as a `size_t`, so `!nullptr` is 1, `(void *)0 ==
+    /// 0` is 1 and `(int *)4 != 0` is 1. The result of the test is an `int`,
+    /// which is why autoconf's C23 probe, `bool b = true | false | !nullptr;`,
+    /// is a constant initialiser — GCC folds every one of these in every
+    /// standard, `(void *)0 == 0` under `-pedantic-errors` too. The
+    /// address of an object is not an integer, so `!&x` still is not folded;
+    /// and [`Sema::const_eval`] itself still gives no value of pointer type,
+    /// since its callers convert what it gives to the expression's own type.
+    fn const_scalar(&mut self, expr: &Expr) -> Option<ConstValue> {
+        if !expr.ty.is_pointer() {
+            return self.const_eval(expr);
+        }
+        let address = self.integer_pointer_value(expr)?;
+        Some(ConstValue::Int(self.size_ty().wrap(address, &self.target)))
     }
 
     /// The bit-counting builtins, folded when their operand is a constant.

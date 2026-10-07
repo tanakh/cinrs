@@ -1112,7 +1112,11 @@ impl Sema<'_> {
     /// The object becomes a *constant* rather than storage: every use of the
     /// name is folded to its value, which is what makes it usable as an array
     /// bound or a `case` label. The cost — and the reason only arithmetic
-    /// objects are accepted — is that there is nothing to take the address of.
+    /// objects and pointers are accepted — is that there is nothing to take the
+    /// address of. A pointer's value has to be null (C23 6.7.1p5: "any explicit
+    /// initializer value for it shall be null"), so a pointer constant is a
+    /// null pointer of its type: autoconf 2.72's C23 probe writes `constexpr
+    /// nullptr_t null_pointer = nullptr;`.
     fn declare_constexpr(
         &mut self,
         name: &ast::Ident,
@@ -1133,12 +1137,32 @@ impl Sema<'_> {
             );
             return;
         };
+        if ty.is_pointer() {
+            if !matches!(self.const_scalar(&init), Some(ConstValue::Int(0))) {
+                self.error(
+                    init.range,
+                    "the initializer of a 'constexpr' pointer has to be a null pointer: C23 \
+                     allows no other value for one",
+                );
+                return;
+            }
+            self.check_redefinition(name);
+            self.insert(
+                &name.name,
+                Entry::Constant {
+                    value: ConstValue::Int(0),
+                    ty,
+                    range: name.range,
+                },
+            );
+            return;
+        }
         if !ty.is_arithmetic() {
             self.error(
                 declarator.range,
                 format!(
                     "a 'constexpr' object of type '{}' is not supported yet; only the \
-                     arithmetic types are",
+                     arithmetic types and the pointers are",
                     self.tyname(ty)
                 ),
             );
@@ -3336,8 +3360,19 @@ impl Sema<'_> {
         match &expr.kind {
             ExprKind::Int(v) => Some(*v),
             ExprKind::Zeroed if expr.ty.is_pointer() => Some(0),
-            ExprKind::Cast(inner) if inner.ty.is_integer() || inner.ty.is_pointer() => {
-                self.integer_pointer_value(inner)
+            ExprKind::Cast(inner) if inner.ty.is_pointer() => self.integer_pointer_value(inner),
+            // Any integer constant expression, not only a literal: `(char *)
+            // -1`. Asked quietly: what is wrong with the integer — a division
+            // by zero — is reported where the integer itself is folded, and
+            // once is enough.
+            ExprKind::Cast(inner) if inner.ty.is_integer() => {
+                let saved = std::mem::take(&mut self.diags);
+                let value = self.const_eval(inner);
+                self.diags = saved;
+                match value {
+                    Some(ConstValue::Int(v)) => Some(v),
+                    _ => None,
+                }
             }
             ExprKind::AddrOf(place) if self.gating.dialect.is_gnu() => {
                 let place = place.clone();

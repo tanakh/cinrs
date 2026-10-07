@@ -96,6 +96,9 @@ follows [Semantic Versioning][semver].
   handler(int); static handler f, g;` — is a function. It was read as an
   object of an incomplete type and refused; expat declares its parser's state
   handlers that way.
+* A null pointer that is only tested is a constant: `bool b = true | false |
+  !nullptr;`, autoconf's C23 probe, and `int i = (void *)0 == 0;` are static
+  initialisers, as in GCC. They were "not a compile-time constant expression".
 * An inline-assembly immediate is printed in its operand's width,
   sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
   UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler

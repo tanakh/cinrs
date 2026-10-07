@@ -45,6 +45,70 @@ fn bool_true_false_and_nullptr_need_no_header() {
     }
 }
 
+/// A null pointer that is only tested folds to a constant, so it may stand in
+/// a static initialiser: `!nullptr` is 1, and a null pointer compared with 0
+/// or with another null pointer is 1 or 0. The first two lines are autoconf
+/// 2.72's C23 probe, which xz's and libpng's `configure` run — a `constexpr`
+/// pointer, which has to be null, is one too. Every value is what GCC 15
+/// gives.
+#[test]
+fn a_tested_null_pointer_is_a_constant() {
+    c23! {
+        #include <stddef.h>
+
+        bool check_that_bool_works = true | false | !nullptr;
+        constexpr nullptr_t null_pointer = nullptr;
+        int not_constexpr_null = !null_pointer;
+        int not_nullptr = !nullptr;
+        int nullptr_is_zero = nullptr == 0;
+        int zero_is_nullptr = 0 == nullptr;
+        int nullptr_is_not_void_zero = (void *)0 != nullptr;
+        int nullptr_chooses = nullptr ? 10 : 20;
+        int nullptr_or = nullptr || (void *)0;
+        int not_four = !(int *)4;
+        enum { TWO = !nullptr + 1 };
+        int three[!nullptr + 2];
+
+        void tested(int *out) {
+            out[0] = check_that_bool_works;
+            out[1] = not_nullptr;
+            out[2] = nullptr_is_zero;
+            out[3] = zero_is_nullptr;
+            out[4] = nullptr_is_not_void_zero;
+            out[5] = nullptr_chooses;
+            out[6] = nullptr_or;
+            out[7] = not_four;
+            out[8] = TWO;
+            out[9] = (int)(sizeof three / sizeof three[0]);
+            out[10] = not_constexpr_null;
+            int *p = null_pointer;
+            out[11] = p == nullptr;
+        }
+    }
+
+    // `(void *)0` is a null pointer constant in every revision.
+    c17! {
+        int not_void_zero = !(void *)0;
+        int void_zero_is_zero = (void *)0 == 0;
+        int not_char_zero = !(char *)0;
+        int void_zeros_differ = (void *)0 != (void *)0;
+
+        void tested_c17(int *out) {
+            out[0] = not_void_zero;
+            out[1] = void_zero_is_zero;
+            out[2] = not_char_zero;
+            out[3] = void_zeros_differ;
+        }
+    }
+
+    let mut out = [0; 12];
+    unsafe { tested(out.as_mut_ptr()) };
+    assert_eq!(out, [1, 1, 1, 1, 0, 20, 0, 0, 2, 3, 1, 1]);
+    let mut out = [0; 4];
+    unsafe { tested_c17(out.as_mut_ptr()) };
+    assert_eq!(out, [1, 1, 1, 0]);
+}
+
 #[test]
 fn constexpr_objects_are_constants() {
     c23! {
