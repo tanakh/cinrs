@@ -100,6 +100,7 @@ mod expr;
 mod float128;
 mod init;
 mod long_double;
+mod nonlocal;
 mod stmt;
 mod types;
 mod va;
@@ -163,6 +164,15 @@ pub fn check_pragmas(program: &Program) -> Diagnostics {
                  `cpuid` is not something a library can do without one. Ask for the \
                  instruction set with __attribute__((target(\"…\"))) and let the caller \
                  guarantee it, or drop the no_std pragma"
+                    .to_owned(),
+            );
+        }
+        // A `longjmp` is a Rust unwind, which only `std` can catch.
+        for range in &program.nonlocal_jumps {
+            diags.error(
+                *range,
+                "'setjmp' and 'longjmp' require std; this unit says no_std. A 'longjmp' is a \
+                 Rust unwind here, and catching one is `std::panic::catch_unwind`"
                     .to_owned(),
             );
         }
@@ -578,6 +588,7 @@ struct SavedFunc {
     goto_scopes: Vec<(SourceRange, ir::LabelId, Vec<ObjectId>)>,
     switch_vla_depths: Vec<usize>,
     func_uses_arena: bool,
+    func_setjmp: bool,
     cleanup_depth: usize,
     next_loop: u32,
     next_switch: u32,
@@ -813,6 +824,22 @@ struct Sema<'a> {
     /// Whether the function being checked declares a variable length array
     /// or calls `alloca`, and so needs the bump arena both allocate from.
     func_uses_arena: bool,
+    /// Whether the function being checked calls `setjmp`, and so needs the
+    /// two hidden objects its [control-flow graph](crate::cfg) re-enters
+    /// through; see [`ir::BuiltinOp::SetJmp`].
+    func_setjmp: bool,
+    /// The one `setjmp` call the expression being checked may hold, by
+    /// address: set by the statement that is about to check a controlling
+    /// expression, an expression statement or an initialiser in which C17
+    /// 7.13.1.1p4 (or the assignment cinrs also takes) allows one, and
+    /// cleared once that expression is done. A `setjmp` anywhere else is
+    /// refused; see [`Sema::setjmp_call`].
+    setjmp_permit: Option<usize>,
+    /// How many statement expressions the expression being checked is
+    /// inside. A `setjmp` in one is refused: its statements are not edges of
+    /// the function's graph, so nothing could come back into the middle of
+    /// them.
+    stmt_expr_depth: u32,
     /// Operands of the atomic builtin being checked whose value is not used
     /// but which C still evaluates: a memory order that was not a constant
     /// expression, and a `__sync_*` builtin's trailing arguments.
@@ -968,6 +995,9 @@ impl<'a> Sema<'a> {
             goto_scopes: Vec::new(),
             switch_vla_depths: Vec::new(),
             func_uses_arena: false,
+            func_setjmp: false,
+            setjmp_permit: None,
+            stmt_expr_depth: 0,
             pending_discard: Vec::new(),
             cleanup_depth: 0,
             static_literals: HashMap::new(),

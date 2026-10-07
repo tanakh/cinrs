@@ -10,6 +10,7 @@ use crate::ir::{
     Stmt, SwitchId, Ty,
 };
 
+use super::nonlocal::SetjmpPlace;
 use super::{Breakable, ConvContext, Label, Sema, SwitchState, render_case_value};
 
 impl Sema<'_> {
@@ -93,6 +94,13 @@ impl Sema<'_> {
     /// lowered through a [control-flow graph](crate::cfg) has no Rust loop to
     /// leave, so a jump out of the statement expression is refused there.
     pub(super) fn stmt_expr(&mut self, block: &ast::Block, range: SourceRange) -> Option<Expr> {
+        self.stmt_expr_depth += 1;
+        let out = self.stmt_expr_inner(block, range);
+        self.stmt_expr_depth -= 1;
+        out
+    }
+
+    fn stmt_expr_inner(&mut self, block: &ast::Block, range: SourceRange) -> Option<Expr> {
         self.check_stmt_expr_jumps(block);
         self.push_scope();
         // The value is the last expression statement, which is checked apart
@@ -201,10 +209,12 @@ impl Sema<'_> {
             ast::StmtKind::Default { body } => self.case_label(None, body, stmt.range),
             ast::StmtKind::Compound(block) => Stmt::Block(self.block(block)),
             ast::StmtKind::Expr(None) => Stmt::Nop,
-            ast::StmtKind::Expr(Some(expr)) => match self.expr(expr) {
-                Some(expr) => Stmt::Expr(expr),
-                None => Stmt::Nop,
-            },
+            ast::StmtKind::Expr(Some(expr)) => {
+                match self.with_setjmp_permit(expr, SetjmpPlace::Statement, |s| s.expr(expr)) {
+                    Some(expr) => Stmt::Expr(expr),
+                    None => Stmt::Nop,
+                }
+            }
             ast::StmtKind::If {
                 cond,
                 then_branch,
@@ -215,7 +225,7 @@ impl Sema<'_> {
                 // `if (sizeof(enum { a, b }))` — is scoped to the `if` and
                 // does not leak into the enclosing block.
                 self.push_scope();
-                let cond = self.condition(cond);
+                let cond = self.controlling(cond);
                 // `if (0) f(x);` never calls `f` — unless a label or a `case`
                 // inside the branch is a way in that the condition does not
                 // guard.
@@ -244,7 +254,7 @@ impl Sema<'_> {
                 // C99 6.8.5p5: an iteration statement is a block of its own,
                 // for the reason `if` is one just above.
                 self.push_scope();
-                let cond = self.condition(cond);
+                let cond = self.controlling(cond);
                 self.breakables.push(Breakable::Loop(id));
                 let body = Box::new(self.stmt(body));
                 self.breakables.pop();
@@ -265,7 +275,7 @@ impl Sema<'_> {
                 self.breakables.push(Breakable::Loop(id));
                 let body = Box::new(self.stmt(body));
                 self.breakables.pop();
-                let cond = self.condition(cond);
+                let cond = self.controlling(cond);
                 self.pop_scope();
                 match cond {
                     Some(cond) => Stmt::DoWhile {
@@ -308,7 +318,7 @@ impl Sema<'_> {
                         Vec::new()
                     }
                 };
-                let cond = cond.as_ref().and_then(|c| self.condition(c));
+                let cond = cond.as_ref().and_then(|c| self.controlling(c));
                 let step = step.as_ref().and_then(|s| self.expr(s));
                 self.breakables.push(Breakable::Loop(id));
                 let body = Box::new(self.stmt(body));
@@ -403,6 +413,12 @@ impl Sema<'_> {
             ast::StmtKind::Asm(asm) => self.asm_stmt(asm, stmt.range),
             ast::StmtKind::Error => Stmt::Nop,
         }
+    }
+
+    /// The controlling expression of an `if` or an iteration statement, which
+    /// is one of the places a `setjmp` may stand.
+    fn controlling(&mut self, cond: &ast::Expr) -> Option<Expr> {
+        self.with_setjmp_permit(cond, SetjmpPlace::Control, |s| s.condition(cond))
     }
 
     fn return_stmt(&mut self, value: Option<&ast::Expr>, range: SourceRange) -> Stmt {
@@ -639,7 +655,7 @@ impl Sema<'_> {
     /// Checks the controlling expression of a `switch`, giving it the type the
     /// labels are converted to.
     fn scrutinee(&mut self, cond: &ast::Expr) -> Option<Expr> {
-        let scrutinee = self.expr(cond)?;
+        let scrutinee = self.with_setjmp_permit(cond, SetjmpPlace::Control, |s| s.expr(cond))?;
         if !scrutinee.ty.is_integer() {
             self.error(
                 cond.range,
@@ -1020,7 +1036,10 @@ impl Sema<'_> {
     /// off [`ast::FunctionDef::uses_label_addrs`], because it is an expression
     /// and may stand anywhere one may.
     pub(super) fn lowering(def: &ast::FunctionDef) -> Option<HashSet<String>> {
-        if def.uses_label_addrs || block_needs_cfg(&def.body, 0, false) {
+        // A `setjmp` is a way back into the middle of the body — what a
+        // `longjmp` to it comes back to — which only the graph has an edge
+        // for; see [`ir::BuiltinOp::SetJmp`].
+        if def.uses_label_addrs || def.uses_setjmp || block_needs_cfg(&def.body, 0, false) {
             return None;
         }
         crate::regions::analyze(&def.body)

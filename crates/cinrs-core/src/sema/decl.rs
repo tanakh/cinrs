@@ -2969,6 +2969,7 @@ impl Sema<'_> {
         self.goto_scopes.clear();
         self.label_vla_scopes.clear();
         self.func_uses_arena = false;
+        self.func_setjmp = false;
         self.next_loop = 0;
         self.next_switch = 0;
         // `next_label` is *not* reset: a label's identity is unique across the
@@ -3233,6 +3234,24 @@ impl Sema<'_> {
                 .iter()
                 .map(|(name, label)| (label.id, name.clone()))
                 .collect();
+            // Which `setjmp` a `longjmp` came back to, and the value it
+            // brought; see `crate::cfg`'s non-local jumps.
+            let setjmp = self.func_setjmp.then(|| crate::cfg::SetJmpObjects {
+                resume: self.new_object(
+                    "__cinrs_sj_resume",
+                    Ty::UInt,
+                    Storage::Automatic,
+                    false,
+                    def.body.range,
+                ),
+                value: self.new_object(
+                    "__cinrs_sj_value",
+                    Ty::Int,
+                    Storage::Automatic,
+                    false,
+                    def.body.range,
+                ),
+            });
             ir::Body::Cfg(crate::cfg::lower(
                 body,
                 &params,
@@ -3241,6 +3260,7 @@ impl Sema<'_> {
                 goto_value,
                 table,
                 &names,
+                setjmp,
             ))
         } else {
             ir::Body::Structured(body)
@@ -3295,6 +3315,7 @@ impl Sema<'_> {
             goto_scopes: std::mem::take(&mut self.goto_scopes),
             switch_vla_depths: std::mem::take(&mut self.switch_vla_depths),
             func_uses_arena: self.func_uses_arena,
+            func_setjmp: self.func_setjmp,
             // A `cleanup` owed by the enclosing block is not owed by the
             // nested function's `return`.
             cleanup_depth: std::mem::take(&mut self.cleanup_depth),
@@ -3320,6 +3341,7 @@ impl Sema<'_> {
         self.goto_scopes = saved.goto_scopes;
         self.switch_vla_depths = saved.switch_vla_depths;
         self.func_uses_arena = saved.func_uses_arena;
+        self.func_setjmp = saved.func_setjmp;
         self.cleanup_depth = saved.cleanup_depth;
         self.next_loop = saved.next_loop;
         self.next_switch = saved.next_switch;

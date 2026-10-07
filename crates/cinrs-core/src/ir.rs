@@ -2403,6 +2403,20 @@ pub struct Program {
     /// `::alloc::vec::Vec`. Filled in after semantic analysis, for the same
     /// reason as [`Program::link_libraries`].
     pub no_std: bool,
+    /// Every `setjmp` and every use of a `longjmp`, by where it was written.
+    ///
+    /// A non-local jump is a Rust unwind here (see [`BuiltinOp::SetJmp`]),
+    /// which needs `std` and a target that unwinds; the pragmas that could
+    /// rule either out are only known after semantic analysis, so the sites
+    /// are collected and checked by [`crate::sema::check_pragmas`]. A unit
+    /// with any of them is generated with the `C-unwind` ABI.
+    pub nonlocal_jumps: Vec<SourceRange>,
+    /// Whether every function the unit defines, declares or points at is
+    /// `extern "C-unwind"` rather than `extern "C"`: what
+    /// [`crate::Options::unwind`] or `#pragma cinrs unwind` asked for, or what
+    /// a [non-local jump](Program::nonlocal_jumps) needs. Filled in after
+    /// semantic analysis.
+    pub unwind: bool,
     /// The Rust path of the `cinrs` facade crate, which the generated code
     /// names when it needs the runtime: `::cinrs` unless
     /// `#pragma cinrs crate "…"` said otherwise.
@@ -2695,6 +2709,37 @@ pub enum BuiltinOp {
     /// `+∞` with the imaginary part's sign kept on a zero — so every infinity
     /// is the *one* point at infinity.
     ComplexProj,
+    /// `setjmp(buf)`, in any of its spellings, as sema finds it: an `int`
+    /// whose value is what the call returns — `0` now, and the `longjmp`'s
+    /// value each time one comes back to it.
+    ///
+    /// The operands are the buffer, converted to `void *`, and whether the
+    /// signal mask is saved with it (`sigsetjmp`'s second operand; `0` for
+    /// the others), as an `int`.
+    ///
+    /// A `longjmp` is a Rust unwind, and a function with a `setjmp` is lowered
+    /// through the [control-flow graph](crate::cfg) with its body inside a
+    /// `catch_unwind`. [`crate::cfg`] lifts each of these out of the
+    /// expression it stands in: the block before it ends with a
+    /// [`BuiltinOp::SetJmpSave`] and a jump to a block of its own, the
+    /// *continuation*, and the expression reads the function's hidden
+    /// `setjmp` value instead. A `longjmp` back to it re-enters the graph at
+    /// that continuation, so none of these reaches code generation.
+    SetJmp,
+    /// What is left of a [`BuiltinOp::SetJmp`] where it was written: writes
+    /// into the buffer which activation of which function it belongs to, and
+    /// which of the function's `setjmp`s it is. A `void` expression.
+    ///
+    /// The operands are the buffer, as `void *`; the site's number, an
+    /// integer constant from 1 that the function's entry dispatch knows; and
+    /// the save-mask flag, as an `int`.
+    SetJmpSave,
+    /// `__builtin_longjmp(buf, value)`, whose operands are the buffer, as
+    /// `void *`, and the value, as an `int`. A `void` expression that never
+    /// completes; see [`BuiltinOp::SetJmp`]. A `longjmp` the unit declares
+    /// is a function of its own instead, which is what lets its address be
+    /// taken.
+    LongJmp,
 }
 
 /// The `float` bit pattern of a NaN that travels through the IR as a `double`.

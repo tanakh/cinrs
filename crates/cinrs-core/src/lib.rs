@@ -392,6 +392,21 @@ pub struct Options {
     /// whoever runs `rustc`, with `-C target-feature`. A `#pragma GCC target`
     /// adds to them rather than replacing them, as in GCC. x86 only.
     pub target_features: Vec<String>,
+    /// Whether every function the unit defines, declares or points at has the
+    /// `extern "C-unwind"` ABI rather than `extern "C"`.
+    ///
+    /// A Rust unwind — which is what a `longjmp` is here; see
+    /// [`crate::sema`]'s non-local jumps — aborts the program when it leaves
+    /// an `extern "C"` function, so every frame between a `longjmp` and its
+    /// `setjmp` has to be `C-unwind`. The calling convention is the same; what
+    /// changes is the *type* of a function pointer, which Rust code handing a
+    /// callback to the unit then has to match.
+    ///
+    /// **Off by default**: a unit that uses `setjmp` or `longjmp` turns it on
+    /// for itself, and so does `#pragma cinrs unwind`. The command-line
+    /// driver turns it on for every unit, since any of them may be between a
+    /// `longjmp` and its `setjmp`.
+    pub unwind: bool,
 }
 
 /// One `-D` or `-U` of a command line; see [`Options::macros`].
@@ -437,6 +452,7 @@ impl Options {
             macros: Vec::new(),
             includes: Vec::new(),
             target_features: Vec::new(),
+            unwind: false,
         }
     }
 
@@ -746,11 +762,15 @@ fn front_end(input: FrontEndInput) -> FrontEndOutput {
         safe_functions,
         export,
         no_std,
+        unwind,
         crate_path,
         pack_events,
         target_events,
         macros: _,
     } = preprocess_unit(&mut ctx, &mut options, &mut diagnostics);
+    // `#pragma cinrs unwind` is the unit's own request for what the option
+    // asks for the whole program; see [`Options::unwind`].
+    options.unwind |= unwind;
     let packing = pp::PackMap::new(pack_events);
     let targets = pp::TargetOptionMap::new(target_events);
     let unit = parse::parse(
@@ -1360,6 +1380,7 @@ fn lower(analysis: Analysis) -> Lowered {
     program.link_libraries = link_libraries;
     program.export = export || options.export;
     program.no_std = no_std;
+    program.unwind = options.unwind || !program.nonlocal_jumps.is_empty();
     if let Some(path) = crate_path {
         program.crate_path = path;
     }

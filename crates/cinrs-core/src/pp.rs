@@ -854,6 +854,9 @@ pub struct Preprocessed {
     /// Whether `#pragma cinrs no_std` said the expansion goes into a
     /// `#![no_std]` crate.
     pub no_std: bool,
+    /// Whether `#pragma cinrs unwind` asked for the `extern "C-unwind"` ABI;
+    /// see [`crate::Options::unwind`].
+    pub unwind: bool,
     /// The Rust path `#pragma cinrs crate` gave the `cinrs` facade crate,
     /// which the generated code names when it needs the runtime.
     pub crate_path: Option<String>,
@@ -1004,6 +1007,7 @@ pub fn preprocess(
         safe_functions: pp.safe_functions,
         export: pp.export,
         no_std: pp.no_std,
+        unwind: pp.unwind,
         crate_path: pp.crate_path,
         pack_events: pp.pack_events,
         target_events: pp.target_events,
@@ -1416,6 +1420,8 @@ struct Pp<'a> {
     export: bool,
     /// Set by `#pragma cinrs no_std`.
     no_std: bool,
+    /// Set by `#pragma cinrs unwind`.
+    unwind: bool,
     /// The Rust path `#pragma cinrs crate` gave the facade crate.
     crate_path: Option<String>,
     /// Where the data model in force came from, which is what a
@@ -1500,6 +1506,7 @@ impl<'a> Pp<'a> {
             safe_functions: Vec::new(),
             export: false,
             no_std: false,
+            unwind: false,
             crate_path: None,
             target_source: options.target_source.clone(),
             target: options.target,
@@ -3269,7 +3276,7 @@ impl Pp<'_> {
 
     /// The `#pragma cinrs` options, for the diagnostics that list them.
     const OPTIONS: &'static str = "'target', 'include_path', 'system_include', 'link', \
-                                   'export', 'safe', 'no_std' and 'crate'";
+                                   'export', 'safe', 'no_std', 'unwind' and 'crate'";
 
     /// `#pragma cinrs …`.
     fn cinrs_pragma(&mut self, rest: &[PTok], range: SourceRange) {
@@ -3306,9 +3313,10 @@ impl Pp<'_> {
             "safe" => self.safe_pragma(&rest[1..], option.range),
             "system_include" => self.system_include_pragma(&rest[1..], option.range),
             // Unit-wide and argument-less: everything with external linkage
-            // becomes a real C symbol, and the `Vec`s a variable length array
-            // or `alloca` needs come from `alloc` rather than from `std`.
-            "export" | "no_std" => {
+            // becomes a real C symbol, the `Vec`s a variable length array
+            // or `alloca` needs come from `alloc` rather than from `std`, and
+            // every function is `extern "C-unwind"`.
+            "export" | "no_std" | "unwind" => {
                 if let Some(extra) = rest.get(1) {
                     self.diags.error(
                         extra.range,
@@ -3318,10 +3326,10 @@ impl Pp<'_> {
                         ),
                     );
                 }
-                if name == "export" {
-                    self.export = true;
-                } else {
-                    self.no_std = true;
+                match name {
+                    "export" => self.export = true,
+                    "no_std" => self.no_std = true,
+                    _ => self.unwind = true,
                 }
             }
             other => {

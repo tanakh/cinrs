@@ -174,6 +174,7 @@ pub fn parse(
         enums: Vec::new(),
         typeofs: Vec::new(),
         label_addrs: 0,
+        setjmp_calls: 0,
     };
     parser.parse_translation_unit(unit_range)
 }
@@ -269,6 +270,9 @@ struct Parser<'a> {
     /// definition put the count back where it found it, so that its own
     /// `&&label` says nothing about the function it was written in.
     label_addrs: u32,
+    /// How many calls to a `setjmp` have been parsed, counted for the reason
+    /// `label_addrs` is; see [`FunctionDef::uses_setjmp`].
+    setjmp_calls: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,6 +1172,7 @@ impl Parser<'_> {
         };
 
         let before = self.label_addrs;
+        let setjmp_before = self.setjmp_calls;
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
             Err(bail) => {
@@ -1200,6 +1205,7 @@ impl Parser<'_> {
             asm_label: declarator.asm_label,
             body,
             uses_label_addrs: self.label_addrs != before,
+            uses_setjmp: self.setjmp_calls != setjmp_before,
             range: self.span_to_here(start),
         }))
     }
@@ -1446,6 +1452,7 @@ impl Parser<'_> {
         };
 
         let before = self.label_addrs;
+        let setjmp_before = self.setjmp_calls;
         let body = match self.parse_compound_stmt() {
             Ok(body) => body,
             Err(bail) => {
@@ -1455,9 +1462,12 @@ impl Parser<'_> {
         };
         self.pop_scope();
         let uses_label_addrs = self.label_addrs != before;
+        let uses_setjmp = self.setjmp_calls != setjmp_before;
         // A nested function's `&&label` names a label of its *own* body, so
-        // the count goes back to what the enclosing function had.
+        // the count goes back to what the enclosing function had; so does a
+        // nested function's `setjmp`.
         self.label_addrs = before;
+        self.setjmp_calls = setjmp_before;
 
         Ok(FunctionDef {
             specifiers: specs,
@@ -1468,6 +1478,7 @@ impl Parser<'_> {
             asm_label: declarator.asm_label,
             body,
             uses_label_addrs,
+            uses_setjmp,
             range: self.span_to_here(start),
         })
     }
@@ -4261,6 +4272,11 @@ impl Parser<'_> {
                     }
                 }
                 let rp = self.expect_punct(Punct::RParen, " after argument list")?;
+                if let ExprKind::Ident(name) = &expr.kind
+                    && is_setjmp_name(&name.name)
+                {
+                    self.setjmp_calls += 1;
+                }
                 expr = Expr {
                     range: expr.range.join(rp),
                     kind: ExprKind::Call {

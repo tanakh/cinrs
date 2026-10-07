@@ -395,6 +395,12 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     options.export = true;
     // The complex types need the runtime, which `runtime` provides.
     options.complex = true;
+    // Any file may be between a `longjmp` and its `setjmp` — a callback that
+    // jumps out through a library — so every function is `extern
+    // "C-unwind"`. `CCINRS_EXP_UNWIND=0` turns that off, for measuring what it
+    // costs; a program that then jumps across a file without `setjmp` or
+    // `longjmp` of its own aborts. (Experimental.)
+    options.unwind = std::env::var_os("CCINRS_EXP_UNWIND").is_none_or(|v| v != "0");
     options
 }
 

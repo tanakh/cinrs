@@ -115,6 +115,38 @@
 //!
 //! [`ir::Stmt::Cleanup`]: crate::ir::Stmt::Cleanup
 //!
+//! # Non-local jumps
+//!
+//! A function that calls `setjmp` is lowered here whatever its jumps are,
+//! because a `longjmp` back to it is one more way into the middle of its
+//! body — see [`ir::BuiltinOp::SetJmp`] for the whole model. Each `setjmp`
+//! (a *site*, numbered from 1) is lifted out of the expression it stands
+//! in: the block it was reached in ends with a [`ir::BuiltinOp::SetJmpSave`],
+//! which writes the activation and the site's number into the buffer, stores
+//! `0` in the hidden `value`, and jumps to a block of its own — the site's
+//! *continuation* — where the rest of the expression reads `value` in place
+//! of the call:
+//!
+//! ```text
+//! if (setjmp(b) == 0) f(); else g();
+//!
+//!   save(b, site 1); value = 0; goto c1;
+//! c1:
+//!   if (value == 0) f(); else g();
+//! ```
+//!
+//! The graph's entry is then a `switch` on the hidden `resume`, whose `case k`
+//! is site `k`'s continuation and whose `default` is the body. Code
+//! generation runs the graph inside a `catch_unwind`, with the locals hoisted
+//! outside it, and an unwind that is a `longjmp` to this activation sets
+//! `resume` and `value` and runs the graph again — which then starts where the
+//! `setjmp` left off. A continuation inside a loop is a second way into the
+//! loop, which is irreducible, and the relooper's [state
+//! variable](crate::reloop) handles it like any other.
+//!
+//! [`ir::BuiltinOp::SetJmp`]: crate::ir::BuiltinOp::SetJmp
+//! [`ir::BuiltinOp::SetJmpSave`]: crate::ir::BuiltinOp::SetJmpSave
+//!
 //! # Readability
 //!
 //! A naive lowering produces a state per statement, which is unreadable. Three
@@ -141,8 +173,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::capture::SourceRange;
 use crate::ir::{
-    BinOp, BreakTarget, CaseRange, Expr, ExprKind, LabelId, LoopId, Object, ObjectId, Place,
-    PlaceKind, Stmt, Storage, SwitchId, is_always_true,
+    BinOp, BreakTarget, BuiltinOp, CaseRange, Expr, ExprKind, LabelId, LoopId, Object, ObjectId,
+    Place, PlaceKind, Stmt, Storage, SwitchId, is_always_true,
 };
 
 /// Identifies a basic block inside a [`Cfg`].
@@ -293,6 +325,21 @@ pub struct Cfg {
     /// This is what codegen emits: loops, `if`s and `match`es, with the state
     /// machine below kept only for a graph the relooper gives up on.
     pub shape: Option<crate::reloop::Plan>,
+    /// The hidden objects of a function that calls `setjmp`, whose graph a
+    /// `longjmp` re-enters; see [Non-local jumps](self#non-local-jumps).
+    pub setjmp: Option<SetJmpObjects>,
+}
+
+/// The two hidden locals of a function that calls `setjmp`.
+#[derive(Clone, Copy, Debug)]
+pub struct SetJmpObjects {
+    /// Which `setjmp` of the function a `longjmp` came back to: `0` on the
+    /// way in, and the site's number, from 1, after one. The graph's entry
+    /// block dispatches on it.
+    pub resume: ObjectId,
+    /// What the `setjmp` returned: `0` from the call itself, the `longjmp`'s
+    /// value after one.
+    pub value: ObjectId,
 }
 
 /// Lowers a checked function body into a control-flow graph.
@@ -314,8 +361,12 @@ pub struct Cfg {
 /// `names` is what each label was called in C, which the loops
 /// [`reloop`](crate::reloop) recovers are named after.
 ///
+/// `setjmp` holds the hidden objects of a function that calls `setjmp`; see
+/// [Non-local jumps](self#non-local-jumps).
+///
 /// The body must end in a statement that always terminates — sema appends a
 /// `return` when the source does not — so that no block falls off the end.
+#[allow(clippy::too_many_arguments)]
 pub fn lower(
     body: Vec<Stmt>,
     params: &[ObjectId],
@@ -324,6 +375,7 @@ pub fn lower(
     goto_value: Option<ObjectId>,
     table: Option<ObjectId>,
     names: &HashMap<LabelId, String>,
+    setjmp: Option<SetJmpObjects>,
 ) -> Cfg {
     let mut used: HashSet<String> = params
         .iter()
@@ -346,6 +398,8 @@ pub fn lower(
         goto_value,
         table,
         dispatch: None,
+        setjmp,
+        sites: Vec::new(),
     };
     // A `goto` has to know how many cleanups its *target* is inside, and a
     // forward one names a label the walk below has not reached yet.
@@ -356,11 +410,18 @@ pub fn lower(
         let block = lowerer.label_block(*id);
         lowerer.taken.push((*id, block));
     }
-    if let Some(object) = goto_value {
+    let hidden = goto_value
+        .into_iter()
+        .chain(setjmp.into_iter().flat_map(|s| [s.resume, s.value]));
+    for object in hidden {
         let name = objects[object.0 as usize].name.clone();
         let rust_name = lowerer.unique_name(&name);
         lowerer.locals.push(Local { object, rust_name });
     }
+    // A function a `longjmp` can come back to is entered through a dispatch
+    // on which `setjmp` it came back to, whose cases are only known once the
+    // body has been walked.
+    let resume_entry = setjmp.map(|_| lowerer.new_block());
     let entry = lowerer.new_block();
     lowerer.current = Some(entry);
     lowerer.stmts(body);
@@ -369,6 +430,13 @@ pub fn lower(
     if let Some(open) = lowerer.current.take() {
         lowerer.blocks[open.index()].term = Terminator::Unreachable;
     }
+    let entry = match (resume_entry, setjmp) {
+        (Some(dispatch), Some(objects)) => {
+            lowerer.resume_dispatch(dispatch, entry, objects);
+            dispatch
+        }
+        _ => entry,
+    };
     let labels = taken
         .iter()
         .enumerate()
@@ -426,6 +494,11 @@ struct Lowerer<'a> {
     table: Option<ObjectId>,
     /// The block every computed `goto` jumps to, made by the first one.
     dispatch: Option<BlockId>,
+    /// The hidden objects of a function that calls `setjmp`.
+    setjmp: Option<SetJmpObjects>,
+    /// The continuation of each `setjmp` lifted so far, and where the call
+    /// was written: site `k` is `sites[k - 1]`.
+    sites: Vec<(BlockId, SourceRange)>,
 }
 
 impl Lowerer<'_> {
@@ -567,7 +640,13 @@ impl Lowerer<'_> {
     fn stmt(&mut self, stmt: Stmt) {
         match stmt {
             Stmt::Nop => {}
-            Stmt::Expr(expr) => self.push(Stmt::Expr(expr)),
+            Stmt::Expr(expr) => {
+                let expr = self.lift_setjmp(expr);
+                // `setjmp(buf);` leaves nothing to do at its continuation.
+                if !self.is_setjmp_value(&expr) {
+                    self.push(Stmt::Expr(expr));
+                }
+            }
             // No control flow of its own: `asm goto` is refused.
             asm @ Stmt::Asm(_) => self.push(asm),
             Stmt::Let {
@@ -764,6 +843,105 @@ impl Lowerer<'_> {
         block
     }
 
+    // -- setjmp ---------------------------------------------------------------
+
+    /// The hidden `value` of a function that calls `setjmp`, as a place.
+    fn setjmp_value_place(&self, objects: SetJmpObjects, range: SourceRange) -> Place {
+        Place {
+            kind: PlaceKind::Object(objects.value),
+            ty: self.objects[objects.value.0 as usize].ty,
+            is_const: false,
+            range,
+        }
+    }
+
+    /// Lifts the `setjmp` out of `expr`, if it has one: the current block ends
+    /// with the save, `value = 0` and a jump to the site's continuation, and
+    /// what is left of `expr` — reading `value` where the call was — is what
+    /// the continuation goes on with. See [Non-local
+    /// jumps](self#non-local-jumps).
+    fn lift_setjmp(&mut self, mut expr: Expr) -> Expr {
+        let Some(objects) = self.setjmp else {
+            return expr;
+        };
+        let place = self.setjmp_value_place(objects, expr.range);
+        let Some((args, range)) = take_setjmp(&mut expr, &place) else {
+            return expr;
+        };
+        let site = self.sites.len() as i128 + 1;
+        let mut args = args.into_iter();
+        let (Some(buf), Some(mask)) = (args.next(), args.next()) else {
+            unreachable!("sema gives a setjmp its buffer and its mask flag")
+        };
+        let save = Expr::new(
+            ExprKind::Builtin {
+                op: BuiltinOp::SetJmpSave,
+                args: vec![buf, Expr::int(site, crate::ir::Ty::Int, range), mask],
+            },
+            crate::ir::Ty::Void,
+            range,
+        );
+        self.push(Stmt::Expr(save));
+        let ty = place.ty;
+        let place = self.setjmp_value_place(objects, range);
+        self.push(Stmt::Expr(Expr::new(
+            ExprKind::Assign {
+                place,
+                value: Box::new(Expr::int(0, ty, range)),
+            },
+            ty,
+            range,
+        )));
+        let cont = self.new_block();
+        self.jump(cont, range);
+        self.continue_at(cont);
+        self.sites.push((cont, range));
+        expr
+    }
+
+    /// Whether `expr` is nothing but a read of the hidden `setjmp` value —
+    /// what `setjmp(buf);` leaves behind once the call is lifted.
+    fn is_setjmp_value(&self, expr: &Expr) -> bool {
+        let Some(objects) = self.setjmp else {
+            return false;
+        };
+        let mut expr = expr;
+        while let ExprKind::Cast(inner) = &expr.kind {
+            expr = inner;
+        }
+        matches!(&expr.kind, ExprKind::Load(Place { kind: PlaceKind::Object(id), .. })
+            if *id == objects.value)
+    }
+
+    /// Fills in the entry block of a function that calls `setjmp`: a
+    /// `switch` on the hidden `resume`, whose `case k` is site `k`'s
+    /// continuation and whose `default` is the body.
+    fn resume_dispatch(&mut self, dispatch: BlockId, body: BlockId, objects: SetJmpObjects) {
+        let range = self
+            .sites
+            .first()
+            .map_or_else(|| SourceRange::at(0), |(_, range)| *range);
+        let place = Place {
+            kind: PlaceKind::Object(objects.resume),
+            ty: self.objects[objects.resume.0 as usize].ty,
+            is_const: false,
+            range,
+        };
+        let ty = place.ty;
+        let cases = self
+            .sites
+            .iter()
+            .enumerate()
+            .map(|(index, (block, _))| (CaseRange::single(index as i128 + 1), *block))
+            .collect();
+        self.blocks[dispatch.index()].term = Terminator::Switch {
+            value: Expr::new(ExprKind::Load(place), ty, range),
+            cases,
+            default: body,
+            range,
+        };
+    }
+
     /// Hoists a local's definition and leaves its initialiser behind.
     fn local(&mut self, object: ObjectId, init: Expr, explicit: bool) {
         let info = &self.objects[object.0 as usize];
@@ -778,6 +956,7 @@ impl Lowerer<'_> {
         if !explicit {
             return;
         }
+        let init = self.lift_setjmp(init);
         let place = Place {
             kind: PlaceKind::Object(object),
             ty,
@@ -830,6 +1009,7 @@ impl Lowerer<'_> {
     }
 
     fn if_stmt(&mut self, cond: Expr, then_branch: Stmt, else_branch: Option<Stmt>) {
+        let cond = self.lift_setjmp(cond);
         let range = cond.range;
         let then_blk = self.new_block();
         let else_blk = self.new_block();
@@ -955,6 +1135,9 @@ impl Lowerer<'_> {
     /// Ends the current block on a loop's controlling expression, which a
     /// constantly true one turns into an unconditional edge.
     fn test(&mut self, cond: Expr, then_blk: BlockId, else_blk: BlockId, range: SourceRange) {
+        // A `setjmp` in the condition is called on every pass, so it is lifted
+        // inside the block the loop comes back to.
+        let cond = self.lift_setjmp(cond);
         if is_always_true(&cond) {
             self.jump(then_blk, range);
             return;
@@ -973,6 +1156,8 @@ impl Lowerer<'_> {
             body,
             range,
         } = switch;
+        // `switch (setjmp(buf))`: the dispatch is the site's continuation.
+        let scrutinee = self.lift_setjmp(scrutinee);
         let dispatch = self.current();
         let exit = self.new_block();
         self.switches.insert(
@@ -1183,6 +1368,39 @@ impl Lowerer<'_> {
             blocks,
             labels,
             shape,
+            setjmp: self.setjmp,
         }
+    }
+}
+
+/// Takes the `setjmp` out of `expr`, leaving a read of `value` in its place,
+/// and returns its operands and where it was written.
+///
+/// Sema only lets one stand where C17 7.13.1.1p4 says, so the search only
+/// has to go through the shapes those places have: a comparison, `!` (a
+/// comparison with zero), a conversion and an assignment.
+fn take_setjmp(expr: &mut Expr, value: &Place) -> Option<(Vec<Expr>, SourceRange)> {
+    match &mut expr.kind {
+        ExprKind::Builtin {
+            op: BuiltinOp::SetJmp,
+            args,
+        } => {
+            let args = std::mem::take(args);
+            let range = expr.range;
+            let place = Place {
+                range,
+                ..value.clone()
+            };
+            *expr = Expr::new(ExprKind::Load(place), value.ty, range);
+            Some((args, range))
+        }
+        ExprKind::Cast(inner) | ExprKind::Neg(inner) | ExprKind::BitNot(inner) => {
+            take_setjmp(inner, value)
+        }
+        ExprKind::Compare { lhs, rhs, .. } | ExprKind::Binary { lhs, rhs, .. } => {
+            take_setjmp(lhs, value).or_else(|| take_setjmp(rhs, value))
+        }
+        ExprKind::Assign { value: stored, .. } => take_setjmp(stored, value),
+        _ => None,
     }
 }

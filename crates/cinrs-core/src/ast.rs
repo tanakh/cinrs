@@ -1318,8 +1318,33 @@ pub struct FunctionDef {
     /// [`Parser::label_addrs`](crate::parse). A nested function's own
     /// `&&label` is its own business and does not set this.
     pub uses_label_addrs: bool,
+    /// Whether the body calls `setjmp` under one of its names (see
+    /// [`is_setjmp_name`]).
+    ///
+    /// Such a function is lowered through a [control-flow
+    /// graph](crate::cfg) too: a `longjmp` comes back into the middle of it,
+    /// which is one more way in. The parser records it for the reason it
+    /// records [`FunctionDef::uses_label_addrs`] — a call is an expression —
+    /// and a nested function's own calls are, again, its own.
+    pub uses_setjmp: bool,
     /// Where the definition was written.
     pub range: SourceRange,
+}
+
+/// Whether `name` is one of the spellings of `setjmp`: the standard's, POSIX's
+/// and BSD's, the ones glibc's `<setjmp.h>` macros expand them to, and GCC's
+/// builtin.
+pub fn is_setjmp_name(name: &str) -> bool {
+    matches!(
+        name,
+        "setjmp" | "_setjmp" | "__setjmp" | "sigsetjmp" | "__sigsetjmp" | "__builtin_setjmp"
+    )
+}
+
+/// Whether `name` is one of the spellings of `longjmp` a program can call:
+/// the standard's, POSIX's and BSD's.
+pub fn is_longjmp_name(name: &str) -> bool {
+    matches!(name, "longjmp" | "_longjmp" | "siglongjmp")
 }
 
 /// A top-level item.

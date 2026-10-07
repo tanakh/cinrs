@@ -195,6 +195,15 @@ impl Sema<'_> {
                         }
                         return Some(Expr::new(ExprKind::Unreachable, Ty::Void, range));
                     }
+                    // The non-local jumps; see `sema::nonlocal`. A `longjmp`
+                    // the unit declares is an ordinary call, to a function
+                    // code generation provides.
+                    if self.is_setjmp_callee(&name.name) {
+                        return self.setjmp_call(expr, &name.name, args, range);
+                    }
+                    if name.name == "__builtin_longjmp" && self.lookup(&name.name).is_none() {
+                        return self.builtin_longjmp(args, range);
+                    }
                     // Everything else GCC spells `__builtin_…`.
                     if let Some(result) = self.builtin_call(&name.name, args, range) {
                         return result;
@@ -594,6 +603,8 @@ impl Sema<'_> {
             self.nested_addresses.push((id, range));
         }
         self.note_long_double_function_use(id, range);
+        // `png_set_longjmp_fn(png_ptr, longjmp, sizeof (jmp_buf))`.
+        self.note_longjmp_use(id, range);
         // An [x86 intrinsic](crate::x86) whose operand has to be an integer
         // constant expression has no address to take: code generation writes
         // the constant into a turbofish, and a function pointer has nowhere to
@@ -2177,17 +2188,21 @@ impl Sema<'_> {
         range: SourceRange,
     ) -> Option<Expr> {
         let (target, sig, name) = self.callee(callee)?;
-        if let Some(what) = non_local_jump(&name) {
+        if let Some(what) = non_local_jump(&name)
+            && !(matches!(target, Callee::Direct(_)) && crate::ast::is_longjmp_name(&name))
+        {
             self.error(
                 callee.range,
                 format!(
-                    "'{name}' is not supported: {what} restores a saved machine context, and the \
-                     state it would return into is the generated Rust's — which the compiler is \
-                     entitled to assume nothing leaves that way. Declaring it is fine; calling it \
-                     would corrupt the program"
+                    "'{name}' is not supported here: {what} through something other than the \
+                     function <setjmp.h> declares would restore a saved machine context, and the \
+                     state it would return into is the generated Rust's"
                 ),
             );
             return None;
+        }
+        if let Callee::Direct(id) = &target {
+            self.note_longjmp_use(*id, range);
         }
         if self.refuse_float128_call(&name, &sig, callee.range) {
             return None;
@@ -3808,16 +3823,12 @@ fn const_parts_of(expr: &Expr) -> Option<crate::complex::Parts> {
 
 /// Whether a name is one of the non-local jumps, and what to call it.
 ///
-/// `setjmp` and `longjmp` unwind by restoring a saved machine context, which
-/// has no meaning in the Rust cinrs generates. The bundled `<setjmp.h>` says so
-/// with an `#error` and stops there — but the *platform's* `<setjmp.h>`,
-/// reachable once `#pragma cinrs system_include` is on, declares them as
-/// ordinary functions, and a program that then called one would compile and
-/// corrupt itself. So the refusal is on the **call**, by name, wherever the
-/// declaration came from. Declaring them, and declaring a `jmp_buf`, are both
-/// fine: `<setjmp.h>` is pulled in by half of POSIX.
-///
-/// The names are the standard ones and the spellings glibc's macros expand to.
+/// A direct call to one is what [`crate::sema::nonlocal`] translates: a
+/// `setjmp` never gets here, and a `longjmp` is a call to the function code
+/// generation provides. A call through a function *pointer* of that name, or
+/// to a spelling only the C library's internals use, would reach the C
+/// library's own, which restores a machine context the generated Rust knows
+/// nothing about — so that is still refused.
 fn non_local_jump(name: &str) -> Option<&'static str> {
     match name {
         "setjmp" | "_setjmp" | "__setjmp" | "sigsetjmp" | "__sigsetjmp" => {

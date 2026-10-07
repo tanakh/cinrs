@@ -245,6 +245,9 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> G
         let span = cg.arena_span.get().unwrap_or_else(Span::call_site);
         items.extend(cg.arena_items(span));
     }
+    if cg.uses_nonlocal.get() {
+        items.extend(cg.nonlocal_jump_items());
+    }
     // The shims the unit needs for the intrinsics whose address it took; see
     // [`Codegen::address_taken`]. Collected while the bodies were generated,
     // so this has to come after them.
@@ -277,6 +280,10 @@ pub fn generate_stubs(program: &Program, map: &SourceMap, options: &Options) -> 
         if !func.is_extern() {
             out.extend(cg.stub_item(func));
         }
+    }
+    // A `longjmp` the extern block defined calls them.
+    if cg.uses_nonlocal.get() {
+        out.extend(cg.nonlocal_jump_items());
     }
     out
 }
@@ -965,6 +972,13 @@ fn vla_marks_ident() -> Ident {
     Ident::new("__cinrs_vla_marks", Span::mixed_site())
 }
 
+/// One of the items a unit with `setjmp` or `longjmp` shares between its
+/// functions, or a binding of the code around them, in the same hygiene; see
+/// [`Codegen::nonlocal_jump_items`].
+fn sj_ident(name: &str) -> Ident {
+    Ident::new(name, Span::mixed_site())
+}
+
 // ---------------------------------------------------------------------------
 // the generator
 // ---------------------------------------------------------------------------
@@ -1160,6 +1174,9 @@ struct Codegen<'a> {
     /// which is what [`Codegen::weak_guard`] is spanned with; see
     /// [`ir::Function::weak`].
     weak_span: Cell<Option<Span>>,
+    /// Whether anything in the unit calls `setjmp` or `longjmp`, so that it
+    /// needs the items they share; see [`Codegen::nonlocal_jump_items`].
+    uses_nonlocal: Cell<bool>,
     /// In a [CFG-mode](crate::cfg) function, the slot of the function's array
     /// of arena marks each variable length array's hidden frame object is;
     /// see [`Codegen::vla_def`].
@@ -1264,6 +1281,7 @@ impl<'a> Codegen<'a> {
             uses_arena: Cell::new(false),
             arena_span: Cell::new(None),
             weak_span: Cell::new(None),
+            uses_nonlocal: Cell::new(false),
             vla_slots: HashMap::new(),
             address_taken: RefCell::new(Vec::new()),
             label_states,
@@ -1560,6 +1578,23 @@ impl<'a> Codegen<'a> {
     fn fn_ty(&self, id: ir::FuncTyId, span: Span) -> TokenStream {
         let func = self.program.types.func_type(id).clone();
         self.fn_ptr_ty(&func.params, func.variadic, func.ret, span)
+    }
+
+    /// Whether the unit's functions are `extern "C-unwind"`; see
+    /// [`ir::Program::unwind`].
+    fn unwind(&self) -> bool {
+        self.program.unwind || self.options.unwind || !self.program.nonlocal_jumps.is_empty()
+    }
+
+    /// The ABI string every function of the unit, and every function pointer
+    /// type, is written with: `"C"`, or `"C-unwind"` when a `longjmp` — a Rust
+    /// unwind — may have to pass through them. The calling convention is the
+    /// same; only an unwind leaving the function differs, which aborts the
+    /// program from an `extern "C"` one.
+    fn abi(&self, span: Span) -> Literal {
+        let mut literal = Literal::string(if self.unwind() { "C-unwind" } else { "C" });
+        literal.set_span(span);
+        literal
     }
 
     // -- the heap the emulated automatic storage comes from -------------------
@@ -2208,6 +2243,7 @@ impl<'a> Codegen<'a> {
         }
         let span = self.map.span(SourceRange::at(0));
         let mut items = TokenStream::new();
+        let mut definitions = TokenStream::new();
         // The symbols this block links by, which is what decides whether it
         // needs a library of its own; see [`LEGACY_STDIO`]. Collected here
         // rather than asked of the program a second time, so that what the
@@ -2248,6 +2284,12 @@ impl<'a> Codegen<'a> {
             if func.intrinsic.is_some() {
                 continue;
             }
+            // A `longjmp` is a function of the unit's own, which unwinds;
+            // see [`Codegen::longjmp_item`].
+            if self.replaces_longjmp(func) {
+                definitions.extend(self.longjmp_item(func));
+                continue;
+            }
             let fspan = self.sp(func.range);
             // The C name, through the same mapping every other name goes
             // through: a keyword becomes `r#yield`, `a$b` becomes
@@ -2279,7 +2321,57 @@ impl<'a> Codegen<'a> {
             }
         }
         let links = self.link_blocks(&symbols, span);
-        quote_spanned! {span=> #links unsafe extern "C" { #items } }
+        let abi = self.abi(span);
+        quote_spanned! {span=> #links unsafe extern #abi { #items } #definitions }
+    }
+
+    /// Whether `func` is a `longjmp` the unit declares and code generation
+    /// defines instead; see [`Codegen::longjmp_item`].
+    fn replaces_longjmp(&self, func: &Function) -> bool {
+        func.body.is_none()
+            && crate::ast::is_longjmp_name(&func.name)
+            && func.sig.params.len() == 2
+            && !func.sig.variadic
+            && func.sig.params[0].is_pointer()
+            && func.sig.params[1].is_integer()
+            && !self.program.nonlocal_jumps.is_empty()
+    }
+
+    /// The `longjmp` (or `_longjmp`, or `siglongjmp`) the unit declares, as a
+    /// function of its own rather than the C library's.
+    ///
+    /// The library's would restore a machine context the generated Rust knows
+    /// nothing about. This one hands its operands to the unit's
+    /// `__cinrs_longjmp`, which unwinds to the `setjmp` that filled the
+    /// buffer in; see [`Codegen::nonlocal_jump_items`]. It has the declared
+    /// name and signature, so a call is an ordinary call and the function's
+    /// address is a C function pointer like any other — which is how libpng's
+    /// `png_jmpbuf` hands `longjmp` itself to the library. It is never a
+    /// symbol: the C library's `longjmp` is still there for anything else that
+    /// links against it.
+    fn longjmp_item(&self, func: &Function) -> TokenStream {
+        self.uses_nonlocal.set(true);
+        let span = self.sp(func.range);
+        let name = self.c_ident(func.item_name(), span);
+        let abi = self.abi(span);
+        let buf = sj_ident("__cinrs_buf");
+        let value = sj_ident("__cinrs_value");
+        let buf_ty = self.ty(func.sig.params[0], span);
+        let value_ty = self.ty(func.sig.params[1], span);
+        let ret = if func.sig.ret.is_void() {
+            TokenStream::new()
+        } else {
+            let ty = self.ty(func.sig.ret, span);
+            quote_spanned! {span=> -> #ty }
+        };
+        let helper = sj_ident("__cinrs_longjmp");
+        let c_int = self.ty(Ty::Int, span);
+        quote_spanned! {span=>
+            #[allow(unknown_lints, unused_unsafe, clippy::all)]
+            pub unsafe extern #abi fn #name(#buf: #buf_ty, #value: #value_ty) #ret {
+                unsafe { #helper(#buf as *mut ::core::ffi::c_void, #value as #c_int) }
+            }
+        }
     }
 
     /// The libraries this unit links: one `#[link(name = "…")] unsafe extern "C"
@@ -2701,13 +2793,15 @@ impl<'a> Codegen<'a> {
         } else {
             self.target_feature_attrs(func, span)
         };
-        // Everything is `extern "C"`, so that its address is a C function
-        // pointer, except that helper, whose address nothing takes and which
-        // could not pass a vector through the C ABI without the feature.
+        // Everything is `extern "C"` (or `"C-unwind"`; see `Codegen::abi`), so
+        // that its address is a C function pointer, except that helper, whose
+        // address nothing takes and which could not pass a vector through the
+        // C ABI without the feature.
         let abi = if helper {
             TokenStream::new()
         } else {
-            quote_spanned! {span=> extern "C" }
+            let abi = self.abi(span);
+            quote_spanned! {span=> extern #abi }
         };
         // A function the unit asked to be safe is generated without `unsafe`,
         // and its body without the `unsafe` block, so that `rustc` checks every
@@ -2842,6 +2936,248 @@ impl<'a> Codegen<'a> {
         quote_spanned! {span=>
             #signature {
                 unsafe { #arena #body }
+            }
+        }
+    }
+
+    /// The items a unit with `setjmp` or `longjmp` shares between its
+    /// functions: the frame type, the registry of live frames, and the
+    /// `longjmp` itself. Private to the unit's module, like the arena.
+    ///
+    /// **The frame.** A function that calls `setjmp` opens with a
+    /// `__cinrs_sj_frame`, which stands for this activation of it. The first
+    /// `setjmp` it runs gives it a serial number, unique on its thread, and
+    /// links it onto the thread's list of live frames; its `Drop` — on a
+    /// `return`, or as an unwind passes through — takes it off again. Frames
+    /// are dropped in the reverse order they were linked, so the list is a
+    /// stack, and nothing is allocated.
+    ///
+    /// **The buffer.** `setjmp` writes five words into its `jmp_buf`: a magic
+    /// number, the frame's address and serial, the site — which `setjmp` of
+    /// the function this is — and the address of the *unit's own* liveness
+    /// check, `__cinrs_sj_live`. A `sigsetjmp` asked to save the signal mask
+    /// writes it after them, and says so with the other magic number. Five
+    /// words is exactly GCC's `__builtin_setjmp` buffer, and well inside every
+    /// platform's `jmp_buf`.
+    ///
+    /// **The jump.** `__cinrs_longjmp` reads the buffer back, asks the check
+    /// the buffer names whether the frame is still live — the *setjmp's*
+    /// unit's registry, which is why the check travels in the buffer: every
+    /// unit has its own, and `ccinrs` compiles every C file into a crate of
+    /// its own — restores the signal mask if it was saved, and unwinds with
+    /// `resume_unwind`, which runs no panic hook and prints nothing. The
+    /// payload is a `[usize; 5]`, a type of `core` and therefore the same
+    /// type in every crate, so a frame in any unit can recognise a jump meant
+    /// for it. A `longjmp` to a frame that has returned is undefined in C,
+    /// and here it aborts the program with a message rather than unwinding
+    /// out of `main`.
+    ///
+    /// Every name here, local bindings included, starts with `__cinrs`:
+    /// `ccinrs` compiles the expansion as *text*, where hygiene is gone, and a
+    /// parameter named like a `static` of the C program would not compile.
+    fn nonlocal_jump_items(&self) -> TokenStream {
+        let span = Span::mixed_site();
+        let frame = sj_ident("__cinrs_sj_frame");
+        let live = sj_ident("__CINRS_SJ_LIVE");
+        let is_live = sj_ident("__cinrs_sj_live");
+        let longjmp = sj_ident("__cinrs_longjmp");
+        let abort = sj_ident("__cinrs_sj_abort");
+        let sigmask = sj_ident("__cinrs_sj_sigmask");
+        let magic = sj_ident("__CINRS_SJ_MAGIC");
+        let magic_mask = sj_ident("__CINRS_SJ_MAGIC_MASK");
+        let payload_magic = sj_ident("__CINRS_SJ_PAYLOAD");
+        let setmask = sj_ident("__CINRS_SJ_SETMASK");
+        let c_int = self.ty(Ty::Int, span);
+        let c_uint = self.ty(Ty::UInt, span);
+        let usize_ty = primitive_ty("usize", span);
+        quote_spanned! {span=>
+            const #magic: #usize_ty = 0x636a_6d70;
+            const #magic_mask: #usize_ty = 0x636a_6d73;
+            const #payload_magic: #usize_ty = 0x636c_6a70;
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            const #setmask: #c_int = 2;
+            #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+            const #setmask: #c_int = 3;
+            #[cfg(unix)]
+            #[allow(unknown_lints, clashing_extern_declarations)]
+            unsafe extern "C" {
+                #[link_name = "pthread_sigmask"]
+                fn #sigmask(
+                    _: #c_int,
+                    _: *const ::core::ffi::c_void,
+                    _: *mut ::core::ffi::c_void,
+                ) -> #c_int;
+            }
+            ::std::thread_local! {
+                static #live: (
+                    ::core::cell::Cell<*const #frame>,
+                    ::core::cell::Cell<#usize_ty>,
+                ) = const {
+                    (::core::cell::Cell::new(::core::ptr::null()), ::core::cell::Cell::new(0))
+                };
+            }
+            #[allow(
+                unknown_lints,
+                missing_debug_implementations,
+                non_camel_case_types,
+                clippy::pedantic,
+                clippy::nursery
+            )]
+            struct #frame {
+                serial: ::core::cell::Cell<#usize_ty>,
+                prev: ::core::cell::Cell<*const #frame>,
+            }
+            #[allow(
+                unknown_lints,
+                unused_unsafe,
+                clippy::pedantic,
+                clippy::nursery,
+                clippy::all
+            )]
+            impl #frame {
+                #[inline(always)]
+                fn new() -> Self {
+                    Self {
+                        serial: ::core::cell::Cell::new(0),
+                        prev: ::core::cell::Cell::new(::core::ptr::null()),
+                    }
+                }
+                /// `setjmp(buf)`: links this activation onto the thread's
+                /// list the first time, and writes it into the buffer.
+                #[inline(never)]
+                unsafe fn save(
+                    &self,
+                    __cinrs_buf: *mut ::core::ffi::c_void,
+                    __cinrs_site: #usize_ty,
+                    __cinrs_mask: #c_int,
+                ) {
+                    if self.serial.get() == 0 {
+                        #live.with(|__cinrs_live| {
+                            let __cinrs_serial = __cinrs_live.1.get() + 1;
+                            __cinrs_live.1.set(__cinrs_serial);
+                            self.serial.set(__cinrs_serial);
+                            self.prev.set(__cinrs_live.0.get());
+                            __cinrs_live.0.set(::core::ptr::from_ref(self));
+                        });
+                    }
+                    let __cinrs_check: fn(#usize_ty, #usize_ty) -> bool = #is_live;
+                    let __cinrs_words = __cinrs_buf.cast::<#usize_ty>();
+                    unsafe {
+                        __cinrs_words.write_unaligned(if __cinrs_mask != 0 {
+                            #magic_mask
+                        } else {
+                            #magic
+                        });
+                        __cinrs_words.add(1).write_unaligned(::core::ptr::from_ref(self).addr());
+                        __cinrs_words.add(2).write_unaligned(self.serial.get());
+                        __cinrs_words.add(3).write_unaligned(__cinrs_site);
+                        __cinrs_words.add(4).write_unaligned(__cinrs_check as #usize_ty);
+                        #[cfg(unix)]
+                        if __cinrs_mask != 0 {
+                            #sigmask(0, ::core::ptr::null(), __cinrs_words.add(5).cast());
+                        }
+                    }
+                }
+                /// Where an unwind arrives: the `setjmp` to resume and its
+                /// value if it is a `longjmp` to this activation, and on its
+                /// way otherwise.
+                #[inline(never)]
+                fn land(
+                    &self,
+                    __cinrs_payload: ::std::boxed::Box<dyn ::core::any::Any + ::core::marker::Send>,
+                ) -> (#c_uint, #c_int) {
+                    if let ::core::option::Option::Some(__cinrs_jump) =
+                        __cinrs_payload.downcast_ref::<[#usize_ty; 5]>()
+                    {
+                        if __cinrs_jump[0] == #payload_magic
+                            && __cinrs_jump[1] == ::core::ptr::from_ref(self).addr()
+                            && __cinrs_jump[2] == self.serial.get()
+                        {
+                            return (__cinrs_jump[3] as #c_uint, __cinrs_jump[4] as #c_int);
+                        }
+                    }
+                    ::std::panic::resume_unwind(__cinrs_payload)
+                }
+            }
+            #[allow(unknown_lints, clippy::pedantic, clippy::nursery)]
+            impl ::core::ops::Drop for #frame {
+                #[inline(always)]
+                fn drop(&mut self) {
+                    if self.serial.get() != 0 {
+                        #live.with(|__cinrs_live| __cinrs_live.0.set(self.prev.get()));
+                    }
+                }
+            }
+            /// Whether the frame at `frame` with `serial` is still live on
+            /// this thread, in this unit's registry.
+            #[allow(unknown_lints, clippy::pedantic, clippy::nursery)]
+            fn #is_live(__cinrs_frame: #usize_ty, __cinrs_serial: #usize_ty) -> bool {
+                #live.with(|__cinrs_live| {
+                    let mut __cinrs_at = __cinrs_live.0.get();
+                    while !__cinrs_at.is_null() {
+                        // SAFETY: a frame on the list is live: its `Drop`
+                        // takes it off before its storage goes.
+                        let __cinrs_this = unsafe { &*__cinrs_at };
+                        if __cinrs_at.addr() == __cinrs_frame {
+                            return __cinrs_this.serial.get() == __cinrs_serial;
+                        }
+                        __cinrs_at = __cinrs_this.prev.get();
+                    }
+                    false
+                })
+            }
+            #[cold]
+            #[inline(never)]
+            fn #abort(__cinrs_message: &str) -> ! {
+                ::std::eprintln!("{}", __cinrs_message);
+                ::std::process::abort()
+            }
+            /// `longjmp(buf, value)`: an unwind to the activation the buffer
+            /// names.
+            #[cold]
+            #[inline(never)]
+            #[allow(unknown_lints, unused_unsafe, clippy::pedantic, clippy::nursery)]
+            unsafe fn #longjmp(__cinrs_buf: *mut ::core::ffi::c_void, __cinrs_value: #c_int) -> ! {
+                let __cinrs_words = __cinrs_buf.cast::<#usize_ty>().cast_const();
+                let (__cinrs_magic, __cinrs_frame, __cinrs_serial, __cinrs_site, __cinrs_check) = unsafe {
+                    (
+                        __cinrs_words.read_unaligned(),
+                        __cinrs_words.add(1).read_unaligned(),
+                        __cinrs_words.add(2).read_unaligned(),
+                        __cinrs_words.add(3).read_unaligned(),
+                        __cinrs_words.add(4).read_unaligned(),
+                    )
+                };
+                if __cinrs_magic != #magic && __cinrs_magic != #magic_mask {
+                    #abort("longjmp: the jmp_buf was not filled in by setjmp");
+                }
+                // SAFETY: the `setjmp` that filled the buffer in wrote its
+                // own unit's check there.
+                let __cinrs_check = unsafe {
+                    ::core::mem::transmute::<#usize_ty, fn(#usize_ty, #usize_ty) -> bool>(
+                        __cinrs_check,
+                    )
+                };
+                if !__cinrs_check(__cinrs_frame, __cinrs_serial) {
+                    #abort(
+                        "longjmp: the function that called setjmp with this jmp_buf has \
+                         already returned (undefined behaviour in C)",
+                    );
+                }
+                #[cfg(unix)]
+                if __cinrs_magic == #magic_mask {
+                    unsafe {
+                        #sigmask(#setmask, __cinrs_words.add(5).cast(), ::core::ptr::null_mut());
+                    }
+                }
+                let __cinrs_value = if __cinrs_value == 0 { 1 } else { __cinrs_value };
+                ::std::panic::resume_unwind(::std::boxed::Box::new([
+                    #payload_magic,
+                    __cinrs_frame,
+                    __cinrs_serial,
+                    __cinrs_site,
+                    __cinrs_value as #usize_ty,
+                ]))
             }
         }
     }
@@ -3518,13 +3854,63 @@ impl<'a> Codegen<'a> {
     /// recovered, or, for a graph it gave up on, the state machine.
     fn cfg_body(&mut self, cfg: &Cfg, span: Span) -> TokenStream {
         let mut out = self.cfg_locals(cfg, span);
-        match &cfg.shape {
-            Some(plan) => {
-                out.extend(self.shape_seq(cfg, &plan.body, &reloop::Exit::nowhere(), span))
-            }
-            None => out.extend(self.state_machine(cfg, span)),
+        let graph = match &cfg.shape {
+            Some(plan) => self.shape_seq(cfg, &plan.body, &reloop::Exit::nowhere(), span),
+            None => self.state_machine(cfg, span),
+        };
+        match cfg.setjmp {
+            Some(objects) => out.extend(self.setjmp_frame(objects, graph, span)),
+            None => out.extend(graph),
         }
         out
+    }
+
+    /// The body of a function that calls `setjmp`: its graph, run inside a
+    /// `catch_unwind` until it returns.
+    ///
+    /// The locals are hoisted above this, outside the closure, so they keep
+    /// whatever values they had when an unwind left the graph. An unwind that
+    /// is a `longjmp` to *this* activation — the frame `__cinrs_sj` stands
+    /// for, which the `setjmp`s write into their buffers — says which
+    /// `setjmp` it came back to and with what value; those go into the hidden
+    /// `resume` and `value`, and the graph runs again, from its entry
+    /// dispatch, which sends it to that `setjmp`'s continuation. Anything else
+    /// carries on unwinding. See [`crate::cfg`]'s non-local jumps.
+    fn setjmp_frame(
+        &mut self,
+        objects: crate::cfg::SetJmpObjects,
+        graph: TokenStream,
+        span: Span,
+    ) -> TokenStream {
+        self.uses_nonlocal.set(true);
+        let frame = sj_ident("__cinrs_sj");
+        let frame_ty = sj_ident("__cinrs_sj_frame");
+        let resume = self.object_ident(objects.resume, span);
+        let value = self.object_ident(objects.value, span);
+        let ret = if self.ret_ty.is_void() {
+            quote_spanned! {span=> () }
+        } else {
+            self.ty(self.ret_ty, span)
+        };
+        let returned = sj_ident("__cinrs_returned");
+        let payload = sj_ident("__cinrs_payload");
+        let site = sj_ident("__cinrs_site");
+        let jumped = sj_ident("__cinrs_jumped");
+        quote_spanned! {span=>
+            let #frame = #frame_ty::new();
+            loop {
+                match ::std::panic::catch_unwind(::core::panic::AssertUnwindSafe(|| -> #ret {
+                    #graph
+                })) {
+                    ::core::result::Result::Ok(#returned) => return #returned,
+                    ::core::result::Result::Err(#payload) => {
+                        let (#site, #jumped) = #frame.land(#payload);
+                        #resume = #site;
+                        #value = #jumped;
+                    }
+                }
+            }
+        }
     }
 
     /// The `let` bindings every local of a graph-lowered function gets.
@@ -4392,8 +4778,9 @@ impl<'a> Codegen<'a> {
         let name = cleanup_guard_ty();
         let p = Ident::new("P", Span::mixed_site());
         let r = Ident::new("R", Span::mixed_site());
+        let abi = self.abi(span);
         quote_spanned! {span=>
-            struct #name<#p: ::core::marker::Copy, #r>(#p, unsafe extern "C" fn(#p) -> #r);
+            struct #name<#p: ::core::marker::Copy, #r>(#p, unsafe extern #abi fn(#p) -> #r);
             impl<#p: ::core::marker::Copy, #r> ::core::ops::Drop for #name<#p, #r> {
                 fn drop(&mut self) {
                     unsafe {
@@ -4534,10 +4921,11 @@ impl<'a> Codegen<'a> {
             };
             let module = self.arch_module(span);
             let call = Ident::new(intr.name, span);
+            let abi = self.abi(span);
             out.extend(quote_spanned! {span=>
                 #[inline]
                 #feature
-                unsafe extern "C" fn #name(#params) #ret {
+                unsafe extern #abi fn #name(#params) #ret {
                     unsafe { ::core::arch::#module::#call(#args) }
                 }
             });
@@ -5676,6 +6064,34 @@ impl<'a> Codegen<'a> {
         use ir::BuiltinOp;
         let int = self.ty(Ty::Int, span);
         match op {
+            // `crate::cfg` lifts every one of these out of its expression.
+            BuiltinOp::SetJmp => Value::new(
+                quote_spanned! {span=>
+                    ::core::unreachable!("internal error in cinrs: a setjmp was not lifted")
+                },
+                prec::CALL,
+            ),
+            // The activation and the site, written into the buffer; see
+            // [`Codegen::nonlocal_jump_items`].
+            BuiltinOp::SetJmpSave => {
+                self.uses_nonlocal.set(true);
+                let frame = sj_ident("__cinrs_sj");
+                let buf = self.expr(&args[0]).at(prec::LOWEST, span);
+                let site = self.expr(&args[1]).at(prec::CAST, span);
+                let mask = self.expr(&args[2]).at(prec::LOWEST, span);
+                let usize_ty = primitive_ty("usize", span);
+                Value::new(
+                    quote_spanned! {span=> #frame.save(#buf, #site as #usize_ty, #mask) },
+                    prec::CALL,
+                )
+            }
+            BuiltinOp::LongJmp => {
+                self.uses_nonlocal.set(true);
+                let helper = sj_ident("__cinrs_longjmp");
+                let buf = self.expr(&args[0]).at(prec::LOWEST, span);
+                let value = self.expr(&args[1]).at(prec::LOWEST, span);
+                Value::new(quote_spanned! {span=> #helper(#buf, #value) }, prec::CALL)
+            }
             BuiltinOp::ComplexProj => {
                 let ty = args[0].ty;
                 let func = self.rt_complex(&format!("proj_{}", Self::complex_suffix(ty)), span);
@@ -7152,7 +7568,8 @@ impl<'a> Codegen<'a> {
             let ty = self.ty(ret, span);
             quote_spanned! {span=> -> #ty }
         };
-        quote_spanned! {span=> unsafe extern "C" fn #list #ret }
+        let abi = self.abi(span);
+        quote_spanned! {span=> unsafe extern #abi fn #list #ret }
     }
 
     /// The path a call to `function` uses.

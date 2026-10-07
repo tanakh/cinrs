@@ -140,7 +140,12 @@ impl Sema<'_> {
                     );
                     return None;
                 }
-                let value = self.expr(expr)?;
+                // `int r = setjmp(buf);`, which GCC takes; see `sema::nonlocal`.
+                let value = self.with_setjmp_permit(
+                    expr,
+                    super::nonlocal::SetjmpPlace::Initializer,
+                    |s| s.expr(expr),
+                )?;
                 Some(self.convert_for(value, ty, ConvContext::Init(name.to_owned())))
             }
             ast::InitializerKind::List(items) => {
