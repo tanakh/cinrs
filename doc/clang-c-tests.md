@@ -271,13 +271,12 @@ which are the same gap — only the arithmetic types are supported.
   as `drs/dr4xx.c`. Behind it, `#nondirective` written *between the
   parentheses of a macro invocation* is taken for argument tokens here and
   not diagnosed.
-* `drs/dr0xx.c` (3, and 2 more for the `_Static_assert` gate): DR089's
-  differing macro redefinition on line 478. 6.10.3p2 makes it a constraint
-  violation, `cinrs` reports it, and GCC and Clang answer it with a warning
-  that only `-pedantic-errors` promotes — but accepting it would mean
-  *choosing* which of the two definitions wins, which is not the kind of
-  leniency this crate takes. Behind it, `func_type fp;` — a function
-  declared through a `typedef` of a function type — is read as an object.
+* `drs/dr0xx.c` (1, and 2 more for the `_Static_assert` gate): the `c23!`
+  revision, whose two DR035 `expected-error` lines are inside
+  `#if __STDC_VERSION__ < 202311L` — the harness limit of `C99/n448.c`
+  below. Its `c11!` and `c17!` revisions come out as required now that
+  DR089's differing macro redefinition on line 478 is a warning and the later
+  definition stands, as GCC and Clang have it.
 * `C99/n448.c` and `C99/n809.c` (2): a `_Static_assert` gate, and a
   `-verify` directive inside an `#if __STDC_VERSION__ >= 202311L` that the
   revision does not compile. Clang's `-verify` never sees a directive in a

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use cinrs_core::diag::Level;
+use cinrs_core::diag::{Diagnostic, Level};
 use cinrs_core::lex::{LexOptions, lex_text};
 use cinrs_core::pp::{Context, Preprocessed, preprocess};
 use cinrs_core::{CommandLineMacro, Options, Standard};
@@ -37,16 +37,33 @@ fn run_in(src: &str, ctx: Context) -> (Vec<String>, Vec<String>) {
         .items()
         .iter()
         .filter(|d| d.level == Level::Error)
-        .map(|d| {
-            let mut text = d.message.clone();
-            for note in &d.notes {
-                text.push_str("\nnote: ");
-                text.push_str(&note.message);
-            }
-            text
-        })
+        .map(with_notes)
         .collect();
     (spellings, errors)
+}
+
+/// A diagnostic's message, each of its notes on a line of its own.
+fn with_notes(d: &Diagnostic) -> String {
+    let mut text = d.message.clone();
+    for note in &d.notes {
+        text.push_str("\nnote: ");
+        text.push_str(&note.message);
+    }
+    text
+}
+
+/// The warnings `src` produces, as [`errors`] gives the errors.
+fn warnings(src: &str) -> Vec<String> {
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, ctx.base, &lex_options());
+    preprocess(&tokens, &ctx, &Options::new(Standard::C99), &mut diags);
+    diags
+        .items()
+        .iter()
+        .filter(|d| d.level == Level::Warning)
+        .map(with_notes)
+        .collect()
 }
 
 /// The token spellings `src` preprocesses to, joined with single spaces.
@@ -214,39 +231,54 @@ OBJ_LIKE FUNC_LIKE(x)
     );
 }
 
+/// The standard's own invalid pairs: a constraint violation, which GCC and
+/// Clang answer with a warning, and the later definition stands.
 #[test]
-fn a_different_definition_is_an_error() {
-    // The standard's own invalid pairs.
-    let errors = errors(
-        r"
+fn a_different_definition_is_warned_about_and_replaces_the_first() {
+    let src = r"
 #define OBJ_LIKE (1-1)
 #define OBJ_LIKE (0)
 #define FUNC_LIKE(b) ( a )
 #define FUNC_LIKE(b) ( b )
-",
-    );
-    assert_eq!(errors.len(), 2, "{errors:#?}");
+OBJ_LIKE FUNC_LIKE(x)
+";
+    assert_eq!(pp(src), "( 0 ) ( x )");
+    let warnings = warnings(src);
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
     assert!(
-        errors[0].contains("macro 'OBJ_LIKE' redefined"),
-        "{errors:#?}"
-    );
-    assert!(
-        errors[0].contains("note: previous definition of 'OBJ_LIKE' is"),
-        "{errors:#?}"
+        warnings[0].contains("macro 'OBJ_LIKE' redefined"),
+        "{warnings:#?}"
     );
     assert!(
-        errors[1].contains("macro 'FUNC_LIKE' redefined"),
-        "{errors:#?}"
+        warnings[0].contains("note: previous definition of 'OBJ_LIKE' is"),
+        "{warnings:#?}"
+    );
+    assert!(
+        warnings[1].contains("macro 'FUNC_LIKE' redefined"),
+        "{warnings:#?}"
     );
 }
 
 #[test]
 fn white_space_separation_is_part_of_a_definition() {
     // `(1 - 1)` and `(1-1)` hold the same tokens but not in the same places.
-    one_error(
-        "#define A (1-1)\n#define A (1 - 1)\n",
-        "macro 'A' redefined",
-    );
+    let warnings = warnings("#define A (1-1)\n#define A (1 - 1)\n");
+    assert_eq!(warnings.len(), 1, "{warnings:#?}");
+    assert!(warnings[0].contains("macro 'A' redefined"), "{warnings:#?}");
+}
+
+/// A system header that redefines a program's macro is not warned about, as
+/// GCC and Clang do not warn: zstd defines `assert` itself before glibc's
+/// `<assert.h>` defines it again. A program that redefines a header's macro
+/// is.
+#[test]
+fn a_redefinition_in_a_system_header_says_nothing() {
+    let src = "#define bool int\n#include <stdbool.h>\nbool";
+    assert_eq!(pp(src), "_Bool");
+    assert_eq!(warnings(src), Vec::<String>::new());
+    let src = "#include <stdbool.h>\n#define bool int\nbool";
+    assert_eq!(pp(src), "int");
+    assert_eq!(warnings(src).len(), 1);
 }
 
 // ---------------------------------------------------------------------------

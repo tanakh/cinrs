@@ -4234,24 +4234,28 @@ impl Pp<'_> {
             // spelling, not about the platform, and the platform's own copy is
             // the authoritative one. So it wins, and nothing is reported.
             //
-            // Every other pair is a real redefinition and keeps its
-            // diagnostic, including a program that redefines a bundled macro:
-            // that one is the program's mistake, not a mismatch between two
-            // models of the same library.
+            // Every other pair is a real redefinition. 6.10.3p2 makes it a
+            // constraint violation, which needs a diagnostic but not a
+            // refusal, and GCC and Clang agree on what follows: a warning, and
+            // the later definition stands. Both say nothing when the later
+            // definition is in a system header — glibc's `<assert.h>`
+            // redefining the `assert` a program defined first, as zstd's
+            // `debug.h` does — and so does cinrs. A program that redefines a
+            // bundled macro is warned, as it would be about the platform's.
             match DefSite::resolves(previous.site, def.site) {
                 Some(DefSite::Platform) if def.site == DefSite::Platform => {}
                 // The platform got there first; the bundled header stands
                 // aside rather than overwriting it.
                 Some(_) => return,
+                None if def.site != DefSite::Program => {}
                 None => {
                     self.diags.push(
-                        Diagnostic::error(name_tok.range, format!("macro '{name}' redefined"))
+                        Diagnostic::warning(name_tok.range, format!("macro '{name}' redefined"))
                             .with_note_at(
                                 previous.name_range,
                                 format!("previous definition of '{name}' is"),
                             ),
                     );
-                    return;
                 }
             }
         }

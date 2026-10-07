@@ -72,6 +72,10 @@ follows [Semantic Versioning][semver].
   narrow string literal as the byte it was, read as Latin-1 in a wide one and
   ignored in a comment, as GCC does; anywhere else it is "unexpected byte 0xE9
   in program (the file is not UTF-8)". Such a file used to be "cannot read".
+* A macro redefined with a different replacement list is a warning, and the
+  later definition stands, as in GCC and Clang; a redefinition in a system
+  header — glibc's `<assert.h>` after a program's own `assert` — says nothing.
+  It used to be an error, which stopped zstd.
 
 ### Fixed
 

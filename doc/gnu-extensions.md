@@ -284,9 +284,8 @@ ones. The line between the two is what the two compilers do by default and
 what the program then means: where GCC and Clang both accept a construct and
 both produce the same value from it, refusing it would be refusing valid C for
 a severity — a warning — that a procedural macro has no way to raise. Where
-they disagree, or where accepting would mean *choosing* a meaning (a macro
-redefined with a different replacement list, say, where the last definition
-wins and only the compiler knows which that is), the diagnostic stays.
+they disagree, or where accepting would mean *choosing* a meaning that only the
+compiler knows, the diagnostic stays.
 
 | Leniency | Example | ISO C | cinrs |
 | --- | --- | --- | --- |
@@ -295,6 +294,7 @@ wins and only the compiler knows which that is), the diagnostic stays.
 | Comparing two function pointers of incompatible types | `int (*a)(int); long (*b)(void); a == b` | 6.5.9p2; GCC warns (`-Wcompare-distinct-pointer-types`) and compares the addresses | 🟢 GNU dialects. A *compatible* pair needs no leniency: `double (*)()` and `double (*)(double)` are compatible (6.7.6.3p15) and compare everywhere, and `void *` against a function pointer follows the conversion rule above it in the table |
 | `sizeof (void)`, `__alignof__ (void)` | `p + 1` with `void *p` | `void` is an incomplete type that can never be completed (6.2.5p19) | 🟢 GNU dialects, both 1 — which is what makes the `void *` arithmetic above mean anything |
 | A stray `;` at file scope | `int f(void) { … };` | 6.9p1 has no empty external declaration, and C23 did not add one | 🟢 GNU dialects |
+| **A macro redefined with a different replacement list** | `#define N 1` … `#define N 2` | 6.10.3p2 constraint violation; GCC and Clang warn, and the later definition stands — silently when it is in a system header | 🟢 **accepted in every entry point**: the later definition replaces the first, with a warning `ccinrs` prints — none when the redefinition is in a platform or bundled header, as zstd's `assert` before glibc's `<assert.h>` is. An identical definition is no redefinition at all |
 | An enumerator that will not fit `int` | `enum e { big = ULLONG_MAX };` | 6.7.2.2p2 constraint violation until C23 (N3029), which widens the enumeration instead | 🟢 `c23!` and the GNU dialects widen; the strict pre-C23 entry points keep the error. The widened type is the narrowest of `int`, `unsigned int`, `long`, … that holds every value, and every enumerator of the enumeration has it |
 | A parameter of a *definition* with no name | `int f(int, int b) { … }` | C23 (N2480) allows it; before that 6.9.1p5 required a name | 🟢 `c23!` and the GNU dialects |
 | An undeclared `alloca` | `void *p = alloca(n);` | no ISO header declares it | 🟢 GNU dialects, where the call is `__builtin_alloca` and so returns `void *`, exactly as GCC's `gnu` modes do. A strict entry point leaves it to the C89 implicit-declaration rule, which types it `int()` |
