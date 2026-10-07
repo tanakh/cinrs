@@ -838,8 +838,18 @@ fn setjmp_switches_the_unit_to_c_unwind() {
                   static jmp_buf env;\n\
                   static void fail(void) { longjmp(env, 2); }\n\
                   int f(void) { if (setjmp(env) == 0) { fail(); return 0; } return 1; }";
-    let output = expand(stream(source), &options()).to_string();
-    assert!(!output.contains("compile_error"), "{output}");
+    let tokens = expand(stream(source), &options());
+    // The one `compile_error!` is the guard against `panic = "abort"`, behind
+    // its `cfg`.
+    let errors = emitted_errors(tokens.clone());
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.message.contains("need `panic = \"unwind\"`")),
+        "{errors:#?}"
+    );
+    let output = tokens.to_string();
+    assert!(output.contains("cfg (panic = \"abort\")"), "{output}");
     assert!(output.contains("extern \"C-unwind\" fn f"), "{output}");
     assert!(output.contains("catch_unwind"), "{output}");
     assert!(output.contains("fn __cinrs_longjmp"), "{output}");

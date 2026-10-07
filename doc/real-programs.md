@@ -471,7 +471,7 @@ conflict: 433,976 conflicts, 656,686 decisions, 20,305,786 propagations on
 one instance in all three builds. Its own test program `tissat`, built from
 `test/*.c` the same way, passes 1,004 of its 1,017 jobs; the 13 it cannot
 run are the allocation-failure tests, which recover through
-`setjmp`/`longjmp`, the documented limitation.
+`setjmp`/`longjmp` — not supported when this was measured.
 
 **Speed.** `gcc -O3` and `clang -O3` (upstream's flags), ms:
 

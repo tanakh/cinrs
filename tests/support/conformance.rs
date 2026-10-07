@@ -1091,7 +1091,7 @@ pub enum Category {
     Unimplemented,
     /// **Deliberately** unsupported, with a located error rather than a
     /// mistranslation: inline assembly, the vector extensions, the trampoline
-    /// and nonlocal-`goto` halves of nested functions, `setjmp`/`longjmp`,
+    /// and nonlocal-`goto` halves of nested functions,
     /// `long double` as a type distinct from `double`, the complex *integer*
     /// types, `-finstrument-functions`, programs that need an optimiser to
     /// delete dead code, `__builtin_return_address` and its relatives, a
