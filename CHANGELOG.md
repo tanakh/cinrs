@@ -39,8 +39,11 @@ follows [Semantic Versioning][semver].
     one program, cinrs's runtime and Rust's standard library included.
   * `-shared` links an ELF shared library that exports the C symbols;
     `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`, and
-    the `-print-*` questions libtool asks. `-E` takes a header, and `-pie`,
-    `-no-pie` and the hardening options distributions pass are taken.
+    the `-print-*` questions libtool asks. GCC's warning options are taken
+    without a word; an unknown one is a warning, and an error under
+    `-Werror`, which is what a `configure` probe looks for, and which makes
+    every warning an error, `#warning` included. `-E` takes a header, and
+    `-pie`, `-no-pie` and the hardening options distributions pass are taken.
     `/dev/null` is a C file like any other, and a file for the linker that
     does not exist is an error even when nothing is linked, as in GCC 15.
   * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`

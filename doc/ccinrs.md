@@ -80,16 +80,20 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-mavx2`, `-mno-avx512f`, … | `rustc`'s `-C target-feature`, in GCC's names, and the macros with them (x86) |
 | `--target=`, `--sysroot=` | another machine; see [Targets](#targets) |
 | `-l`, `-L`, `-Wl,…`, `-pthread`, `-s`, `-pie`, `-no-pie` | as GCC's; `-pthread` also defines `_REENTRANT`; the program is position-independent either way |
+| `-Werror`, `-Wno-error`, `-w` | every warning an error, as GCC has it — `#warning` included; no warnings |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
 | `-funsigned-char`, `-fsigned-char`, `-m32`, `-m64` | checked against the target, whose answer cinrs takes |
 | `--version`, `-dumpversion`, `-dumpfullversion`, `-dumpmachine`, `--help`, `-v`, `-save-temps` | `-dumpversion` is `14`, as `__GNUC__` says; `-v` on its own ends with GCC's `gcc version 14.2.0 …` line, saying it is compatible and not GCC, which is what a `configure` reads |
 | `-print-search-dirs`, `-print-multiarch`, `-print-multi-os-directory`, `-print-prog-name=`, `-print-file-name=`, … | what libtool asks: the platform's library directories (Debian's layout), and a name handed back as GCC hands back one it has no file for |
 
-A `-W` option, a common `-f` code-generation option (`-fPIC`,
-`-fno-strict-aliasing`, `-fvisibility=hidden`, …), `-pedantic` and `-pipe`
-change nothing here and are accepted; an unknown `-W` or `-f` option is too,
-with a warning. An option that would change what a program means and that
+A warning option GCC knows (`-Wall`, `-Wformat=2`, `-Wno-unused`, …), a
+common `-f` code-generation option (`-fPIC`, `-fno-strict-aliasing`,
+`-fvisibility=hidden`, …), `-pedantic` and `-pipe` change nothing here and
+are accepted. An unknown `-f` option is too, with a warning, and so is an
+unknown `-W` one — except under `-Werror`, where either is an error, as it is
+in GCC: that is how a `configure` script finds out whether an option is
+taken. An option that would change what a program means and that
 cinrs cannot follow — `-fshort-enums`, `-fpack-struct`, `-fopenmp`,
 `-fsanitize=` — is an error, never a silent difference, and so is anything
 unknown. Not yet: `-imacros`, `-dD`, `-MG`.

@@ -248,6 +248,18 @@ fn an_error_is_reported_as_gcc_reports_it_and_nothing_is_linked() {
          4 | \treturn missing(x);\n      | \t       ^\n"
     );
     assert!(!s.dir.join("bad").exists());
+
+    // A note that points elsewhere says where first, as GCC's do.
+    s.write(
+        "twice.c",
+        "int f(void) { return 1; }\nint f(void) { return 2; }\n",
+    );
+    let out = s.ccinrs(&["-c", "twice.c"]);
+    assert!(
+        stderr(&out).ends_with("twice.c:1:5: note: previous definition of 'f' is here\n"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -269,6 +281,26 @@ fn warnings_are_printed_unless_w() {
     assert_eq!(stdout(&s.run("w", &[])), "ok\n");
     let out = s.ccinrs(&["-std=gnu89", "-w", "w.c", "-o", "w"]);
     assert_eq!(stderr(&out), "");
+
+    // A macro redefined is a warning and the later definition stands, but not
+    // when the later one is the system's: zstd defines `assert` before
+    // `<assert.h>` does.
+    s.write(
+        "redefined.c",
+        "#define assert(c) ((void)0)\n#define N 1\n#define N 2\n#include <assert.h>\n\
+         int main(void) { assert(N == 2); return N; }\n",
+    );
+    let out = s.ccinrs(&["redefined.c", "-o", "redefined"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stderr(&out).starts_with("redefined.c:3:9: warning: macro 'N' redefined\n")
+            && stderr(&out)
+                .ends_with("redefined.c:2:9: note: previous definition of 'N' is here\n")
+            && !stderr(&out).contains("'assert'"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(s.run("redefined", &[]).status.code(), Some(2));
 }
 
 /// Rust's own checks stay in by default: a misaligned dereference aborts with
@@ -408,8 +440,38 @@ fn the_command_line_is_checked() {
         "ccinrs: warning: ignoring unknown warning option '-Wfrobnicate'\n\
          ccinrs: warning: ignoring unknown option '-ffrobnicate'\n"
     );
+    // A `configure` script's probe of whether a warning option is taken.
+    let out = s.ccinrs(&["-Werror", "-Wfrobnicate", "x.c", "-o", "x"]);
+    assert_eq!(
+        stderr(&out),
+        "ccinrs: error: unrecognized command-line option '-Wfrobnicate'\n"
+    );
+    let out = s.ccinrs(&["-Werror", "-Wduplicated-cond", "x.c", "-o", "x"]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        stderr(&out)
+    );
+    // And of whether `-Werror` works at all: PCRE2's writes a `#warning`.
+    s.write("warned.c", "#warning e\nint main(void) { return 0; }\n");
+    let out = s.ccinrs(&["-Werror", "-c", "warned.c"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        stderr(&out),
+        "warned.c:1:1: error: #warning e\n    1 | #warning e\n      | ^\n\
+         ccinrs: all warnings being treated as errors\n"
+    );
+    assert!(!s.dir.join("warned.o").exists());
+    assert!(s.ccinrs(&["-c", "warned.c"]).status.success());
+    // Two more probes: jansson's compiles `/dev/null` with the option, and
     // CMake's `check_c_compiler_flag(/W4)` must not take an MSVC option for
     // a file it does not find.
+    #[cfg(unix)]
+    assert!(
+        s.ccinrs(&["-Werror", "-S", "-o", "/dev/null", "-xc", "/dev/null"])
+            .status
+            .success()
+    );
     let out = s.ccinrs(&["-c", "x.c", "/W4"]);
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(

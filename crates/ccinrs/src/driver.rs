@@ -445,13 +445,9 @@ impl Run<'_> {
                 check_output(&output)?;
             }
             let translation = translate(path, &self.options)?;
-            let (text, _) = diag::render(
-                &translation.map,
-                &translation.diagnostics,
-                self.inv.warnings,
-            );
+            let (text, tally) = diag::render(&translation.map, &translation.diagnostics, self.inv);
             eprint!("{text}");
-            let Some(items) = translation.items else {
+            let Some(items) = translation.items.filter(|_| tally.errors == 0) else {
                 failed = true;
                 continue;
             };
@@ -514,7 +510,7 @@ impl Run<'_> {
             } else {
                 cinrs_core::preprocess_file(path, &self.options)?
             };
-            let (text, tally) = diag::render(&pre.map, &pre.diagnostics, inv.warnings);
+            let (text, tally) = diag::render(&pre.map, &pre.diagnostics, inv);
             eprint!("{text}");
             if tally.errors > 0 {
                 failed = true;
@@ -906,9 +902,10 @@ impl Run<'_> {
         let inv = self.inv;
         check_output(object)?;
         let translation = translate(path, &self.options)?;
-        let (text, tally) = diag::render(&translation.map, &translation.diagnostics, inv.warnings);
+        let (text, tally) = diag::render(&translation.map, &translation.diagnostics, inv);
         eprint!("{text}");
-        let Some(items) = translation.items else {
+        // An error, or a warning under `-Werror`.
+        let Some(items) = translation.items.filter(|_| tally.errors == 0) else {
             debug_assert!(tally.errors > 0);
             return Ok(None);
         };

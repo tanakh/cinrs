@@ -20,6 +20,8 @@ use std::path::PathBuf;
 
 use cinrs_core::{CommandLineMacro, Dialect, Standard};
 
+use crate::gcc_warnings;
+
 /// What to stop after. The earlier stage wins when a command line names two,
 /// as in GCC: `-E` over `-S` over `-c`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -135,6 +137,9 @@ pub struct Invocation {
     pub debuginfo: u8,
     /// `-w` turns warnings off.
     pub warnings: bool,
+    /// `-Werror`: every warning is an error, as in GCC — `#warning` included,
+    /// which is what a `configure` script's test of `-Werror` writes.
+    pub werror: bool,
     /// Whether the generated code keeps Rust's run-time checks — misaligned
     /// and null pointer dereferences, overlapping `memcpy`, and the checks
     /// cinrs itself writes in a build with debug assertions. **On by
@@ -205,6 +210,7 @@ impl Default for Invocation {
             opt_level: "0",
             debuginfo: 0,
             warnings: true,
+            werror: false,
             checks: true,
             dollars: true,
             char_signed: None,
@@ -241,102 +247,8 @@ impl Invocation {
 /// that says so rather than "unknown option".
 const NOT_YET: &[&str] = &["-MG", "-dD", "-dN", "-imacros"];
 
-/// `-W` options that only choose which warnings GCC prints, accepted without
-/// a word: the names themselves, or a prefix ending in `-` or `=`.
-const QUIET_WARNINGS: &[&str] = &[
-    "all",
-    "extra",
-    "error",
-    "pedantic",
-    "no-",
-    "error=",
-    "fatal-errors",
-    "shadow",
-    "conversion",
-    "sign-",
-    "strict-",
-    "missing-",
-    "declaration-after-statement",
-    "format",
-    "format=",
-    "format-",
-    "unused",
-    "cast-",
-    "pointer-",
-    "write-strings",
-    "undef",
-    "vla",
-    "implicit",
-    "old-style-",
-    "redundant-decls",
-    "nested-externs",
-    "inline",
-    "init-self",
-    "float-",
-    "switch",
-    "switch-",
-    "uninitialized",
-    "maybe-uninitialized",
-    "double-promotion",
-    "padded",
-    "null-",
-    "logical-op",
-    "jump-misses-init",
-    "comment",
-    "type-limits",
-    "bad-function-cast",
-    "char-subscripts",
-    "parentheses",
-    "return-type",
-    "sequence-point",
-    "unreachable-code",
-    "long-long",
-    "variadic-macros",
-    "array-bounds",
-    "stack-protector",
-    "frame-larger-than=",
-    "larger-than=",
-    "alloca",
-    "deprecated",
-    "attributes",
-    "empty-body",
-    "int-conversion",
-    "incompatible-pointer-types",
-    "int-to-pointer-cast",
-    "misleading-indentation",
-    "nonnull",
-    "shift-",
-    "unknown-pragmas",
-    "c++-compat",
-    "c90-c99-compat",
-    "c99-c11-compat",
-    "traditional",
-    "date-time",
-    "discarded-qualifiers",
-    "duplicated-",
-    "multichar",
-    "overflow",
-    "packed",
-    "pointer-sign",
-    "restrict",
-    "stringop-",
-    "vla-larger-than=",
-    "override-init",
-    "suggest-attribute=",
-    "psabi",
-    "abi",
-    "address",
-    "bool-",
-    "clobbered",
-    "dangling-",
-    "div-by-zero",
-    "sizeof-",
-    "tautological-",
-    "zero-length-bounds",
-];
-
 /// `-f` options that cannot change what a program means here, accepted
-/// without a word; same matching as [`QUIET_WARNINGS`].
+/// without a word: the names themselves, or a prefix ending in `-` or `=`.
 const QUIET_FLAGS: &[&str] = &[
     "PIC",
     "pic",
@@ -472,6 +384,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
     let mut force_c = false;
     // Standard input is C only under `-x c`, or when it is only preprocessed.
     let mut stdin = None;
+    // The `-W` and `-f` options GCC would not take, which `-Werror` refuses.
+    let mut unknown: Vec<String> = Vec::new();
     // `.h` files, which only `-E` and `-M` take.
     let mut headers: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next() {
@@ -668,13 +582,30 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
                     "ignoring '{arg}': ccinrs runs no separate assembler or preprocessor"
                 ));
             }
+            // A warning option chooses what GCC would print, which changes
+            // nothing here: the ones GCC knows are taken without a word. One
+            // it does not know is a warning, as in Clang — and under `-Werror`
+            // an error, which is what a `configure` script's test of whether
+            // the compiler takes a flag looks for. An unknown `-Wno-…` is let
+            // be, as GCC lets it be.
+            "-Werror" => inv.werror = true,
+            "-Wno-error" => inv.werror = false,
+            // GCC's old spelling of `-Wextra`, which libevent's configure
+            // still adds.
+            "-W" => {}
             _ if arg.starts_with("-W") => {
-                if !listed(QUIET_WARNINGS, &arg[2..]) {
+                let name = &arg[2..];
+                if !gcc_warnings::known(name) && !name.starts_with("no-") {
                     inv.notes
                         .push(format!("ignoring unknown warning option '{arg}'"));
+                    unknown.push(arg.clone());
                 }
             }
-            _ if arg.starts_with("-f") => flag(&mut inv, &arg)?,
+            _ if arg.starts_with("-f") => {
+                if !flag(&mut inv, &arg)? {
+                    unknown.push(arg.clone());
+                }
+            }
             // Tuning changes no meaning, and SSE arithmetic is what x86-64
             // does anyway.
             _ if arg.starts_with("-mtune=") || arg == "-mfpmath=sse" => {}
@@ -725,11 +656,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             header.display()
         ));
     }
+    if let Some(first) = unknown.first()
+        && inv.werror
+    {
+        return Err(format!("unrecognized command-line option '{first}'"));
+    }
     Ok(inv)
 }
 
-/// One `-f` option.
-fn flag(inv: &mut Invocation, arg: &str) -> Result<(), String> {
+/// One `-f` option; `false` for one ccinrs does not know, which it ignores
+/// with a warning.
+fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
     let name = &arg[2..];
     match name {
         "lto" => inv.lto = Some(Lto::Fat),
@@ -749,9 +686,12 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<(), String> {
                 "'{arg}' changes what the program means, and ccinrs cannot follow it"
             ));
         }
-        _ => inv.notes.push(format!("ignoring unknown option '{arg}'")),
+        _ => {
+            inv.notes.push(format!("ignoring unknown option '{arg}'"));
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// What a file on the command line is, from its name — or C, under `-x c`.
@@ -964,6 +904,7 @@ mod tests {
             "-Wextra",
             "-Wno-unused",
             "-Wformat=2",
+            "-W",
             "-Wswitch-enum",
             "-pedantic",
             "-fPIC",
@@ -981,6 +922,28 @@ mod tests {
         assert_eq!(inv.linker_args, ["-rdynamic"]);
         let inv = parse_all(&["-Wfrobnicate", "-ffrobnicate", "a.c"]).unwrap();
         assert_eq!(inv.notes.len(), 2);
+        // What a `configure` script's probe of a flag looks for: an unknown
+        // warning is an error under `-Werror`, and a known one is not.
+        assert_eq!(
+            parse_all(&["-Werror", "-Wfrobnicate", "a.c"]).unwrap_err(),
+            "unrecognized command-line option '-Wfrobnicate'"
+        );
+        let inv = parse_all(&[
+            "-Werror",
+            "-Wduplicated-cond",
+            "-Werror=format-security",
+            "-Wno-frobnicate",
+            "-Wstrict-aliasing=2",
+            "a.c",
+        ])
+        .unwrap();
+        assert!(inv.notes.is_empty(), "{:?}", inv.notes);
+        assert!(parse_all(&["-Werror", "-Wno-error", "-Wfrobnicate", "a.c"]).is_ok());
+        assert_eq!(
+            parse_all(&["-ffrobnicate", "-Werror", "a.c"]).unwrap_err(),
+            "unrecognized command-line option '-ffrobnicate'"
+        );
+        assert!(parse_all(&["-Werror", "a.c"]).unwrap().werror);
         assert!(
             parse_all(&["-fshort-enums", "a.c"])
                 .unwrap_err()

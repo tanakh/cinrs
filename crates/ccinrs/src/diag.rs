@@ -10,6 +10,8 @@ use std::fmt::Write as _;
 
 use cinrs_core::{Diagnostic, Diagnostics, Level, Pos, SourceMap};
 
+use crate::args::Invocation;
+
 /// How a run of diagnostics came out.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Tally {
@@ -18,27 +20,37 @@ pub struct Tally {
 }
 
 /// Renders every diagnostic of one translation unit, errors always and
-/// warnings when `warnings` is set, in source order.
-pub fn render(map: &SourceMap, diags: &Diagnostics, warnings: bool) -> (String, Tally) {
+/// warnings unless `-w`, in source order. Under `-Werror` a warning is an
+/// error, said so as GCC says it.
+pub fn render(map: &SourceMap, diags: &Diagnostics, inv: &Invocation) -> (String, Tally) {
     let mut out = String::new();
     let mut tally = Tally::default();
     if let Some(message) = diags.fatal_message() {
         let _ = writeln!(out, "ccinrs: fatal error: {message}");
         tally.errors += 1;
     }
+    let mut promoted = false;
     for diag in diags.sorted() {
         let level = match diag.level {
             Level::Error => {
                 tally.errors += 1;
                 "error"
             }
-            Level::Warning if warnings => {
+            Level::Warning if inv.warnings && inv.werror => {
+                tally.errors += 1;
+                promoted = true;
+                "error"
+            }
+            Level::Warning if inv.warnings => {
                 tally.warnings += 1;
                 "warning"
             }
             Level::Warning => continue,
         };
         one(&mut out, map, diag, level);
+    }
+    if promoted {
+        out.push_str("ccinrs: all warnings being treated as errors\n");
     }
     (out, tally)
 }
@@ -54,10 +66,13 @@ fn one(out: &mut String, map: &SourceMap, diag: &Diagnostic, level: &str) {
     excerpt(out, map, diag.range.start);
     for note in &diag.notes {
         match note.range {
+            // A note's message is phrased to be completed by where it points
+            // ("previous definition of 'x' is" … " at line 5"); here the
+            // place leads the line, so "here" completes it.
             Some(range) => {
                 let _ = writeln!(
                     out,
-                    "{}: note: {}",
+                    "{}: note: {} here",
                     location(map, range.start),
                     note.message
                 );
