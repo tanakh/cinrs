@@ -203,7 +203,8 @@ follows [Semantic Versioning][semver].
   where `ccinrs` makes those, so that the copies every unit including the
   header defines merge into one, as common symbols do: Redis's
   `redismodule.h` declares its API's pointers so, and `redis-server` failed
-  to link with "duplicate symbol".
+  to link with "duplicate symbol". `cinrs-core`'s `FileTranslation` says
+  whether a unit makes a real weak definition (`weak_definitions`).
 * Predefined macros GCC has: `__PIC__` and `__pic__` (2) wherever `rustc`
   compiles position-independent code, `__PIE__` and `__pie__` (2) where it
   links position-independent executables, `__FXSR__` with the rest of the
@@ -221,6 +222,16 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **`ccinrs -flto` on x86-64 Linux is the linker's link-time optimisation**:
+  the objects are LLVM bitcode and `rust-lld` optimises them (ThinLTO, `-C
+  linker-plugin-lto`), as GCC's linker plugin does, where it was `rustc`'s
+  `-C lto`. The linker sees every object, so objects and archives compiled
+  without `-flto` link beside the optimised ones, and a file that makes a
+  weak or `common` definition is compiled without it — said under `-v` only
+  — instead of losing the definition's weakness: Redis's default build, with
+  its `-flto`, links `redis-server` (122 of its 125 files optimised).
+  Elsewhere `rustc`'s LTO is as it was. `-fuse-ld` naming another linker is
+  ignored, with a warning, at a link that has `-flto` bitcode in it.
 * A program or library `ccinrs` links stops at a panic — a run-time check
   that failed — with Rust's message and `abort`, through a hook its link
   installs. Now that every function is `extern "C-unwind"`, the panic would
@@ -259,10 +270,10 @@ follows [Semantic Versioning][semver].
 ### Fixed
 
 * A link with `-flto` that also takes an object or an archive `ccinrs`
-  compiled without it is made without link-time optimisation: the other
-  machine code calls Rust's standard library by name, and LTO kept only what
-  the `-flto` crates used — "undefined symbol: core::panicking::panic" when
-  Redis linked `redis-cli` with its `deps/` archives.
+  compiled without it links: the other machine code calls Rust's standard
+  library by name, and `rustc`'s LTO kept only what the `-flto` crates used —
+  "undefined symbol: core::panicking::panic" when Redis linked `redis-cli`
+  with its `deps/` archives. See the `-flto` entry under Changed.
 * A wide string literal as an arm of `?:` that needs a `const` pointer —
   CPython's `return sep ? sep + 1 : L"";` — compiles; the block holding the
   literal's `static` was read as a statement before its `as`.

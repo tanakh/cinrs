@@ -88,7 +88,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | Makefile dependency rules, as GCC writes them and under GCC's names (`-c -o obj/x.o -MD` writes `obj/x.d`); the bundled headers are not listed |
 | `-O0` … `-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast` | `rustc`'s `-C opt-level` (`-Ofast` is `3`, with no fast-math) |
 | `-g`, `-g0` | `rustc`'s `-C debuginfo` |
-| `-flto`, `-flto=thin` | link-time optimisation, `rustc`'s `-C lto=fat` (`thin`): see [below](#link-time-optimisation) |
+| `-flto`, `-flto=thin` | link-time optimisation: `rust-lld`'s on x86-64 Linux (`-C linker-plugin-lto`), `rustc`'s `-C lto=fat` (`thin`) elsewhere; see [below](#link-time-optimisation) |
 | `-march=`, `-mcpu=` | `rustc`'s `-C target-cpu`, `native` included; the feature macros (`__AVX2__`, …) follow what the processor has |
 | `-mavx2`, `-mno-avx512f`, … | `rustc`'s `-C target-feature`, in GCC's names, and the macros with them (x86) |
 | `--target=`, `--sysroot=` | another machine; see [Targets](#targets) |
@@ -165,21 +165,37 @@ A panic — a run-time check that failed — traps.
 ## Link-time optimisation
 
 Each C file is a crate of its own, so without `-flto` nothing is inlined
-from one file into another. With it, an object is an rlib — the crate's code,
-and the LLVM bitcode `rustc` optimises across crates — which a link loads as a
-crate, and a link with `-flto` optimises everything in it as one program: the
-C, cinrs's runtime and Rust's standard library. A call in a loop to a
-function in another file becomes the loop's own code, as with GCC's LTO.
+from one file into another. With it, an object is an rlib which a link loads
+as a crate, and the link optimises the C as one program. A call in a loop to
+a function in another file becomes the loop's own code, as with GCC's LTO.
 
-An object compiled with `-flto` links with one compiled without, and a link
-without `-flto` takes it as ordinary code. A link *with* `-flto` that has an
-object or an archive compiled here without it — Redis links its `deps/`
-archives into a server built with `-flto` — is made without link-time
-optimisation, every object as the ordinary code it also holds: Rust's LTO
-keeps only the standard library's symbols its own modules use, and the
-other machine code calls more of them by name. What it cannot do is go into an
-archive: an rlib is an archive itself, and `ar` would make an archive of
-archives — the link says so — as GCC's own LTO objects need `gcc-ar`.
+**Who optimises** depends on the linker. On x86-64 Linux, where `rustc` links
+with its own `rust-lld`, and on musl, the rlib's object is LLVM bitcode and
+`rust-lld` does the optimisation (`-C linker-plugin-lto`; ThinLTO, for `-flto`
+and `-flto=thin` alike), as GCC's linker plugin does for it. The linker sees
+every object in the link, so an object or an archive compiled without
+`-flto` links beside the optimised ones — Redis links its `deps/` archives
+into a server built with `-flto` — and the files that make a [weak
+definition](#limitations) or a `common` one are compiled without it, an alias
+the assembler makes having no business in a merged module: Redis's
+`redismodule.h` makes three of its 125 files such. `-v` says which; nothing
+else does, since nothing changes but how much is inlined across those files.
+An object compiled with `-flto` is bitcode only, so `-fuse-ld` naming another
+linker is ignored, with a warning, at a link that has one.
+
+Elsewhere — another target, or `-fuse-ld` naming GNU ld, gold or mold at the
+compile — `rustc` does it (`-C lto=fat`, or `thin`), over the C, cinrs's
+runtime and Rust's standard library alike, and an object compiled with
+`-flto` holds machine code too, so a link without `-flto` takes it as
+ordinary code. A link with `-flto` that has an object or an archive compiled
+without it is then made without link-time optimisation, every object as the
+ordinary code it also holds: `rustc` keeps only the standard library's symbols
+its own modules use, and the other machine code calls more of them by name.
+And a weak definition is an ordinary one there, with the warning.
+
+What an object compiled with `-flto` cannot do is go into an archive: an rlib
+is an archive itself, and `ar` would make an archive of archives — the link
+says so — as GCC's own LTO objects need `gcc-ar`.
 
 ## Shared libraries
 
@@ -271,10 +287,12 @@ C project meets first:
   or on an object the file defines) is a real one on ELF — another file's
   definition overrides it, the defining file's own calls included, and a
   shared library exports it weak — made with an assembler alias of a private
-  body. Under **`-flto`**, where another file's override could be merged into
-  the same module as that alias, and on macOS and Windows, it is an ordinary
-  definition with a warning, and a second definition elsewhere is a duplicate
-  symbol rather than an override.
+  body; so is a `common` tentative definition. Under **`-flto`** the file is
+  compiled without it where the linker does the optimisation (x86-64 Linux;
+  see [above](#link-time-optimisation)). Where `rustc` does — another file's
+  override could be merged into the same module as that alias — and on macOS
+  and Windows, it is an ordinary definition with a warning, and a second
+  definition elsewhere is a duplicate symbol rather than an override.
 * **`setjmp` and `longjmp`** work with limits; see [above](#setjmp-and-longjmp).
 * **`long double` is `double`.** A literal `printf` or `scanf` format that
   names a `long double` argument with `L` (`%Lf`, `%.2Le`) is rewritten to `l`

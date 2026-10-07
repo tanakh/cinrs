@@ -1307,6 +1307,10 @@ pub struct FileTranslation {
     pub headers: Vec<Header>,
     /// The absolute paths of the resources `#embed` read.
     pub embedded: Vec<PathBuf>,
+    /// Whether the items make a real weak definition — `weak`, or `common`,
+    /// under [`Options::weak_definitions`] — which is an assembler alias: a
+    /// driver merging units for link-time optimisation keeps this one apart.
+    pub weak_definitions: bool,
 }
 
 /// Translates the C file at `path`.
@@ -1371,6 +1375,7 @@ pub fn translate_source(name: String, text: String, options: &Options) -> FileTr
         symbols,
         headers,
         embedded,
+        weak_definitions: program.has_weak_definitions(),
     }
 }
 

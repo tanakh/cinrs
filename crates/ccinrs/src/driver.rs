@@ -167,6 +167,9 @@ struct ObjectInfo {
     /// Whether one of them was compiled here *without* `-flto`: machine code
     /// that calls into Rust's standard library by symbol.
     native: bool,
+    /// Whether one of the `-flto` ones is bitcode for the linker's
+    /// link-time optimisation; see [`Target::linker_lto`].
+    bitcode: bool,
 }
 
 impl ObjectInfo {
@@ -175,6 +178,7 @@ impl ObjectInfo {
         self.symbols.extend(other.symbols);
         self.crates.extend(other.crates);
         self.native |= other.native;
+        self.bitcode |= other.bitcode;
     }
 }
 
@@ -370,6 +374,30 @@ impl Target {
             bare_wasm,
         })
     }
+
+    /// Whether the program is linked by `rust-lld`, the one linker here that
+    /// reads LLVM bitcode: on x86-64 Linux, where `rustc` links with it by
+    /// default, unless `-fuse-ld` names another, and wherever the target
+    /// carries its own C library.
+    fn links_with_lld(&self, inv: &Invocation) -> bool {
+        self.self_contained
+            || (self.triple == "x86_64-unknown-linux-gnu"
+                && inv.fuse_ld.as_deref().is_none_or(|ld| ld == "lld"))
+    }
+
+    /// Whether `-flto` is the linker's own link-time optimisation — the
+    /// objects are LLVM bitcode, which `rust-lld` optimises as one program
+    /// (ThinLTO) — rather than `rustc`'s.
+    ///
+    /// The linker's sees every object in the link, so an object compiled
+    /// without `-flto` (an archive of a build's own `deps/`, a unit with a
+    /// weak definition) links beside the optimised ones: what it calls in
+    /// Rust's standard library stays defined. `rustc`'s keeps only what the
+    /// crates it optimises use, and an object it does not see is left calling
+    /// `core::panicking::panic` by a name nothing defines.
+    fn linker_lto(&self, inv: &Invocation) -> bool {
+        inv.lto.is_some() && !self.bare_wasm && self.links_with_lld(inv)
+    }
 }
 
 /// What cinrs-core is told for every file of this command line.
@@ -421,11 +449,13 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // cinrs's way to a thread-local object.
     options.own_declarations_are_cinrs = true;
     // A weak definition is a real one, made with the assembler, wherever the
-    // object is assembled on its own: not under `-flto`, where an override in
-    // another file can share the module with the alias. cinrs-core settles
-    // the object format. ccinrs writes a shared library's export list itself,
-    // so a symbol only the assembler defines is exported too.
-    options.weak_definitions = inv.lto.is_none();
+    // object is assembled on its own: not under `rustc`'s `-flto`, where an
+    // override in another file can share the module with the alias. Under
+    // the linker's, a unit that makes one is compiled without it; see
+    // `Run::compile`. cinrs-core settles the object format. ccinrs writes a
+    // shared library's export list itself, so a symbol only the assembler
+    // defines is exported too.
+    options.weak_definitions = inv.lto.is_none() || target.linker_lto(inv);
     options
 }
 
@@ -1052,6 +1082,24 @@ impl Run<'_> {
             debug_assert!(tally.errors > 0);
             return Ok(None);
         };
+        // Under the linker's `-flto`, a unit that makes a real weak
+        // definition is compiled without it: the definition is an alias the
+        // assembler makes, and the optimised program is free to put two
+        // units' in one module — two definitions of one symbol, and an error
+        // where the linker would have taken either. The linker links the
+        // object beside the optimised ones, so nothing changes for the
+        // program but how much is inlined across this file; `-v` says so.
+        let lto = inv
+            .lto
+            .filter(|_| !(translation.weak_definitions && self.target.linker_lto(inv)));
+        if inv.verbose && inv.lto.is_some() && lto.is_none() {
+            eprintln!(
+                "ccinrs: note: {} makes a weak definition, so it is compiled without -flto and \
+                 linked beside the optimised files",
+                path.display()
+            );
+        }
+        let bitcode = lto.is_some() && self.target.linker_lto(inv);
         let stem = self.work.stem(index, path);
         let rust = self.work.path(&format!("{stem}.rs"));
         // The Rust is laid out on the C's lines, so nothing may come before
@@ -1087,20 +1135,27 @@ impl Run<'_> {
                 .to_string()
         };
         let name = crate_name(&stem, path, &made);
-        if inv.lto.is_some() {
+        if lto.is_some() {
             source.push_str(&used_bytes(
                 "CCINRS_CRATE",
                 &format!("{CRATE_PREFIX}{name}\0"),
             ));
         }
+        if bitcode {
+            source.push_str(&used_bytes("CCINRS_BITCODE", BITCODE_MARK));
+        }
         std::fs::write(&rust, source)
             .map_err(|error| format!("cannot write {}: {error}", rust.display()))?;
         let mut cmd = self.rustc.command();
         cmd.args(["--edition", "2024"]);
-        if inv.lto.is_some() {
+        if lto.is_some() {
             cmd.args(["--crate-type", "rlib"]);
         } else {
             cmd.args(["--crate-type", "lib", "--emit", "obj"]);
+        }
+        // The crate's object is the bitcode alone, for the linker.
+        if bitcode {
+            cmd.args(["-C", "linker-plugin-lto"]);
         }
         cmd.args(["--crate-name", &name])
             .args(codegen_flags(inv))
@@ -1144,8 +1199,9 @@ impl Run<'_> {
         Ok(Some(ObjectInfo {
             uses_runtime: translation.uses_runtime,
             symbols: translation.symbols,
-            crates: inv.lto.map(|_| name).into_iter().collect(),
-            native: inv.lto.is_none(),
+            crates: lto.map(|_| name).into_iter().collect(),
+            native: lto.is_none(),
+            bitcode,
         }))
     }
 
@@ -1256,6 +1312,10 @@ fn used_bytes(name: &str, bytes: &str) -> String {
 /// What an object that calls the runtime carries besides its stamp.
 const RUNTIME_MARK: &str = "ccinrs runtime wanted\0";
 
+/// What an `-flto` object made of bitcode for the linker carries; see
+/// [`Target::linker_lto`].
+const BITCODE_MARK: &str = "ccinrs bitcode for the linker\0";
+
 /// How the list of the symbols an object defines begins: the names follow,
 /// separated by spaces, up to a NUL.
 const SYMBOLS_PREFIX: &str = "ccinrs symbols: ";
@@ -1320,10 +1380,12 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
         }
         rest = &found[end..];
     }
+    let bitcode_mark = BITCODE_MARK.as_bytes();
     Ok(ObjectInfo {
         uses_runtime,
         symbols,
         native: stamped && crates.is_empty(),
+        bitcode: !crates.is_empty() && bytes.windows(bitcode_mark.len()).any(|w| w == bitcode_mark),
         crates,
     })
 }
@@ -1421,15 +1483,38 @@ impl Run<'_> {
         for extern_crate in &crates {
             cmd.arg("--extern").arg(extern_crate);
         }
-        // `-flto` at the link is what optimises them all as one — the C, the
-        // runtime and Rust's standard library alike. Not when an object or an
-        // archive compiled here without it is in the link, though: Rust's LTO
-        // keeps only the standard library's symbols its own modules use, and
-        // the machine code would be left calling `core::panicking::panic` and
-        // the rest by names nothing defines — Redis links its `deps/`'
-        // archives into a server built with `-flto`. The `-flto` objects
-        // hold machine code too, so they link as they are.
+        // `-flto` at the link is what optimises them all as one. Where the
+        // objects are bitcode for the linker, `rust-lld` does it, with every
+        // other object in view; see `Target::linker_lto`. The inlining
+        // thresholds the checks raise (see `codegen_flags`) are the linker's
+        // LLVM's to apply then.
+        //
+        // Otherwise it is `rustc`'s, which optimises the C, the runtime and
+        // Rust's standard library alike — but not when an object or an
+        // archive compiled here without it is in the link: `rustc` keeps only
+        // the standard library's symbols its own modules use, and the machine
+        // code would be left calling `core::panicking::panic` and the rest by
+        // names nothing defines. The `-flto` objects hold machine code too,
+        // so they link as they are.
         match inv.lto {
+            _ if linked.bitcode => {
+                cmd.args(["-C", "linker-plugin-lto"]);
+                if inv.checks && inv.opt_level != "0" {
+                    for threshold in [
+                        "-inlinehint-threshold=1000",
+                        "-inline-cold-callsite-threshold=225",
+                    ] {
+                        if self.target.self_contained {
+                            cmd.args(["-C", "link-arg=-mllvm"])
+                                .arg("-C")
+                                .arg(format!("link-arg={threshold}"));
+                        } else {
+                            cmd.arg("-C")
+                                .arg(format!("link-arg=-Wl,-mllvm,{threshold}"));
+                        }
+                    }
+                }
+            }
             _ if linked.native => {}
             Some(Lto::Fat) => {
                 cmd.args(["-C", "lto=fat"]);
@@ -1560,16 +1645,22 @@ impl Run<'_> {
         if self.target.self_contained {
             cmd.args(["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld"]);
         } else if let Some(ld) = inv.fuse_ld.as_ref().filter(|ld| *ld != "lld")
-            && inv.shared
+            && (inv.shared || linked.bitcode)
         {
             // `rustc` gives a shared library a version script of its own, and
             // the C symbols are a second; LLD takes the union of the two, and
-            // GNU ld, gold and mold refuse two anonymous version tags.
+            // GNU ld, gold and mold refuse two anonymous version tags. An
+            // object compiled with `-flto` without `-fuse-ld` is bitcode, which
+            // only LLD reads.
             if inv.warnings {
-                eprintln!(
-                    "ccinrs: warning: ignoring '-fuse-ld={ld}': a shared library is linked by \
-                     LLD, which alone takes rustc's version script and ccinrs's together"
-                );
+                let why = if linked.bitcode {
+                    "an object compiled with -flto is LLVM bitcode, which LLD reads and it \
+                     does not"
+                } else {
+                    "a shared library is linked by LLD, which alone takes rustc's version \
+                     script and ccinrs's together"
+                };
+                eprintln!("ccinrs: warning: ignoring '-fuse-ld={ld}': {why}");
             }
         } else if !bare && let Some(ld) = &inv.fuse_ld {
             // `rustc` links x86-64 Linux with its own `rust-lld` through the C

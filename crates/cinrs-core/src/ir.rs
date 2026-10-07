@@ -2073,6 +2073,20 @@ impl Program {
             && matches!(object.storage, Storage::Static { exported: true, .. })
     }
 
+    /// Whether the unit makes any real weak definition at all, which is
+    /// what a driver compiling for link-time optimisation has to know: the
+    /// definition is an assembler alias, and one merged module could hold
+    /// two of them.
+    pub fn has_weak_definitions(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|func| self.weak_defined_function(func))
+            || self
+                .objects
+                .iter()
+                .any(|object| self.weak_defined_object(object))
+    }
+
     /// The symbol of the accessor a thread-local object with external
     /// linkage named `symbol` is reached through from another unit:
     /// `symbol.cinrs_tls`. A `.` is valid in an ELF, Mach-O and COFF symbol

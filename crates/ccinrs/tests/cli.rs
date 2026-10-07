@@ -384,8 +384,9 @@ fn an_extern_thread_local_object_is_reached_through_its_accessor() {
 /// file overrides — reached through the symbol by the defining file's own
 /// callers too — the default when nothing does, jemalloc's weak tentative
 /// `malloc_conf` overridden by a test's definition, and a shared library's
-/// weak symbol interposed by the program. Under `-flto` it falls back to an
-/// ordinary definition, with the warning.
+/// weak symbol interposed by the program. Under `-flto` the file is compiled
+/// without it where the linker optimises, and falls back to an ordinary
+/// definition, with the warning, where `rustc` does.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[test]
 fn a_weak_definition_is_overridden_by_a_strong_one() {
@@ -435,15 +436,42 @@ fn a_weak_definition_is_overridden_by_a_strong_one() {
         "shared",
     ]);
     assert_eq!(stdout(&s.run("shared", &[])), "101 30 override\n1\n");
-    // `-flto` merges the files before they are assembled, so the definition
-    // is an ordinary one there, with the warning.
-    let lto = s.ccinrs(&["-O2", "-flto", "main.c", "fdef.c", "-o", "lto"]);
+    // Under `-flto`, where the linker does the optimisation (x86-64 Linux),
+    // the file with the weak definitions is compiled without it and linked
+    // beside the others, and says so under `-v` only. Where `rustc` does, it
+    // merges the files before they are assembled, so the definition is an
+    // ordinary one, with the warning.
+    let lto = s.ccinrs(&["-O2", "-flto", "-v", "main.c", "fdef.c", "-o", "lto"]);
     assert!(lto.status.success(), "{}", stderr(&lto));
-    assert!(
-        stderr(&lto).contains("'hook' is defined weakly, which Rust cannot express"),
-        "{}",
-        stderr(&lto)
-    );
+    if cfg!(target_arch = "x86_64") {
+        assert!(
+            stderr(&lto)
+                .contains("fdef.c makes a weak definition, so it is compiled without -flto"),
+            "{}",
+            stderr(&lto)
+        );
+        let quiet = s.ccinrs(&[
+            "-O2",
+            "-flto",
+            "main.c",
+            "fdef.c",
+            "override.c",
+            "-o",
+            "lto-overridden",
+        ]);
+        assert!(quiet.status.success(), "{}", stderr(&quiet));
+        assert!(!stderr(&quiet).contains("weak"), "{}", stderr(&quiet));
+        assert_eq!(
+            stdout(&s.run("lto-overridden", &[])),
+            "101 30 override\n1\n"
+        );
+    } else {
+        assert!(
+            stderr(&lto).contains("'hook' is defined weakly, which Rust cannot express"),
+            "{}",
+            stderr(&lto)
+        );
+    }
     assert_eq!(stdout(&s.run("lto", &[])), "2 3 (null)\n1\n");
 }
 
@@ -472,6 +500,12 @@ fn a_common_definition_in_two_files_is_one_object() {
     );
     s.compile(&["-O2", "main.c", "one.c", "-o", "common"]);
     assert_eq!(stdout(&s.run("common", &[])), "42 7\n");
+    // Redis's build does it under `-flto`, which keeps the definitions where
+    // the linker does the optimisation.
+    if cfg!(target_arch = "x86_64") {
+        s.compile(&["-O2", "-flto", "main.c", "one.c", "-o", "common-lto"]);
+        assert_eq!(stdout(&s.run("common-lto", &[])), "42 7\n");
+    }
 }
 
 /// GCC's vector extensions: a vector type's alignment follows `-mavx` as
