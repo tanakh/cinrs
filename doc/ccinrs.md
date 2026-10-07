@@ -52,7 +52,11 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 * **Rust's run-time checks are on**: a misaligned or null pointer dereference,
   an out-of-bounds `memcpy` overlap and the checks cinrs writes itself stop the
   program with a panic at the C line, at every optimisation level.
-  `-fno-cinrs-checks` takes them out.
+  `-fno-cinrs-checks` takes them out. With them on, LLVM's inliner is told to
+  reach further (`-inlinehint-threshold=1000`,
+  `-inline-cold-callsite-threshold=225`), so that a small `inline` function
+  the checks swell is still inlined, where most of its checks then prove
+  redundant: mbedtls's ChaCha20 runs at the speed it has without them.
 * The **platform's headers** are searched, after `-I`, and before cinrs's
   bundled ones, which supply what only a compiler has (`<stdarg.h>`,
   `<stddef.h>`, the intrinsics) — GCC's order. `-nostdinc` leaves the

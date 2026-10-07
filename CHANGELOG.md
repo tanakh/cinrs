@@ -21,7 +21,8 @@ follows [Semantic Versioning][semver].
     headers before the bundled ones, every non-`static` definition a symbol.
     Rust's run-time checks are on unless `-fno-cinrs-checks` says otherwise,
     and a panic names the C file and line: the Rust is printed on the C's
-    lines.
+    lines. With them on, LLVM's inline thresholds are raised so that the
+    checks do not change which functions are inlined.
   * `-c` objects carry the `rustc` that made them, and a link with another
     refuses them in one sentence; `-S` writes the Rust; `-E` prints the
     preprocessed C with GCC's line markers, and `-dM` the macros; `-M`,

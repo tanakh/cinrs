@@ -1554,6 +1554,24 @@ fn codegen_flags(inv: &Invocation) -> Vec<String> {
         "-C".to_owned(),
         format!("debug-assertions={}", if inv.checks { "on" } else { "off" }),
     ];
+    // The checks are branches and calls LLVM's inliner counts against a
+    // function, so a small `inline` helper that it inlines without them —
+    // mbedtls's ChaCha20 quarter round — stays a call with them, and its
+    // checks with it, where inlining would have proved most of them
+    // redundant: 2.4 times as slow. C says nothing of how far `inline`
+    // reaches; what is wanted is that the checks not change which functions
+    // are inlined, so the thresholds are raised about as much as the checks
+    // swell a function: `inline` ones (225 → 1000 for a hinted callee) and
+    // call sites LLVM thinks seldom run (45 → 225), which is every case of
+    // an interpreter's big `switch`. A program grows by under 2 %.
+    if inv.checks && inv.opt_level != "0" {
+        flags.extend([
+            "-C".to_owned(),
+            "llvm-args=-inlinehint-threshold=1000".to_owned(),
+            "-C".to_owned(),
+            "llvm-args=-inline-cold-callsite-threshold=225".to_owned(),
+        ]);
+    }
     if let Some(triple) = &inv.target {
         flags.extend(["--target".to_owned(), triple.clone()]);
     }
