@@ -108,6 +108,16 @@ follows [Semantic Versioning][semver].
   sign-extended, as GCC and Clang print it: xz's `"n"(UINT32_C(31) -
   UINT32_C(2048))` under `%c` is the displacement `-2017`, which the assembler
   takes, and not `4294965279`, which it refused.
+* A function pointer with static storage duration may hold an object's
+  address or an integer, as libwebp's `static volatile VP8CPUInfo last =
+  (VP8CPUInfo)&last;` sentinel and `SIG_IGN` do: the item is the data pointer,
+  read and written as the function pointer C declared. `rustc`'s constant
+  evaluation refused the translation of every libwebp DSP file. Inside an
+  array or a structure such a constant is refused with the reason.
+* A pointer with static storage duration initialised with a negative integer
+  — glibc's `SIG_ERR`, `((__sighandler_t) -1)`, and `(void *) -1` — is all
+  ones, as in GCC. It was written `-1 as c_ulong`, which `rustc` refused
+  (E0600); curl's test servers keep `SIG_ERR` in a `static`.
 
 ## 0.2.0 — 2026-10-02
 

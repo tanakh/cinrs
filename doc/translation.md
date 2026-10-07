@@ -590,6 +590,39 @@ record nested inside another aggregate — an array of them, a member, or a
 compound literal — whose own size already fixes the room there is. Both are
 refused, in GCC's own words.
 
+## A function pointer that holds an object's address
+
+A C function pointer is an `Option<unsafe extern "C" fn …>`, and Rust's
+constant evaluation will not let a `static` of that type hold anything but a
+function or `None`. C's constant may be an object's address or an integer
+converted to the type: libwebp's every DSP initialiser keeps
+`static volatile VP8CPUInfo last = (VP8CPUInfo)&last;` as a sentinel no real
+function can equal, and `SIG_IGN` is `(void (*)(int)) 1`. Such an object with
+static storage duration is stored as the data pointer it holds, and reached
+the way an [initialised flexible array member](#an-initialised-flexible-array-member)
+is, through a cast of its address:
+
+```c
+typedef int (*VP8CPUInfo)(int);
+static volatile VP8CPUInfo last = (VP8CPUInfo)&last;
+```
+
+```rust
+static mut last: *mut c_void = unsafe {
+    (&raw mut (*(&raw mut last).cast::<Option<unsafe extern "C" fn(c_int) -> c_int>>()))
+        as *mut c_void
+};
+// every use of `last` in the C is  (*(&raw mut last).cast::<Option<…>>())
+```
+
+The two types have one size and one representation, so every load, store,
+comparison and call is the C one; a function pointer holding a data address is
+only ever compared, which is all C allows of it. An ordinary initialiser —
+a function or null — keeps the `Option<fn>` item. A function pointer *inside*
+an array or a structure is part of a value of the aggregate's type, where the
+`Option<fn>` is unavoidable, so such a constant is refused there with the
+reason, and a thread-local one likewise: assign it at run time.
+
 ## Variably modified types and `alloca`
 
 **The storage is the heap, not the stack.** Rust has no way to move the stack

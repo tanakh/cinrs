@@ -2130,6 +2130,29 @@ fn file_scope_asm_becomes_global_asm() {
     ));
 }
 
+/// A function pointer with static storage whose constant is an object's
+/// address or an integer — libwebp's `(VP8CPUInfo)&last`, `SIG_IGN` — is a
+/// `*mut c_void` item, which Rust's constant evaluation lets hold either, and
+/// every use reads it through a cast to the `Option<fn>` C declared. One
+/// initialised with a function stays an `Option<fn>`.
+#[test]
+fn a_function_pointer_holding_a_data_address_is_stored_as_one() {
+    insta::assert_snapshot!(generate_with(
+        Options::gnu(Standard::C99),
+        r#"
+        typedef int (*unary)(int);
+        static int one(int n) { return n; }
+        static unary plain = one;
+        int check(int n) {
+            static volatile unary last = (unary)&last;
+            static unary ignored = (unary)1;
+            if (last == (unary)&last) last = plain;
+            return last(n) + (ignored == (unary)1);
+        }
+        "#
+    ));
+}
+
 /// Extended asm: named operands in GCC's order, a tied input folded into its
 /// output as `inout … =>`, explicit registers at the operand's width (and
 /// written into the template where `%0` named one), modifiers, an immediate

@@ -1991,6 +1991,20 @@ pub struct Object {
     pub asm_label: Option<String>,
     /// The section `__attribute__((section("…")))` asked for.
     pub section: Option<String>,
+    /// Set for a function pointer with static storage duration whose constant
+    /// initialiser is not a function's address or null: libwebp's
+    /// `static volatile VP8CPUInfo last = (VP8CPUInfo)&last;`, a sentinel no
+    /// real function can equal, or `signal`'s `SIG_IGN`, `(void (*)(int)) 1`.
+    ///
+    /// Rust's constant evaluation refuses an `Option<unsafe extern "C" fn>`
+    /// that holds anything but a function, so the item is a
+    /// `*mut core::ffi::c_void` — the same size and representation — and its
+    /// initialiser a data pointer; every use reaches the C object through
+    /// `(*(&raw mut x).cast::<Option<fn …>>())`, the same route the
+    /// [flexible-array companion](Object::flexible_len) takes. At run time a
+    /// function pointer holding such an address is only ever compared, which
+    /// is all C allows of it. See [`codegen`](crate::codegen).
+    pub data_fn_pointer: bool,
     /// Where the declarator was written.
     pub range: SourceRange,
 }

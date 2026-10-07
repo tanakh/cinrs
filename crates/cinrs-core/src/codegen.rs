@@ -2411,7 +2411,14 @@ impl<'a> Codegen<'a> {
         };
         let name = self.c_ident(item_name, span);
         let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
-        let init = self.static_init(&var.init, object.ty, span);
+        // A data function pointer's initialiser is already the `void *` its
+        // item holds; see [`ir::Object::data_fn_pointer`].
+        let init_ty = if object.data_fn_pointer {
+            var.init.ty
+        } else {
+            object.ty
+        };
+        let init = self.static_init(&var.init, init_ty, span);
         let init = self.binding_init(var.object, init, span);
         let (vis, export) = if *exported {
             let export = if self.program.export {
@@ -3250,6 +3257,10 @@ impl<'a> Codegen<'a> {
     /// needs.
     fn storage_ty(&self, id: ir::ObjectId, span: Span) -> TokenStream {
         let object = self.program.object(id);
+        if object.data_fn_pointer {
+            // See [`ir::Object::data_fn_pointer`].
+            return quote_spanned! {span=> *mut ::core::ffi::c_void };
+        }
         match (object.flexible_len, object.ty) {
             (Some(len), Ty::Record(record)) => {
                 let name =
@@ -3280,7 +3291,7 @@ impl<'a> Codegen<'a> {
             let field = Literal::usize_unsuffixed(0);
             access = quote_spanned! {span=> #access.#field };
         }
-        if object.flexible_len.is_some() {
+        if object.flexible_len.is_some() || object.data_fn_pointer {
             let ty = self.ty(object.ty, span);
             access = parenthesize(
                 quote_spanned! {span=> *(&raw mut #access).cast::<#ty>() },

@@ -1524,9 +1524,33 @@ impl Sema<'_> {
         init: Expr,
     ) {
         let ty = self.program.object(id).ty;
-        let value = self
+        let mut value = self
             .static_init(init, "initializer")
             .unwrap_or_else(|| self.zero(ty, declarator.range));
+        // A function pointer whose constant is an object's address or an
+        // integer is kept as a data pointer; see [`ir::Object::data_fn_pointer`].
+        if self.types().is_func_pointer(ty) && !is_function_address(&value) {
+            if self.program.object(id).storage.is_thread_local() {
+                self.error(
+                    value.range,
+                    "a thread-local function pointer can only be initialised with a function or \
+                     null; assign the address at run time instead",
+                );
+            } else {
+                let data = self.ptr_to(Ty::Void, false);
+                let range = value.range;
+                value = Expr::new(ExprKind::Cast(Box::new(strip_casts(value))), data, range);
+                self.program.objects[id.0 as usize].data_fn_pointer = true;
+            }
+        } else if let Some(range) = self.nested_data_fn_pointer(&value) {
+            self.error(
+                range,
+                "a function pointer inside an array or a structure with static storage duration \
+                 can only be initialised with a function or null: Rust's constant evaluation \
+                 refuses an object's address or an integer there. Assign it at run time, or make \
+                 it an object of its own",
+            );
+        }
         // An initialised flexible array member makes the *object* larger than
         // its type; the item is generated with a companion type whose tail is
         // that long. See [`ir::Object::flexible_len`].
@@ -1536,6 +1560,27 @@ impl Sema<'_> {
         if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
             entry.init = value;
         }
+    }
+
+    /// Where a constant initialiser puts something other than a function or
+    /// null into a function pointer *inside* an aggregate, which only a
+    /// [whole object](ir::Object::data_fn_pointer) can hold.
+    fn nested_data_fn_pointer(&self, value: &Expr) -> Option<SourceRange> {
+        match &value.kind {
+            ExprKind::ArrayLit(items) => items.iter().find_map(|e| self.nested_leaf(e)),
+            ExprKind::RecordLit { fields, .. } => fields.iter().find_map(|e| self.nested_leaf(e)),
+            ExprKind::UnionLit { value, .. } | ExprKind::ArrayRepeat { value, .. } => {
+                self.nested_leaf(value)
+            }
+            _ => None,
+        }
+    }
+
+    fn nested_leaf(&self, value: &Expr) -> Option<SourceRange> {
+        if self.types().is_func_pointer(value.ty) {
+            return (!is_function_address(value)).then_some(value.range);
+        }
+        self.nested_data_fn_pointer(value)
     }
 
     /// How many elements an initialiser gave a record's flexible array member,
@@ -3346,7 +3391,11 @@ impl Sema<'_> {
         }
         let value = self.integer_pointer_value(expr)?;
         let size = self.size_ty();
-        let base = Expr::int(value, size, expr.range);
+        // The address as the `size_t` it is: `(void *) -1` — glibc's
+        // `SIG_ERR` — is all ones, and an `Int` holds a value already reduced
+        // to its type's range. A `-1` of an unsigned type would be written
+        // `-1 as c_ulong`, which Rust refuses (E0600).
+        let base = Expr::int(size.wrap(value, &self.target), size, expr.range);
         Some(Expr::new(ExprKind::Cast(Box::new(base)), ty, expr.range))
     }
 
@@ -3494,6 +3543,27 @@ impl Sema<'_> {
             // file scope is an ordinary `Object` with static storage.
             PlaceKind::Temporary(_) | PlaceKind::CompoundLiteral { .. } => false,
         }
+    }
+}
+
+/// Whether a constant of a function pointer type is a function's address or
+/// null, which is what a Rust `Option<unsafe extern "C" fn …>` can hold in a
+/// `static`; see [`ir::Object::data_fn_pointer`] for everything else.
+fn is_function_address(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FuncAddr(_) | ExprKind::Zeroed | ExprKind::Int(0) => true,
+        ExprKind::Cast(inner) => is_function_address(inner),
+        _ => false,
+    }
+}
+
+/// An address constant without the conversions around it, which is what a
+/// [data function pointer](ir::Object::data_fn_pointer) converts to `void *`
+/// instead.
+fn strip_casts(expr: Expr) -> Expr {
+    match expr.kind {
+        ExprKind::Cast(inner) => strip_casts(*inner),
+        _ => expr,
     }
 }
 

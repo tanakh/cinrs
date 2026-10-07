@@ -1751,6 +1751,7 @@ impl<'a> Sema<'a> {
             flexible_len: None,
             asm_label: None,
             section: None,
+            data_fn_pointer: false,
             range,
         });
         self.object_level.push(level);

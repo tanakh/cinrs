@@ -171,6 +171,59 @@ fn a_function_designator() {
     }
 }
 
+/// A function pointer whose constant is *not* a function: libwebp's
+/// `WEBP_DSP_INIT` keeps `static volatile VP8CPUInfo last = (VP8CPUInfo)&last;`
+/// as a sentinel no real function can equal, and `SIG_IGN` is
+/// `(void (*)(int)) 1`. Rust's constant evaluation refuses an `Option<fn>`
+/// holding either, so the item holds a data pointer and every use reads it as
+/// the function pointer C declared; it is compared, assigned a real function
+/// and called through like any other.
+#[test]
+fn a_function_pointer_holding_an_objects_address() {
+    cinrs::gnu99! {
+        typedef int (*unary)(int);
+
+        static int plus_one(int n) { return n + 1; }
+        static int data;
+        static unary from_data = (unary)&data;
+        static unary from_integer = (unary)1;
+        /* glibc's `SIG_ERR` is `((__sighandler_t) -1)`: all ones, as an
+           address, for a function pointer and a data pointer alike. */
+        static unary minus_one = (unary)-1;
+        static unary minus_two = (unary)-2;
+        static unary large = (unary)0xffffffff00000000ull;
+        static void *all_ones = (void *)-1;
+
+        int negative_ones(void) {
+            return (minus_one == (unary)-1) + 10 * (minus_two == (unary)-2)
+                 + 100 * (large == (unary)0xffffffff00000000ull)
+                 + 1000 * (all_ones == (void *)-1)
+                 + 10000 * ((unsigned long)all_ones == (unsigned long)-1);
+        }
+
+        int sentinel(int n) {
+            static volatile unary last = (unary)&last;
+            int r = 0;
+            if (last == (unary)&last) r += 1;          /* the sentinel itself */
+            if (last != plus_one) r += 10;
+            last = plus_one;                           /* a real function now */
+            if (last == plus_one) r += 100;
+            return r * 1000 + last(n);
+        }
+        int others(void) {
+            int r = (from_data == (unary)&data) + 10 * (from_integer == (unary)1);
+            from_integer = plus_one;
+            return r * 100 + from_integer(1);
+        }
+    }
+
+    unsafe {
+        assert_eq!(sentinel(41), 111_042);
+        assert_eq!(others(), 1102);
+        assert_eq!(negative_ones(), 11_111);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // a structure holding pointers, which is what SQLite's `aJsonFunc` is
 // ---------------------------------------------------------------------------

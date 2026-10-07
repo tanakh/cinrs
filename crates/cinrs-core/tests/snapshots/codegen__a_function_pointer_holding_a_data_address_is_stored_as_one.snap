@@ -1,0 +1,96 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_with(Options::gnu(Standard::C99),\nr#\"\n        typedef int (*unary)(int);\n        static int one(int n) { return n; }\n        static unary plain = one;\n        int check(int n) {\n            static volatile unary last = (unary)&last;\n            static unary ignored = (unary)1;\n            if (last == (unary)&last) last = plain;\n            return last(n) + (ignored == (unary)1);\n        }\n        \"#)"
+---
+mod __cinrs_unit_125d52b8 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    pub type unary = ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    >;
+    static mut plain: ::core::option::Option<
+        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    > = ::core::option::Option::Some(
+        one as unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+    );
+    static mut __cinrs_static_125d52b8_check_last: *mut ::core::ffi::c_void = unsafe {
+        (&raw mut (*(&raw mut __cinrs_static_125d52b8_check_last)
+            .cast::<
+                ::core::option::Option<
+                    unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                >,
+            >())) as *mut ::core::ffi::c_void
+    };
+    static mut __cinrs_static_125d52b8_check_ignored: *mut ::core::ffi::c_void = 1
+        as ::core::ffi::c_ulong as *mut ::core::ffi::c_void;
+    unsafe extern "C" fn one(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return n;
+        }
+    }
+    pub unsafe extern "C" fn check(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            if (*(&raw mut __cinrs_static_125d52b8_check_last)
+                .cast::<
+                    ::core::option::Option<
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >,
+                >())
+                == ::core::mem::transmute::<
+                    *mut ::core::option::Option<
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >,
+                    ::core::option::Option<
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >,
+                >(
+                    (&raw mut (*(&raw mut __cinrs_static_125d52b8_check_last)
+                        .cast::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                        >())),
+                )
+            {
+                (*(&raw mut __cinrs_static_125d52b8_check_last)
+                    .cast::<
+                        ::core::option::Option<
+                            unsafe extern "C" fn(
+                                ::core::ffi::c_int,
+                            ) -> ::core::ffi::c_int,
+                        >,
+                    >()) = plain;
+            }
+            return ((*(&raw mut __cinrs_static_125d52b8_check_last)
+                .cast::<
+                    ::core::option::Option<
+                        unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
+                    >,
+                >())
+                .expect("null function pointer"))(n)
+                .wrapping_add(
+                    ((*(&raw mut __cinrs_static_125d52b8_check_ignored)
+                        .cast::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                        >())
+                        == ::core::mem::transmute::<
+                            ::core::primitive::usize,
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                        >(1 as ::core::ffi::c_int as ::core::primitive::usize))
+                        as ::core::ffi::c_int,
+                );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_125d52b8::*;

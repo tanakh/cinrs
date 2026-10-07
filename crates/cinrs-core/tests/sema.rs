@@ -3117,6 +3117,34 @@ fn a_declaration_with_no_prototype_takes_the_library_one() {
 }
 
 #[test]
+fn a_data_address_in_a_function_pointer_is_held_by_a_whole_object_only() {
+    // A whole object holds one as a data pointer; see
+    // `ir::Object::data_fn_pointer`.
+    let options = Options::gnu(Standard::C11);
+    assert!(
+        errors_with(
+            "typedef void (*fp)(void); int x; static fp one = (fp)&x;",
+            &options
+        )
+        .is_empty()
+    );
+    // Inside an aggregate the constant would be an `Option<fn>` again, which
+    // Rust's constant evaluation refuses: a located error instead of rustc's.
+    assert_eq!(
+        errors_with(
+            "typedef void (*fp)(void); int x; static fp table[2] = { 0, (fp)&x };",
+            &options
+        ),
+        [
+            "a function pointer inside an array or a structure with static storage duration \
+             can only be initialised with a function or null: Rust's constant evaluation \
+             refuses an object's address or an integer there. Assign it at run time, or make \
+             it an object of its own"
+        ]
+    );
+}
+
+#[test]
 fn an_implicit_library_function_is_still_an_error_in_c99() {
     assert_eq!(
         errors("int f(char *p) { return strcmp(p, \"x\"); }"),
