@@ -15,10 +15,10 @@ use std::process::Command;
 use cinrs_core::include::System;
 use cinrs_core::{Arch, Env, Options, Os, TargetModel, TargetSource};
 
-use crate::args::{Input, Invocation, Lto, Query, Stage};
+use crate::args::{Input, Invocation, LinkerArg, Lto, Query, Stage};
 use crate::runtime::{self, Runtime};
 use crate::rustc::Rustc;
-use crate::{deps, diag, preprocess, print};
+use crate::{deps, diag, elf, preprocess, print};
 
 /// Why a run stopped.
 pub enum Failure {
@@ -99,6 +99,7 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                         objects.push(LinkInput {
                             path: object,
                             crate_name: info.crates.first().cloned(),
+                            whole: false,
                         });
                         linked.add(info);
                     }
@@ -109,8 +110,11 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                 let mut info = check_stamp(path, &run.stamp)?;
                 // An archive's members are linked when something needs them,
                 // and a shared library's symbols are its own, so neither is
-                // what a shared library made here exports.
-                if is_archive(path) || is_shared_library(path) {
+                // what a shared library made here exports — unless the
+                // archive is linked whole, when every member is in, as
+                // libtool puts a convenience library into a shared one.
+                let whole = is_archive(path) && inv.whole_archives.contains(&index);
+                if (is_archive(path) && !whole) || is_shared_library(path) {
                     info.symbols.clear();
                 }
                 // An `-flto` object is an rlib, which is an archive itself,
@@ -129,6 +133,7 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                 objects.push(LinkInput {
                     path: run.work.link_input(index, path)?,
                     crate_name,
+                    whole,
                 });
             }
         }
@@ -145,6 +150,8 @@ struct LinkInput {
     /// The crate an object compiled with `-flto` is — an rlib, which the link
     /// loads as one; see [`Run::compile`].
     crate_name: Option<String>,
+    /// An archive linked whole: `-Wl,--whole-archive` around it.
+    whole: bool,
 }
 
 /// What a link has to know about the objects in it, which each object made
@@ -598,22 +605,20 @@ fn check_output(path: &Path) -> Result<(), String> {
 /// linker (`-Wl,--version-script,FILE`, `-Wl,--version-script=FILE`) mention,
 /// in a `global:` or a `local:` list alike. A script that cannot be read is
 /// the linker's to report.
-fn version_script_patterns(linker_args: &[String]) -> Vec<String> {
+fn version_script_patterns(linker_args: &[LinkerArg]) -> Vec<String> {
     let mut files = Vec::new();
-    for arg in linker_args {
-        let Some(list) = arg.strip_prefix("-Wl,") else {
-            continue;
-        };
-        let mut items = list.split(',');
-        while let Some(item) = items.next() {
-            let item = item.trim_start_matches('-');
-            if let Some(file) = item.strip_prefix("version-script=") {
-                files.push(file.to_owned());
-            } else if item == "version-script"
-                && let Some(file) = items.next()
-            {
-                files.push(file.to_owned());
-            }
+    let mut words = linker_args.iter().filter_map(|arg| match arg {
+        LinkerArg::Linker(word) => Some(word),
+        LinkerArg::Driver(_) => None,
+    });
+    while let Some(word) = words.next() {
+        let option = word.trim_start_matches('-');
+        if let Some(file) = option.strip_prefix("version-script=") {
+            files.push(file.to_owned());
+        } else if option == "version-script"
+            && let Some(file) = words.next()
+        {
+            files.push(file.clone());
         }
     }
     let mut patterns = Vec::new();
@@ -1030,20 +1035,21 @@ impl Run<'_> {
     }
 
     /// One linker argument of the command line, as `rustc` is to pass it on.
-    /// Through a C compiler, as it is; to `rust-lld` itself (musl), the
-    /// driver's spellings undone — `-Wl,a,b` is `a` and `b`, and `-rdynamic`
-    /// is `--export-dynamic`.
-    fn linker_arg(&self, arg: &str) -> Vec<String> {
-        if !self.target.self_contained {
-            return vec![arg.to_owned()];
+    /// Through a C compiler, in its spelling — `-Wl,word`, or `-Xlinker word`
+    /// for a word with a comma in it; to `rust-lld` itself (musl), the word
+    /// alone, and `-rdynamic` as `--export-dynamic`.
+    fn linker_arg(&self, arg: &LinkerArg) -> Vec<String> {
+        match arg {
+            LinkerArg::Driver(option) if self.target.self_contained && option == "-rdynamic" => {
+                vec!["--export-dynamic".to_owned()]
+            }
+            LinkerArg::Driver(option) => vec![option.clone()],
+            LinkerArg::Linker(word) if self.target.self_contained => vec![word.clone()],
+            LinkerArg::Linker(word) if word.contains(',') => {
+                vec!["-Xlinker".to_owned(), word.clone()]
+            }
+            LinkerArg::Linker(word) => vec![format!("-Wl,{word}")],
         }
-        if let Some(list) = arg.strip_prefix("-Wl,") {
-            return list.split(',').map(str::to_owned).collect();
-        }
-        if arg == "-rdynamic" {
-            return vec!["--export-dynamic".to_owned()];
-        }
-        vec![arg.to_owned()]
     }
 
     /// The compiled runtime, found or compiled on first asking.
@@ -1107,7 +1113,10 @@ fn check_stamp(path: &Path, stamp: &str) -> Result<ObjectInfo, String> {
     };
     let mark = RUNTIME_MARK.as_bytes();
     let uses_runtime = bytes.windows(mark.len()).any(|w| w == mark);
-    let symbols = marked_names(&bytes, SYMBOLS_PREFIX);
+    // What the objects made here say they define, and what the others' — an
+    // object from GCC or an assembler — symbol tables do.
+    let mut symbols = marked_names(&bytes, SYMBOLS_PREFIX);
+    symbols.extend(elf::exported_symbols(&bytes, STAMP_PREFIX.as_bytes()));
     let crates = marked_names(&bytes, CRATE_PREFIX);
     let prefix = STAMP_PREFIX.as_bytes();
     let mut rest = &bytes[..];
@@ -1297,9 +1306,16 @@ impl Run<'_> {
             if object.crate_name.is_some() {
                 continue;
             }
+            let whole = object.whole;
             let object = &object.path;
             if self.target.model.arch == Arch::Wasm32 {
+                if whole {
+                    cmd.args(["-C", "link-arg=--whole-archive"]);
+                }
                 cmd.arg("-C").arg(format!("link-arg={}", object.display()));
+                if whole {
+                    cmd.args(["-C", "link-arg=--no-whole-archive"]);
+                }
                 continue;
             }
             let name = object
@@ -1308,6 +1324,8 @@ impl Run<'_> {
                 .to_string_lossy();
             let spec = if is_shared_library(object) {
                 format!("dylib:+verbatim={name}")
+            } else if is_archive(object) && whole {
+                format!("static:+verbatim,+whole-archive={name}")
             } else if is_archive(object) {
                 format!("static:+verbatim={name}")
             } else {
@@ -1324,7 +1342,15 @@ impl Run<'_> {
             if self.target.self_contained && MUSL_LIBC_PARTS.contains(&lib.as_str()) {
                 continue;
             }
-            cmd.arg("-l").arg(lib);
+            // GNU ld's `-l:file`: that file, looked for in the `-L`
+            // directories, which is `rustc`'s verbatim name.
+            match lib.strip_prefix(':') {
+                Some(file) if file.ends_with(".a") => {
+                    cmd.arg("-l").arg(format!("static:+verbatim={file}"))
+                }
+                Some(file) => cmd.arg("-l").arg(format!("dylib:+verbatim={file}")),
+                None => cmd.arg("-l").arg(lib),
+            };
         }
         for arg in &inv.linker_args {
             for arg in self.linker_arg(arg) {
@@ -1624,10 +1650,15 @@ mod tests {
              ZLIB_1.2.2 {\n    adler32_combine;\n} ZLIB_1.2.0;\n",
         )
         .expect("the script");
-        let args = [format!(
-            "-Wl,-soname,libz.so.1,--version-script,{}",
-            script.display()
-        )];
+        let args = crate::args::parse([
+            format!(
+                "-Wl,-soname,libz.so.1,--version-script,{}",
+                script.display()
+            ),
+            "z.c".to_owned(),
+        ])
+        .expect("the command line")
+        .linker_args;
         let patterns = version_script_patterns(&args);
         assert_eq!(
             patterns,

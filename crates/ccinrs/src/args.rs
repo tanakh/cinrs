@@ -68,6 +68,17 @@ pub enum Lto {
     Thin,
 }
 
+/// Something the command line says about the link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkerArg {
+    /// An option of the C driver's own: `-rdynamic`.
+    Driver(String),
+    /// One word for the linker itself: an item of `-Wl,a,b`, or what follows
+    /// `-Xlinker`. libtool writes `-Wl,--version-script -Wl,file`, one word
+    /// at a time, so the words are what a link reads, not the options.
+    Linker(String),
+}
+
 /// What a command line asks that is not a compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Query {
@@ -169,8 +180,13 @@ pub struct Invocation {
     pub lib_dirs: Vec<PathBuf>,
     /// `-l`, in order (and `pthread` for `-pthread`).
     pub libs: Vec<String>,
-    /// `-Wl,…`, each as written, for the linker driver `rustc` runs.
-    pub linker_args: Vec<String>,
+    /// `-Wl,…`, `-Xlinker` and `-rdynamic`, in order.
+    pub linker_args: Vec<LinkerArg>,
+    /// Which of `inputs` were named between `-Wl,--whole-archive` and
+    /// `-Wl,--no-whole-archive`, as libtool links a convenience library into
+    /// a shared one. `rustc` lays out the link line itself, so the two are
+    /// not passed on but kept as which archives they surround.
+    pub whole_archives: Vec<usize>,
     /// `-flto`: objects that carry what `rustc` needs to optimise them
     /// together, and a link that does.
     pub lto: Option<Lto>,
@@ -222,6 +238,7 @@ impl Default for Invocation {
             lib_dirs: Vec::new(),
             libs: Vec::new(),
             linker_args: Vec::new(),
+            whole_archives: Vec::new(),
             lto: None,
             strip: false,
             shared: false,
@@ -386,6 +403,8 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
     let mut stdin = None;
     // The `-W` and `-f` options GCC would not take, which `-Werror` refuses.
     let mut unknown: Vec<String> = Vec::new();
+    // Between `--whole-archive` and `--no-whole-archive`.
+    let mut whole = false;
     // `.h` files, which only `-E` and `-M` take.
     let mut headers: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next() {
@@ -439,6 +458,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
                     ));
                 }
             };
+            continue;
+        }
+        if arg == "-Xlinker"
+            && let Some(word) = value("-Xlinker")?
+        {
+            linker_word(&mut inv, &mut whole, &word);
             continue;
         }
         if NOT_YET.contains(&arg.as_str()) {
@@ -536,7 +561,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             "-pie" | "-no-pie" => {}
             // The C driver's spelling of `--export-dynamic`, which the C
             // compiler `rustc` links with understands as it is.
-            "-rdynamic" => inv.linker_args.push(arg.clone()),
+            "-rdynamic" => inv.linker_args.push(LinkerArg::Driver(arg.clone())),
             // `-pedantic` only adds warnings; `-pedantic-errors` makes them
             // errors, which cinrs's own diagnostics for the standard chosen
             // already are where it matters.
@@ -576,7 +601,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             _ if arg.starts_with("-g") => {
                 inv.debuginfo = if arg == "-g0" { 0 } else { 2 };
             }
-            _ if arg.starts_with("-Wl,") => inv.linker_args.push(arg.clone()),
+            _ if arg.starts_with("-Wl,") => {
+                for word in arg["-Wl,".len()..].split(',') {
+                    linker_word(&mut inv, &mut whole, word);
+                }
+            }
             _ if arg.starts_with("-Wa,") || arg.starts_with("-Wp,") => {
                 inv.notes.push(format!(
                     "ignoring '{arg}': ccinrs runs no separate assembler or preprocessor"
@@ -639,7 +668,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
                 if !force_c && path.extension().is_some_and(|ext| ext == "h") {
                     headers.push(path.clone());
                 }
-                inv.inputs.push(input(path, force_c)?);
+                let input = input(path, force_c)?;
+                if whole && matches!(input, Input::Linker(_)) {
+                    inv.whole_archives.push(inv.inputs.len());
+                }
+                inv.inputs.push(input);
             }
         }
     }
@@ -662,6 +695,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
         return Err(format!("unrecognized command-line option '{first}'"));
     }
     Ok(inv)
+}
+
+/// One word for the linker, from `-Wl,` or `-Xlinker`.
+fn linker_word(inv: &mut Invocation, whole: &mut bool, word: &str) {
+    match word.trim_start_matches('-') {
+        "whole-archive" => *whole = true,
+        "no-whole-archive" => *whole = false,
+        _ => inv.linker_args.push(LinkerArg::Linker(word.to_owned())),
+    }
 }
 
 /// One `-f` option; `false` for one ccinrs does not know, which it ignores
@@ -919,7 +961,41 @@ mod tests {
         assert!(inv.notes.is_empty(), "{:?}", inv.notes);
         let inv = parse_all(&["-shared", "-static", "-rdynamic", "a.c"]).unwrap();
         assert!(inv.shared && inv.static_link);
-        assert_eq!(inv.linker_args, ["-rdynamic"]);
+        assert_eq!(inv.linker_args, [LinkerArg::Driver("-rdynamic".to_owned())]);
+        // libtool's way of passing a version script, and GCC's other two.
+        let inv = parse_all(&[
+            "-Wl,--version-script",
+            "-Wl,lib.map",
+            "-Wl,-rpath,/opt/lib",
+            "-Xlinker",
+            "--defsym=a,b",
+            "a.c",
+        ])
+        .unwrap();
+        let linker = |word: &str| LinkerArg::Linker(word.to_owned());
+        assert_eq!(
+            inv.linker_args,
+            [
+                linker("--version-script"),
+                linker("lib.map"),
+                linker("-rpath"),
+                linker("/opt/lib"),
+                linker("--defsym=a,b"),
+            ]
+        );
+        // What libtool links a convenience library with: the two words are
+        // kept as which archives they surround.
+        let inv = parse_all(&[
+            "a.o",
+            "-Wl,--whole-archive",
+            "libx.a",
+            "liby.a",
+            "-Wl,--no-whole-archive",
+            "libz.a",
+        ])
+        .unwrap();
+        assert_eq!(inv.whole_archives, [1, 2]);
+        assert!(inv.linker_args.is_empty());
         let inv = parse_all(&["-Wfrobnicate", "-ffrobnicate", "a.c"]).unwrap();
         assert_eq!(inv.notes.len(), 2);
         // What a `configure` script's probe of a flag looks for: an unknown

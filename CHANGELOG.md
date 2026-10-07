@@ -37,12 +37,18 @@ follows [Semantic Versioning][semver].
     macros to match.
   * `-flto` compiles each file to an rlib and has the link optimise them as
     one program, cinrs's runtime and Rust's standard library included.
-  * `-shared` links an ELF shared library that exports the C symbols;
+  * `-shared` links an ELF shared library that exports the C symbols, those
+    of an archive between `-Wl,--whole-archive` and `-Wl,--no-whole-archive`
+    included, as libtool links a convenience library into one, and those of
+    an object another compiler or an assembler made, read off its symbol
+    table;
     `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`, and
-    the `-print-*` questions libtool asks. GCC's warning options are taken
-    without a word; an unknown one is a warning, and an error under
-    `-Werror`, which is what a `configure` probe looks for, and which makes
-    every warning an error, `#warning` included. `-E` takes a header, and
+    the `-print-*` questions libtool asks, `-Xlinker` and `-l:file`. GCC's
+    warning options are taken without a word; an unknown one is a warning,
+    and an error under `-Werror`, which is what a `configure` probe looks
+    for, and which makes every warning an error, `#warning` included. A
+    version script is found however it is given, libtool's
+    `-Wl,--version-script -Wl,file` included. `-E` takes a header, and
     `-pie`, `-no-pie` and the hardening options distributions pass are taken.
     `/dev/null` is a C file like any other, and a file for the linker that
     does not exist is an error even when nothing is linked, as in GCC 15.

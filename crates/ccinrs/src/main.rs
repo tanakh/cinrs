@@ -9,6 +9,7 @@ mod args;
 mod deps;
 mod diag;
 mod driver;
+mod elf;
 mod gcc_warnings;
 mod preprocess;
 mod print;

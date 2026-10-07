@@ -751,6 +751,100 @@ fn a_shared_library() {
     s.compile(&["-shared", "-fPIC", "counter.c", "-o", "libdirect.so"]);
     s.compile(&["main.c", "-L.", "-ldirect", "-o", "from-source"]);
     assert_eq!(run("from-source"), "43 42 1\n");
+
+    // A convenience archive linked whole into a shared library, as libtool
+    // does it — libsodium's `librdrand.la`: its symbols are the library's.
+    let ar = Command::new("ar")
+        .args(["cr", "libcounter.a", "counter.o"])
+        .current_dir(&s.dir)
+        .status()
+        .expect("ar runs");
+    assert!(ar.success());
+    s.write("other.c", "int other(void) { return 0; }\n");
+    s.compile(&["-c", "-fPIC", "other.c"]);
+    s.compile(&[
+        "-shared",
+        "other.o",
+        "-Wl,--whole-archive",
+        "libcounter.a",
+        "-Wl,--no-whole-archive",
+        "-o",
+        "libwhole.so",
+    ]);
+    s.compile(&["main.c", "-L.", "-l:libwhole.so", "-o", "from-archive"]);
+    assert_eq!(run("from-archive"), "43 42 1\n");
+
+    // An object from another compiler in a shared library — on its own, and
+    // in an archive linked whole: its symbols are exported too, as from
+    // GCC's, which a mixed build of libwebp's `libsharpyuv.so` needs.
+    s.write("foreign.c", "int foreign_fn(void) { return 7; }\n");
+    let cc = Command::new("cc")
+        .args(["-fPIC", "-c", "foreign.c", "-o", "foreign.o"])
+        .current_dir(&s.dir)
+        .status()
+        .expect("cc runs");
+    assert!(cc.success());
+    let ar = Command::new("ar")
+        .args(["cr", "libforeign.a", "foreign.o"])
+        .current_dir(&s.dir)
+        .status()
+        .expect("ar runs");
+    assert!(ar.success());
+    s.write(
+        "call.c",
+        "int foreign_fn(void);\nint bump(int);\nint main(void) { return foreign_fn() + bump(0) - 49; }\n",
+    );
+    for (name, inputs) in [
+        ("libmixed.so", vec!["counter.o", "foreign.o"]),
+        (
+            "libmixeda.so",
+            vec![
+                "counter.o",
+                "-Wl,--whole-archive",
+                "libforeign.a",
+                "-Wl,--no-whole-archive",
+            ],
+        ),
+    ] {
+        let mut args = vec!["-shared", "-o", name];
+        args.extend(inputs);
+        s.compile(&args);
+        let lib = format!("-l:{name}");
+        s.compile(&["call.c", "-L.", &lib, "-o", "call"]);
+        let out = Command::new(s.dir.join("call"))
+            .env("LD_LIBRARY_PATH", &s.dir)
+            .output()
+            .expect("the program runs");
+        assert_eq!(out.status.code(), Some(0), "{name}");
+    }
+
+    // A version script decides what is exported, given the way libtool gives
+    // it — one `-Wl,` per word — or through `-Xlinker`: `use_one` is not.
+    s.write(
+        "lib.map",
+        "COUNTER_1 { global: bump; counter; local: *; };\n",
+    );
+    s.write(
+        "bump.c",
+        "#include <stdio.h>\nint bump(int);\nint main(void) { printf(\"%d\\n\", bump(1)); return 0; }\n",
+    );
+    for (name, script) in [
+        ("libsplit.so", ["-Wl,--version-script", "-Wl,lib.map"]),
+        ("libxlinker.so", ["-Xlinker", "--version-script=lib.map"]),
+    ] {
+        let mut args = vec!["-shared", "counter.o", "-o", name];
+        args.extend(script);
+        s.compile(&args);
+        let lib = format!("-l:{name}");
+        s.compile(&["bump.c", "-L.", &lib, "-o", "bump"]);
+        assert_eq!(run("bump"), "43\n");
+        let out = s.ccinrs(&["main.c", "-L.", &lib, "-o", "hidden"]);
+        assert!(
+            !out.status.success() && stderr(&out).contains("use_one"),
+            "{name}: {}",
+            stderr(&out)
+        );
+    }
 }
 
 /// `-static` links the C library in.
