@@ -2020,7 +2020,19 @@ fn a_module_for_wasm32_unknown_unknown() {
          console.log(exports.count_calls());\n",
     );
     s.compile(&["--target", TARGET, "-O2", "lib.c", "-o", "lib.wasm"]);
-    let out = Command::new("node")
+    // V8 reserves several gigabytes of address space for each WebAssembly
+    // memory, to bounds-check with guard pages, and under `scripts/ci.sh`'s
+    // `ulimit -v` that reservation fails ("Cannot allocate Wasm memory").
+    // A Node that has the switch is told to check explicitly instead.
+    let explicit_checks = Command::new("node")
+        .args(["--disable-wasm-trap-handler", "-e", "0"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let mut node = Command::new("node");
+    if explicit_checks {
+        node.arg("--disable-wasm-trap-handler");
+    }
+    let out = node
         .arg("run.mjs")
         .current_dir(&s.dir)
         .output()
