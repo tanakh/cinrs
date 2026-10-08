@@ -100,6 +100,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-include` | a file read before the first line, as if `#include "file"` were written there |
 | `-I`, `-iquote`, `-isystem`, `-idirafter` | include directories, searched in the order given (cinrs has one list) |
 | `-D`, `-U`, `-std=`, `-ansi`, `-x c`, `-nostdinc` | as GCC's; `-std=` takes `c89` to `c23` and `gnu89` to `gnu23` with their aliases |
+| `-fgnu89-inline`, `-fno-gnu89-inline` | GNU89's rules for which inline definitions provide an external definition (an `extern inline` one does not), or C99's (an `inline` one whose declarations never say `extern` does not); the default is the `-std=`'s, and `__GNUC_GNU_INLINE__` or `__GNUC_STDC_INLINE__` follows. See [the inline row](c-status.md#c99) |
 | `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP` | Makefile dependency rules, as GCC writes them and under GCC's names (`-c -o obj/x.o -MD` writes `obj/x.d`); the bundled headers are not listed |
 | `-O0` … `-O3`, `-Os`, `-Oz`, `-Og`, `-Ofast` | `rustc`'s `-C opt-level` (`-Ofast` is `3`, with no fast-math) |
 | `-g`, `-g0` | `rustc`'s `-C debuginfo` |

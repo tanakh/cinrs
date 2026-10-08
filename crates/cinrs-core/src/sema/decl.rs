@@ -2896,6 +2896,7 @@ impl Sema<'_> {
                     param_names,
                     is_static,
                     is_inline,
+                    inline_only: false,
                     noreturn: is_noreturn,
                     inline_hint,
                     cold: attrs.cold.is_some(),
@@ -2934,7 +2935,54 @@ impl Sema<'_> {
         if self.unit.in_library_header(name.range) {
             self.library_declared.insert(id);
         }
+        // C99 6.7.4p7 reads the *file-scope* declarations of the function,
+        // all of them, which is only known at the end of the unit; see
+        // `Sema::classify_inline_definitions`.
+        if scope == FuncScope::File && self.at_file_scope() {
+            let is_extern =
+                specifiers.storage.as_ref().map(|s| s.node) == Some(ast::StorageClass::Extern);
+            let entry = self.inline_decls.entry(id).or_insert(super::InlineDecls {
+                all_inline: true,
+                any_extern: false,
+                gnu_inline: false,
+                extern_definition: false,
+            });
+            entry.all_inline &= is_inline;
+            entry.any_extern |= is_extern;
+            entry.gnu_inline |= attrs.gnu_inline.is_some();
+            if definition.is_some() {
+                entry.extern_definition = is_extern;
+            }
+        }
         Some(id)
+    }
+
+    /// Decides, once every declaration has been seen, which inline
+    /// definitions provide no external definition; see
+    /// [`ir::Function::inline_only`].
+    ///
+    /// C99 6.7.4p7: a definition is an *inline definition* when every
+    /// file-scope declaration of the function in the unit says `inline` and
+    /// none says `extern`. GNU89's rule — `c89!` and `gnu89!`, `ccinrs
+    /// -fgnu89-inline`, or `__attribute__((gnu_inline))` on any declaration
+    /// of the function — is the other way round: an `extern inline`
+    /// definition is used for inlining only, and a plain `inline` one is an
+    /// external definition like any other.
+    pub(super) fn classify_inline_definitions(&mut self) {
+        let decls: Vec<(ir::FuncId, super::InlineDecls)> =
+            self.inline_decls.iter().map(|(id, d)| (*id, *d)).collect();
+        for (id, decls) in decls {
+            let func = &self.program.functions[id.0 as usize];
+            if func.body.is_none() || func.is_static || func.is_nested() || !func.is_inline {
+                continue;
+            }
+            let inline_only = if self.gnu89_inline || decls.gnu_inline {
+                decls.extern_definition
+            } else {
+                decls.all_inline && !decls.any_extern
+            };
+            self.program.functions[id.0 as usize].inline_only = inline_only;
+        }
     }
 
     /// What `__attribute__((target("…")))` asks for, in Rust's spelling.

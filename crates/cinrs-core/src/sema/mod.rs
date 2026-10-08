@@ -530,6 +530,22 @@ struct SwitchState {
     default: Option<SourceRange>,
 }
 
+/// What the file-scope declarations of one function said about `inline` and
+/// `extern`, which C99 6.7.4p7 and GNU89 read differently; see
+/// [`ir::Function::inline_only`].
+#[derive(Clone, Copy, Debug)]
+struct InlineDecls {
+    /// Whether every one of them said `inline`.
+    all_inline: bool,
+    /// Whether any of them said `extern`.
+    any_extern: bool,
+    /// Whether any of them carried `__attribute__((gnu_inline))`.
+    gnu_inline: bool,
+    /// Whether the definition itself said `extern`, which in GNU89 makes an
+    /// `inline` one an inline definition only.
+    extern_definition: bool,
+}
+
 /// Which scope a function declaration's name belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum FuncScope {
@@ -713,6 +729,14 @@ struct Sema<'a> {
     /// "conflicting types for built-in function" warning does; see
     /// [`Sema::implicit_library_signature`].
     library_prototyped: HashSet<ir::FuncId>,
+    /// What the file-scope declarations of each function said about `inline`
+    /// and `extern`, which decides at the end of the unit whether its
+    /// definition provides an external definition; see
+    /// [`ir::Function::inline_only`].
+    inline_decls: HashMap<ir::FuncId, InlineDecls>,
+    /// Whether inline definitions follow GNU89's rules unless a function
+    /// says otherwise; see [`crate::Options::gnu89_inline`].
+    gnu89_inline: bool,
     /// Objects with static storage that an initialiser has already been seen
     /// for, which is what tells a tentative definition from a redefinition.
     initialized: HashSet<ObjectId>,
@@ -997,6 +1021,8 @@ impl<'a> Sema<'a> {
             dead_code: 0,
             item_names: HashSet::new(),
             library_prototyped: HashSet::new(),
+            inline_decls: HashMap::new(),
+            gnu89_inline: options.uses_gnu89_inline(),
             initialized: HashSet::new(),
             compound_literals: Vec::new(),
             rvalue_lanes: HashSet::new(),
@@ -1113,6 +1139,7 @@ impl<'a> Sema<'a> {
         }
         self.complete_tentative_arrays();
         self.check_tentative_enums();
+        self.classify_inline_definitions();
         // What a nested function captures is only final once every call to it
         // has been seen, and what may be done with its address follows from
         // that.

@@ -1255,6 +1255,7 @@ impl Sema<'_> {
             param_names: vec![None; params],
             is_static: false,
             is_inline: false,
+            inline_only: false,
             noreturn: name == "abort" || name == "exit",
             inline_hint: None,
             cold: false,

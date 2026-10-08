@@ -75,6 +75,11 @@ pub enum Attribute {
     /// `common`: a tentative definition is a common symbol, which the linker
     /// merges with every other unit's.
     Common,
+    /// `gnu_inline`: the function's inline definitions follow GNU89's rules
+    /// rather than C99's — an `extern inline` one provides no external
+    /// definition, and a plain `inline` one does — whatever the standard;
+    /// see [`crate::ir::Function::inline_only`].
+    GnuInline,
     /// `asm("symbol")` written as an attribute is not a thing, but
     /// `alias`, `weakref` and the rest are: known, and refused with the reason.
     Unsupported,
@@ -139,6 +144,7 @@ pub fn attribute(name: &str) -> Option<Attribute> {
         "ms_struct" => Attribute::MsStruct,
         "gcc_struct" => Attribute::GccStruct,
         "common" => Attribute::Common,
+        "gnu_inline" => Attribute::GnuInline,
         // Not GCC's: this crate's own, spelled the way a GNU attribute of
         // another vendor's is, so that it works in every entry point.
         "cinrs_safe" => Attribute::Safe,
@@ -195,7 +201,6 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
     "flatten",
     "format",
     "format_arg",
-    "gnu_inline",
     "leaf",
     "malloc",
     "may_alias",

@@ -805,7 +805,10 @@ fn an_exported_unit_defines_real_c_symbols() {
     // Everything with external linkage gets the C name as its symbol, so that
     // another unit — or a C library — can link against it. A `static` keeps
     // its internal linkage, and a name that is a Rust keyword says its symbol
-    // outright rather than exporting `r#match`.
+    // outright rather than exporting `r#match`. An `inline` definition with
+    // no `extern` declaration is C99's inline definition, which provides no
+    // external definition (6.7.4p7): a private copy the unit's calls use,
+    // and the symbol another unit's (#1).
     insta::assert_snapshot!(generate(
         r#"
         #pragma cinrs export

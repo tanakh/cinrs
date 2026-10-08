@@ -244,7 +244,7 @@ may use with `__attribute__((target("avx2")))`; see
 | Macros with a variable number of arguments | N707 | 🟢 Yes | |
 | IEC 60559 support | | 🟡 Partial | Arithmetic is IEEE (Rust `f32`/`f64`), and `<math.h>` has C99's classification (`fpclassify`, `isnan`, `isinf`, `isfinite`, `isnormal`, `signbit`) and quiet comparison (`isgreater` … `isunordered`) macros, defined as GCC's header defines them; `<fenv.h>` and `__STDC_IEC_559__` are absent. |
 | Trailing comma allowed in `enum` declaration | | ⚪ Unverified | |
-| Inline functions | N741 | 🟢 Yes | `#[inline]`; C99's external-definition rules are not modelled. |
+| Inline functions | N741 | 🟢 Yes | `#[inline]`, and C99's external-definition rules (6.7.4p7): a definition whose file-scope declarations all say `inline` and none says `extern` is an *inline definition*, which provides no external definition. That matters where the unit makes C symbols — `ccinrs`, and `#pragma cinrs export` — where its body is a private item the unit's own calls use and its address is the one symbol another unit defines (the one whose declarations say `extern`, or leave out `inline`), so a header's `inline` function included by two files is not defined twice. GNU89's rules — an `extern inline` definition is the inline-only one — apply in `c89!` and `gnu89!`, under `ccinrs -fgnu89-inline`, and to a function a declaration of which says `__attribute__((gnu_inline))`. Without symbols every definition is an item of the unit's own module, as before. `crates/ccinrs/tests/cli.rs`, `tests/units.rs` |
 | Boolean type in `<stdbool.h>` | N815 | 🟢 Yes | |
 | Idempotent type qualifiers | N505 | ⚪ Unverified | |
 | Empty macro arguments | N570 | 🟢 Yes | |

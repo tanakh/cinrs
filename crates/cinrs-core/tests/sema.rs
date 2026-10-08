@@ -3279,3 +3279,57 @@ fn an_implicit_library_function_is_still_an_error_in_c99() {
         ["implicit declaration of function 'strcmp' is invalid in C99"]
     );
 }
+
+/// Which definitions are inline definitions that provide no external
+/// definition: C99 6.7.4p7's, where every file-scope declaration says
+/// `inline` and none says `extern`, and GNU89's, where the definition is
+/// `extern inline` — in `gnu89!`, under `gnu89_inline`, and for a function a
+/// declaration of which says `gnu_inline`. Reported in #1.
+#[test]
+fn an_inline_definition_provides_no_external_definition() {
+    let inline_only = |source: &str, options: &Options| -> Vec<String> {
+        let literal = format!("r#####\"{source}\"#####");
+        let input = TokenStream::from_str(&literal).expect("the wrapper must lex");
+        let analysis = analyze(input, options);
+        let (program, diagnostics) =
+            sema::analyze(&analysis.unit, options, analysis.source.unit_id());
+        assert!(!diagnostics.has_errors(), "{:#?}", diagnostics.items());
+        let mut names: Vec<String> = program
+            .functions
+            .iter()
+            .filter(|f| f.inline_only)
+            .map(|f| f.name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    let source = "inline int a(int x) { return x; }\n\
+                  inline int b(int x) { return x; }\nextern inline int b(int);\n\
+                  inline int c(int x) { return x; }\nint c(int);\n\
+                  extern inline int d(int x) { return x; }\n\
+                  static inline int e(int x) { return x; }\n\
+                  int f(int x) { return x; }\n\
+                  inline int g(int);\ninline int g(int x) { return x; }\n\
+                  int h(void) { extern int a(int); return a(1); }\n\
+                  extern inline __attribute__((gnu_inline)) int i(int x) { return x; }\n\
+                  inline __attribute__((gnu_inline)) int j(int x) { return x; }\n";
+    // C99's rules: `a` and `g` only — `b` and `d` say `extern`, `c` has a
+    // declaration without `inline`, and the block-scope `extern` in `h` is
+    // not a file-scope declaration. `gnu_inline` asks for GNU89's: `i` is
+    // `extern inline`, `j` is not.
+    assert_eq!(
+        inline_only(source, &Options::new(Standard::C11)),
+        ["a", "g", "i"]
+    );
+    // GNU89's: the `extern inline` definitions only.
+    assert_eq!(
+        inline_only(source, &Options::gnu(Standard::C89)),
+        ["d", "i"]
+    );
+    let mut options = Options::new(Standard::C17);
+    options.gnu89_inline = Some(true);
+    assert_eq!(inline_only(source, &options), ["d", "i"]);
+    let mut options = Options::gnu(Standard::C89);
+    options.gnu89_inline = Some(false);
+    assert_eq!(inline_only(source, &options), ["a", "g", "i"]);
+}

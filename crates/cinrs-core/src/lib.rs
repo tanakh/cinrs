@@ -484,6 +484,15 @@ pub struct Options {
     /// UTC when it is set, and the clock in local time otherwise; see
     /// [`clock`]. A test sets it rather than the process's environment.
     pub translation_time: Option<clock::LocalTime>,
+    /// Whether inline definitions follow GNU89's rules rather than C99's —
+    /// GCC's `-fgnu89-inline` (`Some(true)`) and `-fno-gnu89-inline`
+    /// (`Some(false)`). `None`, the default, is GCC's: GNU89's in `c89!` and
+    /// `gnu89!`, C99's everywhere else. It decides which inline definitions
+    /// provide an external definition (see [`ir::Function::inline_only`])
+    /// and whether `__GNUC_GNU_INLINE__` or `__GNUC_STDC_INLINE__` is
+    /// defined; `__attribute__((gnu_inline))` asks for GNU89's rules for one
+    /// function whatever this says.
+    pub gnu89_inline: Option<bool>,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -594,7 +603,14 @@ impl Options {
             front_end: FrontEnd::Macros,
             gnu_leniencies: false,
             translation_time: None,
+            gnu89_inline: None,
         }
+    }
+
+    /// Whether inline definitions follow GNU89's rules; see
+    /// [`Options::gnu89_inline`].
+    pub fn uses_gnu89_inline(&self) -> bool {
+        self.gnu89_inline.unwrap_or(self.standard == Standard::C89)
     }
 
     /// These options with the complex types switched on or off; see

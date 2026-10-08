@@ -2368,7 +2368,12 @@ impl<'a> Codegen<'a> {
             items.extend(quote_spanned! {ospan=> #link pub static mut #rust_name: #ty; });
         }
         for func in &self.program.functions {
-            if !func.is_extern() && !self.program.weak_defined_function(func) {
+            // An inline definition's address is its symbol, which another
+            // unit defines; see [`ir::Function::inline_only`].
+            if !func.is_extern()
+                && !self.program.weak_defined_function(func)
+                && !self.program.inline_only(func)
+            {
                 continue;
             }
             // An [x86 intrinsic](crate::x86) has no symbol: a call to it is
@@ -2977,8 +2982,14 @@ impl<'a> Codegen<'a> {
         // A real weak definition's body is a private item, and the C symbol
         // the weak alias `Codegen::weak_definition_asm` makes of it.
         let weak = self.program.weak_defined_function(func);
+        // An inline definition that provides no external definition is a
+        // private item too, which the unit's own calls use; its symbol is
+        // another unit's. See [`ir::Function::inline_only`].
+        let inline_only = self.program.inline_only(func);
         let name = if weak {
             self.weak_body_ident(func.item_name())
+        } else if inline_only {
+            self.inline_body_ident(func.item_name())
         } else {
             self.c_ident(func.item_name(), span)
         };
@@ -3039,8 +3050,8 @@ impl<'a> Codegen<'a> {
         // takes, which is what `#[unsafe(export_name)]` says. On a *declaration*
         // the label is always honoured, through the `extern` block's
         // `#[link_name]`.
-        let exported = !func.is_static && self.program.export && !weak;
-        let vis = if func.is_static || weak {
+        let exported = !func.is_static && self.program.export && !weak && !inline_only;
+        let vis = if func.is_static || weak || inline_only {
             TokenStream::new()
         } else {
             quote_spanned! {span=> pub }
@@ -3174,7 +3185,7 @@ impl<'a> Codegen<'a> {
     /// told so rather than quietly built without it.
     fn init_array_item(&mut self, func: &Function, kind: ir::InitKind) -> TokenStream {
         let span = self.sp(func.range);
-        let name = self.c_ident(func.item_name(), span);
+        let name = self.call_path(func, span);
         let signature = self.function_pointer_ty(func, span);
         let item = Ident::new(
             &format!(
@@ -3287,6 +3298,15 @@ impl<'a> Codegen<'a> {
         let base = self.c_ident(item_name, Span::call_site()).to_string();
         let base = base.trim_start_matches("r#");
         Ident::new(&format!("__cinrs_weak_body_{base}"), Span::mixed_site())
+    }
+
+    /// The private item an [inline definition](ir::Function::inline_only)'s
+    /// body is, in a unit that makes C symbols; the function's symbol is
+    /// declared in the `extern` block under its own name.
+    fn inline_body_ident(&self, item_name: &str) -> Ident {
+        let base = self.c_ident(item_name, Span::call_site()).to_string();
+        let base = base.trim_start_matches("r#");
+        Ident::new(&format!("__cinrs_inline_{base}"), Span::mixed_site())
     }
 
     /// The `global_asm!` that makes the C symbol `symbol` a weak alias of the
@@ -5793,7 +5813,7 @@ impl<'a> Codegen<'a> {
     /// `f as unsafe extern "C" fn(…) -> R`, the function a drop guard holds.
     fn func_pointer(&self, id: ir::FuncId, span: Span) -> TokenStream {
         let function = self.program.function(id);
-        let name = self.function_path(function, span);
+        let name = self.call_path(function, span);
         let signature = self.function_pointer_ty(function, span);
         quote_spanned! {span=> #name as #signature }
     }
@@ -8456,7 +8476,7 @@ impl<'a> Codegen<'a> {
         let mut target = match callee {
             Callee::Direct(id) => {
                 let function = self.program.function(*id);
-                let path = self.function_path(function, span);
+                let path = self.call_path(function, span);
                 if reinterpreted {
                     // A function *item* is not a function pointer, so the `as`
                     // coercion has to be written before it can be transmuted.
@@ -8709,6 +8729,21 @@ impl<'a> Codegen<'a> {
     /// item in the `extern` block carries the C name as well (see
     /// [`Codegen::extern_block`]), and a lifted nested function carries the name
     /// it was lifted under.
+    /// What a direct call names: [`Codegen::function_path`], except that an
+    /// [inline definition](ir::Function::inline_only) is called as the
+    /// private copy the unit has, as GCC may — the external definition may be
+    /// in no unit at all when every call is inlined.
+    fn call_path(&self, function: &Function, span: Span) -> TokenStream {
+        if self.program.inline_only(function) {
+            let body = self.inline_body_ident(function.item_name());
+            return quote_spanned! {span=> #body };
+        }
+        self.function_path(function, span)
+    }
+
+    /// What the function's name means as a value — its address, and a call
+    /// when nothing better is known: the item, or the symbol another unit
+    /// defines.
     fn function_path(&self, function: &Function, span: Span) -> TokenStream {
         let name = self.c_ident(function.item_name(), span);
         if let Some(declared) = function.weak

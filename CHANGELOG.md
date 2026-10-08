@@ -311,6 +311,21 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **An inline definition provides no external definition** where the unit
+  makes C symbols (`ccinrs`, `#pragma cinrs export`), as C99 6.7.4p7 and
+  GNU89 say: a header's `inline` function that two files include is no
+  longer defined twice ("duplicate symbol", "symbol … is already
+  defined"). C99's rule — every file-scope declaration says `inline` and
+  none says `extern` — in C99 and later; GNU89's — an `extern inline`
+  definition is the inline-only one, a plain `inline` one an external
+  definition — in `c89!` and `gnu89!`, under the new `ccinrs
+  -fgnu89-inline` (and `-fno-gnu89-inline`, which `__GNUC_GNU_INLINE__`
+  follows), and for any function a declaration of which says
+  `__attribute__((gnu_inline))`: glibc's `__extern_inline`, and macOS's
+  `__header_always_inline` in `<sys/select.h>`. The body is a private item
+  the unit's own calls use, and the function's address is the external
+  symbol, the same in every unit. `Options::gnu89_inline` and
+  `Function::inline_only` are new. Reported by tasuren in #1.
 * A static named like a local of the variable-length-array arena — `size`,
   `first`, `count`, `other` — beside a variable length array or `alloca`
   compiles; the arena's code is in a module of its own now, where a binding

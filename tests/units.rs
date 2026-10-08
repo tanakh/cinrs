@@ -198,6 +198,42 @@ mod extern_table {
     }
 }
 
+/// Two exported units including one header with an inline-only definition —
+/// macOS's `<sys/select.h>` is `__darwin_check_fd_set` under
+/// `__header_always_inline`, an `extern __inline __attribute__((gnu_inline))`
+/// — each call their own private copy, and neither defines the symbol, which
+/// was "symbol … is already defined". A C99 `inline` definition likewise.
+/// Reported in #1.
+mod inline_only {
+    mod one {
+        cinrs::c17! {
+            #pragma cinrs export
+            #include "include/gnu_inline.h"
+            int cinrs_test_inline_one(void) {
+                return cinrs_test_check_fd(3) + cinrs_test_twice(10);
+            }
+        }
+    }
+
+    mod two {
+        cinrs::c17! {
+            #pragma cinrs export
+            #include "include/gnu_inline.h"
+            int cinrs_test_inline_two(void) {
+                return cinrs_test_check_fd(2000) + cinrs_test_twice(20);
+            }
+        }
+    }
+
+    #[test]
+    fn two_exported_units_include_an_inline_only_definition() {
+        unsafe {
+            assert_eq!(one::cinrs_test_inline_one(), 21);
+            assert_eq!(two::cinrs_test_inline_two(), 40);
+        }
+    }
+}
+
 /// A third unit, sharing a header with the exporting one and calling into it.
 mod header_client {
     use cinrs::c99;

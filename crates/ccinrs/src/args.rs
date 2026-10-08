@@ -155,6 +155,10 @@ pub struct Invocation {
     /// GCC only warns about are errors. Without it, every `-std=` takes them
     /// as GCC's does; see [`cinrs_core::Options::gnu_leniencies`].
     pub pedantic_errors: bool,
+    /// `-fgnu89-inline` (`Some(true)`) or `-fno-gnu89-inline`: which rules
+    /// decide whether an inline definition is an external one; see
+    /// [`cinrs_core::Options::gnu89_inline`]. `None` is the `-std=`'s.
+    pub gnu89_inline: Option<bool>,
     /// Whether the generated code keeps Rust's run-time checks — misaligned
     /// and null pointer dereferences, overlapping `memcpy`, and the checks
     /// cinrs itself writes in a build with debug assertions. **On by
@@ -246,6 +250,7 @@ impl Default for Invocation {
             warnings: true,
             werror: false,
             pedantic_errors: false,
+            gnu89_inline: None,
             checks: true,
             unwind: true,
             auto_var_init: AutoVarInit::Zero,
@@ -353,8 +358,6 @@ const QUIET_FLAGS: &[&str] = &[
     "no-unroll-loops",
     "tree-vectorize",
     "no-tree-vectorize",
-    "gnu89-inline",
-    "no-gnu89-inline",
     "hosted",
     "freestanding",
     "jump-tables",
@@ -597,6 +600,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             // leniencies, as `c11!` does.
             "-pipe" | "-pedantic" | "-Wpedantic" => {}
             "-pedantic-errors" | "-Werror=pedantic" => inv.pedantic_errors = true,
+            // Which inline definitions provide an external definition, and
+            // `__GNUC_GNU_INLINE__` or `__GNUC_STDC_INLINE__`.
+            "-fgnu89-inline" => inv.gnu89_inline = Some(true),
+            "-fno-gnu89-inline" => inv.gnu89_inline = Some(false),
             // GCC's `-pthread` is the library and the macro.
             "-pthread" => {
                 inv.libs.push("pthread".to_owned());

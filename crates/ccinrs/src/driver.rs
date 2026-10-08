@@ -474,6 +474,7 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // GCC's `-std=c11` warns about the constraint violations its
     // `-std=gnu11` takes, and only `-pedantic-errors` refuses them.
     options.gnu_leniencies = !inv.pedantic_errors;
+    options.gnu89_inline = inv.gnu89_inline;
     options
 }
 
@@ -2032,6 +2033,11 @@ mod tests {
         assert!(!options.gating().lenient());
         let gnu = options_for(&["-std=gnu11", "-pedantic-errors", "a.c"]);
         assert!(gnu.gating().lenient());
+        // `-f[no-]gnu89-inline` overrides the `-std=`'s inline rules.
+        assert!(options_for(&["-std=gnu89", "a.c"]).uses_gnu89_inline());
+        assert!(!options_for(&["-std=c17", "a.c"]).uses_gnu89_inline());
+        assert!(options_for(&["-std=c17", "-fgnu89-inline", "a.c"]).uses_gnu89_inline());
+        assert!(!options_for(&["-std=gnu89", "-fno-gnu89-inline", "a.c"]).uses_gnu89_inline());
     }
 
     /// libjpeg-turbo's `global: *`, a prefix pattern, one that matches

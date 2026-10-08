@@ -5577,12 +5577,12 @@ impl Pp<'_> {
         self.define_object("__CINRS_MINOR__", env!("CARGO_PKG_VERSION_MINOR"));
         self.define_object("__CINRS_PATCH__", env!("CARGO_PKG_VERSION_PATCH"));
         // What `inline` means, in GCC's words: C99's rules in every revision
-        // that has them, GNU89's in `c89!` and `gnu89!`. cinrs models neither
-        // set of external-definition rules — every definition becomes one
-        // Rust function — and the two agree on the only thing a header asks
-        // the macro for, which is how to spell an inline-only definition
-        // (glibc's `__extern_inline`); `gnu_inline` is accepted either way.
-        if matches!(options.standard, Standard::C89) {
+        // that has them, GNU89's in `c89!` and `gnu89!` — or as
+        // `-f[no-]gnu89-inline` says. Which inline definitions provide an
+        // external definition follows the same choice, function by function
+        // where `gnu_inline` asks for GNU89's (glibc's `__extern_inline`,
+        // macOS's `__header_inline`); see [`crate::ir::Function::inline_only`].
+        if options.uses_gnu89_inline() {
             self.define_object("__GNUC_GNU_INLINE__", "1");
         } else {
             self.define_object("__GNUC_STDC_INLINE__", "1");

@@ -529,6 +529,126 @@ fn an_extern_thread_local_object_is_reached_through_its_accessor() {
     );
 }
 
+/// C99 6.7.4p7: an `inline` definition in a header two files include is an
+/// *inline definition*, which provides no external definition; the file that
+/// redeclares it `extern inline` provides the one external definition, and
+/// the program links. Each file's own calls use its own copy, and the
+/// function's address is the one symbol in every file. Reported in #1.
+#[test]
+fn a_c99_inline_definition_is_no_external_definition() {
+    let s = Scratch::new("inline-c99");
+    s.write("inl.h", "inline int f(int x) { return x + 1; }\n");
+    s.write(
+        "u1.c",
+        "#include \"inl.h\"\nint u1(int x) { return f(x); }\nvoid *a1(void) { return (void *) &f; }\n",
+    );
+    s.write(
+        "u2.c",
+        "#include \"inl.h\"\nint u2(int x) { return f(x) * 2; }\nvoid *a2(void) { return (void *) f; }\n",
+    );
+    s.write(
+        "main.c",
+        "#include \"inl.h\"\nextern inline int f(int);\nint u1(int), u2(int);\n\
+         void *a1(void), *a2(void);\n\
+         int main(void) { return u1(1) + u2(1) == 6 && a1() == (void *) f && a2() == (void *) f \
+         ? 0 : 1; }\n",
+    );
+    for std in ["-std=c99", "-std=c17", "-std=gnu11"] {
+        s.compile(&[std, "u1.c", "u2.c", "main.c", "-o", "inline"]);
+        assert_eq!(s.run("inline", &[]).status.code(), Some(0), "{std}");
+    }
+    // A plain `int f(int);` declaration makes the definition an external
+    // one, and so does the absence of `inline` on any declaration.
+    s.write(
+        "ext.c",
+        "inline int g(int x) { return x * 3; }\nint g(int);\n\
+         int main(void) { return g(2) == 6 ? 0 : 1; }\n",
+    );
+    s.compile(&["-std=c11", "ext.c", "-o", "ext"]);
+    assert_eq!(s.run("ext", &[]).status.code(), Some(0));
+}
+
+/// GNU89's rules, the other way round: an `extern inline` definition is for
+/// inlining only, and a plain `inline` one is an external definition. They
+/// are `-std=gnu89`'s, `-fgnu89-inline`'s, and those of any function a
+/// declaration of which says `__attribute__((gnu_inline))` — glibc's
+/// `__extern_inline` and macOS's `__header_inline`, which a header two files
+/// include defines. Reported in #1.
+#[test]
+fn a_gnu89_extern_inline_definition_is_no_external_definition() {
+    let s = Scratch::new("inline-gnu89");
+    s.write(
+        "u1.c",
+        "extern inline int g(int x) { return x + 1; }\nint u1(int x) { return g(x); }\n",
+    );
+    s.write("def.c", "int g(int x) { return x + 1; }\n");
+    s.write(
+        "main.c",
+        "int u1(int);\nint main(void) { return u1(1) == 2 ? 0 : 1; }\n",
+    );
+    s.compile(&["-std=gnu89", "u1.c", "def.c", "main.c", "-o", "gnu89"]);
+    assert_eq!(s.run("gnu89", &[]).status.code(), Some(0));
+    s.compile(&[
+        "-std=c17",
+        "-fgnu89-inline",
+        "u1.c",
+        "def.c",
+        "main.c",
+        "-o",
+        "flag",
+    ]);
+    assert_eq!(s.run("flag", &[]).status.code(), Some(0));
+    // `__GNUC_GNU_INLINE__` follows the choice.
+    s.write(
+        "which.c",
+        "#if defined(__GNUC_GNU_INLINE__) && !defined(__GNUC_STDC_INLINE__)\nint gnu = 1;\n#else\n\
+         int gnu = 0;\n#endif\nint main(void) { return gnu; }\n",
+    );
+    for (args, want) in [
+        (&["-std=gnu89"][..], 1),
+        (&["-std=gnu89", "-fno-gnu89-inline"][..], 0),
+        (&["-std=c17"][..], 0),
+        (&["-std=c17", "-fgnu89-inline"][..], 1),
+    ] {
+        let mut all = args.to_vec();
+        all.extend(["which.c", "-o", "which"]);
+        s.compile(&all);
+        assert_eq!(s.run("which", &[]).status.code(), Some(want), "{args:?}");
+    }
+    // `gnu_inline` under `-std=c17`, glibc's way: an inline-only
+    // definition in a header two files include, and the external definition
+    // in a third. A plain `inline` one under `gnu_inline` is an external
+    // definition, and is the program's one.
+    s.write(
+        "fast.h",
+        "#define __extern_inline extern __inline __attribute__((__gnu_inline__))\n\
+         __extern_inline int h(int x) { return x + 10; }\n",
+    );
+    s.write(
+        "v1.c",
+        "#include \"fast.h\"\nint v1(int x) { return h(x); }\n",
+    );
+    s.write(
+        "v2.c",
+        "int h(int);\nint k(int);\nint v2(int x) { return h(x) + k(x); }\n",
+    );
+    s.write("hdef.c", "int h(int x) { return x + 10; }\n");
+    s.write(
+        "kdef.c",
+        "#include \"fast.h\"\nint v3(int x) { return h(x) * 2; }\n\
+         __inline __attribute__((__gnu_inline__)) int k(int x) { return x - 1; }\n",
+    );
+    s.write(
+        "vmain.c",
+        "int v1(int), v2(int), v3(int);\n\
+         int main(void) { return v1(1) == 11 && v2(1) == 11 && v3(1) == 22 ? 0 : 1; }\n",
+    );
+    s.compile(&[
+        "-std=c17", "v1.c", "v2.c", "hdef.c", "kdef.c", "vmain.c", "-o", "glibc",
+    ]);
+    assert_eq!(s.run("glibc", &[]).status.code(), Some(0));
+}
+
 /// A weak definition is a real one on ELF: a function and an object another
 /// file overrides — reached through the symbol by the defining file's own
 /// callers too — the default when nothing does, jemalloc's weak tentative

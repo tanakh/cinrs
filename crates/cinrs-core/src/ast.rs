@@ -608,6 +608,8 @@ pub struct Attributes {
     pub ms_struct: Option<Spanned<bool>>,
     /// `common`, which makes a tentative definition a common symbol.
     pub common: Option<SourceRange>,
+    /// `gnu_inline`: GNU89's rules for the function's inline definitions.
+    pub gnu_inline: Option<SourceRange>,
 }
 
 /// `__attribute__((cleanup(f)))`: `f(&x)` runs when `x` goes out of scope.
@@ -653,6 +655,7 @@ impl Attributes {
         self.vector_size = self.vector_size.take().or(other.vector_size);
         self.ms_struct = self.ms_struct.take().or(other.ms_struct);
         self.common = self.common.or(other.common);
+        self.gnu_inline = self.gnu_inline.or(other.gnu_inline);
     }
 }
 

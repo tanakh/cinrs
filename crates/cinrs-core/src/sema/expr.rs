@@ -2479,6 +2479,7 @@ impl Sema<'_> {
             param_names,
             is_static: false,
             is_inline: false,
+            inline_only: false,
             noreturn,
             inline_hint: None,
             cold: false,

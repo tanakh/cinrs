@@ -2068,6 +2068,14 @@ impl Program {
             && func.body.is_some()
             && !func.is_static
             && !func.is_nested()
+            && !self.inline_only(func)
+    }
+
+    /// Whether `func`'s body is generated as a private item the unit's own
+    /// calls use, its symbol being another unit's: an [inline
+    /// definition](Function::inline_only) in a unit that makes C symbols.
+    pub fn inline_only(&self, func: &Function) -> bool {
+        self.export && func.inline_only && func.body.is_some() && !func.is_static
     }
 
     /// Whether `object` is a real weak definition; see
@@ -2308,6 +2316,20 @@ pub struct Function {
     pub is_static: bool,
     /// Whether the function was declared `inline`.
     pub is_inline: bool,
+    /// Whether its definition is an *inline definition* that provides no
+    /// external definition: C99 6.7.4p7's, where every file-scope
+    /// declaration says `inline` and none says `extern`, or GNU89's
+    /// `extern inline` one (`c89!`, `gnu89!`, `ccinrs -fgnu89-inline`, or
+    /// `__attribute__((gnu_inline))`, as glibc's `__extern_inline` and macOS's
+    /// `__header_inline` write it).
+    ///
+    /// Where the unit makes C symbols ([`Program::export`]), such a body is a
+    /// private item the unit's own calls use, and the function's *address* is
+    /// the external symbol, declared in the `extern` block — another unit's,
+    /// as C requires of one function's address in every unit. Without
+    /// symbols every definition is an item of the unit's module anyway, and
+    /// this changes nothing. See [`Program::inline_only`].
+    pub inline_only: bool,
     /// Whether the function was declared `_Noreturn` (or `[[noreturn]]`), so
     /// that a call to it ends the statement it is in.
     pub noreturn: bool,
@@ -2721,7 +2743,9 @@ impl Program {
     pub fn has_externs(&self) -> bool {
         !self.externs.is_empty()
             || self.functions.iter().any(|func| {
-                (func.is_extern() && func.intrinsic.is_none()) || self.weak_defined_function(func)
+                (func.is_extern() && func.intrinsic.is_none())
+                    || self.weak_defined_function(func)
+                    || self.inline_only(func)
             })
             || self
                 .objects

@@ -727,6 +727,9 @@ impl Parser<'_> {
             Some(gnu::Attribute::MsStruct) => attrs.ms_struct = Some(Spanned::new(true, range)),
             Some(gnu::Attribute::GccStruct) => attrs.ms_struct = Some(Spanned::new(false, range)),
             Some(gnu::Attribute::Common) => attrs.common = attrs.common.or(Some(range)),
+            Some(gnu::Attribute::GnuInline) => {
+                attrs.gnu_inline = attrs.gnu_inline.or(Some(range));
+            }
             // A statement attribute with nothing to say here: a `switch` group
             // falls through in the generated Rust either way.
             Some(gnu::Attribute::Fallthrough) | Some(gnu::Attribute::Ignored) => {}
