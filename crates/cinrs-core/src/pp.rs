@@ -137,17 +137,20 @@
 //! | `__VERSION__` | `"14.2.0 (cinrs <version>)"` |
 //! | `__FILE__` | the invoking `.rs` file's path, or `"<c99!>"` |
 //! | `__LINE__` | the line of the invoking `.rs` file |
-//! | `__DATE__` | `"??? ?? ????"` |
-//! | `__TIME__` | `"??:??:??"` |
+//! | `__DATE__` | the date of translation: `"Oct  8 2026"` |
+//! | `__TIME__` | the time of translation: `"17:45:37"` |
+//! | `__TIMESTAMP__` | when the file being read was last modified: `"Thu Oct  8 17:45:35 2026"` |
 //!
 //! `__FILE__` and `__LINE__` are computed from the position they are *used*
 //! at, so inside a header they name the header and the line in it, and a macro
 //! defined in `<assert.h>` that mentions them reports the line the assertion
 //! is written on.
 //!
-//! `__DATE__` and `__TIME__` are deliberately fixed placeholders: a build has
-//! to be reproducible, and a macro that expanded to the wall clock would make
-//! the generated code differ between two builds of the same source.
+//! `__DATE__` and `__TIME__` are the moment of translation, as C17 6.10.8.1
+//! asks and GCC has it: `SOURCE_DATE_EPOCH` in UTC when it is set, which is
+//! how a reproducible build pins them, and now in local time otherwise — see
+//! [`crate::clock`]. In a `c99!` block that moment is the expansion, so a crate
+//! that is not rebuilt keeps the date it was built with.
 //!
 //! `__LINE__` is a line of the `.rs` file the invocation is written in
 //! whenever the compiler tells us where that is — the captured C text
@@ -562,6 +565,13 @@ enum Builtin {
     IncludeLevel,
     /// `__COUNTER__` — a fresh integer at every use.
     Counter,
+    /// `__DATE__`, which is reported where it is used when
+    /// `SOURCE_DATE_EPOCH` is no moment.
+    Date,
+    /// `__TIME__`, likewise.
+    Time,
+    /// `__TIMESTAMP__` — when the file being read was last modified.
+    Timestamp,
 }
 
 /// One `#define`.
@@ -888,8 +898,9 @@ pub struct MacroTable {
 impl MacroTable {
     /// Each macro as the `#define` that makes it, sorted by name, with its
     /// replacement list spaced where it was written. The ones computed
-    /// rather than written — `__LINE__`, `__FILE__`, `__COUNTER__` — are left
-    /// out, as GCC leaves them out, and so are `__builtin_LINE()` and its
+    /// rather than written — `__LINE__`, `__FILE__`, `__COUNTER__`, `__DATE__`
+    /// and its siblings — are left out, as GCC leaves them out, and so are
+    /// `__builtin_LINE()` and its
     /// siblings, which are GCC's built-in functions and only macros here.
     pub fn definitions(&self) -> Vec<String> {
         let mut names: Vec<&String> = self
@@ -1387,6 +1398,10 @@ struct Pp<'a> {
     poisoned: HashSet<String>,
     /// The next value `__COUNTER__` expands to.
     counter: u64,
+    /// The moment of translation `__DATE__` and `__TIME__` say, or why
+    /// `SOURCE_DATE_EPOCH` does not give one, which is reported where they
+    /// are used; see [`crate::clock`].
+    translation_time: Result<crate::clock::LocalTime, String>,
     /// The member alignment `#pragma pack` is currently asking for.
     pack: Option<u32>,
     /// What `#pragma pack(push)` saved.
@@ -1498,6 +1513,9 @@ impl<'a> Pp<'a> {
             macro_stacks: HashMap::new(),
             poisoned: HashSet::new(),
             counter: 0,
+            translation_time: options
+                .translation_time
+                .map_or_else(crate::clock::translation_time, Ok),
             pack: None,
             pack_stack: Vec::new(),
             pack_events: Vec::new(),
@@ -2540,6 +2558,22 @@ impl Pp<'_> {
         (out, rest)
     }
 
+    /// The moment of translation, or now after reporting at `range` why
+    /// `SOURCE_DATE_EPOCH` is none — once, at the first use, as GCC does.
+    fn translation_time_at(&mut self, range: SourceRange) -> crate::clock::LocalTime {
+        let now = || crate::clock::LocalTime::local(crate::clock::now());
+        match std::mem::replace(&mut self.translation_time, Ok(now())) {
+            Ok(time) => {
+                self.translation_time = Ok(time);
+                time
+            }
+            Err(message) => {
+                self.diags.error(range, message);
+                now()
+            }
+        }
+    }
+
     /// The token a built-in macro stands for at this use.
     fn builtin_token(&mut self, builtin: Builtin, tok: &PTok, def: &MacroDef, name: &str) -> PTok {
         let kind = match builtin {
@@ -2573,6 +2607,25 @@ impl Pp<'_> {
                 let value = self.counter;
                 self.counter += 1;
                 int_token_kind(u128::from(value))
+            }
+            Builtin::Date => string_token_kind(&self.translation_time_at(tok.range).date()),
+            Builtin::Time => string_token_kind(&self.translation_time_at(tok.range).time()),
+            // GCC's: the modification time of the file being read, whatever
+            // `SOURCE_DATE_EPOCH` says. A `c99!` block's text, which lives in
+            // a `.rs` file, and standard input have no time of their own, and
+            // take the moment of translation.
+            Builtin::Timestamp => {
+                let file = self
+                    .open
+                    .last()
+                    .map(|open| open.key.as_str())
+                    .filter(|key| !key.ends_with(".rs"))
+                    .and_then(|key| crate::clock::modified(std::path::Path::new(key)));
+                let time = match file {
+                    Some(time) => time,
+                    None => self.translation_time_at(tok.range),
+                };
+                string_token_kind(&time.timestamp())
             }
         };
         let exp = self.expansion_of(name, tok.range, def, tok);
@@ -5545,10 +5598,10 @@ impl Pp<'_> {
         self.define_object("__GCC_IEC_559_COMPLEX", "0");
         // What bare `__attribute__((aligned))` gives; see the parser.
         self.define_object("__BIGGEST_ALIGNMENT__", "16");
-        // Fixed placeholders: a build has to give the same output twice.
-        self.define_string("__DATE__", "??? ?? ????");
-        self.define_string("__TIME__", "??:??:??");
-        self.define_string("__TIMESTAMP__", "??? ??? ?? ??:??:?? ????");
+        // The moment of translation, as GCC has it; see [`crate::clock`].
+        self.define_builtin("__DATE__", Builtin::Date);
+        self.define_builtin("__TIME__", Builtin::Time);
+        self.define_builtin("__TIMESTAMP__", Builtin::Timestamp);
         let base_file = self.base_file.clone();
         self.define_string("__BASE_FILE__", &base_file);
         self.define_builtin("__LINE__", Builtin::Line);

@@ -176,8 +176,12 @@ the scope of one is a located error, as C requires.
 **Predefined macros.** `__STDC__`, `__STDC_HOSTED__`, `__STDC_VERSION__`, the
 four `__STDC_NO_*` subsetting macros, and `__FILE__` and `__LINE__`
 — which name the **`.rs` file** and the line in it, so that they point where the
-user is looking. `__DATE__`, `__TIME__` and `__TIMESTAMP__` are fixed
-placeholders, because a build has to give the same output twice. On top of those
+user is looking. `__DATE__` and `__TIME__` are the moment of translation, as
+GCC has them: `SOURCE_DATE_EPOCH` in UTC when it is set — what a reproducible
+build sets — and now, in local time, otherwise. In a `c99!` block that moment is
+the expansion, so a crate that is not rebuilt keeps the date it was built
+with. `__TIMESTAMP__` is when the file being read was last modified, and the
+moment of translation for a block's own text. On top of those
 comes the GCC family and the target description macros (`__GNUC__`,
 `__STRICT_ANSI__`, `__x86_64__`, `__linux__`, `__LP64__`, `__SIZEOF_INT__`,
 `__BYTE_ORDER__`, the limits and the library types), every one of them read off

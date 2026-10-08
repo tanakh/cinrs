@@ -223,6 +223,19 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **`__DATE__` and `__TIME__` are the moment of translation**, as C17
+  6.10.8.1 asks and GCC has them, where they were the placeholders `"???
+  ?? ????"` and `"??:??:??"` — which CPython's `sys.version` parser refuses.
+  `SOURCE_DATE_EPOCH`, when it is set, is that moment in UTC, so a
+  reproducible build still gives the same output twice; GCC's error, at the
+  first use, when it is not a number of seconds up to the end of 9999.
+  Otherwise it is now, in the local zone — `TZ` or `/etc/localtime`, read by
+  cinrs itself (TZif and POSIX rules), and UTC where neither says anything.
+  `__TIMESTAMP__` is the modification time of the file being read, as in
+  GCC, and the moment of translation for a `c99!` block's own text. In a
+  block, the moment is the expansion: a crate that is not rebuilt keeps the
+  date it was built with. `Options::translation_time` fixes the moment, and
+  `cinrs_core::clock` is the calendar and the zone.
 * **`ccinrs -std=c89` … `-std=c17` take what GCC's do**: the constraint
   violations GCC only warns about — a stray `;` at file scope, an enumerator
   outside `int` (glibc's `<sys/epoll.h>`), `sizeof (void)`, a cast to a union

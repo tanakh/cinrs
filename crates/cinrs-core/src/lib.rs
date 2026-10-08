@@ -98,6 +98,7 @@
 pub mod ast;
 pub mod capture;
 pub mod cfg;
+pub mod clock;
 pub mod codegen;
 pub mod complex;
 pub mod diag;
@@ -477,6 +478,12 @@ pub struct Options {
     /// **Off by default**, so `c11!` keeps refusing them; `ccinrs` turns it
     /// on for every `-std=` unless `-pedantic-errors` is given.
     pub gnu_leniencies: bool,
+    /// The moment of translation `__DATE__` and `__TIME__` say, and
+    /// `__TIMESTAMP__` for text that is no file of its own. `None`, the
+    /// default, reads the environment as GCC does: `SOURCE_DATE_EPOCH` in
+    /// UTC when it is set, and the clock in local time otherwise; see
+    /// [`clock`]. A test sets it rather than the process's environment.
+    pub translation_time: Option<clock::LocalTime>,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -586,6 +593,7 @@ impl Options {
             abi_align_public_arrays: false,
             front_end: FrontEnd::Macros,
             gnu_leniencies: false,
+            translation_time: None,
         }
     }
 

@@ -58,6 +58,12 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
   keywords, `__STRICT_ANSI__` is defined and trigraphs are read.
   `-pedantic-errors` (or `-Werror=pedantic`) refuses the leniencies under an
   ISO `-std=`, which is what `c11!` does; a GNU one takes them regardless.
+* **`__DATE__` and `__TIME__` are the moment of translation**, as GCC's are:
+  `SOURCE_DATE_EPOCH` in UTC when it is set (GCC's error, at the first use,
+  when it is not a number of seconds up to the end of 9999), and now in the
+  local zone — `TZ`, or `/etc/localtime` — otherwise. `__TIMESTAMP__` is the
+  file's modification time in the local zone, and the moment of translation
+  for standard input.
 * **Every function is `extern "C-unwind"`**, so that a `longjmp` — a Rust
   unwind here — can pass through any file; see [setjmp and
   longjmp](#setjmp-and-longjmp). `-fno-cinrs-unwind` makes them `extern "C"`.

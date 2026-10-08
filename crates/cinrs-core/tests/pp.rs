@@ -816,8 +816,67 @@ fn the_standard_macros_are_defined() {
         pp("__STDC__ __STDC_HOSTED__ __STDC_VERSION__ __cinrs__"),
         "1 1 199901L 1"
     );
-    assert_eq!(pp("__DATE__ __TIME__"), "\"??? ?? ????\" \"??:??:??\"");
     assert!(cond("defined(__cinrs__) && __STDC_VERSION__ >= 199901L"));
+}
+
+/// The moment of translation, in GCC's spellings: `"Mmm dd yyyy"` with the
+/// day padded by a space, `"hh:mm:ss"`, and `asctime`'s for `__TIMESTAMP__`.
+/// The clock cannot be checked, so its shape is; an injected moment is
+/// checked exactly.
+#[test]
+fn the_date_and_time_are_the_moment_of_translation() {
+    let shaped = |text: &str, shape: &str| {
+        text.len() == shape.len()
+            && text.chars().zip(shape.chars()).all(|(c, s)| match s {
+                '9' => c.is_ascii_digit(),
+                '_' => c.is_ascii_digit() || c == ' ',
+                'A' => c.is_ascii_alphabetic(),
+                _ => c == s,
+            })
+    };
+    let now = pp("__DATE__ __TIME__ __TIMESTAMP__");
+    let parts: Vec<&str> = now.split('"').filter(|p| !p.trim().is_empty()).collect();
+    assert_eq!(parts.len(), 3, "{now}");
+    assert!(shaped(parts[0], "AAA _9 9999"), "{now}");
+    assert!(shaped(parts[1], "99:99:99"), "{now}");
+    assert!(shaped(parts[2], "AAA AAA _9 99:99:99 9999"), "{now}");
+
+    let mut options = Options::new(Standard::C99);
+    options.translation_time = Some(cinrs_core::clock::LocalTime::utc(0));
+    let src = "__DATE__ __TIME__ __TIMESTAMP__";
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, 0, &lex_options());
+    let out = preprocess(&tokens, &ctx, &options, &mut diags);
+    let spelled: Vec<&str> = out
+        .tokens
+        .iter()
+        .filter(|t| !t.is_eof())
+        .map(|t| t.kind.spelling())
+        .collect();
+    assert_eq!(
+        spelled,
+        [
+            "\"Jan  1 1970\"",
+            "\"00:00:00\"",
+            "\"Thu Jan  1 00:00:00 1970\""
+        ]
+    );
+    // GCC lists none of the three under `-dM`: they are built in.
+    assert!(!defined_macros_mention("__DATE__"));
+}
+
+/// Whether `-dM`'s list of the macros defined at the end names `name`.
+fn defined_macros_mention(name: &str) -> bool {
+    let src = "";
+    let ctx = Context::new(src, 0);
+    let mut diags = cinrs_core::Diagnostics::new();
+    let tokens = lex_text(src, 0, &lex_options());
+    let out = preprocess(&tokens, &ctx, &Options::new(Standard::C99), &mut diags);
+    out.macros
+        .definitions()
+        .iter()
+        .any(|line| line.contains(name))
 }
 
 #[test]

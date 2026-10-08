@@ -345,8 +345,21 @@ fn the_predefined_macros_say_what_this_implementation_is() {
     // directory; both are the `.rs` file the block is written in.
     assert!(text(unsafe { base_file() }).ends_with(b"gnu_preprocessor.rs"));
     assert_eq!(text(unsafe { file_name() }), b"gnu_preprocessor.rs");
-    // Fixed, like `__DATE__`, so that a build gives the same output twice.
-    assert_eq!(text(unsafe { timestamp() }), b"??? ??? ?? ??:??:?? ????");
+    // A block's own text has no file of its own, so `__TIMESTAMP__` is the
+    // moment of translation, in `asctime`'s shape: "Thu Oct  8 17:45:35 2026".
+    let stamp = text(unsafe { timestamp() });
+    let shape = b"AAA AAA _9 99:99:99 9999";
+    assert_eq!(stamp.len(), shape.len(), "{stamp:?}");
+    assert!(
+        stamp.iter().zip(shape).all(|(c, s)| match s {
+            b'9' => c.is_ascii_digit(),
+            b'_' => c.is_ascii_digit() || *c == b' ',
+            b'A' => c.is_ascii_alphabetic(),
+            _ => c == s,
+        }),
+        "{}",
+        String::from_utf8_lossy(&stamp)
+    );
     assert_eq!(unsafe { include_level() }, 0);
 }
 

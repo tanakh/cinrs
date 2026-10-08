@@ -380,6 +380,68 @@ fn an_iso_std_takes_what_gcc_takes_unless_pedantic_errors() {
     );
 }
 
+/// `__DATE__` and `__TIME__` are the moment of translation, as in GCC:
+/// `SOURCE_DATE_EPOCH` in UTC when it is set, and GCC's error where they are
+/// used when it is no moment. `__TIMESTAMP__` is the file's modification
+/// time, in the local zone `TZ` names, whatever `SOURCE_DATE_EPOCH` says.
+#[test]
+fn the_date_and_time_follow_source_date_epoch() {
+    let s = Scratch::new("date-time");
+    s.write(
+        "when.c",
+        "#include <stdio.h>\nint main(void) { printf(\"[%s] [%s] [%s]\\n\", __DATE__, __TIME__, \
+         __TIMESTAMP__); return 0; }\n",
+    );
+    // Midsummer 2026, 12:34:56 UTC.
+    let summer = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_782_995_696);
+    std::fs::File::options()
+        .write(true)
+        .open(s.dir.join("when.c"))
+        .and_then(|file| file.set_modified(summer))
+        .expect("the file's modification time");
+    let compile = |epoch: Option<&str>, tz: &str, out: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ccinrs"));
+        command
+            .args(["when.c", "-o", out])
+            .env("CCINRS_CACHE_DIR", cache_dir())
+            .env("TZ", tz)
+            .current_dir(&s.dir);
+        match epoch {
+            Some(epoch) => command.env("SOURCE_DATE_EPOCH", epoch),
+            None => command.env_remove("SOURCE_DATE_EPOCH"),
+        };
+        command.output().expect("ccinrs runs")
+    };
+    let out = compile(Some("0"), "UTC", "utc");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&s.run("utc", &[])),
+        "[Jan  1 1970] [00:00:00] [Thu Jul  2 12:34:56 2026]\n"
+    );
+    // The epoch is UTC whatever the zone; the file's time is local.
+    let out = compile(Some("86399"), "EST5EDT,M3.2.0,M11.1.0", "eastern");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&s.run("eastern", &[])),
+        "[Jan  1 1970] [23:59:59] [Thu Jul  2 08:34:56 2026]\n"
+    );
+    // GCC's error, once, at the first use.
+    let out = compile(Some("1e3"), "UTC", "bad");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    let message = "error: environment variable 'SOURCE_DATE_EPOCH' must expand to a \
+                   non-negative integer less than or equal to 253402300799";
+    assert!(err.contains(&format!("when.c:2:45: {message}")), "{err}");
+    assert_eq!(err.matches(message).count(), 1, "{err}");
+    // Without it, now: only the shape can be checked.
+    let out = compile(None, "JST-9", "now");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let now = stdout(&s.run("now", &[]));
+    let shape = "[Oct  8 2026] [17:45:37] [Thu Jul  2 21:34:56 2026]\n";
+    assert_eq!(now.len(), shape.len(), "{now}");
+    assert!(now.ends_with("] [Thu Jul  2 21:34:56 2026]\n"), "{now}");
+}
+
 /// What ccinrs links is what it compiled, so a function the program declares
 /// in its own header is another of its files, whose `long double` is the
 /// `double` this one passes — Redis's `ld2string` — while one the platform's
