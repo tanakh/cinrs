@@ -314,7 +314,18 @@ follows [Semantic Versioning][semver].
   an `_Atomic` one — may be initialised with an address converted to it, which
   GCC takes as a relocated constant: FFmpeg's `static atomic_uintptr_t
   av_log_callback = (uintptr_t)av_log_default_callback;`. The item holds the
-  address as a pointer and every use reads it as the integer.
+  address as a pointer and every use reads it as the integer. As a member of
+  a table too — git's `{ .defval = (intptr_t)"all" }`, nginx's
+  `(uintptr_t)ngx_ssl_get_protocol` — where the item is a `MaybeUninit` of the
+  table with the addresses written into it.
+* **A brace-initialised local structure or union has zero padding**, as GCC
+  and Clang give it (C11 6.7.9p10, p21): the bytes are zeroed and only the
+  members that are not zero stored, where a struct literal moved into place
+  left the stack's bytes in the padding. git's `ref-filter.c` compares two
+  `{ 0 }` structs with `memcmp`; `git for-each-ref` died on a broken ref, and
+  three of git's tests passed or failed by luck. Compound literals and
+  definitions hoisted out of their block likewise, and `q = p;` of a padded
+  type copies the bytes.
 * An array with static storage duration whose list decides its length may
   name itself in that list — `static const struct node tree[] = { { 1, tree
   }, … };`, FFmpeg's `matroskadec.c` — as its scope begins after its

@@ -868,6 +868,9 @@ struct Sema<'a> {
     /// another object's initialiser — is the value it was written with, and
     /// this is what lets `static_init` reach it. (c-testsuite `00216`.)
     static_literals: HashMap<ObjectId, usize>,
+    /// Set by `static_init` when the value it checked puts an address into
+    /// an integer member; see [`ir::Object::address_slots`].
+    address_slots: bool,
     /// The function-nesting level each object was created at, indexed by
     /// [`ObjectId`]: zero for everything a file-scope declaration or an
     /// ordinary function body made, one for the body of a function nested in
@@ -1019,6 +1022,7 @@ impl<'a> Sema<'a> {
             pending_discard: Vec::new(),
             cleanup_depth: 0,
             static_literals: HashMap::new(),
+            address_slots: false,
             object_level: Vec::new(),
             nest: Vec::new(),
             nest_chains: HashMap::new(),
@@ -1848,6 +1852,7 @@ impl<'a> Sema<'a> {
             weak: None,
             data_fn_pointer: false,
             uninit: false,
+            address_slots: false,
             range,
         });
         self.object_level.push(level);

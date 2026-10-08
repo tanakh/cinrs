@@ -2206,6 +2206,24 @@ pub struct Object {
     /// not, so those are still zero-filled, as scalars are — whose store LLVM
     /// deletes wherever the program writes the variable first.
     pub uninit: bool,
+    /// Set for an object with static storage duration whose initialiser puts
+    /// an address into an integer *inside* an aggregate: git's option tables,
+    /// `{ .defval = (intptr_t) "all" }`, and nginx's variable tables,
+    /// `(uintptr_t) ngx_ssl_get_protocol`. GCC takes such a member as a
+    /// relocated constant; Rust's constant evaluation will not have an
+    /// address in a value of an integer type.
+    ///
+    /// The item is a `MaybeUninit` of the object's type, whose contents are
+    /// not checked: its initialiser is the value with zero in those members,
+    /// and then each address written over its member through a raw pointer
+    /// of the address's own type. Every use reaches the object through
+    /// `(*(&raw mut x).cast::<T>())`, as an [uninitialised
+    /// array](Object::uninit) is reached, and reads the member as the
+    /// integer. A member whose initialiser is such an address is an integer
+    /// type as wide as a pointer whose value is the [cast](ExprKind::Cast)
+    /// of it, which is how code generation finds them. See
+    /// [`codegen`](crate::codegen).
+    pub address_slots: bool,
     /// Where the declarator was written.
     pub range: SourceRange,
 }

@@ -1003,3 +1003,81 @@ fn function_pointers_cast_to_and_from_other_pointers() {
         assert!(!as_data(Some(negate)).is_null());
     }
 }
+
+/// `{ 0 }` zeroes the padding of a local, as GCC and Clang do (C11 6.7.9p10
+/// and p21: what the list leaves out is initialised as an object with static
+/// storage duration is, padding zero bits). git's `ref-filter.c` compares
+/// `struct object_info empty = OBJECT_INFO_INIT;` with `memcmp`, and that
+/// struct ends in a 1-bit field and tail padding; with stack garbage there,
+/// `git for-each-ref` read every object and died on a broken ref. The stack
+/// is dirtied first so that luck cannot pass it.
+#[test]
+fn padding_is_zero_after_a_brace_initialiser_as_git_expects() {
+    cinrs::gnu11! {
+        #include <string.h>
+
+        struct info { void *typep, *sizep, *contentp; unsigned int unrecognized : 1; };
+        struct pair { char c; int i; };
+        union word { char c; long l; };
+        struct outer { struct pair a[2]; short s; };
+
+        static const unsigned char zeros[64];
+        static struct info zero_static;
+
+        __attribute__((noinline)) void dirty_the_stack(void) {
+            volatile unsigned char junk[512];
+            for (int i = 0; i < 512; i++) junk[i] = 0xa5;
+        }
+
+        #define ZERO(x) (memcmp(&(x), zeros, sizeof(x)) == 0)
+
+        __attribute__((noinline)) int git_object_info(void) {
+            struct info empty = { 0 };
+            return memcmp(&zero_static, &empty, sizeof empty) == 0;
+        }
+
+        __attribute__((noinline)) int every_form(void) {
+            struct pair p = { 0 };
+            union word w = { 0 };
+            struct outer o = { .s = 0, .a[1].c = 0 };
+            struct pair arr[3] = { { 0 } };
+            struct pair empty = {};
+            struct pair *literal = &(struct pair){ 0 };
+            struct pair copy;
+            copy = p;
+            return ZERO(p) + ZERO(w) * 2 + ZERO(o) * 4 + ZERO(arr) * 8 + ZERO(empty) * 16
+                + ZERO(*literal) * 32 + ZERO(copy) * 64;
+        }
+
+        __attribute__((noinline)) int members_still_set(void) {
+            struct pair p = { 1, 2 };
+            unsigned char raw[sizeof p];
+            memcpy(raw, &p, sizeof p);
+            return raw[0] == 1 && raw[1] == 0 && raw[2] == 0 && raw[3] == 0 && p.i == 2;
+        }
+
+        /* A jump into a block puts the function through the graph, whose
+           locals are hoisted and whose initialisers are assignments. */
+        __attribute__((noinline)) int through_the_graph(int n) {
+            if (n) goto inside;
+            {
+                n--;
+            inside:
+                n++;
+                struct info empty = { 0 };
+                return memcmp(&zero_static, &empty, sizeof empty) == 0;
+            }
+        }
+    }
+
+    unsafe {
+        dirty_the_stack();
+        assert_eq!(git_object_info(), 1);
+        dirty_the_stack();
+        assert_eq!(every_form(), 127);
+        dirty_the_stack();
+        assert_eq!(members_still_set(), 1);
+        dirty_the_stack();
+        assert_eq!(through_the_graph(1), 1);
+    }
+}

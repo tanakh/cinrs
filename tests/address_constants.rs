@@ -419,6 +419,44 @@ fn an_integer_holds_an_address() {
     assert_eq!(unsafe { addresses() }, 127);
 }
 
+/// The same as a member of a table: git's parse-options tables, `{ .defval =
+/// (intptr_t) "all" }`, and nginx's variable tables, `(uintptr_t)
+/// ngx_ssl_get_protocol`. The item is a `MaybeUninit` of the table, built
+/// with zero there and the addresses written over it.
+#[test]
+fn a_table_holds_addresses_in_integer_members() {
+    cinrs::c11! {
+        #include <stdint.h>
+
+        struct option { const char *long_name; intptr_t defval; int flags; };
+        static struct option options[] = {
+            { .long_name = "untracked-files", .defval = (intptr_t) "all" },
+            { .long_name = "ignored", .defval = (intptr_t) "" },
+            { .long_name = "count", .defval = 3, .flags = 1 },
+        };
+
+        typedef int (*getter_t)(void);
+        static int get_protocol(void) { return 7; }
+        struct variable { const char *name; uintptr_t data; };
+        struct module { int id; struct variable vars[2]; };
+        const struct module ssl = { 1, { { "ssl_protocol", (uintptr_t) get_protocol }, { "none", 0 } } };
+
+        union word { long n; void *p; };
+        static union word words[2] = { { .n = (long) &options[1] }, { .n = 5 } };
+
+        int tables(void) {
+            return (((const char *) options[0].defval)[0] == 'a')
+                + (((const char *) options[1].defval)[0] == 0) * 2
+                + (options[2].defval == 3 && options[2].flags == 1) * 4
+                + (((getter_t) ssl.vars[0].data)() == 7) * 8
+                + (ssl.vars[1].data == 0 && ssl.id == 1) * 16
+                + (words[0].n == (long) &options[1] && words[1].n == 5) * 32;
+        }
+    }
+
+    assert_eq!(unsafe { tables() }, 63);
+}
+
 // ---------------------------------------------------------------------------
 // block scope
 // ---------------------------------------------------------------------------

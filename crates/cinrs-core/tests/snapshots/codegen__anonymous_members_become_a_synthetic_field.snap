@@ -29,12 +29,10 @@ mod __cinrs_unit_fdfea189 {
     }
     pub unsafe extern "C" fn make() -> Value {
         unsafe {
-            let mut v: Value = Value {
-                tag: 2,
-                __cinrs_anon0: __cinrs_fdfea189_union0 {
-                    as_double: 1.5,
-                },
-            };
+            let mut v: Value = ::core::mem::zeroed();
+            ::core::ptr::write_bytes(&raw mut v, 0, 1);
+            v.tag = 2;
+            v.__cinrs_anon0.as_double = 1.5;
             return v;
         }
     }

@@ -1,0 +1,93 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_for(Standard::C11,\nr#\"\n        struct info { void *typep; long size; unsigned unrecognized : 1; };\n        struct pair { char c; int i; };\n        struct dense { int a, b; };\n        union word { char c; long l; };\n\n        int f(struct info *out) {\n            struct info empty = { 0 };\n            struct pair p = { 'x', 2 };\n            struct dense d = { 1, 2 };\n            union word w = { 0 };\n            struct pair q;\n            q = p;\n            *out = empty;\n            return d.a + q.i + (int) w.l + (&(struct pair){ .i = 3 })->i;\n        }\n        \"#)"
+---
+mod __cinrs_unit_bc799006 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct info {
+        pub typep: *mut ::core::ffi::c_void,
+        pub size: ::core::ffi::c_long,
+        pub __cinrs_bits0: [::core::primitive::u8; 1],
+    }
+    impl info {
+        #[inline]
+        pub fn unrecognized(&self) -> ::core::ffi::c_uint {
+            let raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let value: ::core::primitive::u64 = raw & 0x1;
+            value as ::core::ffi::c_uint
+        }
+        #[inline]
+        pub fn set_unrecognized(&mut self, value: ::core::ffi::c_uint) {
+            let bits: ::core::primitive::u64 = (value as ::core::primitive::u64) & 0x1;
+            let raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let raw: ::core::primitive::u64 = (raw & 0xfffffffffffffffe) | bits;
+            self.__cinrs_bits0[0] = raw as ::core::primitive::u8;
+        }
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct pair {
+        pub c: ::core::ffi::c_char,
+        pub i: ::core::ffi::c_int,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct dense {
+        pub a: ::core::ffi::c_int,
+        pub b: ::core::ffi::c_int,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub union word {
+        pub c: ::core::ffi::c_char,
+        pub l: ::core::ffi::c_long,
+    }
+    pub unsafe extern "C" fn f(mut out: *mut info) -> ::core::ffi::c_int {
+        unsafe {
+            let mut __cinrs_bc799006_literal0: pair = ::core::mem::zeroed::<pair>();
+            let mut empty: info = ::core::mem::zeroed();
+            ::core::ptr::write_bytes(&raw mut empty, 0, 1);
+            let mut p: pair = ::core::mem::zeroed();
+            ::core::ptr::write_bytes(&raw mut p, 0, 1);
+            p.c = 120;
+            p.i = 2;
+            let mut d: dense = dense { a: 1, b: 2 };
+            let mut w: word = ::core::mem::zeroed();
+            ::core::ptr::write_bytes(&raw mut w, 0, 1);
+            let mut q: pair = ::core::mem::zeroed::<pair>();
+            ::core::ptr::copy(
+                (&raw const p).cast::<::core::primitive::u8>(),
+                (&raw mut q).cast::<::core::primitive::u8>(),
+                ::core::mem::size_of::<pair>(),
+            );
+            ::core::ptr::copy(
+                (&raw const empty).cast::<::core::primitive::u8>(),
+                (&raw mut (*out)).cast::<::core::primitive::u8>(),
+                ::core::mem::size_of::<info>(),
+            );
+            return d
+                .a
+                .wrapping_add(q.i)
+                .wrapping_add(w.l as ::core::ffi::c_int)
+                .wrapping_add({
+                    let __cinrs_tmp0 = ({
+                        ::core::ptr::write_bytes(
+                            &raw mut __cinrs_bc799006_literal0,
+                            0,
+                            1,
+                        );
+                        __cinrs_bc799006_literal0.i = 3;
+                        (&raw mut __cinrs_bc799006_literal0)
+                    });
+                    (*__cinrs_tmp0).i
+                });
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_bc799006::*;

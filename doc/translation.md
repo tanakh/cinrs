@@ -247,6 +247,36 @@ Measured with `ccinrs -O2 -fno-cinrs-checks` against `gcc -O2`:
 | curl's `formatf` locals (6 KB of tables, three million calls) | 0.033 s | 0.024 s | 0.020 s |
 | the same, with the run-time checks on | — | 0.135 s | 0.022 s |
 
+### Padding, after an initialiser
+
+A structure or union initialised with braces has **zero padding**, as GCC and
+Clang give it: what the list leaves out is initialised as an object with
+static storage duration is (C11 6.7.9p10 and p21), and git's `ref-filter.c`
+compares two `{ 0 }` structs with `memcmp`, padding included. A Rust struct
+value has nothing in its padding, and moving one into place leaves the bytes
+there as the stack had them, so a local, a compound literal or a definition
+hoisted out of its block whose type has padding is initialised in place — the
+bytes zeroed, then only the members that are not zero stored:
+
+```c
+struct pair { char c; int i; };
+struct pair p = { 'x', 2 };
+```
+
+```rust
+let mut p: pair = ::core::mem::zeroed();
+::core::ptr::write_bytes(&raw mut p, 0, 1);
+p.c = 120;
+p.i = 2;
+```
+
+A type without padding is still one literal, and `{ 0 }` of a padded one is
+the `write_bytes` alone. An assignment of a whole structure or union with
+padding, `q = p;`, copies the bytes, as GCC's copy does, where Rust's typed
+copy of a small one would store the members and leave `q`'s padding as it
+was. A function generated as safe Rust keeps the plain literal: it has no
+`unsafe` to write bytes with, and no way to look at them either.
+
 ## Types
 
 | C | Rust |
@@ -715,6 +745,26 @@ address, so the item holds the `*mut c_void` and every use reads and writes it
 as the integer type — `uintptr_t`, `intptr_t`, `long`, and an `_Atomic` one,
 holding a function's or an object's address. A narrower integer is refused,
 as GCC refuses it.
+
+As a *member* — git's option tables, `{ .defval = (intptr_t)"all" }`, and
+nginx's variable tables, `(uintptr_t)ngx_ssl_get_protocol` — the member's
+type cannot change, so the object's item is a `MaybeUninit` of its type, whose
+contents Rust does not check, built with zero in those members and each
+address then written over its member through a pointer of the address's own
+type:
+
+```rust
+static mut options: MaybeUninit<[option; 2]> = {
+    let mut image = MaybeUninit::new([option { long_name: …, defval: 0 }, …]);
+    let base = image.as_mut_ptr();
+    unsafe { (&raw mut (*base)[0].defval).cast::<*mut c_char>().write_unaligned(…); }
+    image
+};
+// every use of `options` in the C is  (*(&raw mut options).cast::<[option; 2]>())
+```
+
+A thread-local object's initialiser is a Rust constant of its own type, so one
+that would need this is refused there: assign it at run time.
 
 ## Variably modified types and `alloca`
 

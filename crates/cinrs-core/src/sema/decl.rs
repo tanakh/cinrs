@@ -1783,9 +1783,23 @@ impl Sema<'_> {
             }
             return;
         }
+        self.address_slots = false;
         let mut value = self
             .static_init(init, "initializer")
             .unwrap_or_else(|| self.zero(ty, declarator.range));
+        if std::mem::take(&mut self.address_slots) {
+            if self.program.object(id).storage.is_thread_local() {
+                self.error(
+                    value.range,
+                    "a thread-local object can only hold an address converted to an integer when \
+                     it is assigned at run time: its initialiser is a Rust constant, which cannot \
+                     make an integer of an address",
+                );
+                value = self.zero(ty, declarator.range);
+            } else {
+                self.program.objects[id.0 as usize].address_slots = true;
+            }
+        }
         // A function pointer whose constant is an object's address or an
         // integer is kept as a data pointer; see [`ir::Object::data_fn_pointer`].
         if self.types().is_func_pointer(ty) && !is_function_address(&value) {
@@ -1837,7 +1851,10 @@ impl Sema<'_> {
         let mut inner = init;
         while let ExprKind::Cast(next) = &inner.kind {
             if next.ty.is_pointer() || self.types().is_func_pointer(next.ty) {
-                return Some((**next).clone());
+                // An address the linker knows: of a function, an object or a
+                // string. `&((struct s *) 0)->b` is an `offsetof` written by
+                // hand, an integer in a GNU block and refused in a strict one.
+                return addressed_symbol(next).then(|| (**next).clone());
             }
             if !(next.ty.is_integer() || matches!(next.ty, Ty::Atomic(_))) {
                 return None;
@@ -3636,6 +3653,16 @@ impl Sema<'_> {
             return Some(expr);
         }
         let (ty, range) = (expr.ty, expr.range);
+        // An address converted to an integer as wide as a pointer, as a
+        // member: git's `{ .defval = (intptr_t) "all" }`. The address is
+        // checked as the constant it is and kept under the conversion; see
+        // [`ir::Object::address_slots`]. (A whole object of that type took
+        // the other road already, in `initialize_static_object`.)
+        if let Some(address) = self.address_in_integer(ty, &expr) {
+            let address = self.static_init(address, what)?;
+            self.address_slots = true;
+            return Some(Expr::new(ExprKind::Cast(Box::new(address)), ty, range));
+        }
         match expr.kind {
             // `int i = (1, 2);` — a comma operator is not part of a *constant
             // expression* (6.6p3), and the initialiser of an object with
@@ -4117,6 +4144,29 @@ fn is_function_address(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::FuncAddr(_) | ExprKind::Zeroed | ExprKind::Int(0) => true,
         ExprKind::Cast(inner) => is_function_address(inner),
+        _ => false,
+    }
+}
+
+/// Whether a pointer constant is the address of something with a symbol — a
+/// function, an object, a string literal — or a place inside one, rather
+/// than an integer converted to a pointer.
+fn addressed_symbol(expr: &Expr) -> bool {
+    fn place_of_symbol(place: &Place) -> bool {
+        match &place.kind {
+            PlaceKind::Object(_) | PlaceKind::Str(_) | PlaceKind::CompoundLiteral { .. } => true,
+            PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => {
+                place_of_symbol(base)
+            }
+            PlaceKind::Index { base, .. } | PlaceKind::Deref(base) => addressed_symbol(base),
+            PlaceKind::Temporary(_) => false,
+        }
+    }
+    match &expr.kind {
+        ExprKind::FuncAddr(_) => true,
+        ExprKind::AddrOf(place) => place_of_symbol(place),
+        ExprKind::Cast(inner) => addressed_symbol(inner),
+        ExprKind::PtrOffset { ptr, .. } => addressed_symbol(ptr),
         _ => false,
     }
 }

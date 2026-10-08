@@ -2601,16 +2601,20 @@ impl<'a> Codegen<'a> {
             return TokenStream::new();
         };
         let name = self.c_ident(item_name, span);
-        let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
-        // A data function pointer's initialiser is already the `void *` its
-        // item holds; see [`ir::Object::data_fn_pointer`].
-        let init_ty = if object.data_fn_pointer {
-            var.init.ty
+        let (ty, init) = if object.address_slots {
+            self.address_slot_image(var.object, &var.init, span)
         } else {
-            object.ty
+            let ty = self.binding_ty(var.object, self.storage_ty(var.object, span), span);
+            // A data function pointer's initialiser is already the `void *`
+            // its item holds; see [`ir::Object::data_fn_pointer`].
+            let init_ty = if object.data_fn_pointer {
+                var.init.ty
+            } else {
+                object.ty
+            };
+            let init = self.static_init(&var.init, init_ty, span);
+            (ty, self.binding_init(var.object, init, span))
         };
-        let init = self.static_init(&var.init, init_ty, span);
-        let init = self.binding_init(var.object, init, span);
         let (vis, export) = if *exported {
             let export = if self.program.export {
                 let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
@@ -2657,6 +2661,154 @@ impl<'a> Codegen<'a> {
             #export
             #section
             #vis static mut #name: #ty = #init;
+        }
+    }
+
+    /// The type and the initialiser of a static that holds addresses in
+    /// integer members; see [`ir::Object::address_slots`].
+    ///
+    /// ```text
+    /// static mut opts: MaybeUninit<[option; 2]> = {
+    ///     let mut image = MaybeUninit::new([option { long_name: …, defval: 0 }, …]);
+    ///     let base = image.as_mut_ptr();
+    ///     unsafe { (&raw mut (*base)[0].defval).cast::<*mut c_char>().write_unaligned(…); }
+    ///     image
+    /// };
+    /// ```
+    fn address_slot_image(
+        &mut self,
+        id: ir::ObjectId,
+        init: &Expr,
+        span: Span,
+    ) -> (TokenStream, TokenStream) {
+        let object_ty = self.program.object(id).ty;
+        let inner = self.binding_ty(id, self.ty(object_ty, span), span);
+        let ty = quote_spanned! {span=> ::core::mem::MaybeUninit<#inner> };
+        let mut slots = Vec::new();
+        let value = self.take_address_slots(init, TokenStream::new(), &mut slots, span);
+        let value = self.static_init(&value, object_ty, span);
+        let value = self.binding_init(id, value, span);
+        let image = Ident::new("__cinrs_image", Span::mixed_site());
+        let base = Ident::new("__cinrs_base", Span::mixed_site());
+        let wrapper = if self.object_align(id).is_some() {
+            let field = Literal::usize_unsuffixed(0);
+            quote_spanned! {span=> .#field }
+        } else {
+            TokenStream::new()
+        };
+        let mut writes = TokenStream::new();
+        for (path, address) in slots {
+            let address_ty = self.ty(address.ty, span);
+            let tokens = self.expr_at(&address, address.ty);
+            writes.extend(quote_spanned! {span=>
+                (&raw mut (*#base)#wrapper #path).cast::<#address_ty>().write_unaligned(#tokens);
+            });
+        }
+        let init = quote_spanned! {span=>
+            {
+                let mut #image = ::core::mem::MaybeUninit::new(#value);
+                let #base = #image.as_mut_ptr();
+                unsafe { #writes }
+                #image
+            }
+        };
+        (ty, init)
+    }
+
+    /// `value` with zero in each member that holds an address converted to
+    /// an integer, and those addresses, each with the path from the object
+    /// to its member.
+    fn take_address_slots(
+        &self,
+        value: &Expr,
+        path: TokenStream,
+        slots: &mut Vec<(TokenStream, Expr)>,
+        span: Span,
+    ) -> Expr {
+        let types = &self.program.types;
+        let (ty, range) = (value.ty, value.range);
+        match &value.kind {
+            ExprKind::Cast(inner)
+                if types.unatomic(ty).is_integer()
+                    && (inner.ty.is_pointer() || types.is_func_pointer(inner.ty)) =>
+            {
+                slots.push((path, (**inner).clone()));
+                Expr::new(ExprKind::Zeroed, ty, range)
+            }
+            ExprKind::RecordLit { record, fields } => {
+                let def = types.record(*record);
+                let fields = fields
+                    .iter()
+                    .zip(&def.fields)
+                    .map(|(field, member)| {
+                        let name = self.c_ident(&member.name, span);
+                        let path = quote_spanned! {span=> #path.#name };
+                        self.take_address_slots(field, path, slots, span)
+                    })
+                    .collect();
+                Expr::new(
+                    ExprKind::RecordLit {
+                        record: *record,
+                        fields,
+                    },
+                    ty,
+                    range,
+                )
+            }
+            ExprKind::UnionLit {
+                record,
+                index,
+                value: member,
+            } => {
+                let name = self.c_ident(&types.record(*record).fields[*index].name, span);
+                let path = quote_spanned! {span=> #path.#name };
+                let member = self.take_address_slots(member, path, slots, span);
+                Expr::new(
+                    ExprKind::UnionLit {
+                        record: *record,
+                        index: *index,
+                        value: Box::new(member),
+                    },
+                    ty,
+                    range,
+                )
+            }
+            ExprKind::ArrayLit(items) => {
+                let items = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let at = usize_literal(index as u64, span);
+                        let path = quote_spanned! {span=> #path[#at] };
+                        self.take_address_slots(item, path, slots, span)
+                    })
+                    .collect();
+                Expr::new(ExprKind::ArrayLit(items), ty, range)
+            }
+            ExprKind::ArrayRepeat { value: item, len } => {
+                let mut first = Vec::new();
+                let zeroed = self.take_address_slots(item, TokenStream::new(), &mut first, span);
+                if !first.is_empty() {
+                    for index in 0..*len {
+                        let at = usize_literal(index, span);
+                        for (inner, address) in &first {
+                            slots.push((
+                                quote_spanned! {span=> #path[#at] #inner },
+                                address.clone(),
+                            ));
+                        }
+                    }
+                }
+                Expr::new(
+                    ExprKind::ArrayRepeat {
+                        value: Box::new(zeroed),
+                        len: *len,
+                    },
+                    ty,
+                    range,
+                )
+            }
+            _ => value.clone(),
         }
     }
 
@@ -4333,8 +4485,10 @@ impl<'a> Codegen<'a> {
         let object = self.program.object(id);
         let mut access = base;
         // An uninitialised array's binding is a `MaybeUninit` of it, and the
-        // array is the place at its address; see [`ir::Object::uninit`].
-        if object.uninit {
+        // array is the place at its address; see [`ir::Object::uninit`]. So
+        // is a static holding addresses in integer members; see
+        // [`ir::Object::address_slots`].
+        if object.uninit || object.address_slots {
             let ty = self.binding_ty(id, self.ty(object.ty, span), span);
             access = parenthesize(
                 quote_spanned! {span=> *(&raw mut #access).cast::<#ty>() },
@@ -5115,7 +5269,11 @@ impl<'a> Codegen<'a> {
             Stmt::Nop => TokenStream::new(),
             Stmt::Asm(asm) => self.asm_stmt(asm),
             Stmt::Expr(expr) => self.expr_stmt(expr),
-            Stmt::Let { object, init, .. } => {
+            Stmt::Let {
+                object,
+                init,
+                explicit,
+            } => {
                 let id = *object;
                 let name = self.object_ident(id, self.sp(self.program.object(id).range));
                 let object = self.program.object(id);
@@ -5125,6 +5283,16 @@ impl<'a> Codegen<'a> {
                 }
                 let object_ty = object.ty;
                 let ty = self.binding_ty(id, self.ty(object_ty, span), span);
+                // `struct S s = { 0 };` with padding in `S`: the bytes are
+                // zeroed and the members stored; see [`Codegen::has_padding`].
+                if *explicit {
+                    let access = self.object_access(id, span);
+                    if let Some(stores) = self.padded_init(&access, object_ty, init, span) {
+                        let zero = quote_spanned! {span=> ::core::mem::zeroed() };
+                        let zero = self.binding_init(id, zero, span);
+                        return quote_spanned! {span=> let mut #name: #ty = #zero; #stores };
+                    }
+                }
                 let init = self.expr_at(init, object_ty);
                 let init = self.binding_init(id, init, span);
                 quote_spanned! {span=> let mut #name: #ty = #init; }
@@ -5894,6 +6062,49 @@ impl<'a> Codegen<'a> {
         let span = self.sp(expr.range);
         match &expr.kind {
             ExprKind::Assign { place, value } => {
+                // The initialiser of a definition hoisted to the top of its
+                // function, given where the C wrote it; see
+                // [`Codegen::has_padding`].
+                if let PlaceKind::Object(id) = place.kind
+                    && matches!(self.program.object(id).storage, Storage::Automatic)
+                    && !self.program.object(id).uninit
+                {
+                    let access = self.object_access(id, span);
+                    if let Some(stores) = self.padded_init(&access, place.ty, value, span) {
+                        return stores;
+                    }
+                }
+                // `q = z;` of a structure or a union with padding copies the
+                // bytes, padding included, as GCC's copy does: a Rust typed
+                // copy of a small one is a store per member, which leaves the
+                // destination's padding as it was.
+                if let ExprKind::Load(source) = &value.kind
+                    && !self.in_safe
+                    && self.has_padding(place.ty)
+                    && matches!(self.program.types.unatomic(place.ty), Ty::Record(_))
+                    && !matches!(place.ty, Ty::Atomic(_))
+                {
+                    let to = self.place(place, true);
+                    let from = self.place(source, false);
+                    if to.bits.is_none()
+                        && from.bits.is_none()
+                        && to.atomic.is_none()
+                        && from.atomic.is_none()
+                    {
+                        let ty = self.ty(place.ty, span);
+                        let (to_setup, to_access) = (&to.setup, &to.access);
+                        let (from_setup, from_access) = (&from.setup, &from.access);
+                        let byte = primitive_ty("u8", span);
+                        return quote_spanned! {span=>
+                            #to_setup #from_setup
+                            ::core::ptr::copy(
+                                (&raw const #from_access).cast::<#byte>(),
+                                (&raw mut #to_access).cast::<#byte>(),
+                                ::core::mem::size_of::<#ty>(),
+                            );
+                        };
+                    }
+                }
                 let lowered = self.place(place, true);
                 let value = self.expr_at(value, self.program.types.unatomic(place.ty));
                 let store = self.write(&lowered, value, span);
@@ -6692,6 +6903,218 @@ impl<'a> Codegen<'a> {
             },
             prec::BLOCK,
         )
+    }
+
+    /// Whether a value of `ty` has bytes that none of its members covers:
+    /// the padding of a structure, the bytes of a union beyond the member it
+    /// holds, or either inside an array's element.
+    ///
+    /// A Rust value has nothing in those bytes — a typed copy, which is what
+    /// building a struct literal and moving it into place is, leaves them
+    /// as they were — and C's `{ 0 }` makes them zero (C11 6.7.9p10 and p21,
+    /// as GCC and Clang do), which git's `memcmp` of two `{ 0 }` structs
+    /// relies on. An object whose type has them is therefore initialised in
+    /// place; see [`Codegen::init_in_place`].
+    fn has_padding(&self, ty: Ty) -> bool {
+        let types = &self.program.types;
+        match ty {
+            Ty::Record(id) => {
+                let def = types.record(id);
+                if !def.complete {
+                    return false;
+                }
+                let Some(layout) = types.size_align(ty, &self.options.target) else {
+                    return false;
+                };
+                // A union's value is the one member it holds: any member
+                // narrower than the union leaves bytes the value has nothing
+                // in.
+                if def.kind == RecordKind::Union {
+                    return def.fields.iter().any(|field| {
+                        field.bits.is_some()
+                            || self.has_padding(field.ty)
+                            || types
+                                .size_align(field.ty, &self.options.target)
+                                .is_none_or(|member| member.size < layout.size)
+                    });
+                }
+                let mut covered = 0;
+                for rust_field in &def.rust_fields {
+                    match rust_field {
+                        ir::RustField::Member(index) => {
+                            let field_ty = def.fields[*index].ty;
+                            if self.has_padding(field_ty) {
+                                return true;
+                            }
+                            covered += types
+                                .size_align(field_ty, &self.options.target)
+                                .map_or(0, |layout| layout.size);
+                        }
+                        ir::RustField::Bits { bytes, .. } | ir::RustField::Pad { bytes, .. } => {
+                            covered += bytes;
+                        }
+                        ir::RustField::Align { .. } => {}
+                    }
+                }
+                covered < layout.size
+            }
+            Ty::Array(_) => types.elem(ty).is_some_and(|elem| self.has_padding(elem)),
+            _ => false,
+        }
+    }
+
+    /// The statements that give the object at `place`, whose bytes are all
+    /// zero already, the value of the initialiser `value` of type `ty`: a
+    /// store per member that is not zero, and nothing for one that is, so
+    /// that `{ 0 }` is the `write_bytes` before it and nothing more. The
+    /// bytes no member covers are never written, and stay zero.
+    fn init_in_place(
+        &mut self,
+        place: &TokenStream,
+        ty: Ty,
+        value: &Expr,
+        span: Span,
+    ) -> TokenStream {
+        if is_zero_bits(value) {
+            return TokenStream::new();
+        }
+        match &value.kind {
+            ExprKind::RecordLit { record, fields }
+                if !self.program.types.record(*record).flexible =>
+            {
+                let def = self.program.types.record(*record).clone();
+                let mut out = TokenStream::new();
+                let mut packed: HashMap<String, Vec<u8>> = HashMap::new();
+                for (index, field) in def.fields.iter().enumerate() {
+                    let Some(value) = fields.get(index) else {
+                        continue;
+                    };
+                    match &field.bits {
+                        // The constant bit-fields of one run are one store of
+                        // its bytes; the others go through their setters.
+                        Some(bits) => {
+                            match constant_bits(value) {
+                                Some(constant) => {
+                                    let storage =
+                                        packed.entry(bits.storage.clone()).or_insert_with(|| {
+                                            let bytes =
+                                                def.rust_fields
+                                                    .iter()
+                                                    .find_map(|rust_field| match rust_field {
+                                                        ir::RustField::Bits {
+                                                            name, bytes, ..
+                                                        } if *name == bits.storage => Some(*bytes),
+                                                        _ => None,
+                                                    })
+                                                    .unwrap_or(0);
+                                            vec![0u8; bytes as usize]
+                                        });
+                                    pack_bits(storage, bits, constant);
+                                }
+                                None => {
+                                    let setter = self.c_ident(&bits.setter, span);
+                                    let value = self.expr_at(value, field.ty);
+                                    out.extend(quote_spanned! {span=> #place.#setter(#value); });
+                                }
+                            }
+                        }
+                        None => {
+                            let fname = self.c_ident(&field.name, span);
+                            let member = quote_spanned! {span=> #place.#fname };
+                            out.extend(self.init_in_place(&member, field.ty, value, span));
+                        }
+                    }
+                }
+                let mut runs: Vec<(String, Vec<u8>)> = packed
+                    .into_iter()
+                    .filter(|(_, bytes)| bytes.iter().any(|byte| *byte != 0))
+                    .collect();
+                runs.sort();
+                let mut stores = TokenStream::new();
+                for (name, bytes) in runs {
+                    let storage = Ident::new(&name, span);
+                    let array = byte_array(&bytes, span);
+                    stores.extend(quote_spanned! {span=> #place.#storage = #array; });
+                }
+                // The constant runs first: a setter reads the run it writes.
+                stores.extend(out);
+                stores
+            }
+            ExprKind::UnionLit {
+                record,
+                index,
+                value: member,
+            } => {
+                let def = self.program.types.record(*record).clone();
+                let field = &def.fields[*index];
+                match &field.bits {
+                    Some(bits) => {
+                        let setter = self.c_ident(&bits.setter, span);
+                        let value = self.expr_at(member, field.ty);
+                        quote_spanned! {span=> #place.#setter(#value); }
+                    }
+                    None => {
+                        let fname = self.c_ident(&field.name, span);
+                        let member_place = quote_spanned! {span=> #place.#fname };
+                        self.init_in_place(&member_place, field.ty, member, span)
+                    }
+                }
+            }
+            ExprKind::ArrayLit(items) => {
+                let elem = self.program.types.elem(ty).unwrap_or(Ty::Int);
+                let mut out = TokenStream::new();
+                for (index, item) in items.iter().enumerate() {
+                    let at = usize_literal(index as u64, span);
+                    let element = quote_spanned! {span=> #place[#at] };
+                    out.extend(self.init_in_place(&element, elem, item, span));
+                }
+                out
+            }
+            ExprKind::ArrayRepeat { value: item, len } if self.has_padding(ty) => {
+                let elem = self.program.types.elem(ty).unwrap_or(Ty::Int);
+                let index = self.temporary_at(span);
+                let element = quote_spanned! {span=> #place[#index] };
+                let body = self.init_in_place(&element, elem, item, span);
+                let len = usize_literal(*len, span);
+                quote_spanned! {span=> for #index in 0..#len { #body } }
+            }
+            _ => {
+                let value = self.expr_at(value, ty);
+                quote_spanned! {span=> #place = #value; }
+            }
+        }
+    }
+
+    /// An initialiser stored into `place`, the object `ty` that a
+    /// declaration or a compound literal defines, when its type
+    /// [has padding](Codegen::has_padding): the bytes zeroed, then the
+    /// members stored. `None` for anything else, which is an ordinary
+    /// assignment of the value.
+    fn padded_init(
+        &mut self,
+        place: &TokenStream,
+        ty: Ty,
+        value: &Expr,
+        span: Span,
+    ) -> Option<TokenStream> {
+        let aggregate = matches!(
+            value.kind,
+            ExprKind::RecordLit { .. }
+                | ExprKind::UnionLit { .. }
+                | ExprKind::ArrayLit(_)
+                | ExprKind::ArrayRepeat { .. }
+                | ExprKind::Zeroed
+        );
+        // A safe function has no `unsafe` to write the bytes with, and no way
+        // to look at padding either.
+        if !aggregate || self.in_safe || !self.has_padding(ty) {
+            return None;
+        }
+        let stores = self.init_in_place(place, ty, value, span);
+        Some(quote_spanned! {span=>
+            ::core::ptr::write_bytes(&raw mut #place, 0, 1);
+            #stores
+        })
     }
 
     /// One of the builtins that becomes a fixed piece of Rust.
@@ -9615,12 +10038,14 @@ impl<'a> Codegen<'a> {
             // literal was written and a literal in a loop is rebuilt on every
             // iteration.
             PlaceKind::CompoundLiteral { object, init } => {
-                let name = self.object_ident(*object, span);
+                // Through the alignment wrapper an array of 16 bytes or more
+                // has on x86-64; see [`Codegen::abi_array_align`].
+                let access = self.object_access(*object, span);
+                if let Some(stores) = self.padded_init(&access, place.ty, init, span) {
+                    return LoweredPlace::plain(stores, access);
+                }
                 let value = self.expr_at(init, place.ty);
-                LoweredPlace::plain(
-                    quote_spanned! {span=> #name = #value; },
-                    quote_spanned! {span=> #name },
-                )
+                LoweredPlace::plain(quote_spanned! {span=> #access = #value; }, access)
             }
         }
     }
@@ -9994,6 +10419,25 @@ impl<'a> Codegen<'a> {
                 quote_spanned! {span=> ::core::mem::zeroed::<#target>() }
             }
         }
+    }
+}
+
+/// Whether an initialiser's value is all zero bits — what the `write_bytes`
+/// in front of an [in-place initialisation](Codegen::init_in_place) has
+/// already stored. Conservative: `-0.0` and anything that is not a literal
+/// are not.
+fn is_zero_bits(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Zeroed | ExprKind::Int(0) => true,
+        ExprKind::Float(value) => value.to_bits() == 0,
+        // `(void *) 0`, `(double) 0`: a scalar zero of another type is zero
+        // bits too, a null pointer included.
+        ExprKind::Cast(inner) => expr.ty.is_scalar() && is_zero_bits(inner),
+        ExprKind::RecordLit { fields, .. } => fields.iter().all(is_zero_bits),
+        ExprKind::UnionLit { value, .. } => is_zero_bits(value),
+        ExprKind::ArrayLit(items) => items.iter().all(is_zero_bits),
+        ExprKind::ArrayRepeat { value, .. } => is_zero_bits(value),
+        _ => false,
     }
 }
 

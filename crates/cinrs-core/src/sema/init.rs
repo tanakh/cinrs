@@ -251,6 +251,7 @@ impl Sema<'_> {
         };
 
         if self.at_file_scope() {
+            self.address_slots = false;
             let value = self.static_init(value, "the initializer of a compound literal")?;
             let item_name = self.anonymous_name("literal");
             let storage = Storage::Static {
@@ -258,6 +259,9 @@ impl Sema<'_> {
                 exported: false,
             };
             let id = self.new_object(&item_name, ty, storage, is_const, range);
+            // See [`ir::Object::address_slots`].
+            self.program.objects[id.0 as usize].address_slots =
+                std::mem::take(&mut self.address_slots);
             self.static_literals.insert(id, self.program.statics.len());
             self.program.statics.push(StaticVar {
                 object: id,

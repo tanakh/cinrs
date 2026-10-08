@@ -876,6 +876,35 @@ fn anonymous_members_become_a_synthetic_field() {
 }
 
 #[test]
+fn a_brace_initialised_local_with_padding_starts_from_zero_bytes() {
+    // git compares two `{ 0 }` structs with `memcmp`, padding included, and
+    // GCC zeroes the padding. A struct literal moved into place has nothing
+    // in it, so the bytes are zeroed and only the members that are not zero
+    // are stored. A record without padding is still one literal, and a
+    // whole-struct copy of a padded one copies the bytes.
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r#"
+        struct info { void *typep; long size; unsigned unrecognized : 1; };
+        struct pair { char c; int i; };
+        struct dense { int a, b; };
+        union word { char c; long l; };
+
+        int f(struct info *out) {
+            struct info empty = { 0 };
+            struct pair p = { 'x', 2 };
+            struct dense d = { 1, 2 };
+            union word w = { 0 };
+            struct pair q;
+            q = p;
+            *out = empty;
+            return d.a + q.i + (int) w.l + (&(struct pair){ .i = 3 })->i;
+        }
+        "#
+    ));
+}
+
+#[test]
 fn alignas_raises_the_alignment_of_the_record() {
     insta::assert_snapshot!(generate_for(
         Standard::C11,
