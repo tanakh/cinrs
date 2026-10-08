@@ -292,7 +292,16 @@ follows [Semantic Versioning][semver].
   literal's `static` was read as a statement before its `as`.
 * A conditional with an integer constant condition is the address constant
   its chosen arm is, in a static initialiser: CPython's `_Py_LATIN1_CHR` in
-  Argument Clinic's keyword tables.
+  Argument Clinic's keyword tables. So is one whose arms are string literals
+  and that is converted to the object's `const char *`, nested or not:
+  OpenSSL's `sizeof(long) == 4 ? "four" : sizeof(long) == 8 ? "eight" : ""`.
+* `__attribute__((aligned(1)))` on a `typedef` of a record lowers its
+  alignment, as GCC does for a scalar's: a read, a write or a member access
+  through a pointer to the `typedef` is an unaligned one. OpenSSL's
+  `aes_block_t` in its AES-IGE code; it was refused.
+* A diagnostic names an untagged record or enumeration "anonymous struct",
+  "anonymous union" or "anonymous enum", not by the Rust item `cinrs` made
+  for it.
 * `static T x[64];` followed by `static T x[] = { … };` defines one object of
   64 elements, as C11 6.9.2 and 6.2.7 make it, rather than "redefinition of
   'x'" (CPython's `pyexpat.c`).

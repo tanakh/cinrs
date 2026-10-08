@@ -1389,8 +1389,12 @@ impl Types {
                 if let Some(c_type) = record.stands_for {
                     return c_type.to_owned();
                 }
+                // An untagged record's Rust name is a synthetic one until a
+                // `typedef` gives it its own, and nothing a diagnostic should
+                // show.
                 match &record.tag {
                     Some(tag) => format!("{} {tag}", record.kind.as_str()),
+                    None if record.anonymous => format!("anonymous {}", record.kind.as_str()),
                     None => format!("{} {}", record.kind.as_str(), record.rust_name),
                 }
             }
@@ -1398,6 +1402,7 @@ impl Types {
                 let def = self.enum_def(id);
                 match &def.tag {
                     Some(tag) => format!("enum {tag}"),
+                    None if def.anonymous => "anonymous enum".to_owned(),
                     None => format!("enum {}", def.rust_name),
                 }
             }

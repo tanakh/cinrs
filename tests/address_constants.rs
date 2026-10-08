@@ -334,6 +334,30 @@ fn a_constant_condition_chooses_an_address() {
     assert_eq!(unsafe { chosen() }, 7);
 }
 
+/// The same with string literals, nested, which is a conversion of the
+/// conditional's `char *` to the object's `const char *` around it: OpenSSL's
+/// `test/bioprinttest.c` names the size of `long` this way.
+#[test]
+fn a_constant_condition_chooses_a_string_literal() {
+    cinrs::c11! {
+        static const char *s = sizeof(long) == 4 ? "four" : sizeof(long) == 8 ? "eight" : "";
+        static const void *other = 1 > 2 ? "no" : (const void *)"yes";
+
+        int chosen_length(void) {
+            int n = 0;
+            while (s[n]) n++;
+            return n * 10 + (((const char *)other)[0] == 'y');
+        }
+    }
+
+    let expected = if core::mem::size_of::<core::ffi::c_long>() == 8 {
+        51
+    } else {
+        41
+    };
+    assert_eq!(unsafe { chosen_length() }, expected);
+}
+
 // ---------------------------------------------------------------------------
 // block scope
 // ---------------------------------------------------------------------------

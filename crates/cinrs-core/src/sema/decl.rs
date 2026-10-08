@@ -2072,13 +2072,21 @@ impl Sema<'_> {
                 );
             } else if scalar {
                 align = (natural != Some(want)).then_some(want);
+            } else if resolved.is_record() && natural.is_some_and(|n| want < n) {
+                // The same for a record: OpenSSL's `typedef struct { unsigned
+                // long data[2]; } aes_block_t __attribute__((aligned(1)));`,
+                // which its AES-IGE code reads at any address. The layout is
+                // the record's own; what is weaker is the promise a pointer to
+                // the `typedef` makes, so a read or a write through one is an
+                // unaligned one, a member reached through one too.
+                align = Some(want);
             } else if natural.is_some_and(|n| want < n) {
                 self.error(
                     aligned.range,
                     format!(
                         "'aligned({want})' on a 'typedef' of '{}' would make it less aligned \
-                         than its type, which is supported for a scalar or a pointer 'typedef' \
-                         only",
+                         than its type, which is supported for a scalar, a pointer or a record \
+                         'typedef' only",
                         self.types().name(resolved)
                     ),
                 );
@@ -3562,6 +3570,28 @@ impl Sema<'_> {
                     _ => else_expr,
                 };
                 self.static_init(*chosen, what)
+            }
+            // The same under a conversion — OpenSSL's `static const char *s
+            // = sizeof(long) == 4 ? "four" : …;`, whose arms are `char *` —
+            // which the chosen arm takes instead.
+            ExprKind::Cast(inner)
+                if !ty.is_arithmetic()
+                    && matches!(&inner.kind, ExprKind::Cond { cond, .. }
+                        if self.const_scalar(cond).is_some()) =>
+            {
+                let ExprKind::Cond {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } = inner.kind
+                else {
+                    unreachable!("just matched");
+                };
+                let chosen = match self.const_scalar(&cond) {
+                    Some(value) if super::is_true(value) => then_expr,
+                    _ => else_expr,
+                };
+                self.static_init(Expr::new(ExprKind::Cast(chosen), ty, range), what)
             }
             ExprKind::RecordLit { record, fields } => {
                 let fields: Option<Vec<Expr>> = fields

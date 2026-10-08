@@ -2472,10 +2472,18 @@ fn what_an_aligned_typedef_cannot_do_is_refused() {
         ],
     );
     rejected(
-        "struct P { int a; };\ntypedef struct P P1 __attribute__((aligned(1)));",
+        "typedef int A2[2];\ntypedef A2 A1 __attribute__((aligned(1)));",
         &[
-            "'aligned(1)' on a 'typedef' of 'struct P' would make it less aligned than its \
-           type, which is supported for a scalar or a pointer 'typedef' only",
+            "'aligned(1)' on a 'typedef' of 'int[2]' would make it less aligned than its \
+           type, which is supported for a scalar, a pointer or a record 'typedef' only",
+        ],
+    );
+    // An untagged record is named for what it is, not for the Rust item.
+    rejected(
+        "typedef struct { int a; } R1[2] __attribute__((aligned(1)));",
+        &[
+            "'aligned(1)' on a 'typedef' of 'anonymous struct[2]' would make it less aligned \
+           than its type, which is supported for a scalar, a pointer or a record 'typedef' only",
         ],
     );
 }

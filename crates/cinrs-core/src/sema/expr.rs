@@ -3551,7 +3551,9 @@ impl Sema<'_> {
             // file scope declares is another one. "The pointee types differ"
             // over two spellings that are letter for letter the same is a
             // riddle; this says which riddle.
-            if self.tyname(to) == self.tyname(expr.ty) {
+            // Two anonymous records are spelt alike for want of a tag, which
+            // is not what the note is about.
+            if self.tyname(to) == self.tyname(expr.ty) && !self.tyname(to).contains("anonymous ") {
                 Some(
                     "these are two different types with the same spelling: a tag belongs to \
                      the scope it was declared in, so one written inside a parameter list \

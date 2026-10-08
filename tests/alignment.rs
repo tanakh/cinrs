@@ -434,3 +434,50 @@ fn an_under_aligned_typedef_reads_and_writes_at_any_address() {
         assert_eq!(over_aligned_typedef(), 1);
     }
 }
+
+/// The same on a `typedef` of a record — OpenSSL's AES-IGE block, read and
+/// written at any address of a byte buffer: the record's layout is its own,
+/// and what the `typedef` weakens is the promise a pointer to it makes, so a
+/// whole-record copy and a member reached through one are unaligned accesses
+/// (a debug build would panic on an aligned one at offset 1). As a member it
+/// sits at offset 1, as GCC puts it.
+#[test]
+fn an_under_aligned_record_typedef_reads_and_writes_at_any_address() {
+    gnu11! {
+        #include <stdint.h>
+        #include <string.h>
+
+        typedef struct { unsigned long data[2]; } aes_block_t __attribute__((__aligned__(1)));
+        struct holder { char c; aes_block_t b; };
+
+        static unsigned char bytes[40];
+
+        int unaligned_record_typedef(void) {
+            unsigned long want0, want1;
+            int i, ok = 1;
+            for (i = 0; i < 40; i++) bytes[i] = (unsigned char) i;
+            memcpy(&want0, bytes + 1, 8);
+            memcpy(&want1, bytes + 9, 8);
+            {
+                aes_block_t b = *(const aes_block_t *) (bytes + 1);
+                const aes_block_t *p = (const aes_block_t *) (bytes + 3);
+                ok &= b.data[0] == want0 && b.data[1] == want1;
+                ok &= p->data[0] == *(const unsigned long *) memcpy(&want0, bytes + 3, 8);
+                *(aes_block_t *) (bytes + 5) = b;
+                ok &= memcmp(bytes + 5, &b, sizeof b) == 0;
+                ((aes_block_t *) (bytes + 7))->data[1] = 0;
+                ok &= bytes[15] == 0 && bytes[22] == 0;
+            }
+            {
+                struct holder h;
+                h.c = 1;
+                h.b.data[1] = 9;
+                ok &= __builtin_offsetof(struct holder, b) == 1 && sizeof(struct holder) == 17
+                    && h.b.data[1] + h.c == 10;
+            }
+            return ok && _Alignof(aes_block_t) == 1 && sizeof(aes_block_t) == 16;
+        }
+    }
+
+    assert_eq!(unsafe { unaligned_record_typedef() }, 1);
+}
