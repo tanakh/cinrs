@@ -101,8 +101,12 @@ with cinrs's message.
 GCC accepts there with a warning — CPython builds every file with `-std=c11`,
 and FFmpeg has a stray `;` after a function — and `__DATE__` was a placeholder
 CPython's `sys.version` parser rejects; each took a workaround (`-std=gnu11`,
-`-std=gnu17` for two files, an explicit date). CPython's configure also needs
-the cache variable described [below](#configure-and-the-run-time-checks).
+`-std=gnu17` for two files, an explicit date). Both have been fixed since —
+ccinrs's `-std=` modes take what GCC's take unless `-pedantic-errors` is
+given, and `__DATE__` is the date of translation, or `SOURCE_DATE_EPOCH`'s —
+and their reproductions pass; the two projects have not been rebuilt since.
+CPython's configure also needs the cache variable described
+[below](#configure-and-the-run-time-checks).
 
 ⁷ `hScale8To15_c`'s inner loop indexes with `int`, and cinrs's signed
 arithmetic wraps on overflow, as GCC's does under `-fwrapv`; GCC with
