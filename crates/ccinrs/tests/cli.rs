@@ -1346,6 +1346,19 @@ fn the_command_line_is_checked() {
         "ccinrs: warning: /W4: linker input file unused because linking not done\n\
          ccinrs: error: /W4: linker input file not found: No such file or directory\n"
     );
+    // `-fsyntax-only` checks and writes nothing: no object, even with `-c`,
+    // and an error in the C is still one.
+    s.write("bad.c", "int f(void) { return undeclared; }\n");
+    let out = s.ccinrs(&["-fsyntax-only", "-c", "x.c"]);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!s.dir.join("x.o").exists());
+    let out = s.ccinrs(&["-fsyntax-only", "bad.c"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("undeclared"), "{}", stderr(&out));
     let out = s.ccinrs(&["-fshort-enums", "x.c"]);
     assert_eq!(
         stderr(&out),

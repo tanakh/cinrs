@@ -28,6 +28,9 @@ use crate::gcc_warnings;
 pub enum Stage {
     /// `-E` (and `-M`, `-MM`): the preprocessed text, or the dependencies.
     Preprocess,
+    /// `-fsyntax-only`: every C file read and checked, its diagnostics
+    /// printed, and nothing written.
+    SyntaxOnly,
     /// `-S`: one `.rs` file per C file — Rust being what `ccinrs` compiles C
     /// to, as assembly is what GCC does.
     Rust,
@@ -771,6 +774,7 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
         _ if name.starts_with("lto=") => inv.lto = Some(Lto::Fat),
         "no-lto" => inv.lto = None,
         _ if name.starts_with("use-ld=") => inv.fuse_ld = Some(name["use-ld=".len()..].to_owned()),
+        "syntax-only" => inv.stop_at(Stage::SyntaxOnly),
         "cinrs-checks" => inv.checks = true,
         "no-cinrs-checks" => inv.checks = false,
         "cinrs-unwind" => inv.unwind = true,
@@ -934,6 +938,10 @@ mod tests {
         let inv = parse_all(&["-MM", "-c", "a.c"]).unwrap();
         assert_eq!(inv.stage, Stage::Preprocess);
         assert!(inv.deps.only && !inv.deps.system);
+        assert_eq!(
+            parse_all(&["-c", "-fsyntax-only", "a.c"]).unwrap().stage,
+            Stage::SyntaxOnly
+        );
     }
 
     #[test]

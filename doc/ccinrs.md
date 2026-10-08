@@ -93,7 +93,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 
 | | |
 | --- | --- |
-| `-o`, `-c`, `-S`, `-E` | the output, and where to stop (`-S` writes Rust); the earliest stage named wins |
+| `-o`, `-c`, `-S`, `-E`, `-fsyntax-only` | the output, and where to stop (`-S` writes Rust; `-fsyntax-only` checks the C, prints what it finds and writes nothing); the earliest stage named wins |
 | `-P` | `-E` without line markers |
 | `-dM` | `-E` printing the macros defined at the end instead — `ccinrs -dM -E - </dev/null` lists the predefined ones |
 | `-` | standard input, under `-x c` or `-E` (`<stdin>` to `__FILE__`) |

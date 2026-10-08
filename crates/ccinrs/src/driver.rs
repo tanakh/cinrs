@@ -77,6 +77,7 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
 
     match inv.stage {
         Stage::Preprocess => return run.preprocess(),
+        Stage::SyntaxOnly => return run.check_syntax(),
         Stage::Rust => return run.emit_rust(),
         Stage::Compile => return run.compile_only(),
         Stage::Link => {}
@@ -522,6 +523,28 @@ impl Run<'_> {
             if self.compile(index, path, &object, deps)?.is_none() {
                 failed = true;
             }
+        }
+        if failed {
+            Err(Failure::Reported)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `-fsyntax-only`: every C file read and checked by cinrs — preprocessed,
+    /// parsed and analysed — and its diagnostics printed; nothing is written
+    /// and `rustc` is not run, as GCC writes nothing and generates no code.
+    fn check_syntax(&self) -> Result<(), Failure> {
+        unused_linker_inputs(self.inv)?;
+        let mut failed = false;
+        for input in &self.inv.inputs {
+            let Input::C(path) = input else {
+                continue;
+            };
+            let translation = translate(path, &self.options)?;
+            let (text, tally) = diag::render(&translation.map, &translation.diagnostics, self.inv);
+            eprint!("{text}");
+            failed |= tally.errors > 0 || translation.items.is_none();
         }
         if failed {
             Err(Failure::Reported)
