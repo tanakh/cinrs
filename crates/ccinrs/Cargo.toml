@@ -33,8 +33,6 @@ cinrs-rt = { workspace = true, features = ["sources"] }
 # `rustc` is given.
 proc-macro2.workspace = true
 quote.workspace = true
-# Reading that token stream as items, to put them in the order of the C lines
-# they came from before printing them; see `print`.
+# `-S`: the Rust a C file becomes, read as items and formatted to be read.
 syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "printing", "clone-impls"] }
-# `-S`: the Rust a C file becomes, formatted to be read.
 prettyplease = "0.3.0"
