@@ -2400,7 +2400,11 @@ impl Pp<'_> {
                 head
             }
             (Some(Piece::Tok(l)), Piece::Tok(r)) => match self.paste(&l, &r, invocation) {
-                Some(kind) => Piece::Tok(self.synthetic(kind, &l, invocation, exp)),
+                Some((kind, errors)) => {
+                    let mut joined = self.synthetic(kind, &l, invocation, exp);
+                    joined.errors = errors;
+                    Piece::Tok(joined)
+                }
                 None => {
                     // Already reported; keep both halves so that the rest of
                     // the expansion still makes some kind of sense.
@@ -2413,17 +2417,31 @@ impl Pp<'_> {
         pieces.extend(rhs);
     }
 
-    /// Concatenates two spellings and lexes the result.
-    fn paste(&mut self, lhs: &PTok, rhs: &PTok, invocation: SourceRange) -> Option<TokenKind> {
+    /// Concatenates two spellings and lexes the result, which is the token
+    /// and what is wrong with it once it is a token of the program.
+    ///
+    /// A preprocessing number need not be a valid constant until then (C17
+    /// 6.4.8): `63 ## . ## 1 ## . ## 100` goes through `63.` and `63.1.`, and
+    /// `32 ## p` is `32p`, which FFmpeg pastes onto a function name. Such a
+    /// token carries what decoding it found, at the invocation, and that is
+    /// reported only if it reaches the parser.
+    fn paste(
+        &mut self,
+        lhs: &PTok,
+        rhs: &PTok,
+        invocation: SourceRange,
+    ) -> Option<(TokenKind, Vec<Diagnostic>)> {
         let text = format!("{}{}", lhs.spelling(), rhs.spelling());
         if text.is_empty() {
             return None;
         }
         let tokens = lex::lex_text(&text, 0, &self.lex_options);
-        let valid = tokens.len() == 2
-            && tokens[0].errors.is_empty()
+        let one = tokens.len() == 2
             && !matches!(tokens[0].kind, TokenKind::Error(_))
             && tokens[0].range.end as usize == text.len();
+        let pp_number = matches!(tokens[0].kind, TokenKind::Int(_) | TokenKind::Float(_))
+            && tokens[0].errors.iter().all(|diag| !diag.lexical);
+        let valid = one && (tokens[0].errors.is_empty() || pp_number);
         if !valid {
             self.diags.error(
                 invocation,
@@ -2435,7 +2453,16 @@ impl Pp<'_> {
             );
             return None;
         }
-        Some(tokens[0].kind.clone())
+        let errors = tokens[0]
+            .errors
+            .iter()
+            .map(|diag| {
+                let mut diag = diag.clone();
+                diag.range = invocation;
+                diag
+            })
+            .collect();
+        Some((tokens[0].kind.clone(), errors))
     }
 
     /// A token that `#` or `##` made up, standing at the invocation.

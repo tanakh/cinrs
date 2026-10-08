@@ -611,6 +611,35 @@ fn an_invalid_paste_is_an_error_at_the_invocation() {
     );
 }
 
+#[test]
+fn a_paste_may_make_a_pp_number_that_is_no_constant() {
+    // C17 6.4.8: a preprocessing number goes on with `.`, digits, identifier
+    // characters and `e+`/`p+`, whether or not it is a valid constant, and
+    // only one that reaches the parser has to be. FFmpeg's
+    // `AV_VERSION_DOT(a, b, c) a ##.## b ##.## c`, stringized:
+    assert_eq!(
+        pp(
+            "#define dot(a, b, c) a ##.## b ##.## c\n#define s(x) #x\n#define xs(x) s(x)\n\
+            xs(dot(63, 1, 100))"
+        ),
+        "\"63.1.100\""
+    );
+    // Its flacdsp's `32 ## p`, pasted on again into a name:
+    assert_eq!(
+        pp("#define j(a, b) a ## b\n#define xj(a, b) j(a, b)\nxj(f_, xj(32, p))"),
+        "f_32p"
+    );
+    // And `e+`, which takes the sign into the number.
+    assert_eq!(
+        pp("#define j(a, b) a ## b\n#define s(x) #x\n#define xs(x) s(x)\nxs(j(1e, +))"),
+        "\"1e+\""
+    );
+    // One that does reach the parser is the error it would have been written.
+    let errors = errors("#define j(a, b) a ## b\nint x = j(32, p);");
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    assert!(!errors[0].contains("pasting"), "{errors:#?}");
+}
+
 // ---------------------------------------------------------------------------
 // conditionals
 // ---------------------------------------------------------------------------
