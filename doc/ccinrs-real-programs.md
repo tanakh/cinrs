@@ -194,9 +194,14 @@ the answer GCC's run found through the probe's cache variable — for CPython,
 * **`longjmp` to another stack**, and its cost (note 4).
 * **`-fvisibility=hidden` is ignored**, so a shared library exports its
   internal functions too: libcurl 1,061 symbols where GCC's has 100.
-* **Build time.** Every C file is a `rustc` run, about a second each even for
-  a small file: git's 563 files take nine times as long as with GCC, CPython's
-  2.7 times, SQLite's one large file 1.2 times.
+* **Build time.** Every C file is a `rustc` run. It used to take about a
+  second even for a small file, most of it spent on the thousands of header
+  declarations a C file brings in; the `.rs` now holds only what the object
+  can reach — git's `abspath.c` is 26 KB of Rust instead of 2 MB, and compiles
+  in 0.48 s instead of 1.26 s (GCC: 0.13 s). git's 563 files build in 2.7
+  times GCC's time (172 s against 64.5 s; nine times before), libuv's in 2.8
+  times, and SQLite's one large file in 1.2 times. What is left is the front
+  end's own work and LLVM's.
 * **Size.** Programs are two to twenty times as large, and every shared
   library carries its own copy of Rust's standard library: CPython's 71
   extension modules take 368 MB where GCC's take 26 MB.
