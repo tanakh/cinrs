@@ -1,0 +1,57 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_with(options,\nr#\"\n        int printf(const char *, ...);\n        int puts(const char *);\n        static int helper(int x) { return x + 1; }\n        static inline int unused_inline(int x) { return x * 2; }\n        static int table_fn(void) { return 3; }\n        int (*const table[1])(void) = { table_fn };\n        static int counter;\n        static int unused_static;\n        __attribute__((constructor)) static void init(void) { counter = 1; }\n        int api(int x) { return helper(x) + counter + printf(\"%d\", x); }\n        \"#)"
+---
+mod __cinrs_unit_f2ea4993 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    unsafe extern "C" {
+        #[link_name = "printf"]
+        pub fn printf(_: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
+    }
+    #[unsafe(no_mangle)]
+    pub static mut table: [::core::option::Option<
+        unsafe extern "C" fn() -> ::core::ffi::c_int,
+    >; 1] = [
+        ::core::option::Option::Some(
+            table_fn as unsafe extern "C" fn() -> ::core::ffi::c_int,
+        ),
+    ];
+    static mut counter: ::core::ffi::c_int = 0;
+    unsafe extern "C" fn helper(mut x: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return x.wrapping_add(1);
+        }
+    }
+    unsafe extern "C" fn table_fn() -> ::core::ffi::c_int {
+        unsafe {
+            return 3;
+        }
+    }
+    unsafe extern "C" fn init() {
+        unsafe {
+            counter = 1;
+        }
+    }
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn api(mut x: ::core::ffi::c_int) -> ::core::ffi::c_int {
+        unsafe {
+            return helper(x)
+                .wrapping_add(counter)
+                .wrapping_add(
+                    printf(
+                        b"%d\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
+                            as *const ::core::ffi::c_char,
+                        x,
+                    ),
+                );
+        }
+    }
+    const _: () = { /* the data-model check */ };
+    #[used]
+    #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__DATA,__mod_init_func"))]
+    #[cfg_attr(not(target_vendor = "apple"), unsafe(link_section = ".init_array"))]
+    static __CINRS_INIT_f2ea4993_init: unsafe extern "C" fn() = init;
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_f2ea4993::*;

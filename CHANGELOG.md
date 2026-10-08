@@ -321,6 +321,18 @@ follows [Semantic Versioning][semver].
   benchmark, QuickJS's 6 % fewer on a numeric one, in about the same time.
   An array reached through a pointer, and a safe function, keep the pointer
   arithmetic.
+* **`ccinrs` generates Rust only for what an object needs**: the
+  definitions the linker sees — every symbol of the unit, what a section or a
+  constructor list puts in the object — what they call, take the address of
+  or name, through a static's initialiser and an `asm` template too, and the
+  declarations and types those name. A `static inline` function a header
+  defines and nothing calls, and a function a header only declares, are not
+  generated at all, where before they were generated and the printed Rust
+  pruned. `Options::reachable_only` asks cinrs-core for this, and
+  `cinrs_core::reach` is the walk. git's `abspath.c` compiles in 0.30 s
+  instead of 0.40 s; git's `make -j2` takes 122 s instead of 153 s, and
+  libuv's `cmake --build -j2` 56 s instead of 64 s, with every object of both
+  defining and referencing the same C symbols as before.
 
 ### Fixed
 

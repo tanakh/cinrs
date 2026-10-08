@@ -2262,6 +2262,34 @@ fn a_weak_definition_is_an_assembler_alias() {
     ));
 }
 
+/// `Options::reachable_only`, which `ccinrs` sets: only what an object of the
+/// unit needs is generated — the definitions the linker sees (a function or
+/// an object with external linkage, a constructor), what they call, take the
+/// address of or name, through a static's initialiser too, and the
+/// declarations their Rust names. A `static` function or object nothing
+/// reaches and a function only declared and never named are left out.
+#[test]
+fn only_what_the_object_reaches_is_generated() {
+    let mut options = Options::gnu(Standard::C99);
+    options.export = true;
+    options.reachable_only = true;
+    insta::assert_snapshot!(generate_with(
+        options,
+        r#"
+        int printf(const char *, ...);
+        int puts(const char *);
+        static int helper(int x) { return x + 1; }
+        static inline int unused_inline(int x) { return x * 2; }
+        static int table_fn(void) { return 3; }
+        int (*const table[1])(void) = { table_fn };
+        static int counter;
+        static int unused_static;
+        __attribute__((constructor)) static void init(void) { counter = 1; }
+        int api(int x) { return helper(x) + counter + printf("%d", x); }
+        "#
+    ));
+}
+
 /// A GCC vector type is a `#[repr(C, align(N))]` struct over its elements,
 /// and each operator is written out over them: a scalar broadcast with
 /// `[x; N]`, the operation through `core::array::from_fn`, and a read

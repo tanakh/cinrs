@@ -207,23 +207,49 @@ pub struct GeneratedUnit {
 /// [`generate`], and what a caller building objects needs to know besides.
 pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> GeneratedUnit {
     let mut cg = Codegen::new(program, map, options);
-    let mut out = cg.type_items();
-    out.extend(cg.extern_block());
+    // Under `reachable_only`, the definitions an object needs and nothing
+    // else; see [`crate::reach`].
+    let reach = options.reachable_only.then(|| crate::reach::reach(program));
+    let mut defined = TokenStream::new();
     for var in &program.statics {
-        out.extend(cg.static_item(var));
+        if reach.as_ref().is_none_or(|reach| reach.object(var.object)) {
+            defined.extend(cg.static_item(var));
+        }
     }
     let mut initialisers = TokenStream::new();
-    for func in &program.functions {
-        if func.body.is_some() {
-            out.extend(cg.function_item(func));
+    for (index, func) in program.functions.iter().enumerate() {
+        let id = ir::FuncId(index as u32);
+        if func.body.is_some() && reach.as_ref().is_none_or(|reach| reach.function(id)) {
+            defined.extend(cg.function_item(func));
             if let Some(kind) = func.init_kind {
                 initialisers.extend(cg.init_array_item(func, kind));
             }
         }
     }
     for asm in &program.global_asm {
-        out.extend(cg.global_asm_item(asm));
+        defined.extend(cg.global_asm_item(asm));
     }
+    // A declaration is needed when the Rust of a definition names it, and a
+    // type when either names it, which is what decides the `extern` block's
+    // contents and then the types' once every definition has been written.
+    let mut out = match reach {
+        None => {
+            let mut out = cg.type_items();
+            out.extend(cg.extern_block(None));
+            out
+        }
+        Some(_) => {
+            let mut named = HashSet::new();
+            names_in(defined.clone(), &mut named);
+            names_in(initialisers.clone(), &mut named);
+            let externs = cg.extern_block(Some(&named));
+            names_in(externs.clone(), &mut named);
+            let mut out = cg.reachable_type_items(&mut named);
+            out.extend(externs);
+            out
+        }
+    };
+    out.extend(defined);
     if !initialisers.is_empty() {
         out.extend(cg.init_array_guard());
         out.extend(initialisers);
@@ -272,7 +298,7 @@ pub fn generate_unit(program: &Program, map: &SourceMap, options: &Options) -> G
 pub fn generate_stubs(program: &Program, map: &SourceMap, options: &Options) -> TokenStream {
     let mut cg = Codegen::new(program, map, options);
     let mut out = cg.type_items();
-    out.extend(cg.extern_block());
+    out.extend(cg.extern_block(None));
     for var in &program.statics {
         out.extend(cg.static_item(var));
     }
@@ -1754,24 +1780,12 @@ impl<'a> Codegen<'a> {
         }
         out.extend(self.flexible_items());
         for def in self.program.types.enums() {
-            if !def.emit {
-                continue;
+            if def.emit {
+                out.extend(self.enum_item(def));
             }
-            let span = self.sp(def.range);
-            let name = self.c_ident(&def.rust_name, span);
-            let int = self.ty(Ty::Int, span);
-            // C says an enumerated type is compatible with an implementation
-            // defined integer type. GCC and Clang pick `int` for one with a
-            // negative enumerator, which is what is still a `Ty::Enum` here;
-            // the `unsigned int` of the others is a `typedef` item.
-            out.extend(quote_spanned! {span=> pub type #name = #int; });
         }
         for constant in &self.program.enum_constants {
-            let span = self.sp(constant.range);
-            let name = self.c_ident(&constant.rust_name, span);
-            let ty = self.ty(constant.ty, span);
-            let value = bare_int_literal(constant.value, constant.ty, span);
-            out.extend(quote_spanned! {span=> pub const #name: #ty = #value; });
+            out.extend(self.enum_constant_item(constant));
         }
         for typedef in &self.program.typedefs {
             // No alias is generated for `va_list`, which is what the
@@ -1779,14 +1793,112 @@ impl<'a> Codegen<'a> {
             // lifetime of the frame it reads, so `pub type va_list = VaList;`
             // does not even parse — and nothing needs the alias, since every
             // generated signature names the type directly.
-            if self.uses_va_list(typedef.ty) {
+            if !self.uses_va_list(typedef.ty) {
+                out.extend(self.typedef_item(typedef));
+            }
+        }
+        out
+    }
+
+    /// A file-scope `enum` tag's alias.
+    fn enum_item(&self, def: &ir::EnumDef) -> TokenStream {
+        let span = self.sp(def.range);
+        let name = self.c_ident(&def.rust_name, span);
+        let int = self.ty(Ty::Int, span);
+        // C says an enumerated type is compatible with an implementation
+        // defined integer type. GCC and Clang pick `int` for one with a
+        // negative enumerator, which is what is still a `Ty::Enum` here; the
+        // `unsigned int` of the others is a `typedef` item.
+        quote_spanned! {span=> pub type #name = #int; }
+    }
+
+    /// An enumerator, as a constant.
+    fn enum_constant_item(&self, constant: &ir::Enumerator) -> TokenStream {
+        let span = self.sp(constant.range);
+        let name = self.c_ident(&constant.rust_name, span);
+        let ty = self.ty(constant.ty, span);
+        let value = bare_int_literal(constant.value, constant.ty, span);
+        quote_spanned! {span=> pub const #name: #ty = #value; }
+    }
+
+    /// A file-scope `typedef`'s alias.
+    fn typedef_item(&self, typedef: &ir::TypedefItem) -> TokenStream {
+        let span = self.sp(typedef.range);
+        let name = self.c_ident(&typedef.rust_name, span);
+        let ty = self.ty(typedef.ty, span);
+        quote_spanned! {span=> pub type #name = #ty; }
+    }
+
+    /// [`Codegen::type_items`] under [`Options::reachable_only`]: the
+    /// structures, unions, enumerations, enumerators and aliases that `named`
+    /// — every name the rest of the unit's Rust uses — includes, and what
+    /// those name in turn, which `named` then includes too.
+    ///
+    /// The wrappers and companions code generation makes for objects of its
+    /// own are few and always written.
+    fn reachable_type_items(&self, named: &mut HashSet<String>) -> TokenStream {
+        enum Item<'p> {
+            Record(&'p ir::RecordDef),
+            Enum(&'p ir::EnumDef),
+            Constant(&'p ir::Enumerator),
+            Typedef(&'p ir::TypedefItem),
+        }
+        let span = Span::call_site();
+        let mut items: Vec<Item> = Vec::new();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut add = |name: &str, item: Item<'a>, items: &mut Vec<Item<'a>>| {
+            by_name
+                .entry(self.c_ident(name, span).to_string())
+                .or_default()
+                .push(items.len());
+            items.push(item);
+        };
+        for record in self.program.types.records().iter().filter(|r| r.emit) {
+            add(&record.rust_name, Item::Record(record), &mut items);
+        }
+        for def in self.program.types.enums().iter().filter(|def| def.emit) {
+            add(&def.rust_name, Item::Enum(def), &mut items);
+        }
+        for constant in &self.program.enum_constants {
+            add(&constant.rust_name, Item::Constant(constant), &mut items);
+        }
+        for typedef in &self.program.typedefs {
+            if !self.uses_va_list(typedef.ty) {
+                add(&typedef.rust_name, Item::Typedef(typedef), &mut items);
+            }
+        }
+        let mut out = self.align_wrapper_items();
+        out.extend(self.gnu_vector_items());
+        out.extend(self.flexible_items());
+        names_in(out.clone(), named);
+        let mut generated: Vec<Option<TokenStream>> = (0..items.len()).map(|_| None).collect();
+        let mut work: Vec<usize> = named
+            .iter()
+            .filter_map(|name| by_name.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        while let Some(index) = work.pop() {
+            if generated[index].is_some() {
                 continue;
             }
-            let span = self.sp(typedef.range);
-            let name = self.c_ident(&typedef.rust_name, span);
-            let ty = self.ty(typedef.ty, span);
-            out.extend(quote_spanned! {span=> pub type #name = #ty; });
+            let tokens = match items[index] {
+                Item::Record(record) => self.record_item(record),
+                Item::Enum(def) => self.enum_item(def),
+                Item::Constant(constant) => self.enum_constant_item(constant),
+                Item::Typedef(typedef) => self.typedef_item(typedef),
+            };
+            let mut found = HashSet::new();
+            names_in(tokens.clone(), &mut found);
+            for name in found {
+                if let Some(indices) = by_name.get(&name) {
+                    work.extend(indices.iter().copied());
+                }
+                named.insert(name);
+            }
+            generated[index] = Some(tokens);
         }
+        out.extend(generated.into_iter().flatten());
         out
     }
 
@@ -2332,10 +2444,15 @@ impl<'a> Codegen<'a> {
     /// **object** is not, because a glob-imported `static` changes what a `let`
     /// of the same name means; [`Program::extern_object_name`] is that rule and
     /// its reason.
-    fn extern_block(&mut self) -> TokenStream {
+    ///
+    /// `named`, under [`Options::reachable_only`], is every name the Rust of
+    /// the unit's definitions uses, and a declaration none of them names is
+    /// left out.
+    fn extern_block(&mut self, named: Option<&HashSet<String>>) -> TokenStream {
         if !self.program.has_externs() {
             return TokenStream::new();
         }
+        let wanted = |ident: &Ident| named.is_none_or(|named| named.contains(&ident.to_string()));
         let span = self.map.span(SourceRange::at(0));
         let mut items = TokenStream::new();
         let mut definitions = TokenStream::new();
@@ -2351,6 +2468,9 @@ impl<'a> Codegen<'a> {
             if let Storage::ExternThreadLocal { item_name } = &object.storage {
                 let ospan = self.sp(object.range);
                 let accessor = self.tls_accessor_ident(item_name);
+                if !wanted(&accessor) {
+                    continue;
+                }
                 let ty = self.ty(object.ty, ospan);
                 let symbol =
                     Program::tls_accessor(object.asm_label.as_deref().unwrap_or(item_name));
@@ -2363,6 +2483,11 @@ impl<'a> Codegen<'a> {
             };
             let ospan = self.sp(object.range);
             let rust_name = self.extern_object_ident(item_name, ospan);
+            if !wanted(&rust_name)
+                && !(object.weak.is_some() && wanted(&self.weak_alias_ident(&rust_name)))
+            {
+                continue;
+            }
             let ty = self.ty(object.ty, ospan);
             // An `__asm__("symbol")` label renames the declaration, which is
             // exactly what `#[link_name]` already says.
@@ -2385,6 +2510,9 @@ impl<'a> Codegen<'a> {
             }
             let ospan = self.sp(object.range);
             let rust_name = self.extern_object_ident(&object.name, ospan);
+            if !wanted(&rust_name) {
+                continue;
+            }
             let ty = self.binding_ty(var.object, self.storage_ty(var.object, ospan), ospan);
             let symbol = object.asm_label.as_deref().unwrap_or(&object.name);
             symbols.push(symbol);
@@ -2411,12 +2539,6 @@ impl<'a> Codegen<'a> {
             if func.intrinsic.is_some() {
                 continue;
             }
-            // A `longjmp` is a function of the unit's own, which unwinds;
-            // see [`Codegen::longjmp_item`].
-            if self.replaces_longjmp(func) {
-                definitions.extend(self.longjmp_item(func));
-                continue;
-            }
             let fspan = self.sp(func.range);
             // The C name, through the same mapping every other name goes
             // through: a keyword becomes `r#yield`, `a$b` becomes
@@ -2424,6 +2546,17 @@ impl<'a> Codegen<'a> {
             // the unit. It is what a call in this unit names too; see
             // [`Codegen::function_path`].
             let rust_name = self.c_ident(func.item_name(), fspan);
+            if !wanted(&rust_name)
+                && !(func.weak.is_some() && wanted(&self.weak_alias_ident(&rust_name)))
+            {
+                continue;
+            }
+            // A `longjmp` is a function of the unit's own, which unwinds;
+            // see [`Codegen::longjmp_item`].
+            if self.replaces_longjmp(func) {
+                definitions.extend(self.longjmp_item(func));
+                continue;
+            }
             let params = self.extern_params(func, fspan);
             let ret = if func.sig.ret.is_void() {
                 TokenStream::new()
@@ -10995,6 +11128,33 @@ fn rooted_in_static(place: &Place, program: &Program) -> bool {
             }
             PlaceKind::Field { base, .. } => place = base,
             _ => return false,
+        }
+    }
+}
+
+/// Every identifier in `tokens`, and every word of a string literal among
+/// them, which is how an `asm!` template names a symbol: what decides, under
+/// [`Options::reachable_only`], which declarations the unit's definitions
+/// need. Compared as text, which keeps a declaration that shares a name with
+/// a field or a local, and never misses one.
+fn names_in(tokens: TokenStream, out: &mut HashSet<String>) {
+    for tree in tokens {
+        match tree {
+            TokenTree::Ident(ident) => {
+                out.insert(ident.to_string());
+            }
+            TokenTree::Group(group) => names_in(group.stream(), out),
+            TokenTree::Literal(literal) => {
+                let text = literal.to_string();
+                if text.contains('"') {
+                    for word in text.split(|c: char| c != '_' && !c.is_ascii_alphanumeric()) {
+                        if word.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic()) {
+                            out.insert(word.to_owned());
+                        }
+                    }
+                }
+            }
+            TokenTree::Punct(_) => {}
         }
     }
 }

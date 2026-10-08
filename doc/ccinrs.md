@@ -40,6 +40,13 @@ parse.c:212:41`. (The column is the Rust's.) `-save-temps` keeps the generated
 Rust and the objects; `-S` writes the Rust a file becomes, formatted to be
 read, as a `.rs` that `rustc --edition 2024` builds on its own.
 
+That Rust holds only what the object needs: the definitions the linker sees,
+what they call, take the address of or name, and the declarations and types
+those name. A `static inline` function a header defines and nothing calls, and
+the thousands of functions a header only declares, are never generated, so a
+small file of git's that includes OpenSSL's and glibc's headers is a few dozen
+kilobytes of Rust rather than two megabytes.
+
 A program that uses `_Complex` calls cinrs's runtime, whose source `ccinrs`
 carries and compiles with the same `rustc` the first time a program needs it;
 it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —

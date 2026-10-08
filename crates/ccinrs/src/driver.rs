@@ -477,6 +477,10 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // Nothing in Rust reads the objects, so every array variable of 16 bytes
     // or more is 16-byte aligned on x86-64, as GCC's are.
     options.abi_align_public_arrays = true;
+    // Nor names anything in them but what the linker sees, so a `static
+    // inline` function of a header nothing calls, and a declaration nothing
+    // names, need no Rust at all; see `cinrs_core::reach`.
+    options.reachable_only = true;
     // A diagnostic that says how to choose another standard names `-std=`,
     // not the macro a `c99!` block is written with.
     options.front_end = cinrs_core::FrontEnd::CommandLine;

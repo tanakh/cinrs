@@ -110,6 +110,7 @@ pub mod lex;
 mod locate;
 pub mod parse;
 pub mod pp;
+pub mod reach;
 pub mod regions;
 pub mod reloop;
 pub mod sema;
@@ -493,6 +494,16 @@ pub struct Options {
     /// defined; `__attribute__((gnu_inline))` asks for GNU89's rules for one
     /// function whatever this says.
     pub gnu89_inline: Option<bool>,
+    /// Whether code generation writes only what an object file of the unit
+    /// needs: the definitions the linker sees — every symbol of the unit, and
+    /// what a section or a constructor list puts in the object — what they
+    /// reach, and the declarations of what they name. A `static` function a
+    /// header defines and nothing calls, and a function a header only
+    /// declares and nothing names, are left out; see [`reach`].
+    ///
+    /// **Off by default**: the Rust around a `c99!` block names its items
+    /// itself. `ccinrs`, whose objects only a linker reads, turns it on.
+    pub reachable_only: bool,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -604,6 +615,7 @@ impl Options {
             gnu_leniencies: false,
             translation_time: None,
             gnu89_inline: None,
+            reachable_only: false,
         }
     }
 
