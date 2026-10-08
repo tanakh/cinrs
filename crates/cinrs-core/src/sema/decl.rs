@@ -729,6 +729,7 @@ impl Sema<'_> {
         self.check_redefinition(name);
         self.refuse_float128_object(&name.name, ty, name.range);
         let id = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
+        self.mark_volatile(id, &declarator.ty);
         // C11 6.7.1p6: the address of a `register` object cannot be computed,
         // explicitly or by an array decaying to a pointer. See
         // [`ir::Object::is_register`].
@@ -1207,6 +1208,7 @@ impl Sema<'_> {
         self.check_redefinition(name);
         self.refuse_float128_object(&name.name, ty, name.range);
         let object = self.new_object(&name.name, ty, Storage::Automatic, is_const, name.range);
+        self.mark_volatile(object, &declarator.ty);
         self.insert(&name.name, Entry::Object(object));
         // The frame is not an object of the C program; its type is what is
         // left under the variable dimensions — the type the arena hands out —
@@ -1723,6 +1725,7 @@ impl Sema<'_> {
         };
         self.refuse_float128_object(&name.name, ty, name.range);
         let id = self.new_object(&name.name, ty, storage, is_const, name.range);
+        self.mark_volatile(id, &declarator.ty);
         self.insert(&name.name, Entry::Object(id));
         if file_scope {
             // An identifier with linkage carries the type of the declaration
@@ -1971,6 +1974,9 @@ impl Sema<'_> {
         if defines {
             self.define_here(id, declarator);
         }
+        // `extern int x; volatile int x;` — a qualifier on any declaration of
+        // the object is the object's.
+        self.mark_volatile(id, &declarator.ty);
         declarator.init.as_ref()?;
         if !self.initialized.insert(id) {
             let previous = self.program.object(id).range;
@@ -2107,6 +2113,7 @@ impl Sema<'_> {
             declarator.ty.qualifiers.is_const,
             name.range,
         );
+        self.mark_volatile(id, &declarator.ty);
         self.program.externs.push(id);
         // An `extern` declaration names an object with external linkage
         // wherever it is written, so the name belongs in the file scope.
@@ -2252,6 +2259,7 @@ impl Sema<'_> {
                 .and_then(|entry| entry.function.clone()),
             _ => None,
         };
+        let volatile = self.declared_volatile(ty);
         self.insert(
             &name.name,
             Entry::Typedef(TypedefEntry {
@@ -2259,6 +2267,7 @@ impl Sema<'_> {
                 range: name.range,
                 align,
                 function,
+                volatile,
             }),
         );
 
@@ -3443,6 +3452,7 @@ impl Sema<'_> {
                 param.ty.qualifiers.is_const,
                 name.range,
             );
+            self.mark_volatile(object, &param.ty);
             self.insert(&name.name, Entry::Object(object));
             // Either spelling is a list this function may copy: a `va_list`
             // parameter holds the caller's list, and a `va_list *` points at

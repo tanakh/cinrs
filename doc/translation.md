@@ -309,6 +309,58 @@ copy of a small one would store the members and leave `q`'s padding as it
 was. A function generated as safe Rust keeps the plain literal: it has no
 `unsafe` to write bytes with, and no way to look at them either.
 
+### Volatile objects
+
+Every read and every write of a `volatile` lvalue is a `read_volatile` or a
+`write_volatile` of its address, so each one happens, once, in the order C
+wrote it (C11 6.7.3p7). That is what makes a flag a signal handler sets end
+the loop that waits for it:
+
+```c
+static volatile sig_atomic_t done;
+static void on_alarm(int sig) { done = 1; }
+/* … */
+while (!done)
+    ;
+```
+
+```rust
+// on_alarm
+{ let __cinrs_value = 1; (&raw mut done).write_volatile(__cinrs_value); }
+// the loop
+'l0: while (&raw const done).read_volatile() == 0 {}
+```
+
+The qualifier is read off the place, as C defines it: an object declared
+`volatile`, directly or through a `typedef`; anything reached through a
+pointer to `volatile` — `*(volatile int *)p`, `r->status` of a `volatile
+struct regs *r`; a member of a `volatile` record or one declared `volatile`;
+and an element of an array whose elements are, which is where the qualifier of
+`volatile int a[4]` is and what the pointer `a` decays to carries. A local is
+no exception: it keeps its memory, and each access goes to it. So:
+
+* `x = v;` is one volatile read, and `v = x;` one volatile write, whatever the
+  type — a whole `volatile` structure is read or written as one.
+* `v += x`, `v++` and `--v` are one volatile read and one volatile write, and
+  the value of the expression — like that of `y = (v = x)` — is the value
+  stored, not a second read.
+* A bit-field is a read of the bytes it shares with its neighbours, the
+  update on a copy of them, and a write of the bytes back: one volatile read
+  and one volatile write.
+* A member of a packed record is read and written as the only field of a
+  `#[repr(C, packed)]` wrapper, since a volatile access wants an aligned
+  pointer.
+* What is not an access stays what it was: `&v`, `sizeof v`, `typeof (v)`,
+  and an array of `volatile` elements decaying to a pointer.
+* In a [safe function](features.md#safe-functions) a `volatile` local is
+  accessed in an `unsafe` block of its own, its address being valid by
+  construction; anything through a pointer is refused there, as every other
+  dereference is.
+
+A pointer to `volatile` is a type of its own in the generated code's sense
+too: `volatile int *` and `int *` are not compatible, so a declaration of one
+does not complete the other, and `_Generic` tells them apart.
+
 ## Types
 
 | C | Rust |

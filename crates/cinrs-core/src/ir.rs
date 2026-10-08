@@ -125,6 +125,17 @@ pub const UNREACHABLE_BUILTIN: &str = "__builtin_unreachable";
 /// accessors have to agree on.
 pub const NEVER_RAW: &[&str] = &["self", "Self", "super", "crate", "_"];
 
+/// The qualifiers a pointer's pointee or an array's elements have, as a
+/// diagnostic spells them in front of the type.
+fn qualifier_prefix(konst: bool, volatile: bool) -> &'static str {
+    match (konst, volatile) {
+        (true, true) => "const volatile ",
+        (true, false) => "const ",
+        (false, true) => "volatile ",
+        (false, false) => "",
+    }
+}
+
 /// The Rust identifier a C name is generated as, spelled out.
 ///
 /// Only the names [`NEVER_RAW`] lists change; a name that collides with an
@@ -384,7 +395,8 @@ impl VecTy {
     }
 }
 
-/// A pointer type: what it points at, and whether that is `const`.
+/// A pointer type: what it points at, and whether that is `const` or
+/// `volatile`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerType {
     /// The pointee type.
@@ -392,6 +404,10 @@ pub struct PointerType {
     /// Whether the pointee is `const`-qualified, which decides between
     /// `*const T` and `*mut T`.
     pub konst: bool,
+    /// Whether the pointee is `volatile`-qualified, which makes every read and
+    /// write through the pointer a volatile access. The Rust type is the same
+    /// raw pointer; see [`Program::place_volatile`].
+    pub volatile: bool,
     /// The alignment the pointee has *in C*, when a `typedef` gave it one
     /// that is not its type's own: `typedef uint64_t
     /// __attribute__((aligned(1))) u64_unaligned;` makes `u64_unaligned *` a
@@ -427,6 +443,10 @@ pub struct ArrayType {
     /// Whether the element type is `const`-qualified, which is what decides
     /// the constness of the pointer the array decays to.
     pub elem_const: bool,
+    /// Whether the element type is `volatile`-qualified, which the pointer the
+    /// array decays to carries in the same way; see
+    /// [`Types::volatile_elements`].
+    pub elem_volatile: bool,
     /// Whether this is a variable length array (C99 6.7.5.2), whose bound was
     /// not an integer constant expression.
     ///
@@ -558,6 +578,9 @@ pub struct Field {
     pub ty: Ty,
     /// Whether the member's type is `const`-qualified.
     pub is_const: bool,
+    /// Whether the member's type is `volatile`-qualified. A member array's
+    /// qualifier is on its elements instead, as for any array.
+    pub is_volatile: bool,
     /// The byte offset from the start of the record (always 0 in a union).
     ///
     /// For a bit-field this is the byte the field's first bit falls in; the
@@ -746,9 +769,22 @@ impl Types {
     /// The type `pointee *` where the pointee's C alignment is `align` rather
     /// than its type's own; see [`PointerType::align`].
     pub fn pointer_aligned(&mut self, pointee: Ty, konst: bool, align: Option<u64>) -> Ty {
+        self.pointer_qualified(pointee, konst, false, align)
+    }
+
+    /// The type `pointee *` with every qualifier of the pointee spelled out;
+    /// see [`PointerType`].
+    pub fn pointer_qualified(
+        &mut self,
+        pointee: Ty,
+        konst: bool,
+        volatile: bool,
+        align: Option<u64>,
+    ) -> Ty {
         let key = PointerType {
             pointee,
             konst,
+            volatile,
             align,
         };
         if let Some(id) = self.pointer_index.get(&key) {
@@ -808,6 +844,7 @@ impl Types {
             elem,
             len,
             elem_const,
+            elem_volatile: false,
             vla: false,
             vla_len: None,
             incomplete: false,
@@ -821,6 +858,7 @@ impl Types {
             elem,
             len: 0,
             elem_const,
+            elem_volatile: false,
             vla: true,
             vla_len,
             incomplete: false,
@@ -833,10 +871,48 @@ impl Types {
             elem,
             len: 0,
             elem_const,
+            elem_volatile: false,
             vla: false,
             vla_len: None,
             incomplete: true,
         })
+    }
+
+    /// The same type with the elements of every array in it `volatile`, as
+    /// [`Types::const_elements`] does for `const`: `volatile int a[4]` and
+    /// `typedef int A[4]; volatile A a;` are one type, whose elements are
+    /// what is volatile.
+    pub fn volatile_elements(&mut self, ty: Ty) -> Ty {
+        let Ty::Array(id) = ty else {
+            return ty;
+        };
+        let array = self.array_type(id);
+        if array.elem.is_array() {
+            let elem = self.volatile_elements(array.elem);
+            if elem == array.elem {
+                return ty;
+            }
+            return self.array_type_of(ArrayType { elem, ..array });
+        }
+        if array.elem_volatile {
+            return ty;
+        }
+        self.array_type_of(ArrayType {
+            elem_volatile: true,
+            ..array
+        })
+    }
+
+    /// Whether `ty` is an array whose elements — at the bottom of every
+    /// dimension — are `volatile`.
+    pub fn has_volatile_elements(&self, ty: Ty) -> bool {
+        match ty {
+            Ty::Array(id) => {
+                let array = self.array_type(id);
+                array.elem_volatile || self.has_volatile_elements(array.elem)
+            }
+            _ => false,
+        }
     }
 
     /// The same type with the elements of every array in it `const`.
@@ -1081,6 +1157,14 @@ impl Types {
         }
     }
 
+    /// Whether `ty` is a pointer whose pointee is `volatile`.
+    pub fn points_to_volatile(&self, ty: Ty) -> bool {
+        match ty {
+            Ty::Pointer(id) => self.pointer_type(id).volatile,
+            _ => false,
+        }
+    }
+
     /// The element type of an array.
     pub fn elem(&self, ty: Ty) -> Option<Ty> {
         match ty {
@@ -1191,12 +1275,14 @@ impl Types {
         }
     }
 
-    /// The type an array or function decays to in a value context.
-    pub fn decayed(&mut self, ty: Ty, konst: bool) -> Ty {
+    /// The type an array or function decays to in a value context; `konst`
+    /// and `volatile` are the qualifiers of the array object itself.
+    pub fn decayed(&mut self, ty: Ty, konst: bool, volatile: bool) -> Ty {
         match ty {
             Ty::Array(id) => {
                 let array = self.array_type(id);
-                self.pointer(array.elem, array.elem_const || konst)
+                let volatile = volatile || self.has_volatile_elements(ty);
+                self.pointer_qualified(array.elem, array.elem_const || konst, volatile, None)
             }
             Ty::Func(_) => self.pointer(ty, false),
             other => other,
@@ -1366,12 +1452,12 @@ impl Types {
                 if let Ty::Func(f) = p.pointee {
                     return self.func_name(f, "(*)");
                 }
-                let prefix = if p.konst { "const " } else { "" };
+                let prefix = qualifier_prefix(p.konst, p.volatile);
                 format!("{prefix}{} *", self.name(p.pointee))
             }
             Ty::Array(id) => {
                 let a = self.array_type(id);
-                let prefix = if a.elem_const { "const " } else { "" };
+                let prefix = qualifier_prefix(a.elem_const, a.elem_volatile);
                 if a.vla {
                     // C's own spelling for an array whose bound is not a
                     // constant expression; the bound belongs to the object, so
@@ -2122,6 +2208,10 @@ pub struct Object {
     pub storage: Storage,
     /// Whether the object's type is `const`-qualified.
     pub is_const: bool,
+    /// Whether the object's type is `volatile`-qualified, which makes every
+    /// read and write of it a volatile access; see [`Program::place_volatile`].
+    /// An array's qualifier is on its elements instead.
+    pub is_volatile: bool,
     /// Whether the declaration said `register`.
     ///
     /// The specifier is a hint about speed that this crate has nothing to do
@@ -2687,6 +2777,43 @@ impl Program {
     /// Panics if `id` did not come from this program.
     pub fn string(&self, id: StrId) -> &StrData {
         &self.strings[id.0 as usize]
+    }
+
+    /// Whether a place is a `volatile`-qualified lvalue, whose every read and
+    /// write is a volatile access (C11 6.7.3p7).
+    ///
+    /// The qualifier is not part of [`Ty`] for anything but pointers and
+    /// arrays, so it is read off the shape of the place: an object declared
+    /// `volatile`, anything reached through a pointer to `volatile`, a member
+    /// declared `volatile` or of a `volatile` record, and an element of an
+    /// array whose elements are — which an array object passes on to the
+    /// pointer it decays to.
+    pub fn place_volatile(&self, place: &Place) -> bool {
+        match &place.kind {
+            PlaceKind::Object(id) => {
+                let object = self.object(*id);
+                object.is_volatile || self.types.has_volatile_elements(object.ty)
+            }
+            PlaceKind::Deref(ptr) | PlaceKind::Index { base: ptr, .. } => {
+                self.types.points_to_volatile(ptr.ty)
+            }
+            PlaceKind::Field {
+                base,
+                record,
+                index,
+            } => {
+                let field = &self.types.record(*record).fields[*index];
+                field.is_volatile
+                    || self.types.has_volatile_elements(field.ty)
+                    || self.place_volatile(base)
+            }
+            PlaceKind::ComplexPart { base, .. } => self.place_volatile(base),
+            PlaceKind::CompoundLiteral { object, .. } => {
+                let object = self.object(*object);
+                object.is_volatile || self.types.has_volatile_elements(object.ty)
+            }
+            PlaceKind::Str(_) | PlaceKind::Temporary(_) => false,
+        }
     }
 
     /// The hidden Rust name an externally linked **object** is declared under.

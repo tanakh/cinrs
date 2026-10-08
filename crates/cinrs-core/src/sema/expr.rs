@@ -684,7 +684,8 @@ impl Sema<'_> {
                 );
             }
             let konst = place.is_const;
-            let ty = self.program.types.decayed(place.ty, konst);
+            let volatile = self.program.place_volatile(&place);
+            let ty = self.program.types.decayed(place.ty, konst, volatile);
             return Expr::new(ExprKind::AddrOf(place), ty, range);
         }
         // Lvalue conversion drops the qualifiers, `_Atomic` among them (C11
@@ -1498,7 +1499,10 @@ impl Sema<'_> {
         // a;` is on the elements, and `Sema::ptr_to` reads it from there — so
         // the object's own flag says nothing here, and taking it would make
         // the two spellings of one type two types.
-        let ty = self.ptr_to(place.ty, place.is_const && !place.ty.is_array());
+        // `volatile` is the same: `&v` of a `volatile int v` is a `volatile
+        // int *`, and so is `&r->x` of a `volatile struct regs *r`.
+        let volatile = !place.ty.is_array() && self.program.place_volatile(&place);
+        let ty = self.ptr_to_qualified(place.ty, place.is_const && !place.ty.is_array(), volatile);
         Some(Expr::new(ExprKind::AddrOf(place), ty, range))
     }
 
@@ -2154,21 +2158,20 @@ impl Sema<'_> {
         if !lhs.ty.is_pointer() || !rhs.ty.is_pointer() {
             return None;
         }
+        // The result keeps `const` and `volatile` if either side has it.
+        let konst = self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
+        let volatile =
+            self.types().points_to_volatile(lhs.ty) || self.types().points_to_volatile(rhs.ty);
         if self.same_pointee(lhs.ty, rhs.ty) {
-            // The result keeps `const` if either side has it.
             let pointee = self.pointee(lhs.ty).expect("a pointer");
-            let konst =
-                self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
-            return Some(self.ptr_to(pointee, konst));
+            return Some(self.ptr_to_qualified(pointee, konst, volatile));
         }
         // C11 6.5.15p6: one operand a pointer to `void` and the other a
         // pointer to an object type gives a pointer to `void`, and this comes
         // before the composite below so that `void *` wins whichever side it
         // is on.
         if self.types().is_void_pointer(lhs.ty) || self.types().is_void_pointer(rhs.ty) {
-            let konst =
-                self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
-            return Some(self.ptr_to(Ty::Void, konst));
+            return Some(self.ptr_to_qualified(Ty::Void, konst, volatile));
         }
         // 6.5.15p6 again: two pointers to compatible types give a pointer to
         // the *composite* type, and either of a compatible pair will do for
@@ -2190,9 +2193,7 @@ impl Sema<'_> {
         if from_lhs || self.pointer_assignable(rhs.ty, lhs.ty) {
             let composite = if from_lhs { lhs.ty } else { rhs.ty };
             let pointee = self.pointee(composite).expect("a pointer");
-            let konst =
-                self.types().points_to_const(lhs.ty) || self.types().points_to_const(rhs.ty);
-            return Some(self.ptr_to(pointee, konst));
+            return Some(self.ptr_to_qualified(pointee, konst, volatile));
         }
         None
     }

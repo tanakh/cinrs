@@ -937,6 +937,63 @@ fn assert_aborted(out: &Output) {
     assert_eq!(out.status.signal(), Some(6), "{}", stderr(out));
 }
 
+/// A `volatile` object is read from memory every time: the flag a signal
+/// handler sets ends the loop that waits for it. With the read hoisted out of
+/// the loop, as `-O2` did while a `volatile` access was an ordinary one, the
+/// loop spins for ever, so the program is given ten seconds rather than
+/// being waited for.
+#[cfg(unix)]
+#[test]
+fn a_volatile_flag_a_signal_handler_sets_ends_the_loop() {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    let s = Scratch::new("volatile-signal");
+    s.write(
+        "alarm.c",
+        r#"#include <signal.h>
+#include <stdio.h>
+#include <sys/time.h>
+static volatile sig_atomic_t done;
+static void on_alarm(int sig) { (void)sig; done = 1; }
+int main(void) {
+    struct itimerval t = { { 0, 0 }, { 0, 20000 } };
+    signal(SIGALRM, on_alarm);
+    setitimer(ITIMER_REAL, &t, 0);
+    while (!done)
+        ;
+    puts("done");
+    return 0;
+}
+"#,
+    );
+    s.compile(&["-O2", "alarm.c", "-o", "alarm"]);
+    let mut child = Command::new(s.dir.join("alarm"))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("the program runs");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the program can be waited for") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the loop never saw the flag the signal handler set");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .expect("piped")
+        .read_to_string(&mut out)
+        .expect("the output");
+    assert!(status.success(), "{status}");
+    assert_eq!(out, "done\n");
+}
+
 /// `-c` makes one object per file, named as GCC names it, and a later run
 /// links them; an object from another `rustc` is refused by name.
 #[test]

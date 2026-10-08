@@ -259,6 +259,7 @@ impl Sema<'_> {
                 exported: false,
             };
             let id = self.new_object(&item_name, ty, storage, is_const, range);
+            self.mark_volatile(id, &type_name.ty);
             // See [`ir::Object::address_slots`].
             self.program.objects[id.0 as usize].address_slots =
                 std::mem::take(&mut self.address_slots);
@@ -272,6 +273,7 @@ impl Sema<'_> {
 
         let name = self.anonymous_name("literal");
         let id = self.new_object(&name, ty, Storage::Automatic, is_const, range);
+        self.mark_volatile(id, &type_name.ty);
         self.compound_literals.push(id);
         Some(place_of(
             PlaceKind::CompoundLiteral {

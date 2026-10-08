@@ -90,3 +90,4 @@ user_headers
 variadic
 vla
 vm_types
+volatile

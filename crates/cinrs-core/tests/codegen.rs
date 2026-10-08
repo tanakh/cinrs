@@ -362,6 +362,56 @@ fn an_in_range_subscript_of_an_array_object_is_an_element_of_it() {
     ));
 }
 
+/// Every read and every write of a `volatile` lvalue is one `read_volatile`
+/// or `write_volatile` of its address: an object declared `volatile` (through
+/// a `typedef` too, and a local), anything through a pointer to `volatile`, a
+/// member of a `volatile` record or one declared `volatile`, an element of a
+/// `volatile` array, a whole record copied in or out. Two stores in a row are
+/// two writes. A compound assignment and `++` are one read and one write, and
+/// their value is the value stored rather than a second read; a bit-field is
+/// a read and a write of the bytes it lives in, and a packed member goes
+/// through a packed wrapper. What is not an access — `&`, `sizeof`, the decay
+/// of an array — is what it always was.
+#[test]
+fn every_access_of_a_volatile_lvalue_is_a_volatile_one() {
+    insta::assert_snapshot!(generate_with(
+        Options::gnu(Standard::C99),
+        r"
+        struct regs { int ctrl; volatile int status; unsigned mode : 3, irq : 1; };
+        struct pk { char c; volatile int v; } __attribute__((packed));
+        typedef volatile int vint;
+        volatile int counter;
+        volatile int table[4];
+        volatile struct regs dev;
+        struct regs plain;
+        struct pk packed;
+        vint flag;
+
+        int accesses(volatile int *p, struct regs *r, volatile struct regs *vr, int i) {
+            volatile int local = 1;
+            int sum;
+            counter = 1;
+            counter = 2;
+            counter += 3;
+            sum = counter++;
+            sum += ++counter;
+            table[i & 3] = *p;
+            *p = 7;
+            r->status = sum;
+            vr->ctrl = r->ctrl;
+            vr->mode = 5;
+            vr->irq++;
+            dev = plain;
+            plain = dev;
+            packed.v = flag;
+            local += 1;
+            sum += (counter = 4);
+            return sum + local + (int) sizeof counter + (&counter == table);
+        }
+        "
+    ));
+}
+
 #[test]
 fn structs_unions_and_enums() {
     insta::assert_snapshot!(generate(

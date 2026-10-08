@@ -324,6 +324,21 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* **`volatile` was ignored**: a `volatile` object was read and written like
+  any other, so LLVM merged, dropped and hoisted its accesses — a loop
+  waiting for a `volatile sig_atomic_t` flag a signal handler sets spun for
+  ever at `-O2`, and two stores in a row were one. Every read and write of
+  a `volatile` lvalue is now a `read_volatile` or `write_volatile` of its
+  address: an object declared `volatile` (through a `typedef` too, a local
+  included), anything through a pointer to `volatile`, a member of a
+  `volatile` record or one declared `volatile`, and an element of a
+  `volatile` array. A compound assignment and `++`/`--` are one volatile
+  read and one volatile write, whose value is the value stored; a bit-field
+  is one volatile read and one volatile write of the bytes it lives in; a
+  whole structure is copied in or out with one of each; a packed member goes
+  through a packed wrapper. `&v`, `sizeof v` and an array's decay are
+  unchanged. `volatile int *` and `int *` are no longer compatible types.
+  See [`doc/translation.md`](doc/translation.md#volatile-objects).
 * On WebAssembly and Windows, `extern int x __attribute__((weak));`
   followed by the unit's own definition of `x` is that definition, with the
   warning, as on every other target; it was refused as a weak reference

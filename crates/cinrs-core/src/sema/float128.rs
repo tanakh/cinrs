@@ -105,6 +105,7 @@ impl Sema<'_> {
             anonymous: false,
             ty: bytes,
             is_const: false,
+            is_volatile: false,
             offset: 0,
             bits: None,
             flexible: false,

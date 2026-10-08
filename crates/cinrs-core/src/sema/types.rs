@@ -57,6 +57,7 @@ struct Member {
     anonymous: bool,
     ty: Ty,
     is_const: bool,
+    is_volatile: bool,
     /// The width and signedness of a bit-field.
     bits: Option<(u32, bool)>,
     /// What `_Alignas` or `__attribute__((aligned(N)))` asked for.
@@ -156,6 +157,9 @@ impl Sema<'_> {
         // standard says it is.
         if ty.qualifiers.is_const {
             resolved = self.program.types.const_elements(resolved);
+        }
+        if ty.qualifiers.is_volatile {
+            resolved = self.program.types.volatile_elements(resolved);
         }
         self.check_restrict(ty, resolved)?;
         if ty.qualifiers.is_atomic {
@@ -366,32 +370,39 @@ impl Sema<'_> {
                 // A pointer to a `typedef` that is under- or over-aligned
                 // (`const xxh_unalign64 *`) says so in the pointer type, which
                 // is what makes `*p` an unaligned access.
+                let volatile = self.declared_volatile(inner);
                 if let Some(align) = self.typedef_align(inner) {
                     let natural = self
                         .types()
                         .size_align(pointee, &self.target)
                         .map_or(1, |layout| layout.align);
                     if align != natural {
-                        return Ok(self.program.types.pointer_aligned(
+                        return Ok(self.program.types.pointer_qualified(
                             pointee,
                             inner.qualifiers.is_const,
+                            volatile,
                             Some(align),
                         ));
                     }
                 }
-                Ok(self.ptr_to(pointee, inner.qualifiers.is_const))
+                Ok(self.ptr_to_qualified(pointee, inner.qualifiers.is_const, volatile))
             }
             ast::TypeKind::Array { elem, size, .. } => {
                 let element = self.resolve_ty(elem)?;
                 self.check_element_type(element, elem.range)?;
                 let konst = elem.qualifiers.is_const;
-                Ok(match self.array_len(size, range)? {
+                let array = match self.array_len(size, range)? {
                     ArrayLen::Fixed(len) => {
                         self.check_array_size(element, len, range)?;
                         self.program.types.array(element, len, konst)
                     }
                     ArrayLen::Variable(len) => self.program.types.vla_array(element, konst, len),
                     ArrayLen::Unspecified => self.program.types.incomplete_array(element, konst),
+                };
+                Ok(if self.declared_volatile(elem) {
+                    self.program.types.volatile_elements(array)
+                } else {
+                    array
                 })
             }
             ast::TypeKind::Function(func) => {
@@ -570,7 +581,8 @@ impl Sema<'_> {
             // both GCC and Clang answer `struct incomplete a[]` with an error
             // (WG14 DR047, `drs/dr0xx.c`).
             self.check_element_type(element, elem.range)?;
-            return Ok(self.ptr_to(element, elem.qualifiers.is_const));
+            let volatile = self.declared_volatile(elem);
+            return Ok(self.ptr_to_qualified(element, elem.qualifiers.is_const, volatile));
         }
         let resolved = self.resolve_ty(ty)?;
         if resolved.is_func() {
@@ -582,7 +594,7 @@ impl Sema<'_> {
         // declaration has to agree with `void f(int *a);`.
         if let Ty::Array(id) = resolved {
             let array = self.types().array_type(id);
-            return Ok(self.ptr_to(array.elem, array.elem_const));
+            return Ok(self.ptr_to_qualified(array.elem, array.elem_const, array.elem_volatile));
         }
         Ok(resolved)
     }
@@ -1496,6 +1508,7 @@ impl Sema<'_> {
                     anonymous: false,
                     ty,
                     is_const: field.ty.qualifiers.is_const,
+                    is_volatile: self.declared_volatile(&field.ty),
                     bits: Some(bits),
                     align_request: field.attrs.aligned.as_ref().and(align_request),
                     packed,
@@ -1540,6 +1553,7 @@ impl Sema<'_> {
                     anonymous: true,
                     ty,
                     is_const: field.ty.qualifiers.is_const,
+                    is_volatile: self.declared_volatile(&field.ty),
                     bits: None,
                     align_request,
                     packed,
@@ -1574,6 +1588,7 @@ impl Sema<'_> {
                 anonymous: false,
                 ty,
                 is_const: field.ty.qualifiers.is_const,
+                is_volatile: self.declared_volatile(&field.ty),
                 bits: None,
                 align_request,
                 packed,
@@ -1855,11 +1870,15 @@ impl Sema<'_> {
             );
             return None;
         }
-        Some(
-            self.program
-                .types
-                .array(element, 0, elem.qualifiers.is_const),
-        )
+        let array = self
+            .program
+            .types
+            .array(element, 0, elem.qualifiers.is_const);
+        Some(if self.declared_volatile(elem) {
+            self.program.types.volatile_elements(array)
+        } else {
+            array
+        })
     }
 
     /// Checks the width of a bit-field, and works out whether reading it
@@ -2350,6 +2369,7 @@ impl Sema<'_> {
                         anonymous: member.anonymous,
                         ty: member.ty,
                         is_const: member.is_const,
+                        is_volatile: member.is_volatile,
                         offset,
                         bits: None,
                         flexible: member.flexible,
@@ -2392,6 +2412,7 @@ impl Sema<'_> {
                         anonymous: false,
                         ty: member.ty,
                         is_const: member.is_const,
+                        is_volatile: member.is_volatile,
                         offset: start / 8,
                         bits: Some(BitField {
                             width,

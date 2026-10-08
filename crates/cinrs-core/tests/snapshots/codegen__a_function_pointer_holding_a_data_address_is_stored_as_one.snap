@@ -30,12 +30,13 @@ mod __cinrs_unit_125d52b8 {
     }
     pub unsafe extern "C" fn check(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
-            if (*(&raw mut __cinrs_static_125d52b8_check_last)
+            if (&raw const (*(&raw mut __cinrs_static_125d52b8_check_last)
                 .cast::<
                     ::core::option::Option<
                         unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
                     >,
-                >())
+                >()))
+                .read_volatile()
                 == ::core::mem::transmute::<
                     *mut ::core::option::Option<
                         unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
@@ -54,21 +55,26 @@ mod __cinrs_unit_125d52b8 {
                         >())),
                 )
             {
-                (*(&raw mut __cinrs_static_125d52b8_check_last)
-                    .cast::<
-                        ::core::option::Option<
-                            unsafe extern "C" fn(
-                                ::core::ffi::c_int,
-                            ) -> ::core::ffi::c_int,
-                        >,
-                    >()) = plain;
+                {
+                    let __cinrs_value = plain;
+                    (&raw mut (*(&raw mut __cinrs_static_125d52b8_check_last)
+                        .cast::<
+                            ::core::option::Option<
+                                unsafe extern "C" fn(
+                                    ::core::ffi::c_int,
+                                ) -> ::core::ffi::c_int,
+                            >,
+                        >()))
+                        .write_volatile(__cinrs_value);
+                }
             }
-            return ((*(&raw mut __cinrs_static_125d52b8_check_last)
+            return ((&raw const (*(&raw mut __cinrs_static_125d52b8_check_last)
                 .cast::<
                     ::core::option::Option<
                         unsafe extern "C" fn(::core::ffi::c_int) -> ::core::ffi::c_int,
                     >,
-                >())
+                >()))
+                .read_volatile()
                 .expect("null function pointer"))(n)
                 .wrapping_add(
                     ((*(&raw mut __cinrs_static_125d52b8_check_ignored)

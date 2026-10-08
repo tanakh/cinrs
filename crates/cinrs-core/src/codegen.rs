@@ -1022,6 +1022,23 @@ struct LoweredPlace {
     /// object's own type with the `_Atomic` taken off — what the value the
     /// load produces is converted to.
     atomic: Option<(AtomicClass, Ty)>,
+    /// Set when the place is `volatile`: every read of it is a `read_volatile`
+    /// and every write a `write_volatile` of its address, so that LLVM neither
+    /// merges, drops nor moves any of them (C11 6.7.3p7). See
+    /// [`ir::Program::place_volatile`].
+    volatile: Option<VolatileAccess>,
+}
+
+/// What a `volatile` place's accesses need to know beyond its address.
+struct VolatileAccess {
+    /// The Rust type of the object, which an underaligned one is read and
+    /// written as the only field of a packed wrapper.
+    ty: TokenStream,
+    /// Whether the access goes inside an `unsafe` block of its own: in a safe
+    /// function, for an object of the function itself, whose address is valid
+    /// by construction. Anything reached through a pointer is left to `rustc`
+    /// to refuse, as it does every other dereference there.
+    own_unsafe: bool,
 }
 
 impl LoweredPlace {
@@ -1033,6 +1050,7 @@ impl LoweredPlace {
             bits: None,
             unaligned: false,
             atomic: None,
+            volatile: None,
         }
     }
 }
@@ -1083,6 +1101,12 @@ fn rmw_of_binop(op: BinOp) -> Option<ir::AtomicRmw> {
 struct BitAccess {
     getter: Ident,
     setter: Ident,
+    /// The byte array the field's bits live in, which a `volatile` bit-field
+    /// reads and writes whole.
+    storage: Ident,
+    /// The Rust type of the record, of which a `volatile` access builds a
+    /// scratch copy for the accessors to work on.
+    record: TokenStream,
 }
 
 /// The unsigned word a bit-field's bytes are gathered into, and what its
@@ -5940,16 +5964,18 @@ impl<'a> Codegen<'a> {
         let span = self.sp(place.range);
         let lowered = self.place(place, true);
         setup.extend(lowered.setup.clone());
-        if !lowered.unaligned {
+        if !lowered.unaligned && lowered.volatile.is_none() {
             let access = &lowered.access;
             return quote_spanned! {span=> #access };
         }
+        // An underaligned place, and a `volatile` one, which is read and
+        // written once each with the accesses its kind needs.
         let temp = Ident::new(&format!("__cinrs_asm{index}"), span);
         let ty = self.ty(place.ty, span);
-        let access = &lowered.access;
         // A pure output is initialised by the statement itself, exactly once.
         setup.extend(if read == Some(true) {
-            quote_spanned! {span=> let mut #temp: #ty = (&raw const #access).read_unaligned(); }
+            let current = self.read(&lowered, span).at(prec::LOWEST, span);
+            quote_spanned! {span=> let mut #temp: #ty = #current; }
         } else {
             quote_spanned! {span=> let #temp: #ty; }
         });
@@ -6152,8 +6178,12 @@ impl<'a> Codegen<'a> {
                 // bytes, padding included, as GCC's copy does: a Rust typed
                 // copy of a small one is a store per member, which leaves the
                 // destination's padding as it was.
+                // A `volatile` record is copied as one volatile read and one
+                // volatile write instead, through `read` and `write` below.
                 if let ExprKind::Load(source) = &value.kind
                     && !self.in_safe
+                    && !self.program.place_volatile(place)
+                    && !self.program.place_volatile(source)
                     && self.has_padding(place.ty)
                     && matches!(self.program.types.unatomic(place.ty), Ty::Record(_))
                     && !matches!(place.ty, Ty::Atomic(_))
@@ -6201,6 +6231,16 @@ impl<'a> Codegen<'a> {
                     return self.atomic_place_rmw(&lowered, kind, RmwValue::None, span);
                 }
                 let (hoist, rhs) = self.compound_rhs(value);
+                if lowered.volatile.is_some() && lowered.bits.is_some() {
+                    let old = self.temporary();
+                    let current = Value::atom(quote_spanned! {span=> #old });
+                    let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
+                    let updated = updated.at(prec::LOWEST, span);
+                    let rmw =
+                        self.volatile_bits_update(&lowered, &old, updated, RmwValue::None, span);
+                    let setup = &lowered.setup;
+                    return quote_spanned! {span=> #setup #hoist #rmw };
+                }
                 let current = self.read(&lowered, span);
                 let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
                 let updated = updated.at(prec::LOWEST, span);
@@ -6213,6 +6253,14 @@ impl<'a> Codegen<'a> {
                 if lowered.atomic.is_some() {
                     let kind = PlaceRmw::Step { dec: *dec };
                     return self.atomic_place_rmw(&lowered, kind, RmwValue::None, span);
+                }
+                if lowered.volatile.is_some() && lowered.bits.is_some() {
+                    let old = self.temporary();
+                    let current = Value::atom(quote_spanned! {span=> #old });
+                    let next = self.step_value(current, place.ty, *dec, span);
+                    let rmw = self.volatile_bits_update(&lowered, &old, next, RmwValue::None, span);
+                    let setup = &lowered.setup;
+                    return quote_spanned! {span=> #setup #rmw };
                 }
                 let current = self.read(&lowered, span);
                 let next = self.step_value(current, place.ty, *dec, span);
@@ -6404,70 +6452,19 @@ impl<'a> Codegen<'a> {
             // ordinary array of `void *`.
             ExprKind::LabelAddr(id) => self.label_address(*id, expr.ty, span),
             ExprKind::Assign { .. } => self.assign_chain(expr),
+            // Out of line, as the complex shapes below are, to keep the
+            // locals of the four ways of updating a place off this frame.
             ExprKind::CompoundAssign {
                 place,
                 op,
                 value,
                 compute,
-            } => {
-                let lowered = self.place(place, true);
-                if lowered.atomic.is_some() {
-                    let kind = PlaceRmw::Compound {
-                        op: *op,
-                        value,
-                        compute: *compute,
-                    };
-                    let tokens = self.atomic_place_rmw(&lowered, kind, RmwValue::New, span);
-                    return Value::new(tokens, prec::BLOCK);
-                }
-                let (hoist, rhs) = self.compound_rhs(value);
-                let current = self.read(&lowered, span);
-                let updated = self.compound_value(current, place.ty, *op, value, rhs, *compute);
-                let updated = updated.at(prec::LOWEST, span);
-                let store = self.write(&lowered, updated, span);
-                let read = self.read(&lowered, span).at(prec::LOWEST, span);
-                let setup = &lowered.setup;
-                Value::new(
-                    quote_spanned! {span=> { #setup #hoist #store #read } },
-                    prec::BLOCK,
-                )
-            }
+            } => self.compound_assign_value(place, *op, value, *compute, span),
             ExprKind::IncDec {
                 place,
                 dec,
                 postfix,
-            } => {
-                let lowered = self.place(place, true);
-                if lowered.atomic.is_some() {
-                    let want = if *postfix {
-                        RmwValue::Old
-                    } else {
-                        RmwValue::New
-                    };
-                    let tokens =
-                        self.atomic_place_rmw(&lowered, PlaceRmw::Step { dec: *dec }, want, span);
-                    return Value::new(tokens, prec::BLOCK);
-                }
-                let current = self.read(&lowered, span);
-                let next = self.step_value(current, place.ty, *dec, span);
-                let store = self.write(&lowered, next, span);
-                let read = self.read(&lowered, span).at(prec::LOWEST, span);
-                let setup = &lowered.setup;
-                if *postfix {
-                    let tmp = self.temporary();
-                    Value::new(
-                        quote_spanned! {span=>
-                            { #setup let #tmp = #read; #store #tmp }
-                        },
-                        prec::BLOCK,
-                    )
-                } else {
-                    Value::new(
-                        quote_spanned! {span=> { #setup #store #read } },
-                        prec::BLOCK,
-                    )
-                }
-            }
+            } => self.inc_dec_value(place, *dec, *postfix, span),
             // The three complex shapes are one call apiece: this function is
             // the one code generation recurses through, and every local in it
             // costs a slice of the stack `rustc` gives macro expansion.
@@ -9155,6 +9152,110 @@ impl<'a> Codegen<'a> {
         tokens
     }
 
+    /// `place op= value` as an expression, whose value is the value stored.
+    #[inline(never)]
+    fn compound_assign_value(
+        &mut self,
+        place: &Place,
+        op: BinOp,
+        value: &Expr,
+        compute: Ty,
+        span: Span,
+    ) -> Value {
+        let lowered = self.place(place, true);
+        if lowered.atomic.is_some() {
+            let kind = PlaceRmw::Compound { op, value, compute };
+            let tokens = self.atomic_place_rmw(&lowered, kind, RmwValue::New, span);
+            return Value::new(tokens, prec::BLOCK);
+        }
+        let (hoist, rhs) = self.compound_rhs(value);
+        let setup = &lowered.setup;
+        if lowered.volatile.is_some() && lowered.bits.is_some() {
+            let old = self.temporary();
+            let current = Value::atom(quote_spanned! {span=> #old });
+            let updated = self.compound_value(current, place.ty, op, value, rhs, compute);
+            let updated = updated.at(prec::LOWEST, span);
+            let rmw = self.volatile_bits_update(&lowered, &old, updated, RmwValue::New, span);
+            return Value::new(quote_spanned! {span=> { #setup #hoist #rmw } }, prec::BLOCK);
+        }
+        let current = self.read(&lowered, span);
+        let updated = self.compound_value(current, place.ty, op, value, rhs, compute);
+        let updated = updated.at(prec::LOWEST, span);
+        // A `volatile` object is read once and written once: the value of the
+        // expression is the value stored, not a second read.
+        if lowered.volatile.is_some() {
+            let tmp = self.temporary();
+            let ty = self.ty(place.ty, span);
+            let store = self.write(&lowered, quote_spanned! {span=> #tmp }, span);
+            return Value::new(
+                quote_spanned! {span=> { #setup #hoist let #tmp: #ty = #updated; #store #tmp } },
+                prec::BLOCK,
+            );
+        }
+        let store = self.write(&lowered, updated, span);
+        let read = self.read(&lowered, span).at(prec::LOWEST, span);
+        Value::new(
+            quote_spanned! {span=> { #setup #hoist #store #read } },
+            prec::BLOCK,
+        )
+    }
+
+    /// `++place`, `place++`, `--place` or `place--` as an expression.
+    #[inline(never)]
+    fn inc_dec_value(&mut self, place: &Place, dec: bool, postfix: bool, span: Span) -> Value {
+        let lowered = self.place(place, true);
+        let want = if postfix {
+            RmwValue::Old
+        } else {
+            RmwValue::New
+        };
+        if lowered.atomic.is_some() {
+            let tokens = self.atomic_place_rmw(&lowered, PlaceRmw::Step { dec }, want, span);
+            return Value::new(tokens, prec::BLOCK);
+        }
+        let setup = &lowered.setup;
+        // A `volatile` object is read once and written once; see
+        // [`Codegen::compound_assign_value`].
+        if lowered.volatile.is_some() && lowered.bits.is_some() {
+            let old = self.temporary();
+            let current = Value::atom(quote_spanned! {span=> #old });
+            let next = self.step_value(current, place.ty, dec, span);
+            let rmw = self.volatile_bits_update(&lowered, &old, next, want, span);
+            return Value::new(quote_spanned! {span=> { #setup #rmw } }, prec::BLOCK);
+        }
+        if lowered.volatile.is_some() {
+            let (old, new) = (self.temporary(), self.temporary());
+            let ty = self.ty(place.ty, span);
+            let read = self.read(&lowered, span).at(prec::LOWEST, span);
+            let current = Value::atom(quote_spanned! {span=> #old });
+            let next = self.step_value(current, place.ty, dec, span);
+            let store = self.write(&lowered, quote_spanned! {span=> #new }, span);
+            let result = if postfix { &old } else { &new };
+            return Value::new(
+                quote_spanned! {span=>
+                    { #setup let #old: #ty = #read; let #new: #ty = #next; #store #result }
+                },
+                prec::BLOCK,
+            );
+        }
+        let current = self.read(&lowered, span);
+        let next = self.step_value(current, place.ty, dec, span);
+        let store = self.write(&lowered, next, span);
+        let read = self.read(&lowered, span).at(prec::LOWEST, span);
+        if postfix {
+            let tmp = self.temporary();
+            Value::new(
+                quote_spanned! {span=> { #setup let #tmp = #read; #store #tmp } },
+                prec::BLOCK,
+            )
+        } else {
+            Value::new(
+                quote_spanned! {span=> { #setup #store #read } },
+                prec::BLOCK,
+            )
+        }
+    }
+
     /// A chain of assignments, folded without recursing down it.
     ///
     /// `a = b = c` is right-associative, so this is nesting in the same way
@@ -9181,14 +9282,30 @@ impl<'a> Codegen<'a> {
             // The value of an assignment to an *atomic* object is the value
             // stored and not what the object holds afterwards: another thread
             // may have changed it already, and reading it back would be a
-            // second atomic operation C never asked for.
-            if lowered.atomic.is_some() {
+            // second atomic operation C never asked for. A `volatile` one is
+            // the same, with a second access in place of a second operation.
+            if lowered.atomic.is_some() || (lowered.volatile.is_some() && lowered.bits.is_none()) {
                 let tmp = self.temporary();
                 let target = self.ty(ty, span);
                 let store = self.write(&lowered, quote_spanned! {span=> #tmp }, span);
                 let setup = &lowered.setup;
                 tokens = quote_spanned! {span=>
                     { #setup let #tmp: #target = #tokens; #store #tmp }
+                };
+                continue;
+            }
+            // A `volatile` bit-field's value is read off the copy its update
+            // went through, which truncates it as reading back would, without
+            // a second access. The value is computed first: it may update
+            // another field in the same bytes.
+            if lowered.volatile.is_some() && lowered.bits.is_some() {
+                let (value, old) = (self.temporary(), self.temporary());
+                let target = self.ty(ty, span);
+                let update = quote_spanned! {span=> #value };
+                let rmw = self.volatile_bits_update(&lowered, &old, update, RmwValue::New, span);
+                let setup = &lowered.setup;
+                tokens = quote_spanned! {span=>
+                    { #setup let #value: #target = #tokens; #rmw }
                 };
                 continue;
             }
@@ -9860,6 +9977,18 @@ impl<'a> Codegen<'a> {
                 lowered.unaligned = false;
             }
         }
+        if lowered.atomic.is_none() && self.program.place_volatile(place) {
+            // A member of a packed record is one Rust reads unaligned by
+            // itself — but only as a place, and a volatile access goes through
+            // its address.
+            if lowered.bits.is_none() && self.place_align(place) < self.type_align(place.ty) {
+                lowered.unaligned = true;
+            }
+            lowered.volatile = Some(VolatileAccess {
+                ty: self.ty(place.ty, self.sp(place.range)),
+                own_unsafe: self.in_safe && rooted_in_local(place, self.program),
+            });
+        }
         lowered
     }
 
@@ -10217,9 +10346,12 @@ impl<'a> Codegen<'a> {
                     bits: Some(BitAccess {
                         getter: self.c_ident(&bits.getter, span),
                         setter: self.c_ident(&bits.setter, span),
+                        storage: Ident::new(&bits.storage, span),
+                        record: self.ty(Ty::Record(*record), span),
                     }),
                     unaligned: false,
                     atomic: None,
+                    volatile: None,
                 }
             }
             // `__real__ z` and `__imag__ z` are the two fields of the runtime's
@@ -10280,6 +10412,9 @@ impl<'a> Codegen<'a> {
                 span,
             );
         }
+        if let Some(volatile) = &place.volatile {
+            return self.read_volatile(place, volatile, span);
+        }
         match &place.bits {
             Some(bits) => {
                 let getter = &bits.getter;
@@ -10301,6 +10436,9 @@ impl<'a> Codegen<'a> {
             let order = self.ordering(ir::MemOrder::SeqCst, span);
             let value = self.value_to_repr(class, ty, Value::new(value, prec::LOWEST), span);
             return quote_spanned! {span=> #object.store(#value, #order); };
+        }
+        if let Some(volatile) = &place.volatile {
+            return self.write_volatile(place, volatile, value, span);
         }
         match &place.bits {
             // A value that is a block of its own — the `b = 1` of
@@ -10326,6 +10464,134 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// Reads a `volatile` place: one `read_volatile` of its address.
+    ///
+    /// A bit-field reads the bytes its bits live in, whole, into a scratch
+    /// copy of the record that the getter then works on; an underaligned
+    /// object is read as the one field of a packed wrapper, since
+    /// `read_volatile` wants an aligned pointer.
+    fn read_volatile(&self, place: &LoweredPlace, volatile: &VolatileAccess, span: Span) -> Value {
+        let access = &place.access;
+        let tokens = match &place.bits {
+            Some(bits) => {
+                let (getter, storage, record) = (&bits.getter, &bits.storage, &bits.record);
+                let copy = Ident::new("__cinrs_volatile", Span::mixed_site());
+                quote_spanned! {span=> {
+                    let mut #copy: #record = ::core::mem::zeroed();
+                    #copy.#storage = (&raw const #access.#storage).read_volatile();
+                    #copy.#getter()
+                } }
+            }
+            None if place.unaligned => {
+                let packed = Ident::new("__CinrsPacked", Span::mixed_site());
+                let ty = &volatile.ty;
+                quote_spanned! {span=> {
+                    #[repr(C, packed)]
+                    struct #packed(#ty);
+                    (&raw const #access).cast::<#packed>().read_volatile().0
+                } }
+            }
+            None => quote_spanned! {span=> (&raw const #access).read_volatile() },
+        };
+        if volatile.own_unsafe {
+            return Value::new(quote_spanned! {span=> unsafe { #tokens } }, prec::BLOCK);
+        }
+        let level = if place.bits.is_some() || place.unaligned {
+            prec::BLOCK
+        } else {
+            prec::CALL
+        };
+        Value::new(tokens, level)
+    }
+
+    /// The statement that stores `value` into a `volatile` place: one
+    /// `write_volatile` of its address, after the value is computed.
+    ///
+    /// A bit-field is a volatile read of the bytes its bits live in, the
+    /// setter on a scratch copy of the record, and a volatile write of the
+    /// bytes back; see [`Codegen::read_volatile`] for the rest.
+    fn write_volatile(
+        &self,
+        place: &LoweredPlace,
+        volatile: &VolatileAccess,
+        value: TokenStream,
+        span: Span,
+    ) -> TokenStream {
+        let access = &place.access;
+        let new = Ident::new("__cinrs_value", Span::mixed_site());
+        let store = match &place.bits {
+            Some(bits) => {
+                let (setter, storage, record) = (&bits.setter, &bits.storage, &bits.record);
+                let copy = Ident::new("__cinrs_volatile", Span::mixed_site());
+                quote_spanned! {span=>
+                    let mut #copy: #record = ::core::mem::zeroed();
+                    #copy.#storage = (&raw const #access.#storage).read_volatile();
+                    #copy.#setter(#new);
+                    (&raw mut #access.#storage).write_volatile(#copy.#storage);
+                }
+            }
+            None if place.unaligned => {
+                let packed = Ident::new("__CinrsPacked", Span::mixed_site());
+                let ty = &volatile.ty;
+                quote_spanned! {span=>
+                    #[repr(C, packed)]
+                    struct #packed(#ty);
+                    (&raw mut #access).cast::<#packed>().write_volatile(#packed(#new));
+                }
+            }
+            None => quote_spanned! {span=> (&raw mut #access).write_volatile(#new); },
+        };
+        if volatile.own_unsafe {
+            return quote_spanned! {span=> { let #new = #value; unsafe { #store } } };
+        }
+        quote_spanned! {span=> { let #new = #value; #store } }
+    }
+
+    /// An update of a `volatile` bit-field — an assignment, a compound one,
+    /// `++` or `--` — as one volatile read and one volatile write of the bytes
+    /// its bits live in.
+    ///
+    /// The bytes go into a scratch copy of the record; `old` is bound to the
+    /// field's value there, `update` is the new value in terms of it, the
+    /// setter stores that into the copy, and the bytes go back. The block's
+    /// value is what `want` asks for — the new one read off the copy, which
+    /// is what truncates it to the field's width.
+    fn volatile_bits_update(
+        &self,
+        place: &LoweredPlace,
+        old: &Ident,
+        update: TokenStream,
+        want: RmwValue,
+        span: Span,
+    ) -> TokenStream {
+        let bits = place.bits.as_ref().expect("a bit-field");
+        let own_unsafe = place.volatile.as_ref().is_some_and(|v| v.own_unsafe);
+        let access = &place.access;
+        let (getter, setter, storage, record) =
+            (&bits.getter, &bits.setter, &bits.storage, &bits.record);
+        let copy = Ident::new("__cinrs_volatile", Span::mixed_site());
+        let new = Ident::new("__cinrs_value", Span::mixed_site());
+        let value = match want {
+            RmwValue::None => TokenStream::new(),
+            RmwValue::Old => quote_spanned! {span=> #old },
+            RmwValue::New => quote_spanned! {span=> #copy.#getter() },
+        };
+        let body = quote_spanned! {span=>
+            let mut #copy: #record = ::core::mem::zeroed();
+            #copy.#storage = (&raw const #access.#storage).read_volatile();
+            let #old = #copy.#getter();
+            let #new = #update;
+            #copy.#setter(#new);
+            (&raw mut #access.#storage).write_volatile(#copy.#storage);
+            #value
+        };
+        if own_unsafe {
+            quote_spanned! {span=> unsafe { #body } }
+        } else {
+            quote_spanned! {span=> { #body } }
+        }
+    }
+
     /// The `&AtomicX` an `_Atomic` place is reached through.
     ///
     /// A raw pointer to the object rather than a reference to it: the object
@@ -10339,11 +10605,12 @@ impl<'a> Codegen<'a> {
 
     /// `*p` as a place.
     fn deref_place(&mut self, ptr: &Expr, pointee: Ty, mutable: bool, span: Span) -> LoweredPlace {
-        let simple =
-            matches!(&ptr.kind, ExprKind::Load(p) if matches!(p.kind, PlaceKind::Object(_)));
+        let simple = matches!(&ptr.kind, ExprKind::Load(p)
+            if matches!(p.kind, PlaceKind::Object(_)) && !self.program.place_volatile(p));
         if simple {
             // A variable holding the pointer can be dereferenced as often as
-            // needed, so no temporary is called for.
+            // needed, so no temporary is called for — unless it is a
+            // `volatile` one, each read of which is an access of its own.
             let tokens = self.pointer_operand(ptr, pointee, mutable, span);
             return LoweredPlace::plain(
                 TokenStream::new(),
@@ -10727,6 +10994,22 @@ fn rooted_in_static(place: &Place, program: &Program) -> bool {
                 return !matches!(storage, Storage::Automatic) && !storage.is_thread_local();
             }
             PlaceKind::Field { base, .. } => place = base,
+            _ => return false,
+        }
+    }
+}
+
+/// Whether a place is an automatic object of the function being generated,
+/// or a member or a part of one: something whose address is valid without
+/// anything having been dereferenced to reach it.
+fn rooted_in_local(place: &Place, program: &Program) -> bool {
+    let mut place = place;
+    loop {
+        match &place.kind {
+            PlaceKind::Object(id) => {
+                return matches!(program.object(*id).storage, Storage::Automatic);
+            }
+            PlaceKind::Field { base, .. } | PlaceKind::ComplexPart { base, .. } => place = base,
             _ => return false,
         }
     }

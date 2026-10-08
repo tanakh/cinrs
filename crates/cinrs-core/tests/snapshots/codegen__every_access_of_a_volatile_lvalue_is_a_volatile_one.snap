@@ -1,0 +1,179 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate_with(Options::gnu(Standard::C99),\nr\"\n        struct regs { int ctrl; volatile int status; unsigned mode : 3, irq : 1; };\n        struct pk { char c; volatile int v; } __attribute__((packed));\n        typedef volatile int vint;\n        volatile int counter;\n        volatile int table[4];\n        volatile struct regs dev;\n        struct regs plain;\n        struct pk packed;\n        vint flag;\n\n        int accesses(volatile int *p, struct regs *r, volatile struct regs *vr, int i) {\n            volatile int local = 1;\n            int sum;\n            counter = 1;\n            counter = 2;\n            counter += 3;\n            sum = counter++;\n            sum += ++counter;\n            table[i & 3] = *p;\n            *p = 7;\n            r->status = sum;\n            vr->ctrl = r->ctrl;\n            vr->mode = 5;\n            vr->irq++;\n            dev = plain;\n            plain = dev;\n            packed.v = flag;\n            local += 1;\n            sum += (counter = 4);\n            return sum + local + (int) sizeof counter + (&counter == table);\n        }\n        \")"
+---
+mod __cinrs_unit_97099984 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct regs {
+        pub ctrl: ::core::ffi::c_int,
+        pub status: ::core::ffi::c_int,
+        pub __cinrs_bits0: [::core::primitive::u8; 1],
+    }
+    impl regs {
+        #[inline]
+        pub fn mode(&self) -> ::core::ffi::c_uint {
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let __cinrs_value: ::core::primitive::u64 = __cinrs_raw & 0x7;
+            __cinrs_value as ::core::ffi::c_uint
+        }
+        #[inline]
+        pub fn set_mode(&mut self, __cinrs_value: ::core::ffi::c_uint) {
+            let __cinrs_bits: ::core::primitive::u64 = (__cinrs_value
+                as ::core::primitive::u64) & 0x7;
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let __cinrs_raw: ::core::primitive::u64 = (__cinrs_raw & 0xfffffffffffffff8)
+                | __cinrs_bits;
+            self.__cinrs_bits0[0] = __cinrs_raw as ::core::primitive::u8;
+        }
+        #[inline]
+        pub fn irq(&self) -> ::core::ffi::c_uint {
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let __cinrs_value: ::core::primitive::u64 = (__cinrs_raw >> 3) & 0x1;
+            __cinrs_value as ::core::ffi::c_uint
+        }
+        #[inline]
+        pub fn set_irq(&mut self, __cinrs_value: ::core::ffi::c_uint) {
+            let __cinrs_bits: ::core::primitive::u64 = ((__cinrs_value
+                as ::core::primitive::u64) << 3) & 0x8;
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+                as ::core::primitive::u64;
+            let __cinrs_raw: ::core::primitive::u64 = (__cinrs_raw & 0xfffffffffffffff7)
+                | __cinrs_bits;
+            self.__cinrs_bits0[0] = __cinrs_raw as ::core::primitive::u8;
+        }
+    }
+    #[repr(C, packed)]
+    #[derive(Copy, Clone)]
+    pub struct pk {
+        pub c: ::core::ffi::c_char,
+        pub v: ::core::ffi::c_int,
+    }
+    pub type vint = ::core::ffi::c_int;
+    pub static mut counter: ::core::ffi::c_int = 0;
+    pub static mut table: [::core::ffi::c_int; 4] = [0; 4];
+    pub static mut dev: regs = unsafe { ::core::mem::zeroed::<regs>() };
+    pub static mut plain: regs = unsafe { ::core::mem::zeroed::<regs>() };
+    pub static mut packed: pk = unsafe { ::core::mem::zeroed::<pk>() };
+    pub static mut flag: ::core::ffi::c_int = 0;
+    pub unsafe extern "C" fn accesses(
+        mut p: *mut ::core::ffi::c_int,
+        mut r: *mut regs,
+        mut vr: *mut regs,
+        mut i: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut local: ::core::ffi::c_int = 1;
+            let mut sum: ::core::ffi::c_int = 0;
+            {
+                let __cinrs_value = 1;
+                (&raw mut counter).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = 2;
+                (&raw mut counter).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = (&raw const counter).read_volatile().wrapping_add(3);
+                (&raw mut counter).write_volatile(__cinrs_value);
+            }
+            sum = {
+                let __cinrs_tmp0: ::core::ffi::c_int = (&raw const counter)
+                    .read_volatile();
+                let __cinrs_tmp1: ::core::ffi::c_int = __cinrs_tmp0.wrapping_add(1);
+                {
+                    let __cinrs_value = __cinrs_tmp1;
+                    (&raw mut counter).write_volatile(__cinrs_value);
+                }
+                __cinrs_tmp0
+            };
+            sum = sum
+                .wrapping_add({
+                    let __cinrs_tmp2: ::core::ffi::c_int = (&raw const counter)
+                        .read_volatile();
+                    let __cinrs_tmp3: ::core::ffi::c_int = __cinrs_tmp2.wrapping_add(1);
+                    {
+                        let __cinrs_value = __cinrs_tmp3;
+                        (&raw mut counter).write_volatile(__cinrs_value);
+                    }
+                    __cinrs_tmp3
+                });
+            let __cinrs_tmp4 = (i & 3) as ::core::primitive::usize;
+            {
+                let __cinrs_value = (&raw const (*p)).read_volatile();
+                (&raw mut table[__cinrs_tmp4]).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = 7;
+                (&raw mut (*p)).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = sum;
+                (&raw mut (*r).status).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = (*r).ctrl;
+                (&raw mut (*vr).ctrl).write_volatile(__cinrs_value);
+            }
+            {
+                let __cinrs_value = 5;
+                let mut __cinrs_volatile: regs = ::core::mem::zeroed();
+                __cinrs_volatile.__cinrs_bits0 = (&raw const (*vr).__cinrs_bits0)
+                    .read_volatile();
+                __cinrs_volatile.set_mode(__cinrs_value);
+                (&raw mut (*vr).__cinrs_bits0)
+                    .write_volatile(__cinrs_volatile.__cinrs_bits0);
+            }
+            {
+                let mut __cinrs_volatile: regs = ::core::mem::zeroed();
+                __cinrs_volatile.__cinrs_bits0 = (&raw const (*vr).__cinrs_bits0)
+                    .read_volatile();
+                let __cinrs_tmp5 = __cinrs_volatile.irq();
+                let __cinrs_value = __cinrs_tmp5.wrapping_add(1);
+                __cinrs_volatile.set_irq(__cinrs_value);
+                (&raw mut (*vr).__cinrs_bits0)
+                    .write_volatile(__cinrs_volatile.__cinrs_bits0);
+            }
+            {
+                let __cinrs_value = plain;
+                (&raw mut dev).write_volatile(__cinrs_value);
+            }
+            plain = (&raw const dev).read_volatile();
+            {
+                let __cinrs_value = (&raw const flag).read_volatile();
+                #[repr(C, packed)]
+                struct __CinrsPacked(::core::ffi::c_int);
+                (&raw mut packed.v)
+                    .cast::<__CinrsPacked>()
+                    .write_volatile(__CinrsPacked(__cinrs_value));
+            }
+            {
+                let __cinrs_value = (&raw const local).read_volatile().wrapping_add(1);
+                (&raw mut local).write_volatile(__cinrs_value);
+            }
+            sum = sum
+                .wrapping_add({
+                    let __cinrs_tmp6: ::core::ffi::c_int = 4;
+                    {
+                        let __cinrs_value = __cinrs_tmp6;
+                        (&raw mut counter).write_volatile(__cinrs_value);
+                    }
+                    __cinrs_tmp6
+                });
+            return sum
+                .wrapping_add((&raw const local).read_volatile())
+                .wrapping_add(4)
+                .wrapping_add(
+                    ((&raw mut counter) == (&raw mut table).cast::<::core::ffi::c_int>())
+                        as ::core::ffi::c_int,
+                );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_97099984::*;

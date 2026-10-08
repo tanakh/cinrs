@@ -431,6 +431,10 @@ struct TypedefEntry {
     /// which a declaration through the name — `static handler f, g;`, as
     /// expat declares its state handlers — declares functions with.
     function: Option<std::rc::Rc<ast::FunctionType>>,
+    /// Whether the type is `volatile` at the top — `typedef volatile int
+    /// vint;` — which an object or a pointee declared through the name is
+    /// then too; see [`Sema::declared_volatile`].
+    volatile: bool,
 }
 
 /// What a tag name refers to.
@@ -1089,6 +1093,7 @@ impl<'a> Sema<'a> {
                     range: SourceRange::at(0),
                     align: None,
                     function: None,
+                    volatile: false,
                 }),
             );
         }
@@ -1102,6 +1107,7 @@ impl<'a> Sema<'a> {
                     range: SourceRange::at(0),
                     align: None,
                     function: None,
+                    volatile: false,
                 }),
             );
         }
@@ -1121,6 +1127,7 @@ impl<'a> Sema<'a> {
                         range: SourceRange::at(0),
                         align: None,
                         function: None,
+                        volatile: false,
                     }),
                 );
             }
@@ -1465,13 +1472,38 @@ impl<'a> Sema<'a> {
     }
 
     fn ptr_to(&mut self, pointee: Ty, konst: bool) -> Ty {
+        self.ptr_to_qualified(pointee, konst, false)
+    }
+
+    /// [`Sema::ptr_to`], for a pointee that may be `volatile` as well.
+    fn ptr_to_qualified(&mut self, pointee: Ty, konst: bool, volatile: bool) -> Ty {
         // An array type carries its qualifiers on its *elements* (6.7.3p9), so
         // `const double (*)[m]` is a pointer to an array whose elements are
         // const — and the pointer is the one that has to say so, because that
         // is what the generated `*const` is.
         let konst =
             konst || matches!(pointee, Ty::Array(id) if self.types().array_type(id).elem_const);
-        self.program.types.pointer(pointee, konst)
+        let volatile = volatile || self.types().has_volatile_elements(pointee);
+        self.program
+            .types
+            .pointer_qualified(pointee, konst, volatile, None)
+    }
+
+    /// Whether a type as written is `volatile` at the top: the qualifier
+    /// itself, or a `typedef` name whose type is. An array's qualifier goes
+    /// on its elements instead; see [`ir::Types::volatile_elements`].
+    fn declared_volatile(&self, ty: &ast::Type) -> bool {
+        ty.qualifiers.is_volatile
+            || matches!(&ty.kind, ast::TypeKind::Typedef(name)
+                if self.lookup_typedef(name).is_some_and(|entry| entry.volatile))
+    }
+
+    /// Records that an object was declared `volatile`; see
+    /// [`ir::Object::is_volatile`].
+    fn mark_volatile(&mut self, id: ObjectId, declared: &ast::Type) {
+        if self.declared_volatile(declared) {
+            self.program.objects[id.0 as usize].is_volatile = true;
+        }
     }
 
     /// The alignment a `typedef` name gave its scalar type, when `ty` is
@@ -1556,7 +1588,9 @@ impl<'a> Sema<'a> {
             (Ty::Func(x), Ty::Func(y)) => self.func_compatible(x, y, comparing),
             (Ty::Pointer(x), Ty::Pointer(y)) => {
                 let (x, y) = (self.types().pointer_type(x), self.types().pointer_type(y));
-                x.konst == y.konst && self.compatible_in(x.pointee, y.pointee, comparing)
+                x.konst == y.konst
+                    && x.volatile == y.volatile
+                    && self.compatible_in(x.pointee, y.pointee, comparing)
             }
             // C99 6.7.5.2p6: compatible element types, and equal sizes only
             // when *both* have one that is a constant. `extern int j[]; int
@@ -1570,6 +1604,7 @@ impl<'a> Sema<'a> {
             (Ty::Array(x), Ty::Array(y)) => {
                 let (x, y) = (self.types().array_type(x), self.types().array_type(y));
                 x.elem_const == y.elem_const
+                    && x.elem_volatile == y.elem_volatile
                     && self.compatible_in(x.elem, y.elem, comparing)
                     && (x.vla || y.vla || x.incomplete || y.incomplete || x.len == y.len)
             }
@@ -1874,6 +1909,7 @@ impl<'a> Sema<'a> {
             ty,
             storage,
             is_const,
+            is_volatile: false,
             is_register: false,
             vla_storage: false,
             align: None,
@@ -2005,13 +2041,15 @@ impl<'a> Sema<'a> {
             return entry.param;
         }
         let object = self.program.object(owner);
-        let (ty, is_const, name, range) = (
+        let (ty, is_const, is_volatile, name, range) = (
             object.ty,
             object.is_const,
+            object.is_volatile,
             object.name.clone(),
             object.range,
         );
-        let pointer = self.ptr_to(ty, is_const);
+        // A `volatile` variable stays one through the pointer it is reached by.
+        let pointer = self.ptr_to_qualified(ty, is_const, is_volatile);
         // The hidden parameter is named after the variable it carries, so that
         // the generated Rust reads as what it is.
         let param = self.new_object_at(
