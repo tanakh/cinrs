@@ -308,7 +308,11 @@ const QUIET_FLAGS: &[&str] = &[
     "omit-frame-pointer",
     "no-omit-frame-pointer",
     "diagnostics-color",
+    "diagnostics-color=",
     "no-diagnostics-color",
+    // Universal character names in identifiers, which cinrs takes anyway.
+    "extended-identifiers",
+    "no-extended-identifiers",
     "message-length=",
     "exceptions",
     "no-exceptions",
@@ -779,6 +783,18 @@ fn flag(inv: &mut Invocation, arg: &str) -> Result<bool, String> {
                  '-ftrivial-auto-var-init=' are: pattern uninitialized zero"
             ));
         }
+        // The source and the program's strings are UTF-8, which is what cinrs
+        // reads and writes; Tcl's `configure` adds `-finput-charset=UTF-8`.
+        // Another character set would change a string's bytes.
+        _ if name.starts_with("input-charset=") || name.starts_with("exec-charset=") => {
+            let (_, charset) = name.split_once('=').expect("the prefix has one");
+            if !matches!(charset.to_ascii_lowercase().as_str(), "utf-8" | "utf8") {
+                return Err(format!(
+                    "'{arg}' changes what the program means, and ccinrs cannot follow it: \
+                     it reads its source and writes its strings as UTF-8"
+                ));
+            }
+        }
         "dollars-in-identifiers" => inv.dollars = true,
         "no-dollars-in-identifiers" => inv.dollars = false,
         "signed-char" | "no-unsigned-char" => inv.char_signed = Some(true),
@@ -1015,6 +1031,10 @@ mod tests {
             "-fstack-protector-strong",
             "-ftls-model=global-dynamic",
             "-ffp-contract=off",
+            "-fdiagnostics-color=auto",
+            "-finput-charset=UTF-8",
+            "-fexec-charset=utf-8",
+            "-fextended-identifiers",
             "-pie",
             "a.c",
         ])
@@ -1106,6 +1126,11 @@ mod tests {
             parse_all(&["-fshort-enums", "a.c"])
                 .unwrap_err()
                 .contains("changes what")
+        );
+        assert!(
+            parse_all(&["-finput-charset=ISO-8859-1", "a.c"])
+                .unwrap_err()
+                .contains("UTF-8")
         );
         assert!(!parse_all(&["-fno-cinrs-checks", "a.c"]).unwrap().checks);
         assert!(parse_all(&["a.c"]).unwrap().unwind);
