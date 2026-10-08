@@ -302,7 +302,7 @@ SQLite VDBE, say — runs at the speed `gcc` gives it.
 | [System headers][system-headers] | `/usr/include` and what glibc's headers do here |
 | [Cross-compilation][cross] · [`no_std`][no-std] | targets and data models; what the expansion needs |
 | [Conformance][testsuites] · [Benchmarks][benchmarks] · [Real programs][real-programs] | how the numbers above are measured; SQLite, BLAKE3, xxHash and CRoaring against `gcc -O2` and `clang -O2` |
-| [`ccinrs`][ccinrs] | the C compiler: its options, defaults, targets and shared libraries, and the projects it has built |
+| [`ccinrs`][ccinrs] · [on real programs][ccinrs-real-programs] | the C compiler: its options, defaults, targets and shared libraries; 27 open-source programs it has built, tested and timed against GCC |
 | [API documentation](https://docs.rs/cinrs) | the macro reference: `c99!` and each of its siblings |
 
 ## How it works
@@ -346,6 +346,7 @@ dual licensed as above, without any additional terms or conditions.
 [benchmarks]: https://github.com/tanakh/cinrs/blob/master/doc/benchmarks.md
 [real-programs]: https://github.com/tanakh/cinrs/blob/master/doc/real-programs.md
 [ccinrs]: https://github.com/tanakh/cinrs/blob/master/doc/ccinrs.md
+[ccinrs-real-programs]: https://github.com/tanakh/cinrs/blob/master/doc/ccinrs-real-programs.md
 [features]: https://github.com/tanakh/cinrs/blob/master/doc/features.md
 [translation]: https://github.com/tanakh/cinrs/blob/master/doc/translation.md
 [input-forms]: https://github.com/tanakh/cinrs/blob/master/doc/features.md#input-forms

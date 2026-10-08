@@ -282,3 +282,15 @@ so: what follows the call could not be resumed.
 panic), a target with no operating system and `#pragma cinrs no_std` (no
 `std` to catch an unwind with), a crate built with `panic = "abort"` (at
 compile time), and `ccinrs -fno-cinrs-unwind`.
+
+## The run-time checks and `configure`
+
+A `configure` probe that finds out what the machine does by doing something C
+leaves undefined — a misaligned load, an overflowing pointer — stops at the
+run-time check instead, and `configure` takes that for the answer it was
+testing for. Nothing says so: CPython's probe for aligned memory access makes
+it hash strings with FNV instead of SipHash-1-3 under `ccinrs`. When a
+project's `config.log` differs from GCC's, give the probe's cache variable the
+answer GCC's run found (`ac_cv_aligned_required=no` for CPython), or run
+`configure` with `-fno-cinrs-checks`; see
+[ccinrs on real programs](ccinrs-real-programs.md#configure-and-the-run-time-checks).

@@ -222,6 +222,11 @@ What to know:
 
 ## What it has built
 
+[ccinrs on real programs](ccinrs-real-programs.md) is the long version: 27
+open-source programs — SQLite, CPython, OpenSSL, FFmpeg, git, nginx, Redis
+and twenty more — built with their own build systems, their test suites run
+and compared with GCC's test by test, and their speed measured.
+
 `scripts/check-ccinrs.sh` fetches six projects at pinned releases, builds them
 with their own build systems and `CC=ccinrs` — run-time checks on — and runs
 their own tests; it also runs c-testsuite through the command line.
