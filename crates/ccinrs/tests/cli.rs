@@ -1374,6 +1374,20 @@ fn a_shared_library() {
     s.compile(&["main.c", "-L.", "-l:libwhole.so", "-o", "from-archive"]);
     assert_eq!(run("from-archive"), "43 42 1\n");
 
+    // An archive and a shared library named on the command line through a
+    // relative symbolic link, as Redis's `deps/xxhash/libxxhash.a` and
+    // jemalloc's `lib/libjemalloc.so` are.
+    std::fs::create_dir_all(s.dir.join("deps")).expect("the directory");
+    std::os::unix::fs::symlink("../libcounter.a", s.dir.join("deps/libcounter.a"))
+        .expect("the link");
+    std::os::unix::fs::symlink("../libwhole.so", s.dir.join("deps/libwhole.so")).expect("the link");
+    s.compile(&["main.c", "deps/libcounter.a", "-o", "through-link"]);
+    assert_eq!(run("through-link"), "43 42 1\n");
+    // A library with no soname is recorded as it was named, as GCC records
+    // it: `deps/libwhole.so`, found from the directory the program runs in.
+    s.compile(&["main.c", "deps/libwhole.so", "-o", "through-so-link"]);
+    assert_eq!(stdout(&s.run("through-so-link", &[])), "43 42 1\n");
+
     // An object from another compiler in a shared library — on its own, and
     // in an archive linked whole: its symbols are exported too, as from
     // GCC's, which a mixed build of libwebp's `libsharpyuv.so` needs.

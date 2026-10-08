@@ -130,8 +130,17 @@ pub fn run(inv: &Invocation) -> Result<(), Failure> {
                 }
                 let crate_name = info.crates.first().cloned();
                 linked.add(info);
+                // A shared library is named to the linker as it was on the
+                // command line, which is what a program without a soname
+                // to go by records as its dependency (GCC's `DT_NEEDED`);
+                // the rest are brought into the work directory.
+                let path = if is_shared_library(path) {
+                    path.clone()
+                } else {
+                    run.work.link_input(index, path)?
+                };
                 objects.push(LinkInput {
-                    path: run.work.link_input(index, path)?,
+                    path,
                     crate_name,
                     whole,
                 });
@@ -1609,13 +1618,15 @@ impl Run<'_> {
                 }
                 continue;
             }
+            if is_shared_library(object) {
+                cmd.arg("-C").arg(format!("link-arg={}", object.display()));
+                continue;
+            }
             let name = object
                 .file_name()
                 .expect("an object in the work directory has a name")
                 .to_string_lossy();
-            let spec = if is_shared_library(object) {
-                format!("dylib:+verbatim={name}")
-            } else if is_archive(object) && whole {
+            let spec = if is_archive(object) && whole {
                 format!("static:+verbatim,+whole-archive={name}")
             } else if is_archive(object) {
                 format!("static:+verbatim={name}")
@@ -1958,8 +1969,13 @@ impl WorkDir {
             .file_name()
             .ok_or_else(|| format!("{}: not a file", path.display()))?;
         let here = self.path(&format!("{index}-{}", name.to_string_lossy()));
-        if std::fs::hard_link(path, &here).is_err() {
-            std::fs::copy(path, &here).map_err(|error| format!("{}: {error}", path.display()))?;
+        // What a symbolic link names, not the link: a hard link to a relative
+        // one would name nothing from the work directory — Redis's
+        // `deps/xxhash/libxxhash.a`, jemalloc's `libjemalloc.so`.
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if std::fs::hard_link(&target, &here).is_err() {
+            std::fs::copy(&target, &here)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
         }
         Ok(here)
     }
