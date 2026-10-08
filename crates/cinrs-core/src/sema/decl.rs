@@ -1712,6 +1712,26 @@ impl Sema<'_> {
         init: Expr,
     ) {
         let ty = self.program.object(id).ty;
+        // An integer as wide as a pointer, holding an address: FFmpeg's
+        // `static atomic_uintptr_t av_log_callback = (uintptr_t)
+        // av_log_default_callback;`. GCC takes it as the relocated address;
+        // Rust's constant evaluation cannot make an integer of one, so the
+        // item holds the address as a data pointer, as a data function
+        // pointer's does, and every use reads it as the integer.
+        if let Some(address) = self.address_in_integer(ty, &init)
+            && !self.program.object(id).storage.is_thread_local()
+        {
+            let data = self.ptr_to(Ty::Void, false);
+            let range = init.range;
+            let address = Expr::new(ExprKind::Cast(Box::new(address)), data, range);
+            if let Some(value) = self.static_init(address, "initializer") {
+                self.program.objects[id.0 as usize].data_fn_pointer = true;
+                if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
+                    entry.init = value;
+                }
+            }
+            return;
+        }
         let mut value = self
             .static_init(init, "initializer")
             .unwrap_or_else(|| self.zero(ty, declarator.range));
@@ -1748,6 +1768,32 @@ impl Sema<'_> {
         if let Some(entry) = self.program.statics.iter_mut().find(|s| s.object == id) {
             entry.init = value;
         }
+    }
+
+    /// The address an initialiser converts to an integer of type `ty`, when
+    /// `ty` is an integer as wide as a pointer — `(uintptr_t) f`, `(long)
+    /// &x`, under an `_Atomic` too — and what it converts is a pointer or a
+    /// function. Anything narrower is no constant in GCC either.
+    fn address_in_integer(&mut self, ty: Ty, init: &Expr) -> Option<Expr> {
+        let integer = self.types().unatomic(ty);
+        if !integer.is_integer()
+            || self.size_of(integer) != Some(u64::from(self.target.ptr_bits / 8))
+            // `(uintptr_t) (void *) 16` is an integer constant already.
+            || self.const_eval(init).is_some()
+        {
+            return None;
+        }
+        let mut inner = init;
+        while let ExprKind::Cast(next) = &inner.kind {
+            if next.ty.is_pointer() || self.types().is_func_pointer(next.ty) {
+                return Some((**next).clone());
+            }
+            if !(next.ty.is_integer() || matches!(next.ty, Ty::Atomic(_))) {
+                return None;
+            }
+            inner = next;
+        }
+        None
     }
 
     /// Where a constant initialiser puts something other than a function or

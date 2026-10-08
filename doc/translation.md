@@ -707,6 +707,15 @@ an array or a structure is part of a value of the aggregate's type, where the
 `Option<fn>` is unavoidable, so such a constant is refused there with the
 reason, and a thread-local one likewise: assign it at run time.
 
+An integer as wide as a pointer whose initialiser converts an address to it is
+the same case the other way round. GCC takes `static atomic_uintptr_t
+av_log_callback = (uintptr_t)av_log_default_callback;` (FFmpeg) as the
+relocated address, and Rust's constant evaluation cannot make an integer of an
+address, so the item holds the `*mut c_void` and every use reads and writes it
+as the integer type — `uintptr_t`, `intptr_t`, `long`, and an `_Atomic` one,
+holding a function's or an object's address. A narrower integer is refused,
+as GCC refuses it.
+
 ## Variably modified types and `alloca`
 
 **The storage is the heap, not the stack.** Rust has no way to move the stack

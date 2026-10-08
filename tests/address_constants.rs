@@ -358,6 +358,44 @@ fn a_constant_condition_chooses_a_string_literal() {
     assert_eq!(unsafe { chosen_length() }, expected);
 }
 
+/// An integer as wide as a pointer, initialised with an address converted to
+/// it: FFmpeg's `static atomic_uintptr_t av_log_callback = (uintptr_t)
+/// av_log_default_callback;`. GCC takes it as the relocated address; the item
+/// holds it as a pointer, and the program reads and writes the integer.
+#[test]
+fn an_integer_holds_an_address() {
+    cinrs::c11! {
+        #include <stdint.h>
+        #include <stdatomic.h>
+
+        static int called;
+        static void callback(void) { called++; }
+        static int table[4];
+
+        static uintptr_t as_integer = (uintptr_t) callback;
+        static atomic_uintptr_t as_atomic = (uintptr_t) callback;
+        long into_table = (long) &table[2];
+        static const intptr_t offset = (intptr_t) (table + 1);
+        static uintptr_t not_an_address = (uintptr_t) (void *) 16;
+
+        int addresses(void) {
+            void (*f)(void) = (void (*)(void)) atomic_load(&as_atomic);
+            f();
+            int ok = (as_integer == (uintptr_t) callback)
+                + (into_table == (long) &table[2]) * 2
+                + (offset == (intptr_t) &table[1]) * 4
+                + (not_an_address == 16) * 8
+                + called * 16;
+            as_integer += 1;
+            atomic_store(&as_atomic, 7);
+            return ok + (as_integer == (uintptr_t) callback + 1) * 32
+                + (atomic_load(&as_atomic) == 7) * 64;
+        }
+    }
+
+    assert_eq!(unsafe { addresses() }, 127);
+}
+
 // ---------------------------------------------------------------------------
 // block scope
 // ---------------------------------------------------------------------------

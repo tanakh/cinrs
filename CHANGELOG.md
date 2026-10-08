@@ -304,6 +304,17 @@ follows [Semantic Versioning][semver].
   Argument Clinic's keyword tables. So is one whose arms are string literals
   and that is converted to the object's `const char *`, nested or not:
   OpenSSL's `sizeof(long) == 4 ? "four" : sizeof(long) == 8 ? "eight" : ""`.
+* `##` may make a preprocessing number that is not a valid constant, as C17
+  6.4.8 allows: FFmpeg's `AV_VERSION_DOT(a, b, c) a ##.## b ##.## c` goes
+  through `63.1.` on its way to `63.1.100`, and its `32 ## p` is pasted on into
+  a function name. "pasting '63.1' and '.' does not give a valid token" was
+  28 of FFmpeg's failing files. A number that reaches the parser that way is
+  still the error it would have been written.
+* A `static` integer as wide as a pointer — `uintptr_t`, `intptr_t`, `long`,
+  an `_Atomic` one — may be initialised with an address converted to it, which
+  GCC takes as a relocated constant: FFmpeg's `static atomic_uintptr_t
+  av_log_callback = (uintptr_t)av_log_default_callback;`. The item holds the
+  address as a pointer and every use reads it as the integer.
 * `__attribute__((aligned(1)))` on a `typedef` of a record lowers its
   alignment, as GCC does for a scalar's: a read, a write or a member access
   through a pointer to the `typedef` is an unaligned one. OpenSSL's

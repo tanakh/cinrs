@@ -2183,6 +2183,13 @@ pub struct Object {
     /// [flexible-array companion](Object::flexible_len) takes. At run time a
     /// function pointer holding such an address is only ever compared, which
     /// is all C allows of it. See [`codegen`](crate::codegen).
+    ///
+    /// The same for an integer as wide as a pointer whose initialiser
+    /// converts an address to it — FFmpeg's `static atomic_uintptr_t cb =
+    /// (uintptr_t) default_cb;`, which GCC takes as a relocated constant and
+    /// Rust's constant evaluation cannot turn into an integer: the item holds
+    /// the address as a `*mut c_void`, and every use reads and writes it as
+    /// the integer type.
     pub data_fn_pointer: bool,
     /// Set for a local **array** declared without an initialiser in a unit
     /// that asked for uninitialised locals ([`crate::AutoVarInit::Uninitialized`]):
