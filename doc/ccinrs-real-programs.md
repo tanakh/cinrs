@@ -65,7 +65,7 @@ the tables give the last state.
 | jq 1.8.2 | autoconf | nothing | `make check`: all pass | 0.82–1.21 / 0.74–1.06 |
 | Redis 8.10.2 | make (`-C src`, its `-flto`) | nothing | its whole suite, as GCC but one ⁵ | the benchmark at GCC's rate; Lua `EVAL` 1.24 / 0.94 |
 | jemalloc 5.3 (Redis's) | autoconf | nothing | 138/138 | — |
-| CPython 3.14.8 | autoconf | `asm_trampoline.S` assembled by GCC ⁶ | 449 test files pass (GCC 453) | 1.70 / 1.30 |
+| CPython 3.14.8 | autoconf | `asm_trampoline.S` assembled by GCC, and a `configure` cache variable ⁶ | 446 test files pass (GCC 453) ⁹ | 1.70 / 1.30 |
 | OpenSSL 3.5.9 | `Configure no-asm` | nothing | 345 of 347 files, the other two the async fibres ⁴ | 1.06–1.44 / 0.92–1.20 |
 | Tcl 9.0.4 | autoconf | nothing | 68,225 tests, as GCC | the bytecode loop 1.5; the rest 1.0–1.13 |
 | FFmpeg 9.0.2 | its `configure`, `--disable-asm` | nothing ⁶ | FATE 2,844 of 2,845, as GCC | 1.08–2.31 / 0.74–1.18; scaling 4.1 / 1.8 ⁷ |
@@ -97,16 +97,14 @@ with cinrs's message.
 ⁵ `HINCRBYFLOAT` and `INCRBYFLOAT` round through `long double`, which is
 `double` here: `1.23` comes back as `1.22999999999999998`.
 
-⁶ When they were measured, ccinrs refused under `-std=c11` and `-std=c17` what
-GCC accepts there with a warning — CPython builds every file with `-std=c11`,
-and FFmpeg has a stray `;` after a function — and `__DATE__` was a placeholder
-CPython's `sys.version` parser rejects; each took a workaround (`-std=gnu11`,
-`-std=gnu17` for two files, an explicit date). Both have been fixed since —
-ccinrs's `-std=` modes take what GCC's take unless `-pedantic-errors` is
-given, and `__DATE__` is the date of translation, or `SOURCE_DATE_EPOCH`'s —
-and their reproductions pass; the two projects have not been rebuilt since.
-CPython's configure also needs the cache variable described
-[below](#configure-and-the-run-time-checks).
+⁶ Earlier rounds needed more: ccinrs refused under `-std=c11` and `-std=c17`
+what GCC accepts there with a warning — CPython builds every file with
+`-std=c11`, and FFmpeg has a stray `;` after a function — and `__DATE__` was a
+placeholder CPython's `sys.version` parser rejects. ccinrs's `-std=` modes now
+take what GCC's take unless `-pedantic-errors` is given, and `__DATE__` is the
+date of translation (or `SOURCE_DATE_EPOCH`'s); rebuilt with that, FFmpeg needs
+nothing, and CPython only its trampoline's assembly and the cache variable
+described [below](#configure-and-the-run-time-checks).
 
 ⁷ `hScale8To15_c`'s inner loop indexes with `int`, and cinrs's signed
 arithmetic wraps on overflow, as GCC's does under `-fwrapv`; GCC with
@@ -115,6 +113,13 @@ arithmetic wraps on overflow, as GCC's does under `-fwrapv`; GCC with
 ⁸ git's SHA-1 code reads `uint32_t`s from unaligned addresses, which is
 undefined behaviour the run-time checks stop at; its own
 `-DSHA1DC_FORCE_ALIGNED_ACCESS` avoids it, and is needed only with the checks.
+
+⁹ Of CPython's test files, those that fail here and pass with GCC are
+`test_ctypes`' four `long double` tests (note 5), `test_memoryio` (the
+undefined behaviour [below](#what-it-found)), the two `test_gdb` files (gdb's
+CPython printers want C's debug information, and the program has Rust's),
+`test_perf_profiler`, and `test_socket` and `test_ssl`, which fail now and
+then with GCC as well.
 
 `scripts/check-ccinrs.sh` covers six more — lz4, cJSON, cmark, brotli, zlib,
 expat — and c-testsuite; see [ccinrs.md](ccinrs.md#what-it-has-built).
