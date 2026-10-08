@@ -4375,9 +4375,29 @@ impl<'a> Codegen<'a> {
     /// [`Codegen::align_wrapper_items`] and [`ir::Object::align`].
     fn object_align(&self, id: ir::ObjectId) -> Option<u64> {
         let object = self.program.object(id);
-        match (object.align, self.abi_array_align(object)) {
-            (Some(asked), Some(abi)) => Some(asked.max(abi)),
-            (asked, abi) => asked.or(abi),
+        [
+            object.align,
+            self.abi_array_align(object),
+            self.packed_aligned(object.ty),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+
+    /// The alignment of a record both packed and aligned — or of an array of
+    /// one — which its Rust item cannot have (see `sema`'s `define_record`),
+    /// so an object of the type gets it from the wrapper an `_Alignas`
+    /// object has.
+    fn packed_aligned(&self, ty: Ty) -> Option<u64> {
+        match ty {
+            Ty::Record(id) => {
+                let def = self.program.types.record(id);
+                let align = def.layout?.align;
+                (def.packed.is_some() && align > def.rust_align).then_some(align)
+            }
+            Ty::Array(id) => self.packed_aligned(self.program.types.array_type(id).elem),
+            _ => None,
         }
     }
 

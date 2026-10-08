@@ -2210,7 +2210,7 @@ impl Sema<'_> {
                     ),
                 );
             } else {
-                self.align_typedef_record(resolved, want, aligned.range);
+                self.align_typedef_record(resolved, want);
             }
         }
         let already = self.declared_here(&name.name).is_some();

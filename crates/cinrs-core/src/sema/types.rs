@@ -1592,9 +1592,22 @@ impl Sema<'_> {
         if let Some(want) = record_align
             && want > laid_out.layout.align
         {
+            let size = round_up(laid_out.layout.size, want);
+            if laid_out.packed_attr.is_some() {
+                // Packed *and* aligned — the kernel's `struct bpf_fib_lookup`
+                // in <linux/bpf.h> — is GCC's members packed, the record N
+                // aligned and its size a multiple of N. Rust refuses
+                // `#[repr(C, packed, align(N))]` (E0587), so the item stays
+                // packed and one byte aligned, as `rust_align` says, and gets
+                // its size from a field; an enclosing record pads to N from
+                // that, as it does for any packed member, and an object of
+                // the type is placed at N in a wrapper of its own.
+                pad_rust_fields(&mut laid_out.rust_fields, kind, laid_out.layout.size, size);
+            } else {
+                laid_out.align_attr = Some(want);
+            }
             laid_out.layout.align = want;
-            laid_out.layout.size = round_up(laid_out.layout.size, want);
-            laid_out.align_attr = Some(want);
+            laid_out.layout.size = size;
         }
         // Rust refuses a packed type that transitively holds a
         // `#[repr(align)]` one, and C is perfectly happy to pack such a
@@ -1604,15 +1617,6 @@ impl Sema<'_> {
             for member in &members {
                 self.demote_alignment(member.ty, spec.range);
             }
-        }
-        if laid_out.align_attr.is_some() && laid_out.packed_attr.is_some() {
-            // Rust refuses `#[repr(C, packed, align(N))]` outright (`E0587`),
-            // and there is no second way to say it.
-            self.error(
-                spec.range,
-                "a record cannot be both packed and given a stricter alignment; Rust has \
-                 no representation for that combination",
-            );
         }
         self.check_atomic_members(&laid_out);
         let record = self.program.types.record_mut(id);
@@ -1720,7 +1724,7 @@ impl Sema<'_> {
     /// only way to name it at all. A tagged record is left alone: raising
     /// `struct S` because one typedef of it asked would change the layout
     /// everywhere the tag is used.
-    pub(super) fn align_typedef_record(&mut self, ty: Ty, want: u64, range: SourceRange) {
+    pub(super) fn align_typedef_record(&mut self, ty: Ty, want: u64) {
         let Ty::Record(id) = ty else {
             return;
         };
@@ -1732,13 +1736,14 @@ impl Sema<'_> {
             return;
         }
         if def.packed.is_some() {
-            // Rust refuses `#[repr(C, packed, align(N))]` (`E0587`), the same
-            // way it does when both are written on the record itself.
-            self.error(
-                range,
-                "a record cannot be both packed and given a stricter alignment; Rust has \
-                 no representation for that combination",
-            );
+            // Rust refuses `#[repr(C, packed, align(N))]` (`E0587`); as when
+            // both are written on the record itself, the item stays packed
+            // and gets its size from a field. See `Sema::define_record`.
+            let kind = def.kind;
+            let size = round_up(layout.size, want);
+            let record = self.program.types.record_mut(id);
+            pad_rust_fields(&mut record.rust_fields, kind, layout.size, size);
+            record.layout = Some(ir::Layout { size, align: want });
             return;
         }
         let record = self.program.types.record_mut(id);
@@ -3186,4 +3191,24 @@ fn round_up(value: u64, align: u64) -> u64 {
         return value;
     }
     value.div_ceil(align).saturating_mul(align)
+}
+
+/// Grows a packed record's Rust item from `from` bytes to `to` with a field
+/// of its own, since a packed item has no alignment to round its size up
+/// with. A union's members all start at zero, so its filler *is* the size.
+fn pad_rust_fields(rust_fields: &mut Vec<RustField>, kind: RecordKind, from: u64, to: u64) {
+    if to <= from {
+        return;
+    }
+    let pads = rust_fields
+        .iter()
+        .filter(|field| matches!(field, RustField::Pad { .. }))
+        .count();
+    rust_fields.push(RustField::Pad {
+        name: format!("__cinrs_pad{pads}"),
+        bytes: match kind {
+            RecordKind::Struct => to - from,
+            RecordKind::Union => to,
+        },
+    });
 }

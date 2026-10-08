@@ -326,6 +326,12 @@ follows [Semantic Versioning][semver].
   three of git's tests passed or failed by luck. Compound literals and
   definitions hoisted out of their block likewise, and `q = p;` of a padded
   type copies the bytes.
+* A record both `packed` and `aligned(N)` compiles, laid out as GCC lays it
+  out — members packed, alignment N, size a multiple of N — where it was "a
+  record cannot be both packed and given a stricter alignment": the kernel's
+  `<linux/bpf.h>` has one, which nginx's configure includes. The Rust item
+  stays packed and gets its size from a field; an enclosing record pads to
+  N, and an object of the type is placed at N by an alignment wrapper.
 * `__attribute__((noreturn))` on a variable of function pointer type is
   taken and dropped, as GCC gives it to the pointed-to type, where it was
   "'_Noreturn' is only allowed on a function" (git's `NORETURN_PTR` in

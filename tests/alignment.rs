@@ -481,3 +481,46 @@ fn an_under_aligned_record_typedef_reads_and_writes_at_any_address() {
 
     assert_eq!(unsafe { unaligned_record_typedef() }, 1);
 }
+
+/// A record both packed and aligned: its members packed, the record N
+/// aligned, its size a multiple of N — the kernel's `struct bpf_fib_lookup`
+/// in <linux/bpf.h>, which nginx's configure includes. Rust refuses
+/// `#[repr(C, packed, align(N))]`, so the item stays packed and sized by a
+/// field, an enclosing record pads to N, and an object of the type is placed
+/// at N by a wrapper.
+#[test]
+fn a_record_both_packed_and_aligned_is_laid_out_as_gcc_lays_it_out() {
+    cinrs::gnu11! {
+        #include <stddef.h>
+        #include <stdint.h>
+
+        struct s {
+            char c;
+            union { unsigned short a; unsigned int b; } __attribute__((packed, aligned(2))) u;
+        };
+        struct p8 { char c; int i; char d; } __attribute__((packed, aligned(8)));
+        struct outer { char x; struct p8 p; char y; };
+
+        static struct p8 global = { 1, 2, 3 };
+        static struct p8 table[3];
+
+        int packed_and_aligned(void) {
+            struct p8 local = { 4, 5, 6 };
+            char between = 0;
+            struct p8 second = { 7, 8, 9 };
+            struct outer o = { 1, { 2, 3, 4 }, 5 };
+            (void) between;
+            table[1].i = 10;
+            return (offsetof(struct s, u) == 2 && sizeof(struct s) == 6)
+                + (sizeof(struct p8) == 8 && _Alignof(struct p8) == 8
+                   && offsetof(struct p8, i) == 1 && offsetof(struct p8, d) == 5) * 2
+                + (offsetof(struct outer, p) == 8 && offsetof(struct outer, y) == 16
+                   && sizeof(struct outer) == 24) * 4
+                + ((uintptr_t) &global % 8 == 0 && (uintptr_t) &table[1] % 8 == 0
+                   && (uintptr_t) &local % 8 == 0 && (uintptr_t) &second % 8 == 0) * 8
+                + (global.i + local.i + second.d + table[1].i + o.p.d + o.y == 35) * 16;
+        }
+    }
+
+    assert_eq!(unsafe { packed_and_aligned() }, 31);
+}
