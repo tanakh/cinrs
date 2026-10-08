@@ -691,6 +691,10 @@ struct Sema<'a> {
     /// Functions the unit defines, collected before anything else so that a
     /// prototype can be told from a declaration of an external symbol.
     defined_functions: HashSet<String>,
+    /// The `weak` declarations of objects not yet defined when they were
+    /// written, checked at the end of the unit; see
+    /// [`Sema::check_weak_object_references`].
+    weak_object_references: Vec<(ir::ObjectId, SourceRange, String)>,
     /// The names already warned about as defined weakly, so that a function
     /// whose declaration and definition both say `weak` is warned about once;
     /// see [`Sema::warn_weak_definition`].
@@ -1011,6 +1015,7 @@ impl<'a> Sema<'a> {
             enum_incomplete: vec![None; unit.enums.len()],
             enum_lists: Vec::new(),
             defined_functions: HashSet::new(),
+            weak_object_references: Vec::new(),
             weak_definitions: HashSet::new(),
             long_double_decls: HashMap::new(),
             long_double_exprs: HashMap::new(),
@@ -1140,6 +1145,7 @@ impl<'a> Sema<'a> {
         self.complete_tentative_arrays();
         self.check_tentative_enums();
         self.classify_inline_definitions();
+        self.check_weak_object_references();
         // What a nested function captures is only final once every call to it
         // has been seen, and what may be done with its address follows from
         // that.

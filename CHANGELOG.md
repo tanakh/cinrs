@@ -311,6 +311,12 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* On WebAssembly and Windows, `extern int x __attribute__((weak));`
+  followed by the unit's own definition of `x` is that definition, with the
+  warning, as on every other target; it was refused as a weak reference
+  before the definition was seen. Only a weak reference nothing in the unit
+  defines is refused there. (A function's definitions were already known
+  in advance.)
 * An AArch64 Apple target defines `__arm64__`, `__arm64` and
   `__ARM64_ARCH_8__` besides `__aarch64__`, as Apple's Clang does: the
   macOS SDK's `<sys/cdefs.h>` stopped at "Unsupported architecture" without

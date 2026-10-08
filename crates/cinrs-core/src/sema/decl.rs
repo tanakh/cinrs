@@ -441,8 +441,11 @@ impl Sema<'_> {
                     if matches!(self.program.object(id).storage, Storage::Extern { .. }) {
                         // A definition later in the unit takes the object out
                         // of the `extern` block again, and the weakness with
-                        // it; see `Sema::define_here`.
-                        self.check_weak_reference(range, &name.name);
+                        // it; see `Sema::define_here`. Whether this is a weak
+                        // *reference* is therefore only known at the end of
+                        // the unit; see `Sema::check_weak_object_references`.
+                        self.weak_object_references
+                            .push((id, range, name.name.clone()));
                         let object = &mut self.program.objects[id.0 as usize];
                         object.weak = object.weak.or(Some(range));
                     } else if self.program.weak_definitions
@@ -1021,6 +1024,21 @@ impl Sema<'_> {
                     target.os.as_str()
                 ),
             );
+        }
+    }
+
+    /// Checks, once the whole unit has been seen, each `weak` declaration of
+    /// an object that was still only declared when it was written: one the
+    /// unit went on to define is an ordinary definition, with the warning
+    /// `Sema::define_here` gave it, on every target; one it never defined is
+    /// a weak reference, which [`Sema::check_weak_reference`] checks. A weak
+    /// function needs no such pass: the unit's function definitions are
+    /// collected before anything is checked.
+    pub(super) fn check_weak_object_references(&mut self) {
+        for (id, range, name) in std::mem::take(&mut self.weak_object_references) {
+            if matches!(self.program.object(id).storage, Storage::Extern { .. }) {
+                self.check_weak_reference(range, &name);
+            }
         }
     }
 

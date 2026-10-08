@@ -561,6 +561,55 @@ fn apple_aarch64_has_apples_names_for_it() {
     );
 }
 
+/// `weak` on a declaration of something the unit goes on to define is an
+/// ordinary definition, with a warning, on every target — the declaration
+/// coming first included, which for an object is only known at the end of
+/// the unit. Only a weak *reference* nothing in the unit defines is refused
+/// where there is no object format to mark one in: WebAssembly and Windows.
+#[test]
+fn a_weak_declaration_the_unit_defines_is_a_definition_everywhere() {
+    let defined = r#"
+        extern int count __attribute__((weak));
+        __attribute__((weak)) int hook(int x);
+        int use(void) { return hook(1) + count; }
+        int hook(int x) { return x + 1; }
+        int count = 40;
+        extern int tentative __attribute__((weak));
+        int tentative;
+        "#;
+    for triple in [
+        "wasm32-unknown-unknown",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+    ] {
+        accepts(triple, defined);
+    }
+    let message = |name: &str, target: &str| {
+        format!(
+            "'weak' is not supported when translating for {target}: a weak reference needs \
+             an ELF or Mach-O object and inline assembly to mark the symbol with, and a strong \
+             one instead would not link without '{name}'"
+        )
+    };
+    let references = r#"
+        extern int absent_count __attribute__((weak));
+        __attribute__((weak)) int absent_hook(int x);
+        int use(void) { return absent_hook ? absent_hook(1) : absent_count; }
+        "#;
+    for (triple, target) in [
+        ("wasm32-unknown-unknown", "wasm32-none"),
+        ("x86_64-pc-windows-msvc", "x86_64-windows"),
+    ] {
+        let found = errors_with(references, &options(triple));
+        assert!(
+            found.contains(&message("absent_count", target))
+                && found.contains(&message("absent_hook", target)),
+            "{triple}: {found:#?}"
+        );
+    }
+    accepts("x86_64-unknown-linux-gnu", references);
+}
+
 /// `<limits.h>`, which is written entirely in terms of those macros.
 #[test]
 fn limits_h_follows_the_model() {

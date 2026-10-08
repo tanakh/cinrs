@@ -626,10 +626,12 @@ mod exported {
 /// declared function's address as non-null. One the program does define, in
 /// another unit here, is found and called as usual.
 ///
-/// Not on Windows: a weak reference needs an ELF or Mach-O object, and cinrs
-/// refuses `weak` on a declaration there.
-#[cfg(not(windows))]
+/// The references are not on Windows: a weak reference needs an ELF or
+/// Mach-O object, and cinrs refuses `weak` on a declaration of something the
+/// unit never defines there. A declaration the unit goes on to define is a
+/// definition, on Windows too.
 mod weak {
+    #[cfg(not(windows))]
     mod hooks {
         cinrs::gnu99! {
             #pragma cinrs export
@@ -642,7 +644,7 @@ mod weak {
     /// *loader* may find missing, and Apple's linker still wants a definition
     /// to link against (or `-Wl,-U,_name`), from Clang's objects as from
     /// these — zstd uses its weak hooks on ELF alone for that reason.
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(windows, target_vendor = "apple")))]
     mod absent {
         cinrs::gnu99! {
             #include <stddef.h>
@@ -662,6 +664,7 @@ mod weak {
         }
     }
 
+    #[cfg(not(windows))]
     mod user {
         cinrs::gnu99! {
             int cinrs_weak_test_present(int x) __attribute__((weak));
@@ -679,7 +682,7 @@ mod weak {
         }
     }
 
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(windows, target_vendor = "apple")))]
     #[test]
     fn a_weak_reference_is_null_when_nothing_defines_the_symbol() {
         unsafe {
@@ -689,6 +692,7 @@ mod weak {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_weak_reference_reaches_a_definition_in_another_unit() {
         unsafe {
@@ -702,7 +706,8 @@ mod weak {
     /// its library header declared weak, or a plain weak default — is an
     /// ordinary definition, with a warning: with no other definition the
     /// program is GCC's. (A second, strong definition elsewhere would be a
-    /// duplicate symbol at link time rather than an override.)
+    /// duplicate symbol at link time rather than an override.) On every
+    /// target, a declaration written before the definition included.
     mod defined {
         cinrs::gnu99! {
             #include <stddef.h>
