@@ -69,7 +69,7 @@
 //! are broken to from further up — the `case`s of a `switch` that fall through
 //! one into the next, or the shared code an interpreter's instructions jump
 //! to — gives each of them a labelled block around everything before it, and
-//! past [`MAX_NESTING`] of those, counted as [`codegen`](crate::codegen) emits
+//! past four hundred of those, counted as [`codegen`](crate::codegen) emits
 //! them, the output would nest deeper than is safe to compile, where the
 //! machine's flat `match` does not nest at all. And the shapes are checked
 //! before they are handed over: if every block is not in the tree exactly
@@ -206,7 +206,7 @@ pub struct Plan {
 /// `names` is the C label each block stands at, where it stands at one, which
 /// is what the loops are named after. `None` means the [state
 /// machine](crate::cfg) has to be used: a function whose shapes would nest
-/// deeper than [`MAX_NESTING`], or — which has not been observed, and is checked
+/// deeper than four hundred labelled blocks, or — which has not been observed, and is checked
 /// for rather than trusted — one whose shapes would not account for every block
 /// or would leave a jump with nothing to break to.
 pub fn plan(blocks: &[BasicBlock], names: &HashMap<BlockId, String>) -> Option<Plan> {
