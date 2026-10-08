@@ -444,6 +444,20 @@ pub struct Options {
     /// or as a `cdylib`. `ccinrs` turns it on for an ELF target without
     /// `-flto`, where it writes the export list itself.
     pub weak_definitions: bool,
+    /// Whether an array *with external linkage* gets the x86-64 psABI's
+    /// alignment too.
+    ///
+    /// The psABI (3.1.2) gives every array variable of 16 bytes or more —
+    /// automatic, static or global — 16-byte alignment, and SIMD code relies
+    /// on it: `_mm_load_ps(table)`. cinrs gives it to every such array of the
+    /// unit on an x86-64 System V target, through the wrapper an `_Alignas`
+    /// object is generated in. The one exception is an array Rust code
+    /// reads, a `pub static` of the unit, whose Rust type the wrapper would
+    /// change from `[T; N]` to `__cinrs_align_16<[T; N]>`.
+    ///
+    /// **Off by default**, so a block's public arrays keep their Rust type;
+    /// `ccinrs`, whose objects nothing in Rust reads, turns it on.
+    pub abi_align_public_arrays: bool,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -550,6 +564,7 @@ impl Options {
             auto_var_init: AutoVarInit::Zero,
             own_declarations_are_cinrs: false,
             weak_definitions: false,
+            abi_align_public_arrays: false,
         }
     }
 

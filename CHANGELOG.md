@@ -222,6 +222,15 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **An array variable of 16 bytes or more is 16-byte aligned on x86-64**
+  (System V), as the psABI says (3.1.2) and GCC and Clang do: automatic,
+  `static` and file-scope ones, and variable length arrays, through the
+  wrapper an `_Alignas` object is generated in. SIMD code relies on it —
+  `_mm_load_ps(table)` is an aligned load, and faulted on a cinrs array four
+  bytes off. The type and `__alignof__` are unchanged. In a `c99!` block a
+  file-scope array with external linkage keeps its plain Rust type, and
+  alignment, unless `Options::abi_align_public_arrays` is set, as `ccinrs`
+  sets it.
 * **`ccinrs -flto` on x86-64 Linux is the linker's link-time optimisation**:
   the objects are LLVM bitcode and `rust-lld` optimises them (ThinLTO, `-C
   linker-plugin-lto`), as GCC's linker plugin does, where it was `rustc`'s
@@ -269,6 +278,10 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* A static named like a local of the variable-length-array arena — `size`,
+  `first`, `count`, `other` — beside a variable length array or `alloca`
+  compiles; the arena's code is in a module of its own now, where a binding
+  of the same name does not shadow it (E0530).
 * A link with `-flto` that also takes an object or an archive `ccinrs`
   compiled without it links: the other machine code calls Rust's standard
   library by name, and `rustc`'s LTO kept only what the `-flto` crates used —

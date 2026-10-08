@@ -5,6 +5,9 @@ expression: "generate(r\"\n        int sum(const int *values, int n) {\n        
 mod __cinrs_unit_270870a9 {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
     pub unsafe extern "C" fn sum(
         mut values: *const ::core::ffi::c_int,
         mut n: ::core::ffi::c_int,
@@ -67,14 +70,17 @@ mod __cinrs_unit_270870a9 {
     }
     pub unsafe extern "C" fn first() -> ::core::ffi::c_int {
         unsafe {
-            let mut grid: [[::core::ffi::c_int; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
-            let mut p: *mut ::core::ffi::c_int = ((&raw mut grid)
+            let mut grid: __cinrs_align_16<[[::core::ffi::c_int; 3]; 2]> = __cinrs_align_16([
+                [1, 2, 3],
+                [4, 5, 6],
+            ]);
+            let mut p: *mut ::core::ffi::c_int = ((&raw mut grid.0)
                 .cast::<[::core::ffi::c_int; 3]>()
                 .offset(1) as *mut ::core::ffi::c_int)
                 .offset(2);
             return (*p)
                 .wrapping_add({
-                    let __cinrs_tmp0 = ((&raw mut grid)
+                    let __cinrs_tmp0 = ((&raw mut grid.0)
                         .cast::<[::core::ffi::c_int; 3]>()
                         .offset(0) as *mut ::core::ffi::c_int)
                         .offset(0);

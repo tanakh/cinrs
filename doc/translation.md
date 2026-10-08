@@ -624,6 +624,21 @@ in — a `typedef`, a bit-field, a function, a parameter and an object declared
 `register` — are each refused where they are written, and so is a variable
 length array, whose storage is allocated at run time.
 
+The same wrapper carries the alignment the **x86-64 System V psABI** gives an
+array *variable*: "a local or global array variable of length at least 16
+bytes … always has alignment of at least 16 bytes" (3.1.2). GCC and Clang
+follow it, and SIMD code relies on it — `_mm_load_ps(table)` is an aligned
+load — so every automatic, `static` and file-scope array of 16 bytes or more
+is generated 16-byte aligned on that target, and a variable length array is
+allocated so. It is the variable's, not the type's: `_Alignof(float[4])`,
+`__alignof__` of the variable and a member array are untouched, as in GCC.
+The rule is x86-64's alone — i386, AArch64, Arm, RISC-V and Windows x64 align
+an array to its elements, as `gcc` and `clang` do there. In a `c99!` block an
+array Rust code can reach, a file-scope one with external linkage, keeps its
+plain `[T; N]` type and its elements' alignment, so that the Rust that reads
+it does not have to change; `ccinrs`, whose objects nothing in Rust reads,
+aligns those too (`Options::abi_align_public_arrays`).
+
 ## An initialised flexible array member
 
 C99 forbids it, because the object would have to be larger than its type. GNU C

@@ -508,6 +508,56 @@ fn a_common_definition_in_two_files_is_one_object() {
     }
 }
 
+/// The x86-64 psABI gives an array variable of 16 bytes or more 16-byte
+/// alignment, and code compiled by another compiler relies on it for an array
+/// `ccinrs` defined: here `_mm_load_ps`, an aligned SSE load, on the extern
+/// array, from an object `cc` compiled. A local and a variable length array
+/// have it too, and `__alignof__` still answers the type's.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn an_array_variable_is_aligned_as_the_psabi_says() {
+    let s = Scratch::new("psabi-arrays");
+    s.write(
+        "tables.c",
+        "#include <stdint.h>\n\
+         char pad = 1;\n\
+         float weights[4] = { 1, 2, 3, 4 };\n\
+         char tail = 2;\n\
+         double more[2] = { 5, 6 };\n\
+         int locals_aligned(int n) {\n\
+           char local[16]; short vla[n]; local[0] = (char)n; vla[0] = 0;\n\
+           return ((uintptr_t)local & 15) == 0 && ((uintptr_t)vla & 15) == 0\n\
+             && ((uintptr_t)weights & 15) == 0 && ((uintptr_t)more & 15) == 0\n\
+             && __alignof__(weights) == 4 && _Alignof(float[4]) == 4 && sizeof weights == 16\n\
+             && local[0] == (char)n && vla[0] == 0;\n\
+         }\n",
+    );
+    s.write(
+        "reader.c",
+        "#include <xmmintrin.h>\n\
+         extern float weights[4];\n\
+         float total(void) {\n\
+           float out[4];\n\
+           _mm_storeu_ps(out, _mm_load_ps(weights));\n\
+           return out[0] + out[1] + out[2] + out[3];\n\
+         }\n",
+    );
+    s.write(
+        "main.c",
+        "#include <stdio.h>\nfloat total(void);\nint locals_aligned(int);\n\
+         int main(void) { printf(\"%g %d\\n\", total(), locals_aligned(5)); return 0; }\n",
+    );
+    let cc = Command::new("cc")
+        .args(["-O2", "-c", "reader.c", "-o", "reader.o"])
+        .current_dir(&s.dir)
+        .status();
+    if !cc.is_ok_and(|status| status.success()) {
+        return;
+    }
+    s.compile(&["-O2", "main.c", "tables.c", "reader.o", "-o", "aligned"]);
+    assert_eq!(stdout(&s.run("aligned", &[])), "10 1\n");
+}
+
 /// GCC's vector extensions: a vector type's alignment follows `-mavx` as
 /// GCC's does, glibc's `<link.h>` — whose vectors an `aligned` lowers to 16
 /// bytes — compiles, and a vector passed by value to a function of another

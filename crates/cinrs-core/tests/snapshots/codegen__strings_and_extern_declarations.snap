@@ -5,6 +5,9 @@ expression: "generate(r#\"\n        unsigned long strlen(const char *s);\n      
 mod __cinrs_unit_5cdf88e1 {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
     unsafe extern "C" {
         #[link_name = "errno"]
         pub static mut __cinrs_5cdf88e1_errno: ::core::ffi::c_int;
@@ -13,18 +16,18 @@ mod __cinrs_unit_5cdf88e1 {
         #[link_name = "printf"]
         pub fn printf(fmt: *const ::core::ffi::c_char, ...) -> ::core::ffi::c_int;
     }
-    static mut messages: [*const ::core::ffi::c_char; 2] = [
+    static mut messages: __cinrs_align_16<[*const ::core::ffi::c_char; 2]> = __cinrs_align_16([
         b"ok\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
             as *const ::core::ffi::c_char,
         b"failed\0".as_ptr().cast::<::core::ffi::c_char>().cast_mut()
             as *const ::core::ffi::c_char,
-    ];
+    ]);
     pub unsafe extern "C" fn report(
         mut failed: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
         unsafe {
             let mut message: *const ::core::ffi::c_char = {
-                let __cinrs_tmp0 = (&raw mut messages)
+                let __cinrs_tmp0 = (&raw mut messages.0)
                     .cast::<*const ::core::ffi::c_char>()
                     .offset(
                         (failed != 0) as ::core::ffi::c_int as ::core::primitive::isize,

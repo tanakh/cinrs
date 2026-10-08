@@ -456,6 +456,9 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // shared library's export list itself, so a symbol only the assembler
     // defines is exported too.
     options.weak_definitions = inv.lto.is_none() || target.linker_lto(inv);
+    // Nothing in Rust reads the objects, so every array variable of 16 bytes
+    // or more is 16-byte aligned on x86-64, as GCC's are.
+    options.abi_align_public_arrays = true;
     options
 }
 

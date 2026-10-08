@@ -867,3 +867,23 @@ fn alloca_and_a_variable_length_array_in_one_function() {
         assert_eq!(both(4), 3 * 6 + 16);
     }
 }
+
+/// The arena's own code names its locals and parameters `size`, `first`,
+/// `count`, `other` and the like, and a unit's statics of those names used
+/// to be in its scope, where a binding may not shadow them (E0530).
+#[test]
+fn statics_named_like_the_arenas_locals() {
+    gnu99! {
+        static float other[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+        static int size = 3, first = 1, count = 2, chunks = 4, mark = 5;
+        int with_statics(int n) {
+            short a[n];
+            char *b = alloca(n);
+            a[0] = (short)(size + first + count + chunks + mark);
+            b[0] = 1;
+            return a[0] + b[0] + (int)(other[0] * 2.0f);
+        }
+    }
+
+    assert_eq!(unsafe { with_statics(3) }, 15 + 1 + 1);
+}

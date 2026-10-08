@@ -5,10 +5,13 @@ expression: automatic
 pub unsafe extern "C" fn automatic(mut i: ::core::ffi::c_int) -> ::core::ffi::c_int {
     unsafe {
         let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
-        let mut table: [*mut ::core::ffi::c_void; 2] = ::core::mem::zeroed::<
-            [*mut ::core::ffi::c_void; 2],
-        >();
-        table = [1usize as *mut ::core::ffi::c_void, 2usize as *mut ::core::ffi::c_void];
+        let mut table: __cinrs_align_16<[*mut ::core::ffi::c_void; 2]> = __cinrs_align_16(
+            ::core::mem::zeroed::<[*mut ::core::ffi::c_void; 2]>(),
+        );
+        table.0 = [
+            1usize as *mut ::core::ffi::c_void,
+            2usize as *mut ::core::ffi::c_void,
+        ];
         __cinrs_goto = (i as ::core::ffi::c_ulong).wrapping_add(1);
         match __cinrs_goto {
             1 => {

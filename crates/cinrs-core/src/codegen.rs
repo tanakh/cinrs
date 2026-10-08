@@ -1770,11 +1770,11 @@ impl<'a> Codegen<'a> {
     /// `sizeof buf` is the array's size, and only the binding knows about the
     /// wrapper. See [`ir::Object::align`].
     fn align_wrapper_items(&self) -> TokenStream {
-        let mut wanted: Vec<(u64, SourceRange)> = self
-            .program
-            .objects
-            .iter()
-            .filter_map(|object| Some((object.align?, object.range)))
+        let mut wanted: Vec<(u64, SourceRange)> = (0..self.program.objects.len())
+            .filter_map(|index| {
+                let id = ir::ObjectId(index as u32);
+                Some((self.object_align(id)?, self.program.object(id).range))
+            })
             .collect();
         wanted.sort_by_key(|(align, _)| *align);
         wanted.dedup_by_key(|(align, _)| *align);
@@ -3837,7 +3837,15 @@ impl<'a> Codegen<'a> {
                 },
             )
         };
+        // In a module of their own, so that the arena's locals and parameters
+        // — `size`, `first`, `count`, `other` — are not in the scope of the
+        // unit's statics of the same names, which a binding may not shadow
+        // (E0530): a C `static float other[4]` beside a variable length array
+        // did not compile. Hygiene cannot help a unit printed as text.
+        let module = Ident::new("__cinrs_vla_items", Span::mixed_site());
         quote_spanned! {span=>
+            use self::#module::{#arena, #frame};
+            mod #module {
             #spare_item
             #give_back
             #[allow(
@@ -3849,7 +3857,7 @@ impl<'a> Codegen<'a> {
                 clippy::pedantic,
                 clippy::nursery
             )]
-            struct #arena {
+            pub(super) struct #arena {
                 chunks: ::core::cell::UnsafeCell<#chunks_ty>,
                 cur: ::core::cell::Cell<#usize_ty>,
                 top: ::core::cell::Cell<#usize_ty>,
@@ -3865,7 +3873,7 @@ impl<'a> Codegen<'a> {
             )]
             impl #arena {
                 #[inline(always)]
-                fn new() -> Self {
+                pub(super) fn new() -> Self {
                     Self {
                         chunks: ::core::cell::UnsafeCell::new(#empty),
                         cur: ::core::cell::Cell::new(0),
@@ -3874,17 +3882,17 @@ impl<'a> Codegen<'a> {
                     }
                 }
                 #[inline(always)]
-                fn mark(&self) -> (#usize_ty, #usize_ty) {
+                pub(super) fn mark(&self) -> (#usize_ty, #usize_ty) {
                     (self.cur.get(), self.top.get())
                 }
                 #[inline(always)]
-                fn frame(&self) -> #frame<'_> {
+                pub(super) fn frame(&self) -> #frame<'_> {
                     #frame(self, self.mark())
                 }
                 /// Moves the position back down to `mark`, but never below
                 /// `floor` and never up.
                 #[inline(always)]
-                fn release(&self, mark: (#usize_ty, #usize_ty)) {
+                pub(super) fn release(&self, mark: (#usize_ty, #usize_ty)) {
                     let floor = self.floor.get();
                     let to = if mark > floor { mark } else { floor };
                     if to < self.mark() {
@@ -3893,7 +3901,7 @@ impl<'a> Codegen<'a> {
                     }
                 }
                 #[inline(always)]
-                fn bytes(&self, bytes: #usize_ty, align: #usize_ty) -> *mut #u8_ty {
+                pub(super) fn bytes(&self, bytes: #usize_ty, align: #usize_ty) -> *mut #u8_ty {
                     // SAFETY: nothing else borrows the list of chunks while
                     // this runs, and the memory written is inside a chunk.
                     unsafe {
@@ -3954,13 +3962,13 @@ impl<'a> Codegen<'a> {
                 }
                 /// `count` zeroed elements of `T`.
                 #[inline(always)]
-                fn alloc<#t>(&self, count: #usize_ty) -> *mut #t {
+                pub(super) fn alloc<#t>(&self, count: #usize_ty) -> *mut #t {
                     self.alloc_aligned::<#t>(count, 1)
                 }
                 /// `count` zeroed elements of `T`, the first at a multiple of
                 /// `align` if that is stricter than `T`'s own alignment.
                 #[inline(always)]
-                fn alloc_aligned<#t>(&self, count: #usize_ty, align: #usize_ty) -> *mut #t {
+                pub(super) fn alloc_aligned<#t>(&self, count: #usize_ty, align: #usize_ty) -> *mut #t {
                     let bytes = count
                         .checked_mul(::core::mem::size_of::<#t>())
                         .expect("a variable length array is larger than the address space");
@@ -3971,7 +3979,7 @@ impl<'a> Codegen<'a> {
                 /// `size` zeroed bytes, 16-byte aligned, that no frame gives
                 /// back: they live until the arena is dropped.
                 #[inline(always)]
-                fn alloca(&self, size: #usize_ty) -> *mut #void {
+                pub(super) fn alloca(&self, size: #usize_ty) -> *mut #void {
                     let first = self.bytes(size, 16);
                     self.floor.set(self.mark());
                     first.cast::<#void>()
@@ -3980,7 +3988,7 @@ impl<'a> Codegen<'a> {
                 /// gives back what its previous pass took, and everything
                 /// allocated after that, and records where this one starts.
                 #[inline]
-                fn redefine(
+                pub(super) fn redefine(
                     &self,
                     marks: &mut [::core::option::Option<(#usize_ty, #usize_ty)>],
                     slot: #usize_ty,
@@ -4008,7 +4016,7 @@ impl<'a> Codegen<'a> {
                 clippy::pedantic,
                 clippy::nursery
             )]
-            struct #frame<'a>(&'a #arena, (#usize_ty, #usize_ty));
+            pub(super) struct #frame<'a>(&'a #arena, (#usize_ty, #usize_ty));
             #[allow(
                 unknown_lints,
                 elided_lifetimes_in_paths,
@@ -4021,6 +4029,7 @@ impl<'a> Codegen<'a> {
                 fn drop(&mut self) {
                     self.0.release(self.1);
                 }
+            }
             }
         }
     }
@@ -4188,7 +4197,46 @@ impl<'a> Codegen<'a> {
     /// one-field wrapper that carries the alignment; see
     /// [`Codegen::align_wrapper_items`] and [`ir::Object::align`].
     fn object_align(&self, id: ir::ObjectId) -> Option<u64> {
-        self.program.object(id).align
+        let object = self.program.object(id);
+        match (object.align, self.abi_array_align(object)) {
+            (Some(asked), Some(abi)) => Some(asked.max(abi)),
+            (asked, abi) => asked.or(abi),
+        }
+    }
+
+    /// The x86-64 System V psABI's alignment of an array variable: "a local
+    /// or global array variable of length at least 16 bytes … always has
+    /// alignment of at least 16 bytes" (3.1.2), which GCC and Clang give it
+    /// and SIMD code relies on — `_mm_load_ps(table)`, or Redis's
+    /// `uint64_t [64][64]` read as `v2uq`s. It is a property of the
+    /// *variable*: an array type, a member and `__alignof__` are untouched,
+    /// as in GCC. No other ABI here has such a rule — i386, AArch64, Arm,
+    /// RISC-V and Windows x64 align an array to its elements — and an array
+    /// Rust code reads keeps its Rust type unless
+    /// [`Options::abi_align_public_arrays`] says otherwise.
+    fn abi_array_align(&self, object: &ir::Object) -> Option<u64> {
+        let target = &self.options.target;
+        if target.arch != crate::target::Arch::X86_64 || target.os == crate::target::Os::Windows {
+            return None;
+        }
+        match object.storage {
+            Storage::Automatic => {}
+            Storage::Static { exported, .. } | Storage::ThreadLocal { exported, .. } => {
+                if exported && !self.options.abi_align_public_arrays {
+                    return None;
+                }
+            }
+            Storage::Extern { .. } | Storage::ExternThreadLocal { .. } => return None,
+        }
+        let Ty::Array(id) = object.ty else {
+            return None;
+        };
+        let array = self.program.types.array_type(id);
+        if array.vla || array.incomplete || object.vla_storage {
+            return None;
+        }
+        let layout = self.program.types.size_align(object.ty, target)?;
+        (layout.size >= 16 && layout.align < 16).then_some(16)
     }
 
     /// The type an object's binding is declared with.
@@ -4293,7 +4341,7 @@ impl<'a> Codegen<'a> {
                 span,
             );
         }
-        if object.align.is_some() {
+        if self.object_align(id).is_some() {
             let field = Literal::usize_unsuffixed(0);
             access = quote_spanned! {span=> #access.#field };
         }
@@ -5272,8 +5320,15 @@ impl<'a> Codegen<'a> {
         let usize_ty = primitive_ty("usize", span);
         let arena = self.arena_ident(span);
         // A requested alignment stricter than the element's pads the arena's
-        // position up to a multiple of it before the array starts.
-        let first = match def.align {
+        // position up to a multiple of it before the array starts. The x86-64
+        // psABI asks for 16 of every variable length array (3.1.2); see
+        // [`Codegen::abi_array_align`].
+        let target = &self.options.target;
+        let abi = (target.arch == crate::target::Arch::X86_64
+            && target.os != crate::target::Os::Windows
+            && self.type_align(elem) < 16)
+            .then_some(16);
+        let first = match def.align.max(abi) {
             Some(align) => {
                 let align = Literal::usize_unsuffixed(align as usize);
                 quote_spanned! {span=>
@@ -9307,12 +9362,17 @@ impl<'a> Codegen<'a> {
     fn place_underaligned(&self, place: &Place) -> bool {
         match &place.kind {
             // A GCC vector read through a pointer is read as though it might
-            // be anywhere its elements could be. GCC gives every array of 16
-            // bytes or more 16-byte alignment, as the x86-64 psABI asks, and
-            // vector code leans on it — Redis's `crccombine.c` reads a
-            // `uint64_t [64]` as `v2uq`s — while a Rust array is aligned to
-            // its elements only. An unaligned vector load costs nothing on any
-            // processor that has vector loads at all.
+            // be anywhere its elements could be. Vector code points one at
+            // storage its elements' type aligns — Redis's `crccombine.c` reads
+            // a `uint64_t [64]` as `v2uq`s — which an array *variable* now
+            // covers on x86-64 (see `Codegen::abi_array_align`), but a member
+            // array, an offset into one, and every array on AArch64, whose
+            // ABI has no such rule, are aligned to their elements only. GCC's
+            // code is fine there by luck on x86-64 and by design on AArch64,
+            // whose vector loads take any address; an aligned Rust load
+            // would be undefined behaviour and, with debug assertions, a
+            // panic. An unaligned vector load costs nothing on any processor
+            // that has vector loads at all.
             PlaceKind::Deref(_) | PlaceKind::Index { .. } if place.ty.is_gnu_vector() => {
                 let elem = self.gnu_vector_shape(place.ty).elem;
                 self.type_align(elem) < self.type_align(place.ty)

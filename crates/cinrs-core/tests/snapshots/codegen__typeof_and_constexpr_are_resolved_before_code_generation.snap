@@ -5,12 +5,17 @@ expression: "generate_for(Standard::C23,\nr#\"\n        constexpr int LIMIT = 4;
 mod __cinrs_unit_8f5fa472 {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
     pub const RED: ::core::ffi::c_uchar = 0;
     pub const GREEN: ::core::ffi::c_uchar = 1;
     pub type Small = ::core::ffi::c_uchar;
     pub unsafe extern "C" fn sum() -> ::core::ffi::c_int {
         unsafe {
-            let mut values: [::core::ffi::c_int; 4] = [1, 2, 3, 4];
+            let mut values: __cinrs_align_16<[::core::ffi::c_int; 4]> = __cinrs_align_16([
+                1, 2, 3, 4,
+            ]);
             let mut total: ::core::ffi::c_int = 0;
             {
                 let mut i: ::core::ffi::c_int = 0;
@@ -21,7 +26,7 @@ mod __cinrs_unit_8f5fa472 {
                     'l0_body: {
                         total = total
                             .wrapping_add({
-                                let __cinrs_tmp0 = (&raw mut values)
+                                let __cinrs_tmp0 = (&raw mut values.0)
                                     .cast::<::core::ffi::c_int>()
                                     .offset(i as ::core::primitive::isize);
                                 (*__cinrs_tmp0)

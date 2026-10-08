@@ -1713,3 +1713,54 @@ fn gcc_vector_operators_on_the_intel_types() {
 fn mm_malloc_aligns_and_frees() {
     assert_eq!(unsafe { aligned_blocks() }, 1);
 }
+
+// The x86-64 psABI gives an array variable of 16 bytes or more 16-byte
+// alignment, and `_mm_load_ps` — an aligned load — on one is how SIMD code
+// relies on it: a global, a local and a block-scope `static`, each a
+// `float[4]` whose elements alone would give it 4. An array Rust code reads,
+// a `pub static` of the block, keeps its Rust type, and the alignment of its
+// elements; `ccinrs` aligns those too (see its CLI tests).
+c11! {
+    #include <xmmintrin.h>
+    #include <stdint.h>
+
+    static char before = 1;
+    static float table[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    static char between = 2;
+    static float other[4] = {0.5f, 0.5f, 0.5f, 0.5f};
+
+    float aligned_loads(void) {
+        char pad = between + before;
+        float local[4] = {5.0f, 6.0f, 7.0f, 8.0f};
+        static float inner[8] = {1.0f, 1.0f, 1.0f, 1.0f, 2.0f, 2.0f, 2.0f, 2.0f};
+        float out[4];
+        __m128 sum = _mm_add_ps(_mm_load_ps(table), _mm_load_ps(local));
+        sum = _mm_add_ps(sum, _mm_load_ps(inner + 4));
+        sum = _mm_add_ps(sum, _mm_load_ps(other));
+        _mm_storeu_ps(out, sum);
+        return out[0] + out[1] + out[2] + out[3] + (float)(pad - 3);
+    }
+
+    int arrays_are_aligned(int n) {
+        char local16[16];
+        double local32[4];
+        short vla[n];
+        local16[0] = 0;
+        local32[0] = 0;
+        vla[0] = 0;
+        return ((uintptr_t)table & 15) == 0 && ((uintptr_t)other & 15) == 0
+            && ((uintptr_t)local16 & 15) == 0 && ((uintptr_t)local32 & 15) == 0
+            && ((uintptr_t)vla & 15) == 0
+            /* the variable is aligned, not its type */
+            && __alignof__(table) == 4 && _Alignof(float[4]) == 4 && sizeof table == 16
+            && local16[0] == 0 && local32[0] == 0.0 && vla[0] == 0;
+    }
+}
+
+#[test]
+fn an_array_variable_has_the_psabis_alignment() {
+    unsafe {
+        assert_eq!(aligned_loads(), 10.0 + 26.0 + 8.0 + 2.0);
+        assert_eq!(arrays_are_aligned(5), 1);
+    }
+}

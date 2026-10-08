@@ -5,6 +5,9 @@ expression: "generate_for(Standard::C99,\nr#\"\n        #pragma cinrs auto_var_i
 mod __cinrs_unit_124c9a7c {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
     #[repr(C)]
     #[derive(Copy, Clone)]
     pub struct pair {
@@ -17,18 +20,23 @@ mod __cinrs_unit_124c9a7c {
     }
     pub unsafe extern "C" fn structured() -> ::core::ffi::c_int {
         unsafe {
-            let mut buf: ::core::mem::MaybeUninit<[::core::ffi::c_int; 64]> = ::core::mem::MaybeUninit::uninit();
+            let mut buf: ::core::mem::MaybeUninit<
+                __cinrs_align_16<[::core::ffi::c_int; 64]>,
+            > = ::core::mem::MaybeUninit::uninit();
             let mut ready: [::core::ffi::c_int; 2] = [1, 0];
             let mut scalar: ::core::ffi::c_int = 0;
             let mut p: pair = ::core::mem::zeroed::<pair>();
             fill(
-                (&raw mut (*(&raw mut buf).cast::<[::core::ffi::c_int; 64]>()))
+                (&raw mut (*(&raw mut buf)
+                    .cast::<__cinrs_align_16<[::core::ffi::c_int; 64]>>())
+                    .0)
                     .cast::<::core::ffi::c_int>(),
                 64,
             );
             scalar = {
                 let __cinrs_tmp0 = (&raw mut (*(&raw mut buf)
-                    .cast::<[::core::ffi::c_int; 64]>()))
+                    .cast::<__cinrs_align_16<[::core::ffi::c_int; 64]>>())
+                    .0)
                     .cast::<::core::ffi::c_int>()
                     .offset(3);
                 (*__cinrs_tmp0)
@@ -44,11 +52,14 @@ mod __cinrs_unit_124c9a7c {
     }
     pub unsafe extern "C" fn with_goto(mut n: ::core::ffi::c_int) -> ::core::ffi::c_int {
         unsafe {
-            let mut seen: ::core::mem::MaybeUninit<[::core::ffi::c_char; 16]> = ::core::mem::MaybeUninit::uninit();
+            let mut seen: ::core::mem::MaybeUninit<
+                __cinrs_align_16<[::core::ffi::c_char; 16]>,
+            > = ::core::mem::MaybeUninit::uninit();
             let mut i: ::core::ffi::c_int = 0;
             'again: loop {
                 let __cinrs_tmp0 = (&raw mut (*(&raw mut seen)
-                    .cast::<[::core::ffi::c_char; 16]>()))
+                    .cast::<__cinrs_align_16<[::core::ffi::c_char; 16]>>())
+                    .0)
                     .cast::<::core::ffi::c_char>()
                     .offset(i as ::core::primitive::isize);
                 (*__cinrs_tmp0) = n as ::core::ffi::c_char;
@@ -63,7 +74,8 @@ mod __cinrs_unit_124c9a7c {
             }
             return ({
                 let __cinrs_tmp1 = (&raw mut (*(&raw mut seen)
-                    .cast::<[::core::ffi::c_char; 16]>()))
+                    .cast::<__cinrs_align_16<[::core::ffi::c_char; 16]>>())
+                    .0)
                     .cast::<::core::ffi::c_char>()
                     .offset(15);
                 (*__cinrs_tmp1)

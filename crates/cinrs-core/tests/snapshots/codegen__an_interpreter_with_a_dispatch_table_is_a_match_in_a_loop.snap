@@ -5,19 +5,24 @@ expression: "generate(r\"\n        int run(const unsigned char *code) {\n       
 mod __cinrs_unit_d6c7bdfa {
     #![allow(…)]
     const _: () = { /* the data-model check */ };
-    static mut __cinrs_static_d6c7bdfa_run_dispatch: [*mut ::core::ffi::c_void; 3] = [
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
+    static mut __cinrs_static_d6c7bdfa_run_dispatch: __cinrs_align_16<
+        [*mut ::core::ffi::c_void; 3],
+    > = __cinrs_align_16([
         1usize as *mut ::core::ffi::c_void,
         2usize as *mut ::core::ffi::c_void,
         3usize as *mut ::core::ffi::c_void,
-    ];
+    ]);
     pub unsafe extern "C" fn run(
         mut code: *const ::core::ffi::c_uchar,
     ) -> ::core::ffi::c_int {
         unsafe {
             let mut __cinrs_goto: ::core::ffi::c_ulong = 0;
-            let mut stack: [::core::ffi::c_int; 16] = ::core::mem::zeroed::<
-                [::core::ffi::c_int; 16],
-            >();
+            let mut stack: __cinrs_align_16<[::core::ffi::c_int; 16]> = __cinrs_align_16(
+                ::core::mem::zeroed::<[::core::ffi::c_int; 16]>(),
+            );
             let mut sp: ::core::ffi::c_int = 0;
             let mut ip: *const ::core::ffi::c_uchar = ::core::ptr::null::<
                 ::core::ffi::c_uchar,
@@ -36,7 +41,7 @@ mod __cinrs_unit_d6c7bdfa {
             'dispatch: loop {
                 match __cinrs_goto {
                     1 => {
-                        let __cinrs_tmp3 = (&raw mut stack)
+                        let __cinrs_tmp3 = (&raw mut stack.0)
                             .cast::<::core::ffi::c_int>()
                             .offset(
                                 ({
@@ -65,12 +70,12 @@ mod __cinrs_unit_d6c7bdfa {
                     }
                     2 => {
                         sp = sp.wrapping_sub(1);
-                        let __cinrs_tmp8 = (&raw mut stack)
+                        let __cinrs_tmp8 = (&raw mut stack.0)
                             .cast::<::core::ffi::c_int>()
                             .offset(sp.wrapping_sub(1) as ::core::primitive::isize);
                         (*__cinrs_tmp8) = (*__cinrs_tmp8)
                             .wrapping_add({
-                                let __cinrs_tmp9 = (&raw mut stack)
+                                let __cinrs_tmp9 = (&raw mut stack.0)
                                     .cast::<::core::ffi::c_int>()
                                     .offset(sp as ::core::primitive::isize);
                                 (*__cinrs_tmp9)
@@ -87,7 +92,7 @@ mod __cinrs_unit_d6c7bdfa {
                     }
                     3 => {
                         return {
-                            let __cinrs_tmp12 = (&raw mut stack)
+                            let __cinrs_tmp12 = (&raw mut stack.0)
                                 .cast::<::core::ffi::c_int>()
                                 .offset(sp.wrapping_sub(1) as ::core::primitive::isize);
                             (*__cinrs_tmp12)
