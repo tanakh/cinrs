@@ -1205,10 +1205,7 @@ impl<'a> Sema<'a> {
     /// The note that names the entry point which would have accepted what
     /// [`Sema::gnu_leniency`] just refused.
     fn gnu_note(&self) -> String {
-        format!(
-            "GCC accepts this with a warning; write {} for the same leniency",
-            self.gating.standard.macro_name_in(crate::Dialect::Gnu)
-        )
+        self.gating.leniency_note()
     }
 
     /// The gate diagnostic for a name a newer standard would have made a

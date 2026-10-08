@@ -326,6 +326,16 @@ follows [Semantic Versioning][semver].
   three of git's tests passed or failed by luck. Compound literals and
   definitions hoisted out of their block likewise, and `q = p;` of a padded
   type copies the bytes.
+* A strict block or `-std=` below C23, which refuses `#embed`, no longer
+  defines `__has_embed` either, and `__has_embed(…)` answers "not found"
+  there: FFmpeg's checkasm, compiled with `-std=c17`, asks with `#ifdef
+  __has_embed` and took the directive into the refusal. A GNU dialect takes
+  both, as before.
+* Under `ccinrs`, a diagnostic that says how to choose another standard or
+  dialect names the option — "compile with -std=gnu17 for the same
+  leniency", "(this file is compiled with -std=c17)" — rather than the
+  `gnu17!` macro; `Options::front_end` says which front end the C came
+  through.
 * A static pointing into an `extern` array of unknown size at an offset —
   FFmpeg's `ff_ac3_enc_options + 2` — compiles: pointer arithmetic in a
   static's initialiser is `wrapping_offset`, where rustc's constant

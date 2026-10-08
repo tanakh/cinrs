@@ -895,6 +895,7 @@ impl LexOptions {
             gating: crate::Gating {
                 standard,
                 dialect: crate::Dialect::Iso,
+                front_end: crate::FrontEnd::Macros,
             },
             dollar_in_identifiers: true,
             trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),
@@ -1934,17 +1935,13 @@ impl<'a> Lexer<'a> {
             return (FloatSuffix::None, false);
         }
         if !self.options.gating.dialect.is_gnu() {
-            let gnu = self.options.gating.standard.macro_name_in(Dialect::Gnu);
-            let here = self
-                .options
-                .gating
-                .standard
-                .macro_name_in(self.options.gating.dialect);
+            let gnu = self.options.gating.spelled(Dialect::Gnu);
+            let here = self.options.gating.here();
             self.error(
                 range,
                 format!(
                     "the suffix '{suffix}' on a floating constant is a GNU extension, and \
-                     requires a GNU dialect ({gnu}) (this block is {here})"
+                     requires a GNU dialect ({gnu}) ({here})"
                 ),
             );
             return (FloatSuffix::None, false);

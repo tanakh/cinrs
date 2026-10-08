@@ -2060,14 +2060,31 @@ fn the_has_operators_count_as_defined() {
     assert_eq!(pp("#if defined(__has_attribute)\nyes\n#endif"), "yes");
     assert_eq!(pp("#if defined __has_builtin\nyes\n#endif"), "yes");
     assert_eq!(pp("#ifndef __has_c_attribute\nno\n#endif\nend"), "end");
-    for op in [
-        "__has_include_next",
-        "__has_feature",
-        "__has_extension",
-        "__has_embed",
-    ] {
+    for op in ["__has_include_next", "__has_feature", "__has_extension"] {
         assert!(cond(&format!("defined({op})")), "{op}");
     }
+    // `__has_embed` is defined where `#embed` is accepted: C23, or a GNU
+    // dialect of any revision. A strict block of an older one refuses the
+    // directive, so the operator is not defined there and answers "not
+    // found", and a program that asks first — FFmpeg's checkasm, `#ifdef
+    // __has_embed` — takes its other road.
+    assert_eq!(
+        pp("#ifdef __has_embed\nyes\n#else\nno\n#endif\n__STDC_EMBED_FOUND__"),
+        "no 1"
+    );
+    assert!(cond("__has_embed(<stddef.h>) == __STDC_EMBED_NOT_FOUND__"));
+    assert_eq!(
+        pp_embedding(
+            "#ifdef __has_embed\nyes\n#endif\n#if __has_embed(<data.bin>) == 1\nfound\n#endif"
+        ),
+        "yes found"
+    );
+    let (tokens, errors, _) = run_embedding(
+        Standard::C17,
+        "#ifdef __has_embed\nyes\n#endif\n#if __has_embed(<data.bin>)\nfound\n#endif",
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert!(tokens.is_empty(), "{tokens:?}");
     // Not answered here (C++ only), so not defined — and the usual fallback
     // a header writes for it is taken.
     assert_eq!(pp("#ifdef __has_cpp_attribute\nyes\n#endif\nno"), "no");

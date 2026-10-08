@@ -459,6 +459,9 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // Nothing in Rust reads the objects, so every array variable of 16 bytes
     // or more is 16-byte aligned on x86-64, as GCC's are.
     options.abi_align_public_arrays = true;
+    // A diagnostic that says how to choose another standard names `-std=`,
+    // not the macro a `c99!` block is written with.
+    options.front_end = cinrs_core::FrontEnd::CommandLine;
     options
 }
 

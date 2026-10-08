@@ -458,6 +458,11 @@ pub struct Options {
     /// **Off by default**, so a block's public arrays keep their Rust type;
     /// `ccinrs`, whose objects nothing in Rust reads, turns it on.
     pub abi_align_public_arrays: bool,
+    /// Which front end the C came through, which is what a diagnostic names
+    /// when it says how to choose another standard or dialect: `gnu11!`, or
+    /// `-std=gnu11`. [`FrontEnd::Macros`] by default; `ccinrs` sets
+    /// [`FrontEnd::CommandLine`].
+    pub front_end: FrontEnd,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -565,6 +570,7 @@ impl Options {
             own_declarations_are_cinrs: false,
             weak_definitions: false,
             abi_align_public_arrays: false,
+            front_end: FrontEnd::Macros,
         }
     }
 
@@ -612,8 +618,20 @@ impl Options {
         Gating {
             standard: self.standard,
             dialect: self.dialect,
+            front_end: self.front_end,
         }
     }
+}
+
+/// Which front end the C came through, which is what a diagnostic that says
+/// how to choose another standard or dialect has to name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrontEnd {
+    /// The `c99!` family of macros: "write gnu11! for the same leniency".
+    #[default]
+    Macros,
+    /// A command line, `ccinrs`'s: "compile with -std=gnu11".
+    CommandLine,
 }
 
 /// The pair every pass needs to answer "may this block write that?".
@@ -627,6 +645,8 @@ pub struct Gating {
     pub standard: Standard,
     /// Whether the GNU extensions are switched on.
     pub dialect: Dialect,
+    /// How the diagnostics name a standard and a dialect.
+    pub front_end: FrontEnd,
 }
 
 impl Gating {
@@ -637,10 +657,45 @@ impl Gating {
             return None;
         }
         Some(format!(
-            "{what} requires {} or later (this block is {})",
+            "{what} requires {} or later ({})",
             needed.as_str(),
-            self.standard.macro_name_in(self.dialect)
+            self.here()
         ))
+    }
+
+    /// How the front end selects this standard in `dialect`: `gnu11!`, or
+    /// `-std=gnu11` on a command line.
+    pub fn spelled(self, dialect: Dialect) -> String {
+        let name = self.standard.macro_name_in(dialect);
+        match self.front_end {
+            FrontEnd::Macros => name.to_owned(),
+            FrontEnd::CommandLine => format!("-std={}", name.trim_end_matches('!')),
+        }
+    }
+
+    /// What a diagnostic says the code is being compiled as: "this block is
+    /// c99!", or "this file is compiled with -std=c99".
+    pub fn here(self) -> String {
+        match self.front_end {
+            FrontEnd::Macros => format!("this block is {}", self.spelled(self.dialect)),
+            FrontEnd::CommandLine => {
+                format!("this file is compiled with {}", self.spelled(self.dialect))
+            }
+        }
+    }
+
+    /// The note on a GNU leniency a strict standard refuses, which says how to
+    /// have it.
+    pub fn leniency_note(self) -> String {
+        let gnu = self.spelled(Dialect::Gnu);
+        match self.front_end {
+            FrontEnd::Macros => {
+                format!("GCC accepts this with a warning; write {gnu} for the same leniency")
+            }
+            FrontEnd::CommandLine => {
+                format!("GCC accepts this with a warning; compile with {gnu} for the same leniency")
+            }
+        }
     }
 
     /// Whether a declaration with no type specifier at all means `int`
@@ -685,19 +740,19 @@ impl Gating {
         if self.dialect.is_gnu() {
             return None;
         }
-        let gnu = self.standard.macro_name_in(Dialect::Gnu);
-        let here = self.standard.macro_name_in(self.dialect);
+        let gnu = self.spelled(Dialect::Gnu);
+        let here = self.here();
         match name {
             "typeof" | "typeof_unqual" if self.standard < Standard::C23 => {
                 return Some(format!(
                     "'{name}' requires a GNU dialect ({gnu}) or C23 or later \
-                     (this block is {here})"
+                     ({here})"
                 ));
             }
             "asm" => {
                 return Some(format!(
                     "'{name}' requires a GNU dialect ({gnu}); the spelling '__asm__' is \
-                     available everywhere (this block is {here})"
+                     available everywhere ({here})"
                 ));
             }
             _ => {}

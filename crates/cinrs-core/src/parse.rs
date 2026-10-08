@@ -432,10 +432,7 @@ impl Parser<'_> {
     /// The note that names the entry point which would have accepted what
     /// [`Parser::gnu_leniency`] just refused.
     fn gnu_note(&self) -> String {
-        format!(
-            "GCC accepts this with a warning; write {} for the same leniency",
-            self.gating.standard.macro_name_in(crate::Dialect::Gnu)
-        )
+        self.gating.leniency_note()
     }
 
     /// Reports a GNU-only leniency the strict entry points refuse.

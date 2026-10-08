@@ -4963,7 +4963,18 @@ impl Pp<'_> {
     /// (`__has_cpp_attribute`, Clang's `__has_declspec_attribute`, which GCC
     /// does not define either) stays undefined.
     fn is_defined(&self, name: &str) -> bool {
-        self.macros.contains_key(name) || HAS_OPERATORS.contains(&name)
+        self.macros.contains_key(name)
+            || (HAS_OPERATORS.contains(&name) && (name != "__has_embed" || self.embed_allowed()))
+    }
+
+    /// Whether `#embed` is accepted here: in C23, and before it in a GNU
+    /// dialect, as GCC takes it. A strict block of an older revision refuses
+    /// the directive, so it does not define `__has_embed` either, and
+    /// `__has_embed(…)` answers "not found": a program that asks before it
+    /// embeds — FFmpeg's checkasm, `#ifdef __has_embed` — takes its other
+    /// road rather than the refusal.
+    fn embed_allowed(&self) -> bool {
+        self.gating.requires("'#embed'", Standard::C23).is_none()
     }
 
     /// Answers one `__has_…(…)` operator, returning its value and the index
@@ -5060,6 +5071,9 @@ impl Pp<'_> {
                 };
                 let params = self.embed_parameters(&inner[after..], range, false);
                 let origin = self.cur().origin.clone();
+                if !self.embed_allowed() {
+                    return Some((EMBED_NOT_FOUND, end));
+                }
                 match (
                     params,
                     include::resolve_embed(&resource, form, &origin, &self.search),

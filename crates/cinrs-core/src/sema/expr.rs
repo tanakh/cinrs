@@ -2917,13 +2917,13 @@ impl Sema<'_> {
             return None;
         }
         if !self.gating.dialect.is_gnu() {
-            let gnu = self.gating.standard.macro_name_in(crate::Dialect::Gnu);
-            let here = self.gating.standard.macro_name_in(self.gating.dialect);
+            let gnu = self.gating.spelled(crate::Dialect::Gnu);
+            let here = self.gating.here();
             self.error(
                 type_name.range,
                 format!(
                     "a cast to a union type is a GNU extension, and requires a GNU dialect \
-                     ({gnu}) (this block is {here})"
+                     ({gnu}) ({here})"
                 ),
             );
             return Some(None);

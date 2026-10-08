@@ -293,6 +293,43 @@ fn no_cinrs_unwind_refuses_setjmp() {
     assert!(s.run("plain", &[]).status.success());
 }
 
+/// A diagnostic that says how to choose another standard names `-std=`, which
+/// is how a command line chooses one, not the macro a `c99!` block is written
+/// with. And under `-std=c17`, which refuses `#embed` as `c17!` does,
+/// `__has_embed` is not defined, so FFmpeg's `#ifdef __has_embed` takes its
+/// other road rather than the refusal.
+#[test]
+fn a_strict_standard_is_named_as_the_command_line_names_it() {
+    let s = Scratch::new("strict-std");
+    s.write(
+        "lenient.c",
+        "int something(void);\nvoid forwards(void) { return something(); }\n\
+         int main(void) { long x = 1.0q > 0; return (int) x; }\n",
+    );
+    let out = s.ccinrs(&["-std=c17", "-c", "lenient.c"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("compile with -std=gnu17 for the same leniency"),
+        "{err}"
+    );
+    assert!(
+        err.contains("requires a GNU dialect (-std=gnu17) (this file is compiled with -std=c17)"),
+        "{err}"
+    );
+    assert!(!err.contains("gnu17!"), "{err}");
+    s.write(
+        "embed.c",
+        "#include <stdio.h>\n#ifdef __has_embed\nstatic const char data[] = {\n#embed \"data.bin\" suffix(, 0)\n};\n\
+         #else\nstatic const char data[] = \"no embed\";\n#endif\nint main(void) { puts(data); return 0; }\n",
+    );
+    s.write("data.bin", "embedded");
+    s.compile(&["-std=c17", "embed.c", "-o", "c17"]);
+    assert_eq!(stdout(&s.run("c17", &[])), "no embed\n");
+    s.compile(&["-std=gnu17", "embed.c", "-o", "gnu17"]);
+    assert_eq!(stdout(&s.run("gnu17", &[])), "embedded\n");
+}
+
 /// What ccinrs links is what it compiled, so a function the program declares
 /// in its own header is another of its files, whose `long double` is the
 /// `double` this one passes — Redis's `ld2string` — while one the platform's
