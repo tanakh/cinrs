@@ -66,13 +66,7 @@ mod __cinrs_unit_3f73a1c1 {
             };
             return m.d + m.i as ::core::ffi::c_double + o.i as ::core::ffi::c_double
                 + o.d + t.a as ::core::ffi::c_double + t.b as ::core::ffi::c_double
-                + t.c as ::core::ffi::c_double
-                + ({
-                    let __cinrs_tmp4 = (&raw mut b.x)
-                        .cast::<::core::ffi::c_char>()
-                        .offset(12);
-                    (*__cinrs_tmp4)
-                }) as ::core::ffi::c_double;
+                + t.c as ::core::ffi::c_double + b.x[12] as ::core::ffi::c_double;
         }
     }
 }

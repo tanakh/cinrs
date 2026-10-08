@@ -10006,6 +10006,129 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// The array object of a subscript `a[i]` that is lowered as an element
+    /// of the array itself, `a[i as usize]`, rather than through the pointer
+    /// `a` decays to.
+    ///
+    /// The pointer lowering — `a.cast::<T>().offset(i)` and a dereference —
+    /// has `offset` check that the address calculation does not wrap, which
+    /// LLVM cannot fold for a `static`, whose address it does not know. Inside
+    /// an object the calculation cannot wrap, so when the subscript is sure to
+    /// be in range — a constant, or an `unsigned char` into a table of 256, as
+    /// in an interpreter's `goto *table[opcode]`, which runs once per
+    /// instruction — the check has nothing to catch. The projection's own
+    /// bounds check is one LLVM folds, since the subscript's range proves it.
+    ///
+    /// Only an array reached without a dereference qualifies: a named object
+    /// that is not a weak reference, and its members and in-range elements.
+    /// Through a pointer, `p->a[0]` would check `p` against the alignment of
+    /// the whole record rather than the element's, which is another check, so
+    /// that keeps the pointer lowering.
+    fn projectable_array<'e>(&self, base: &'e Expr, index: &Expr, elem: Ty) -> Option<&'e Place> {
+        let ExprKind::AddrOf(array) = &base.kind else {
+            return None;
+        };
+        let Ty::Array(id) = array.ty else {
+            return None;
+        };
+        let info = self.program.types.array_type(id);
+        // A static's initialiser keeps the `wrapping_offset` that suits
+        // constant evaluation; see `Codegen::in_static_init`. A safe function
+        // keeps the pointer too, so that what one may do does not hang on the
+        // form of a subscript: `a[0]` of a local array would be safe Rust and
+        // `a[i]` would not.
+        if self.in_static_init
+            || self.in_safe
+            || info.vla
+            || info.elem != elem
+            || self.program.types.is_vm(array.ty)
+            || !self.reached_without_deref(array)
+        {
+            return None;
+        }
+        let (low, high) = self.value_range(index);
+        (low >= 0 && high < i128::from(info.len)).then_some(array)
+    }
+
+    /// Whether a place is a named object, or a member or an in-range element
+    /// of one, rather than anything reached through a pointer; see
+    /// [`Codegen::projectable_array`].
+    fn reached_without_deref(&self, place: &Place) -> bool {
+        match &place.kind {
+            PlaceKind::Object(id) => self.program.object(*id).weak.is_none(),
+            PlaceKind::Field { base, .. } => self.reached_without_deref(base),
+            PlaceKind::Index { base, index } => {
+                self.projectable_array(base, index, place.ty).is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// `array[index]` as a place of the array, for a subscript
+    /// [`Codegen::projectable_array`] has found in range.
+    fn array_element(
+        &mut self,
+        array: &Place,
+        index: &Expr,
+        mutable: bool,
+        span: Span,
+    ) -> LoweredPlace {
+        let lowered = self.place(array, mutable);
+        let access = lowered.access;
+        let mut setup = lowered.setup;
+        let subscript = match &index.kind {
+            // In range, so not negative.
+            ExprKind::Int(value) => usize_literal(*value as u64, span),
+            // Evaluated once, before the place is used: `t[i++] += 1` reads
+            // and writes the place.
+            _ => {
+                let tokens = self.expr(index).at(prec::CAST, span);
+                let usize_ty = primitive_ty("usize", span);
+                let tmp = self.temporary_at(span);
+                setup.extend(quote_spanned! {span=> let #tmp = #tokens as #usize_ty; });
+                quote_spanned! {span=> #tmp }
+            }
+        };
+        LoweredPlace::plain(setup, quote_spanned! {span=> #access[#subscript] })
+    }
+
+    /// The values an integer expression can take, as far as its form shows: a
+    /// constant, a conversion that keeps its operand's value, the value an
+    /// assignment to a variable stores, or `x & mask` with a mask that is not
+    /// negative. Anything else may be any value of its type.
+    fn value_range(&self, expr: &Expr) -> (i128, i128) {
+        if !expr.ty.is_integer() {
+            return (i128::MIN, i128::MAX);
+        }
+        let target = &self.options.target;
+        let whole = (expr.ty.min_value(target), expr.ty.max_value(target));
+        let narrow = match &expr.kind {
+            ExprKind::Int(value) => (*value, *value),
+            ExprKind::Cast(inner) => self.value_range(inner),
+            // A bit-field stores fewer bits than its type has, so only a
+            // whole variable is sure to hold the value as converted.
+            ExprKind::Assign { place, value } if matches!(place.kind, PlaceKind::Object(_)) => {
+                self.value_range(value)
+            }
+            ExprKind::Binary {
+                op: BinOp::BitAnd,
+                lhs,
+                rhs,
+            } => match (&lhs.kind, &rhs.kind) {
+                (ExprKind::Int(mask), _) | (_, ExprKind::Int(mask)) if *mask >= 0 => (0, *mask),
+                _ => whole,
+            },
+            _ => whole,
+        };
+        // A conversion to a narrower type wraps, and the result is then only
+        // known to be a value of that type.
+        if narrow.0 >= whole.0 && narrow.1 <= whole.1 {
+            narrow
+        } else {
+            whole
+        }
+    }
+
     fn place_access(&mut self, place: &Place, mutable: bool) -> LoweredPlace {
         let span = self.sp(place.range);
         match &place.kind {
@@ -10053,6 +10176,9 @@ impl<'a> Codegen<'a> {
             }
             PlaceKind::Deref(ptr) => self.deref_place(ptr, place.ty, mutable, span),
             PlaceKind::Index { base, index } => {
+                if let Some(array) = self.projectable_array(base, index, place.ty) {
+                    return self.array_element(array, index, mutable, span);
+                }
                 let pointer = self.pointer_operand(base, place.ty, mutable, span);
                 let offset = self.scaled_offset(place.ty, index, false, span);
                 let tmp = self.temporary_at(span);

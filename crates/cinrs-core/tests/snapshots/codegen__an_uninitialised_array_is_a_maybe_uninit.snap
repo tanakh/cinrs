@@ -33,20 +33,10 @@ mod __cinrs_unit_124c9a7c {
                     .cast::<::core::ffi::c_int>(),
                 64,
             );
-            scalar = {
-                let __cinrs_tmp0 = (&raw mut (*(&raw mut buf)
-                    .cast::<__cinrs_align_16<[::core::ffi::c_int; 64]>>())
-                    .0)
-                    .cast::<::core::ffi::c_int>()
-                    .offset(3);
-                (*__cinrs_tmp0)
-            };
-            p.a = {
-                let __cinrs_tmp1 = (&raw mut ready)
-                    .cast::<::core::ffi::c_int>()
-                    .offset(0);
-                (*__cinrs_tmp1)
-            };
+            scalar = (*(&raw mut buf)
+                .cast::<__cinrs_align_16<[::core::ffi::c_int; 64]>>())
+                .0[3];
+            p.a = ready[0];
             return scalar.wrapping_add(p.a).wrapping_add(p.b);
         }
     }
@@ -72,14 +62,9 @@ mod __cinrs_unit_124c9a7c {
                 }
                 break 'again;
             }
-            return ({
-                let __cinrs_tmp1 = (&raw mut (*(&raw mut seen)
-                    .cast::<__cinrs_align_16<[::core::ffi::c_char; 16]>>())
-                    .0)
-                    .cast::<::core::ffi::c_char>()
-                    .offset(15);
-                (*__cinrs_tmp1)
-            }) as ::core::ffi::c_int;
+            return (*(&raw mut seen)
+                .cast::<__cinrs_align_16<[::core::ffi::c_char; 16]>>())
+                .0[15] as ::core::ffi::c_int;
         }
     }
 }

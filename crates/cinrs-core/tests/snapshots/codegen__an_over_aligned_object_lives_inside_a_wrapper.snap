@@ -30,14 +30,7 @@ mod __cinrs_unit_d922206a {
                 .cast::<::core::ffi::c_char>();
             return local
                 .0
-                .wrapping_add(
-                    ({
-                        let __cinrs_tmp0 = (&raw mut v.0)
-                            .cast::<::core::ffi::c_float>()
-                            .offset(0);
-                        (*__cinrs_tmp0)
-                    }) as ::core::ffi::c_int,
-                )
+                .wrapping_add(v.0[0] as ::core::ffi::c_int)
                 .wrapping_add((*p) as ::core::ffi::c_int);
         }
     }

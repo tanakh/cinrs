@@ -763,6 +763,44 @@ fn a_threaded_dispatch_loop() {
     assert_eq!(unsafe { run(code.as_ptr(), 8) }, 14);
 }
 
+/// The table a bytecode interpreter has: an entry for every value of an
+/// `unsigned char` opcode, most of them the same label, so that it is read
+/// rather than folded. An `unsigned char` cannot be out of its range, so the
+/// read is an element of the table rather than pointer arithmetic, and the
+/// dispatch goes where the opcode says.
+#[test]
+fn a_dispatch_table_indexed_by_an_unsigned_char() {
+    c99! {
+        int run(const unsigned char *pc) {
+            static void *table[256];
+            int acc = 0;
+            int opcode;
+            for (int i = 0; i < 256; i++)
+                table[i] = &&unknown;
+            table[0] = &&halt;
+            table[1] = &&inc;
+            table[2] = &&twice;
+            goto *table[opcode = *pc++];
+        inc:
+            acc += 1;
+            goto *table[opcode = *pc++];
+        twice:
+            acc *= 2;
+            goto *table[opcode = *pc++];
+        unknown:
+            return -opcode;
+        halt:
+            return acc;
+        }
+    }
+
+    unsafe {
+        assert_eq!(run([1u8, 1, 2, 1, 0].as_ptr()), 5);
+        assert_eq!(run([1u8, 200].as_ptr()), -200);
+        assert_eq!(run([255u8].as_ptr()), -255);
+    }
+}
+
 /// `&&label` is an ordinary rvalue: it goes into a variable, through a `?:`,
 /// and into a function's own `void *` parameter-shaped local.
 #[test]

@@ -271,6 +271,51 @@ fn two_dimensional_arrays() {
     }
 }
 
+/// A subscript sure to be in range of an array object — a constant, an
+/// `unsigned char` into 256 elements, a masked value — is an element of the
+/// array rather than pointer arithmetic, and reads and writes the same element
+/// in a static, a local, a member and a row of a two-dimensional member.
+#[test]
+fn in_range_subscripts_of_array_objects() {
+    c99! {
+        struct rec { int n; unsigned char bytes[4]; long cells[2][3]; };
+        static int squares[256];
+        static struct rec r;
+
+        int tables(const unsigned char *s, int k) {
+            int local[8] = { 0 };
+            int total = 0;
+            for (int i = 0; i < 256; i++)
+                squares[i] = i * i;
+            for (; *s; s++)
+                total += squares[*s];
+            local[k & 7] = 5;
+            local[7] += local[k & 7];
+            r.bytes[3] = 9;
+            r.cells[1][2] = 40;
+            r.cells[0][k & 1] = 2;
+            return total + local[7] + r.bytes[3] + (int) (r.cells[1][2] + r.cells[0][1]);
+        }
+
+        /* The subscript of a place that is read and written is evaluated
+           once. */
+        int bump(int k) {
+            unsigned char counts[4] = { 0 };
+            counts[k++ & 3] += 10;
+            counts[k++ & 3]++;
+            return counts[0] * 1000 + counts[1] * 100 + counts[2] * 10 + k;
+        }
+    }
+
+    // 97² + 98², then local[1] = local[7] = 5, 9, 40 and cells[0][1] = 2.
+    assert_eq!(
+        unsafe { tables(c"ab".as_ptr().cast(), 9) },
+        9409 + 9604 + 5 + 9 + 40 + 2
+    );
+    // counts[0] = 10, counts[1] = 1, and k went up by two.
+    assert_eq!(unsafe { bump(0) }, 10_000 + 100 + 2);
+}
+
 #[test]
 fn global_arrays_and_structs_are_visible_from_rust() {
     c99! {

@@ -1,0 +1,89 @@
+---
+source: crates/cinrs-core/tests/codegen.rs
+expression: "generate(r\"\n        struct ops { int count; short pair[2]; };\n        static const int table[256] = { 1, 2, 3 };\n        static struct ops global;\n        int op;\n\n        int lookup(const unsigned char *pc, int i, struct ops *p) {\n            int local[4] = { 0 };\n            local[3] = table[*pc];\n            return local[3]\n                + table[op = *pc++]\n                + table[i & 0xff]\n                + global.pair[1]\n                + table[i]\n                + table[(signed char) i]\n                + p->pair[1];\n        }\n        \")"
+---
+mod __cinrs_unit_a62480a5 {
+    #![allow(…)]
+    const _: () = { /* the data-model check */ };
+    #[repr(C, align(16))]
+    #[derive(Copy, Clone)]
+    pub struct __cinrs_align_16<T>(pub T);
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct ops {
+        pub count: ::core::ffi::c_int,
+        pub pair: [::core::ffi::c_short; 2],
+    }
+    static mut table: __cinrs_align_16<[::core::ffi::c_int; 256]> = __cinrs_align_16([
+        1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
+    static mut global: ops = unsafe { ::core::mem::zeroed::<ops>() };
+    pub static mut op: ::core::ffi::c_int = 0;
+    pub unsafe extern "C" fn lookup(
+        mut pc: *const ::core::ffi::c_uchar,
+        mut i: ::core::ffi::c_int,
+        mut p: *mut ops,
+    ) -> ::core::ffi::c_int {
+        unsafe {
+            let mut local: __cinrs_align_16<[::core::ffi::c_int; 4]> = __cinrs_align_16(
+                [0; 4],
+            );
+            local.0[3] = {
+                let __cinrs_tmp0 = (*pc) as ::core::primitive::usize;
+                table.0[__cinrs_tmp0]
+            };
+            return local
+                .0[3]
+                .wrapping_add({
+                    let __cinrs_tmp3 = ({
+                        op = ({
+                            let __cinrs_tmp2 = ({
+                                let __cinrs_tmp1 = pc;
+                                pc = pc.offset(1);
+                                __cinrs_tmp1
+                            });
+                            (*__cinrs_tmp2)
+                        }) as ::core::ffi::c_int;
+                        op
+                    }) as ::core::primitive::usize;
+                    table.0[__cinrs_tmp3]
+                })
+                .wrapping_add({
+                    let __cinrs_tmp4 = (i & 255) as ::core::primitive::usize;
+                    table.0[__cinrs_tmp4]
+                })
+                .wrapping_add(global.pair[1] as ::core::ffi::c_int)
+                .wrapping_add({
+                    let __cinrs_tmp5 = ((&raw mut table.0).cast::<::core::ffi::c_int>()
+                        as *const ::core::ffi::c_int)
+                        .offset(i as ::core::primitive::isize);
+                    (*__cinrs_tmp5)
+                })
+                .wrapping_add({
+                    let __cinrs_tmp6 = ((&raw mut table.0).cast::<::core::ffi::c_int>()
+                        as *const ::core::ffi::c_int)
+                        .offset(i as ::core::ffi::c_schar as ::core::primitive::isize);
+                    (*__cinrs_tmp6)
+                })
+                .wrapping_add(
+                    ({
+                        let __cinrs_tmp7 = (&raw mut (*p).pair)
+                            .cast::<::core::ffi::c_short>()
+                            .offset(1);
+                        (*__cinrs_tmp7)
+                    }) as ::core::ffi::c_int,
+                );
+        }
+    }
+}
+#[allow(unknown_lints, ambiguous_glob_reexports, unused_imports)]
+pub use __cinrs_unit_a62480a5::*;

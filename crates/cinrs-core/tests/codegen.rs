@@ -333,6 +333,35 @@ fn pointers_and_arrays() {
     ));
 }
 
+/// A subscript sure to be in range of an array *object* — a constant, a
+/// value converted from a narrower type, what an assignment to a variable
+/// stores, a mask — is an element of the array place, with no `offset` whose
+/// address calculation would be checked. Any other subscript, and any array
+/// reached through a pointer, is the pointer arithmetic C defines it as.
+#[test]
+fn an_in_range_subscript_of_an_array_object_is_an_element_of_it() {
+    insta::assert_snapshot!(generate(
+        r"
+        struct ops { int count; short pair[2]; };
+        static const int table[256] = { 1, 2, 3 };
+        static struct ops global;
+        int op;
+
+        int lookup(const unsigned char *pc, int i, struct ops *p) {
+            int local[4] = { 0 };
+            local[3] = table[*pc];
+            return local[3]
+                + table[op = *pc++]
+                + table[i & 0xff]
+                + global.pair[1]
+                + table[i]
+                + table[(signed char) i]
+                + p->pair[1];
+        }
+        "
+    ));
+}
+
 #[test]
 fn structs_unions_and_enums() {
     insta::assert_snapshot!(generate(

@@ -308,6 +308,19 @@ follows [Semantic Versioning][semver].
   dependency GCC breaks with an `xor`; libwebp's lossless entropy loop, whose
   `ctz` landed in the register of the previous iteration's table lookup, ran
   at 2.7× GCC's time and now runs at 1.05× (0.200 s → 0.075 s; gcc 0.071 s).
+* A subscript that cannot be outside an array object is an element of the
+  array, `table[op as usize]`, rather than pointer arithmetic: a constant, a
+  value converted from a narrower type (an `unsigned char` into 256
+  elements), what an assignment to a variable stores, or a mask, into a named
+  array or a member or element of one. With debug assertions, `offset` checks
+  that the address calculation does not wrap, which cannot fail inside an
+  object and which LLVM cannot fold for a `static`, whose address it does not
+  know; LLVM drops the element's bounds check, which the subscript's range
+  proves. An interpreter's `goto *table[opcode]` is the case: CPython's eval
+  loop is 6 % smaller and runs 2.6 % fewer instructions on a recursive
+  benchmark, QuickJS's 6 % fewer on a numeric one, in about the same time.
+  An array reached through a pointer, and a safe function, keep the pointer
+  arithmetic.
 
 ### Fixed
 

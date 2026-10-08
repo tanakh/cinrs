@@ -79,13 +79,7 @@ mod __cinrs_unit_270870a9 {
                 .offset(1) as *mut ::core::ffi::c_int)
                 .offset(2);
             return (*p)
-                .wrapping_add({
-                    let __cinrs_tmp0 = ((&raw mut grid.0)
-                        .cast::<[::core::ffi::c_int; 3]>()
-                        .offset(0) as *mut ::core::ffi::c_int)
-                        .offset(0);
-                    (*__cinrs_tmp0)
-                })
+                .wrapping_add(grid.0[0][0])
                 .wrapping_add((p.is_null()) as ::core::ffi::c_int);
         }
     }

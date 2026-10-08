@@ -23,10 +23,8 @@ mod __cinrs_unit_e93ec3d8 {
                 let __cinrs_tmp1: __cinrs_vec_2x_unsigned_long_long = (&raw const (*p))
                     .read_unaligned();
                 let __cinrs_tmp2: __cinrs_vec_2x_unsigned_long_long = {
-                    let __cinrs_tmp0 = (&raw mut masks)
-                        .cast::<__cinrs_vec_2x_unsigned_long_long>()
-                        .offset((i & 1) as ::core::primitive::isize);
-                    (&raw const (*__cinrs_tmp0)).read_unaligned()
+                    let __cinrs_tmp0 = (i & 1) as ::core::primitive::usize;
+                    (&raw const masks[__cinrs_tmp0]).read_unaligned()
                 };
                 __cinrs_vec_2x_unsigned_long_long(
                     ::core::array::from_fn(|__cinrs_tmp3| {

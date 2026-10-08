@@ -186,6 +186,31 @@ tab[];` it knows as zero bytes, so FFmpeg's `static const int *p =
 ff_ac3_enc_options + 2;` would be refused where GCC's relocation is not
 checked either.
 
+A subscript is pointer arithmetic, as C defines it: `a[i]` is `*(a + i)`, the
+array decays to a pointer to its first element, `.offset(i)` moves it, and the
+place is a dereference. When the array is an object reached without a
+pointer — a named one, or a member or an element of one — and the subscript
+cannot be outside it — a constant, an `unsigned char` into 256 elements,
+`i & 7` into 8 — the place is an element of the array instead:
+
+```c
+static const int table[256] = { 1, 2, 3 };
+int f(const unsigned char *pc) { return table[*pc]; }
+```
+
+```rust
+// `.0` is the wrapper of an over-aligned object; see below.
+return { let __cinrs_tmp0 = (*pc) as usize; table.0[__cinrs_tmp0] };
+```
+
+That leaves out the check `offset` makes in a build with debug assertions,
+that the address calculation does not wrap, which cannot fail inside an
+object, and LLVM drops the bounds check Rust puts on the element, since the
+subscript's range proves it. An interpreter whose opcode is an `unsigned char`
+reads its dispatch table this way once per instruction. A safe function keeps
+the pointer, so that what it may do does not depend on how a subscript is
+written.
+
 ### Locals declared without an initialiser
 
 C leaves such a local indeterminate, and Rust may not read uninitialised
