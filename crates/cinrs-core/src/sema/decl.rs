@@ -302,8 +302,13 @@ impl Sema<'_> {
         }
 
         // Everything below declares an *object*, which none of the function
-        // specifiers apply to.
-        if let Some(range) = decl.specifiers.noreturn {
+        // specifiers apply to. GNU's `noreturn` *attribute* is another
+        // matter: on a function pointer GCC gives it to the pointed-to type,
+        // and git's `static NORETURN_PTR report_fn usage_routine = …;` says
+        // so. It changes nothing a call here does, so it is dropped.
+        if let Some(range) = decl.specifiers.noreturn
+            && decl.specifiers.attrs.noreturn != Some(range)
+        {
             self.error(range, "'_Noreturn' is only allowed on a function");
         }
         let mut attrs = declarator.attrs.clone();

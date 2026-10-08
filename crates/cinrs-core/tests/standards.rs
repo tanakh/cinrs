@@ -404,6 +404,21 @@ fn noreturn_ends_a_function() {
         "_Noreturn int x;",
         &["'_Noreturn' is only allowed on a function"],
     );
+    rejected(
+        Standard::C11,
+        "typedef void (*report_fn)(const char *);\n_Noreturn report_fn r;",
+        &["'_Noreturn' is only allowed on a function"],
+    );
+    // GNU's attribute on a function pointer is GCC's way of saying the
+    // pointed-to function does not return (git's `NORETURN_PTR`), and is
+    // taken without a word.
+    accepted(
+        Standard::C11,
+        "typedef void (*report_fn)(const char *);\n\
+         static void die(const char *m) { (void) m; for (;;) {} }\n\
+         static __attribute__((__noreturn__)) report_fn die_routine = die;\n\
+         void call(void) { die_routine(\"bye\"); }",
+    );
 }
 
 #[test]

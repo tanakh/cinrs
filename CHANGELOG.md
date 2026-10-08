@@ -326,6 +326,10 @@ follows [Semantic Versioning][semver].
   three of git's tests passed or failed by luck. Compound literals and
   definitions hoisted out of their block likewise, and `q = p;` of a padded
   type copies the bytes.
+* `__attribute__((noreturn))` on a variable of function pointer type is
+  taken and dropped, as GCC gives it to the pointed-to type, where it was
+  "'_Noreturn' is only allowed on a function" (git's `NORETURN_PTR` in
+  `usage.c`). The keyword is still a function's alone.
 * A strict block or `-std=` below C23, which refuses `#embed`, no longer
   defines `__has_embed` either, and `__has_embed(…)` answers "not found"
   there: FFmpeg's checkasm, compiled with `-std=c17`, asks with `#ifdef
