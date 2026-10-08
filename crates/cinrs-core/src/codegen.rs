@@ -1129,6 +1129,9 @@ struct Codegen<'a> {
     /// an `extern T tab[];` it knows as zero bytes (FFmpeg's
     /// `ff_ac3_enc_options + 2`). GCC's relocation is not checked either.
     in_static_init: bool,
+    /// Every function's parameters, whose bindings are the Rust parameters
+    /// themselves and so never sit in an alignment wrapper.
+    parameters: HashSet<ir::ObjectId>,
     /// The Rust names of the locals of the function being generated, wherever
     /// they differ from the C ones: in [CFG mode](crate::cfg), where every
     /// local of the function shares one scope, and for a local whose name
@@ -1266,10 +1269,13 @@ impl<'a> Codegen<'a> {
             reserved.insert(constant.rust_name.clone());
         }
         let mut label_states = HashMap::new();
+        let mut parameters = HashSet::new();
         for func in &program.functions {
             if let Some(ir::Body::Cfg(cfg)) = &func.body {
                 label_states.extend(cfg.labels.iter().map(|(id, number)| (*id, *number)));
             }
+            parameters.extend(func.params.iter().copied());
+            parameters.extend(func.env.iter().map(|entry| entry.param));
         }
         Self {
             program,
@@ -1277,6 +1283,7 @@ impl<'a> Codegen<'a> {
             options,
             continue_styles: HashMap::new(),
             in_static_init: false,
+            parameters,
             local_names: HashMap::new(),
             env: HashMap::new(),
             reserved,
@@ -4375,14 +4382,16 @@ impl<'a> Codegen<'a> {
     /// [`Codegen::align_wrapper_items`] and [`ir::Object::align`].
     fn object_align(&self, id: ir::ObjectId) -> Option<u64> {
         let object = self.program.object(id);
-        [
-            object.align,
-            self.abi_array_align(object),
-            self.packed_aligned(object.ty),
-        ]
-        .into_iter()
-        .flatten()
-        .max()
+        // A parameter of such a type arrives by value, as the Rust type has it.
+        let packed_aligned = if self.parameters.contains(&id) {
+            None
+        } else {
+            self.packed_aligned(object.ty)
+        };
+        [object.align, self.abi_array_align(object), packed_aligned]
+            .into_iter()
+            .flatten()
+            .max()
     }
 
     /// The alignment of a record both packed and aligned — or of an array of

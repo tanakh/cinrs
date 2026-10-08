@@ -38,11 +38,11 @@ as unimplemented or not planned, case by case.
   [`doc/c-testsuite.md`](c-testsuite.md) has the details.
 * **[GCC's C torture tests](gcc-torture.md)** — 1,776 self-checking
   programs, each a bug report distilled into twenty lines, where success is
-  exit status zero. **1,697 of the 1,769 run are correct (95.9 %)** under
-  `gnu11!` — 1,594 passing and 103 refused as C99 requires — and 1,692
-  (95.6 %) under `gnu89!`, which is the language these C89-era programs were
+  exit status zero. **1,698 of the 1,769 run are correct (96.0 %)** under
+  `gnu11!` — 1,595 passing and 103 refused as C99 requires — and 1,693
+  (95.7 %) under `gnu89!`, which is the language these C89-era programs were
   written in and refuses only the one that uses C23's `va_start`. **Not one of
-  the 72 errors is a bug**; they are the x87 register operands of inline
+  the 71 errors is a bug**; they are the x87 register operands of inline
   assembly, `asm goto`, the complex
   *integer* types, the corners of nested functions that need a trampoline or a
   nonlocal `goto`, the handful of `__builtin_*` forms this crate does not
@@ -219,15 +219,15 @@ report breaks its error count down into them, in this order:
 | --- | --- | --- |
 | **bug** | `[bug]` | `cinrs` is wrong here: it accepts the case and mistranslates it, refuses code it means to support, or emits Rust that will not compile. These are the work items. A failure that is not in the list at all counts as one. |
 | **unimplemented** | `[unimplemented]` | A feature `cinrs` intends to have and has not got to yet — the 🟠 `planned` rows of [`doc/gnu-extensions.md`](gnu-extensions.md) and every diagnostic that says "not supported yet". |
-| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the x87 register operands of inline assembly, which `asm!` has no operand for, the trampoline and nonlocal-`goto` halves of nested functions, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a record both packed and over-aligned, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
+| **not planned** | `[not-planned]` | Deliberately unsupported, with a located error rather than a mistranslation: the x87 register operands of inline assembly, which `asm!` has no operand for, the trampoline and nonlocal-`goto` halves of nested functions, `long double` as a type distinct from `double`, the complex *integer* types, `-finstrument-functions`, programs that need an optimiser to delete dead code, `__builtin_return_address` and its relatives, a `va_list` where Rust cannot put one — and everything the tables mark 🔴 `not planned` or ⚫ `impossible`. Nothing here is a to-do. |
 | **toolchain** | `?` marker | Not about `cinrs` at all: the case needs a Rust that this toolchain is older than. No list has one today: the last were the variadic *definitions* and `va_list` objects that needed `c_variadic`, which became stable in 1.99 — now the minimum supported version. |
 
 A summary therefore reads
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1697/1769 correct (95.9%) — 1594 passed, 103 rejected as the standard requires
-  errors: 72 — bug 0, unimplemented 5, not planned 67, toolchain 0
-  (7 not generated) — 5 m 43 s
+gcc.c-torture/execute through `gnu11!`: 1698/1769 correct (96.0%) — 1595 passed, 103 rejected as the standard requires
+  errors: 71 — bug 0, unimplemented 5, not planned 66, toolchain 0
+  (7 not generated) — 4 m 23 s
 ```
 
 and the old numbers are still there: `passed` is the pass rate's numerator.

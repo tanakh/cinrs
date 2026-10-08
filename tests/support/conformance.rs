@@ -1094,9 +1094,9 @@ pub enum Category {
     /// and nonlocal-`goto` halves of nested functions,
     /// `long double` as a type distinct from `double`, the complex *integer*
     /// types, `-finstrument-functions`, programs that need an optimiser to
-    /// delete dead code, `__builtin_return_address` and its relatives, a
-    /// record both packed and over-aligned, and everything `doc/`'s tables
-    /// mark `not planned` or `impossible`. Nothing here is a to-do.
+    /// delete dead code, `__builtin_return_address` and its relatives, and
+    /// everything `doc/`'s tables mark `not planned` or `impossible`. Nothing
+    /// here is a to-do.
     NotPlanned,
 }
 

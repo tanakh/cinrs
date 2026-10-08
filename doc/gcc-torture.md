@@ -162,21 +162,21 @@ broken down into the four categories
 defines.
 
 ```
-gcc.c-torture/execute through `gnu11!`: 1697/1769 correct (95.9%) — 1594 passed, 103 rejected as the standard requires
-  errors: 72 — bug 0, unimplemented 5, not planned 67, toolchain 0
-  (7 not generated) — 5 m 43 s
+gcc.c-torture/execute through `gnu11!`: 1698/1769 correct (96.0%) — 1595 passed, 103 rejected as the standard requires
+  errors: 71 — bug 0, unimplemented 5, not planned 66, toolchain 0
+  (7 not generated) — 4 m 23 s
 ```
 
 | entry point | correct | rate | passed | rejected | bug | unimplemented | not planned |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **`gnu11!`** | **1697/1769** | **95.9 %** | 1594 | 103 | 0 | 5 | 67 |
-| `gnu89!` | 1692/1769 | 95.6 % | 1691 | 1 | 0 | 6 | 71 |
+| **`gnu11!`** | **1698/1769** | **96.0 %** | 1595 | 103 | 0 | 5 | 66 |
+| `gnu89!` | 1693/1769 | 95.7 % | 1692 | 1 | 0 | 6 | 70 |
 
 by group:
 
 | group | `gnu11!` | `gnu89!` |
 | --- | ---: | ---: |
-| `execute` | 1625/1691 (96.1 %) | 1620/1691 (95.8 %) |
+| `execute` | 1626/1691 (96.2 %) | 1621/1691 (95.9 %) |
 | `execute/ieee` | 72/78 (92.3 %) | 72/78 (92.3 %) |
 
 **There is no `[bug]` left in this corpus**, under either entry point.
@@ -200,9 +200,9 @@ every entry point below `c23!`) old-style definitions — which is exactly the
 set of things seventy-five of these cases ask for with `-std=gnu89` and
 another few hundred simply assume. It also needs no
 [prelude](#the-prelude): a call to an undeclared `abort` declares it. Under it
-1691 cases build and run.
+1692 cases build and run.
 
-**`gnu11!` gets the same 1594 of those, refuses 102 more as the standard
+**`gnu11!` gets the same 1595 of those, refuses 102 more as the standard
 requires it to, and comes out five ahead.** Those 102 are the cases that lean
 on a rule C99 deleted — implicit `int` (99: 96 on a declaration, 3 on a K&R
 parameter) and an implicit function declaration (3) — and a C99-or-later entry
@@ -217,7 +217,7 @@ rule there and stop at a second gap — four at a nested function that needs the
 enclosing *frame* (two at a nonlocal `goto` out of one, two at the address of a
 label of the enclosing function), and one at a nested function that uses the
 enclosing function's variable length array. That is the whole of the
-difference: 1691 = 1594 + 97, and 1697 = 1594 + 102 + 1. (Two more,
+difference: 1692 = 1595 + 97, and 1698 = 1595 + 102 + 1. (Two more,
 `execute/20210505-1` and `pr56982`, used to be counted among the 104 C89
 cases: their "type specifier missing" was `jmp_buf`, which `<setjmp.h>` did
 not declare. With [setjmp and longjmp](limitations.md#setjmp-and-longjmp)
@@ -237,24 +237,23 @@ because GCC's own runner would not have run them either.
 
 ### The errors, by category and cause
 
-Under `gnu11!` 67 of the 72 errors are refused at compile time, in 26
+Under `gnu11!` 66 of the 71 errors are refused at compile time, in 25
 distinct causes, and 5 are programs that built and then did the wrong thing;
-under `gnu89!`, 72 of 77 in 27. The ones worth a line each, with what the
+under `gnu89!`, 71 of 76 in 26. The ones worth a line each, with what the
 same cause costs under `gnu89!` beside it — the 103 conforming rejections
 above are *not* in this table:
 
 | category | `gnu89!` | `gnu11!` | cause | e.g. |
 | --- | ---: | ---: | --- | --- |
 | not planned | 10 | 10 | a `__builtin_…` this crate does not implement: `__builtin_return_address`, `apply`, `va_arg_pack`, and the signalling-NaN spellings of the formats cinrs has no type for, `__builtin_nansf16`, `nansf16b`, `nansf128` and `nansf128x` | `execute/20010122-1` |
+| not planned | 8 | 8 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension — `execute/20040308-1` and `align-nest` among them, whose record is also packed and aligned, which they used to stop at | `execute/20020412-1` |
 | not planned | 7 | 7 | a complex *integer* type — `_Complex int`, `__complex__ char`, `3i` — which is a GNU extension of its own with no Rust counterpart | `execute/20041124-1` |
 | not planned | 6 | 6 | `va_list` somewhere other than a local or a parameter | `execute/stdarg-1` |
-| not planned | 6 | 6 | a struct member with a variably modified type, which C forbids (6.7.2.1p9) and GCC takes as an extension | `execute/20020412-1` |
 | not planned | 5 | 5 | a `#include` of a corpus file outside the sparse checkout (`../../gcc.dg/…`) | `execute/pr105777` |
 | not planned | 5 | 5 | `__attribute__((scalar_storage_order))`, which reverses the byte order of every scalar in a record | `execute/20230630-2` |
 | not planned | 7 | 4 | a **nonlocal `goto`**: a jump out of a nested function to a label of the enclosing one, which GCC reaches through the enclosing frame | `execute/nestfunc-5` |
 | not planned | 5 | 5 | a program that built and then did the wrong thing — see [below](#the-programs-that-built-and-then-did-the-wrong-thing) | `ieee/cdivchkd` |
 | not planned | 3 | 3 | `__attribute__((alias))` | `execute/alias-2` |
-| not planned | 3 | 3 | a record both packed and given a stricter alignment | `execute/20040308-1` |
 | not planned | 2 | 2 | `<sys/types.h>` and `<sys/mman.h>`: cinrs bundles the ISO C headers, and the POSIX ones come from the platform only under `#pragma cinrs system_include`, which the harness does not write | `execute/loop-2f` |
 | not planned | 2 | 2 | the **address of a nested function that uses the enclosing frame**, which is what GCC's trampoline is for | `execute/20000822-1` |
 | not planned | 1 | 1 | a `link_error()` nothing defines, which an optimiser is required to delete | `ieee/fp-cmp-7` |
@@ -461,7 +460,7 @@ the link fails. Its twin `execute/medce-1` — `if (0) { link_error(); case 1: �
 [relooped](translation.md#control-flow-and-goto) the dead call really is inside
 an `if false`, which LLVM deletes.
 
-**Read the table by its first column.** 10 of `gnu11!`'s 72 errors are the
+**Read the table by its first column.** 10 of `gnu11!`'s 71 errors are the
 largest `not planned` row — the `__builtin_…` forms nobody is going to write —
 another 13 are the complex-integer and `va_list`-in-a-record corners Rust has
 no counterpart for, and 1 is the inline assembly `asm!` cannot say: an operand
