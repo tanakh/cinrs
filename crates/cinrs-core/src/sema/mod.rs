@@ -1197,9 +1197,10 @@ impl<'a> Sema<'a> {
     /// for `int` before C23. Each of them is a
     /// [`Standard`](crate::Standard)-independent *dialect* question, which is
     /// why it is not [`Sema::require_standard`]; `doc/gnu-extensions.md` has
-    /// the list.
+    /// the list. A strict block has them too when
+    /// [`crate::Options::gnu_leniencies`] says so, as `ccinrs -std=c11` does.
     fn gnu_leniency(&self) -> bool {
-        self.gating.dialect.is_gnu()
+        self.gating.lenient()
     }
 
     /// The note that names the entry point which would have accepted what

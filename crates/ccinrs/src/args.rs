@@ -151,6 +151,10 @@ pub struct Invocation {
     /// `-Werror`: every warning is an error, as in GCC — `#warning` included,
     /// which is what a `configure` script's test of `-Werror` writes.
     pub werror: bool,
+    /// `-pedantic-errors` (or `-Werror=pedantic`): the constraint violations
+    /// GCC only warns about are errors. Without it, every `-std=` takes them
+    /// as GCC's does; see [`cinrs_core::Options::gnu_leniencies`].
+    pub pedantic_errors: bool,
     /// Whether the generated code keeps Rust's run-time checks — misaligned
     /// and null pointer dereferences, overlapping `memcpy`, and the checks
     /// cinrs itself writes in a build with debug assertions. **On by
@@ -241,6 +245,7 @@ impl Default for Invocation {
             debuginfo: 0,
             warnings: true,
             werror: false,
+            pedantic_errors: false,
             checks: true,
             unwind: true,
             auto_var_init: AutoVarInit::Zero,
@@ -586,10 +591,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Strin
             // The C driver's spelling of `--export-dynamic`, which the C
             // compiler `rustc` links with understands as it is.
             "-rdynamic" => inv.linker_args.push(LinkerArg::Driver(arg.clone())),
-            // `-pedantic` only adds warnings; `-pedantic-errors` makes them
-            // errors, which cinrs's own diagnostics for the standard chosen
-            // already are where it matters.
-            "-pipe" | "-pedantic" | "-pedantic-errors" => {}
+            // `-pedantic` only adds warnings, and cinrs has none of those to
+            // add. `-pedantic-errors` makes the constraint violations GCC
+            // warns about errors: an ISO `-std=` then refuses GCC's
+            // leniencies, as `c11!` does.
+            "-pipe" | "-pedantic" | "-Wpedantic" => {}
+            "-pedantic-errors" | "-Werror=pedantic" => inv.pedantic_errors = true,
             // GCC's `-pthread` is the library and the macro.
             "-pthread" => {
                 inv.libs.push("pthread".to_owned());

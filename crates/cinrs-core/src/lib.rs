@@ -463,6 +463,20 @@ pub struct Options {
     /// `-std=gnu11`. [`FrontEnd::Macros`] by default; `ccinrs` sets
     /// [`FrontEnd::CommandLine`].
     pub front_end: FrontEnd,
+    /// Whether a strict [`Dialect::Iso`] unit takes GCC's leniencies — the
+    /// constraint violations GCC only warns about, which a GNU dialect takes
+    /// anyway: a stray `;` at file scope, an enumerator outside `int`,
+    /// `sizeof (void)`, a cast to a union type and the rest of
+    /// `doc/gnu-extensions.md`'s leniency table — and `#embed` before C23.
+    /// What makes the dialect ISO stays: `asm` and `typeof` are not keywords,
+    /// `__STRICT_ANSI__` is defined, trigraphs are read and the GNU-only
+    /// library functions are not builtins.
+    ///
+    /// GCC's `-std=c11` differs from `-std=gnu11` in exactly those things and
+    /// warns about the rest, which only `-pedantic-errors` makes errors.
+    /// **Off by default**, so `c11!` keeps refusing them; `ccinrs` turns it
+    /// on for every `-std=` unless `-pedantic-errors` is given.
+    pub gnu_leniencies: bool,
 }
 
 /// What a local declared without an initialiser holds before the program
@@ -571,6 +585,7 @@ impl Options {
             weak_definitions: false,
             abi_align_public_arrays: false,
             front_end: FrontEnd::Macros,
+            gnu_leniencies: false,
         }
     }
 
@@ -619,6 +634,7 @@ impl Options {
             standard: self.standard,
             dialect: self.dialect,
             front_end: self.front_end,
+            leniencies: self.gnu_leniencies,
         }
     }
 }
@@ -647,9 +663,19 @@ pub struct Gating {
     pub dialect: Dialect,
     /// How the diagnostics name a standard and a dialect.
     pub front_end: FrontEnd,
+    /// Whether a strict dialect takes GCC's leniencies all the same; see
+    /// [`Options::gnu_leniencies`].
+    pub leniencies: bool,
 }
 
 impl Gating {
+    /// Whether this unit takes the constraint violations GCC only warns
+    /// about: in a GNU dialect, and in a strict one that
+    /// [`Options::gnu_leniencies`] says behaves as GCC's `-std=c11` does.
+    pub fn lenient(self) -> bool {
+        self.dialect.is_gnu() || self.leniencies
+    }
+
     /// The message a feature from a newer revision gets here, or `None` when it
     /// is accepted.
     pub fn requires(self, what: &str, needed: Standard) -> Option<String> {
@@ -692,9 +718,12 @@ impl Gating {
             FrontEnd::Macros => {
                 format!("GCC accepts this with a warning; write {gnu} for the same leniency")
             }
-            FrontEnd::CommandLine => {
-                format!("GCC accepts this with a warning; compile with {gnu} for the same leniency")
-            }
+            // A command line takes the leniency in every `-std=` unless it
+            // says `-pedantic-errors`, which is GCC's way of refusing it too.
+            FrontEnd::CommandLine => format!(
+                "GCC accepts this with a warning, and so does ccinrs without -pedantic-errors \
+                 or with {gnu}"
+            ),
         }
     }
 

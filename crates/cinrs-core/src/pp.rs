@@ -2868,7 +2868,9 @@ impl Pp<'_> {
             }
             "pragma" => self.pragma(rest, range),
             "embed" => {
-                self.require_standard(Standard::C23, "'#embed'", range);
+                if !self.embed_allowed() {
+                    self.require_standard(Standard::C23, "'#embed'", range);
+                }
                 self.embed(rest, range);
             }
             "line" => self.line_directive(rest, range, false),
@@ -4968,13 +4970,14 @@ impl Pp<'_> {
     }
 
     /// Whether `#embed` is accepted here: in C23, and before it in a GNU
-    /// dialect, as GCC takes it. A strict block of an older revision refuses
-    /// the directive, so it does not define `__has_embed` either, and
+    /// dialect or under [`crate::Options::gnu_leniencies`], as GCC 15 takes
+    /// it in every `-std=`. A strict block of an older revision refuses the
+    /// directive, so it does not define `__has_embed` either, and
     /// `__has_embed(…)` answers "not found": a program that asks before it
     /// embeds — FFmpeg's checkasm, `#ifdef __has_embed` — takes its other
     /// road rather than the refusal.
     fn embed_allowed(&self) -> bool {
-        self.gating.requires("'#embed'", Standard::C23).is_none()
+        self.gating.lenient() || self.gating.requires("'#embed'", Standard::C23).is_none()
     }
 
     /// Answers one `__has_…(…)` operator, returning its value and the index

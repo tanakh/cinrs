@@ -471,6 +471,9 @@ fn options(inv: &Invocation, target: &Target, features: Vec<String>) -> Options 
     // A diagnostic that says how to choose another standard names `-std=`,
     // not the macro a `c99!` block is written with.
     options.front_end = cinrs_core::FrontEnd::CommandLine;
+    // GCC's `-std=c11` warns about the constraint violations its
+    // `-std=gnu11` takes, and only `-pedantic-errors` refuses them.
+    options.gnu_leniencies = !inv.pedantic_errors;
     options
 }
 
@@ -1992,6 +1995,44 @@ impl Drop for WorkDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `-std=` takes GCC's leniencies, as GCC's do, until
+    /// `-pedantic-errors` (or `-Werror=pedantic`) says otherwise; `-pedantic`
+    /// alone changes nothing. The dialect is the `-std=`'s either way.
+    #[test]
+    fn the_leniencies_follow_pedantic_errors() {
+        let triple = "x86_64-unknown-linux-gnu";
+        let target = Target {
+            triple: triple.to_owned(),
+            model: TargetModel::from_triple(triple).expect("a known triple"),
+            cross: false,
+            self_contained: false,
+            bare_wasm: false,
+        };
+        let options_for = |args: &[&str]| {
+            let inv = crate::args::parse(args.iter().map(|a| (*a).to_owned())).expect("parses");
+            options(&inv, &target, Vec::new())
+        };
+        for std in ["-std=c89", "-std=c99", "-std=c11", "-std=c17", "-std=gnu11"] {
+            let lenient = |args: &[&str]| {
+                let mut all = vec![std];
+                all.extend_from_slice(args);
+                all.push("a.c");
+                options_for(&all).gnu_leniencies
+            };
+            assert!(lenient(&[]), "{std}");
+            assert!(lenient(&["-pedantic"]), "{std}");
+            assert!(!lenient(&["-pedantic-errors"]), "{std}");
+            assert!(!lenient(&["-Werror=pedantic"]), "{std}");
+        }
+        let options = options_for(&["-std=c11", "a.c"]);
+        assert_eq!(options.dialect, cinrs_core::Dialect::Iso);
+        assert!(options.gating().lenient());
+        let options = options_for(&["-std=c11", "-pedantic-errors", "a.c"]);
+        assert!(!options.gating().lenient());
+        let gnu = options_for(&["-std=gnu11", "-pedantic-errors", "a.c"]);
+        assert!(gnu.gating().lenient());
+    }
 
     /// libjpeg-turbo's `global: *`, a prefix pattern, one that matches
     /// nothing, and everything a narrowing leaves alone: a `local:` list, an

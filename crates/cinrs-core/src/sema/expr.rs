@@ -2916,7 +2916,7 @@ impl Sema<'_> {
         if !def.complete {
             return None;
         }
-        if !self.gating.dialect.is_gnu() {
+        if !self.gating.lenient() {
             let gnu = self.gating.spelled(crate::Dialect::Gnu);
             let here = self.gating.here();
             self.error(

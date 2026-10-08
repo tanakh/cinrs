@@ -293,31 +293,57 @@ fn no_cinrs_unwind_refuses_setjmp() {
     assert!(s.run("plain", &[]).status.success());
 }
 
-/// A diagnostic that says how to choose another standard names `-std=`, which
-/// is how a command line chooses one, not the macro a `c99!` block is written
-/// with. And under `-std=c17`, which refuses `#embed` as `c17!` does,
-/// `__has_embed` is not defined, so FFmpeg's `#ifdef __has_embed` takes its
-/// other road rather than the refusal.
+/// GCC's `-std=c11` differs from `-std=gnu11` in keywords, `__STRICT_ANSI__`
+/// and trigraphs, and warns about the constraint violations `gnu11` takes;
+/// only `-pedantic-errors` refuses them. So does every `-std=` here: CPython
+/// builds with `-std=c11` past a stray `;` and glibc's `<sys/epoll.h>`, whose
+/// `EPOLLET` is `1u << 31` in an `enum`, and FFmpeg with `-std=c17` past a
+/// `;` after a function and an `#embed`. What makes the dialect ISO stays:
+/// CPython's `Py_ARRAY_LENGTH` takes its plain, constant form because
+/// `__STRICT_ANSI__` is defined, and its GNU form is no constant under
+/// `-std=gnu11` here as in GCC. A diagnostic that says how to have a
+/// leniency names the command line, not the macro a `c11!` block is written
+/// with.
+#[cfg(target_os = "linux")]
 #[test]
-fn a_strict_standard_is_named_as_the_command_line_names_it() {
+fn an_iso_std_takes_what_gcc_takes_unless_pedantic_errors() {
     let s = Scratch::new("strict-std");
     s.write(
         "lenient.c",
-        "int something(void);\nvoid forwards(void) { return something(); }\n\
-         int main(void) { long x = 1.0q > 0; return (int) x; }\n",
+        "#include <sys/epoll.h>\nint something(void);\n\
+         int twice(int x) { return 2 * x; };\n\
+         void forwards(void) { return something(); }\n\
+         int main(void) { return twice(EPOLLIN) != 2; }\n",
     );
-    let out = s.ccinrs(&["-std=c17", "-c", "lenient.c"]);
+    for std in ["-std=c89", "-std=c99", "-std=c11", "-std=c17"] {
+        s.compile(&[std, "-c", "lenient.c", "-o", "lenient.o"]);
+    }
+    let out = s.ccinrs(&["-std=c11", "-pedantic-errors", "-c", "lenient.c"]);
     assert!(!out.status.success());
     let err = stderr(&out);
+    assert!(err.contains("expected a declaration, found ';'"), "{err}");
+    assert!(err.contains("should not return a value"), "{err}");
     assert!(
-        err.contains("compile with -std=gnu17 for the same leniency"),
+        err.contains(
+            "GCC accepts this with a warning, and so does ccinrs without -pedantic-errors or \
+             with -std=gnu11"
+        ),
         "{err}"
     );
+    assert!(!err.contains("gnu11!"), "{err}");
+    // A GNU extension that is no leniency is the dialect's still.
+    s.write(
+        "suffix.c",
+        "int main(void) { long x = 1.0q > 0; return (int) x; }\n",
+    );
+    let out = s.ccinrs(&["-std=c17", "-c", "suffix.c"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
     assert!(
         err.contains("requires a GNU dialect (-std=gnu17) (this file is compiled with -std=c17)"),
         "{err}"
     );
-    assert!(!err.contains("gnu17!"), "{err}");
+    // `#embed` and `__has_embed` follow the leniencies.
     s.write(
         "embed.c",
         "#include <stdio.h>\n#ifdef __has_embed\nstatic const char data[] = {\n#embed \"data.bin\" suffix(, 0)\n};\n\
@@ -325,9 +351,33 @@ fn a_strict_standard_is_named_as_the_command_line_names_it() {
     );
     s.write("data.bin", "embedded");
     s.compile(&["-std=c17", "embed.c", "-o", "c17"]);
-    assert_eq!(stdout(&s.run("c17", &[])), "no embed\n");
+    assert_eq!(stdout(&s.run("c17", &[])), "embedded\n");
+    s.compile(&["-std=c17", "-pedantic-errors", "embed.c", "-o", "pedantic"]);
+    assert_eq!(stdout(&s.run("pedantic", &[])), "no embed\n");
     s.compile(&["-std=gnu17", "embed.c", "-o", "gnu17"]);
     assert_eq!(stdout(&s.run("gnu17", &[])), "embedded\n");
+    // CPython's faulthandler.c.
+    s.write(
+        "length.c",
+        "#include <stddef.h>\n\
+         #define Py_BUILD_ASSERT_EXPR(cond) \\\n    ((void)sizeof(struct { int dummy; _Static_assert(cond, #cond); }), 0)\n\
+         #if defined(__GNUC__) && !defined(__STRICT_ANSI__)\n\
+         #define Py_ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]) \\\n    \
+         + Py_BUILD_ASSERT_EXPR(!__builtin_types_compatible_p(typeof(array), typeof(&(array)[0]))))\n\
+         #else\n#define Py_ARRAY_LENGTH(array) (sizeof(array) / sizeof((array)[0]))\n#endif\n\
+         static const int handlers[] = { 1, 2, 3 };\n\
+         static const size_t nsignals = Py_ARRAY_LENGTH(handlers);\n\
+         int main(void) { return (int) nsignals - 3; }\n",
+    );
+    s.compile(&["-std=c11", "length.c", "-o", "length"]);
+    assert_eq!(s.run("length", &[]).status.code(), Some(0));
+    let out = s.ccinrs(&["-std=gnu11", "-c", "length.c"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("is not a compile-time constant expression"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// What ccinrs links is what it compiled, so a function the program declares

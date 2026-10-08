@@ -896,6 +896,7 @@ impl LexOptions {
                 standard,
                 dialect: crate::Dialect::Iso,
                 front_end: crate::FrontEnd::Macros,
+                leniencies: false,
             },
             dollar_in_identifiers: true,
             trigraphs: trigraphs_enabled(standard, crate::Dialect::Iso),

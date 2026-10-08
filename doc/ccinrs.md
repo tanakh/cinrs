@@ -49,6 +49,15 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 
 * **`-std=gnu17`**, as GCC 14 has it, and the predefined macros of GCC 14.2
   (`__GNUC__` is 14) together with `__CINRS__`.
+* **Every `-std=` takes GCC's leniencies** — the constraint violations GCC
+  only warns about, which [the leniency
+  table](gnu-extensions.md#the-leniencies-constraint-violations-gcc-only-warns-about)
+  lists: a stray `;` at file scope, an enumerator outside `int`, `sizeof
+  (void)` and the rest — and `#embed` before C23, as GCC 15 does. An ISO one
+  (`-std=c11`) keeps what makes it ISO in GCC: `asm` and `typeof` are not
+  keywords, `__STRICT_ANSI__` is defined and trigraphs are read.
+  `-pedantic-errors` (or `-Werror=pedantic`) refuses the leniencies under an
+  ISO `-std=`, which is what `c11!` does; a GNU one takes them regardless.
 * **Every function is `extern "C-unwind"`**, so that a `longjmp` — a Rust
   unwind here — can pass through any file; see [setjmp and
   longjmp](#setjmp-and-longjmp). `-fno-cinrs-unwind` makes them `extern "C"`.
@@ -95,6 +104,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 | `-l`, `-l:file`, `-L`, `-Wl,…`, `-Xlinker`, `-pthread`, `-s`, `-pie`, `-no-pie` | as GCC's; `-pthread` also defines `_REENTRANT`; the program is position-independent either way |
 | `-fuse-ld=bfd`, `gold`, `mold`, `lld` | the linker the C compiler runs for `rustc` — whose own default on x86-64 Linux is LLD — for a program; a shared library is always linked by LLD, the one linker that takes `rustc`'s version script beside the one for the C symbols |
 | `-Werror`, `-Wno-error`, `-w` | every warning an error, as GCC has it — `#warning` included; no warnings |
+| `-pedantic-errors`, `-Werror=pedantic` | an ISO `-std=` refuses the constraint violations GCC only warns about, with the error and a note saying so; see [Defaults](#defaults). `-pedantic` alone changes nothing |
 | `-shared`, `-static`, `-rdynamic` | a shared library (see [below](#shared-libraries)); a static program (`-C target-feature=+crt-static`); all symbols in the dynamic table |
 | `-fno-cinrs-checks`, `-fcinrs-checks` | Rust's run-time checks off, on |
 | `-fno-cinrs-unwind`, `-fcinrs-unwind` | every function `extern "C"` rather than `extern "C-unwind"`, the default: 0.3 % fewer instructions on SQLite's speedtest1 (under 0.1 % with `-fno-cinrs-checks`), and `setjmp` and `longjmp` refused where they are written (see [setjmp and longjmp](#setjmp-and-longjmp)) |
@@ -105,7 +115,7 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
 
 A warning option GCC knows (`-Wall`, `-Wformat=2`, `-Wno-unused`, …), a
 common `-f` code-generation option (`-fPIC`, `-fno-strict-aliasing`,
-`-fvisibility=hidden`, …), `-pedantic` and `-pipe` change nothing here and
+`-fvisibility=hidden`, …), `-pedantic`, `-Wpedantic` and `-pipe` change nothing here and
 are accepted. An unknown `-f` option is too, with a warning, and so is an
 unknown `-W` one — except under `-Werror`, where either is an error, as it is
 in GCC: that is how a `configure` script finds out whether an option is

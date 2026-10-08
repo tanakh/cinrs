@@ -2490,7 +2490,7 @@ impl Sema<'_> {
             // definitions before C23"). There is nothing to bind — the body
             // cannot name the parameter — but the generated item still needs
             // one in that position; see `Sema::function_def`.
-            if definition.is_some() && param.name.is_none() {
+            if definition.is_some() && param.name.is_none() && !self.gating.lenient() {
                 self.require_standard(
                     crate::Standard::C23,
                     "omitting a parameter name in a function definition",
@@ -3983,7 +3983,7 @@ impl Sema<'_> {
                     _ => None,
                 }
             }
-            ExprKind::AddrOf(place) if self.gating.dialect.is_gnu() => {
+            ExprKind::AddrOf(place) if self.gating.lenient() => {
                 let place = place.clone();
                 self.place_offset(&place)
             }

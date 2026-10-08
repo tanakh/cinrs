@@ -223,6 +223,17 @@ follows [Semantic Versioning][semver].
 
 ### Changed
 
+* **`ccinrs -std=c89` … `-std=c17` take what GCC's do**: the constraint
+  violations GCC only warns about — a stray `;` at file scope, an enumerator
+  outside `int` (glibc's `<sys/epoll.h>`), `sizeof (void)`, a cast to a union
+  type and the rest of the leniency table in `doc/gnu-extensions.md` — and
+  `#embed` before C23, with `__has_embed` defined. CPython builds with
+  `-std=c11` and FFmpeg with `-std=c17`. What makes the dialect ISO stays:
+  `asm` and `typeof` are not keywords, `__STRICT_ANSI__` is defined and
+  trigraphs are read. `-pedantic-errors` (or `-Werror=pedantic`) gives the
+  strict entry points' errors back, with a note that says so; `-pedantic`
+  alone changes nothing. `Options::gnu_leniencies` is the switch, off by
+  default, so `c11!` and the other strict macros are unchanged.
 * **An array variable of 16 bytes or more is 16-byte aligned on x86-64**
   (System V), as the psABI says (3.1.2) and GCC and Clang do: automatic,
   `static` and file-scope ones, and variable length arrays, through the
@@ -336,16 +347,16 @@ follows [Semantic Versioning][semver].
   taken and dropped, as GCC gives it to the pointed-to type, where it was
   "'_Noreturn' is only allowed on a function" (git's `NORETURN_PTR` in
   `usage.c`). The keyword is still a function's alone.
-* A strict block or `-std=` below C23, which refuses `#embed`, no longer
-  defines `__has_embed` either, and `__has_embed(…)` answers "not found"
-  there: FFmpeg's checkasm, compiled with `-std=c17`, asks with `#ifdef
-  __has_embed` and took the directive into the refusal. A GNU dialect takes
-  both, as before.
+* A strict block below `c23!`, which refuses `#embed`, no longer defines
+  `__has_embed` either, and `__has_embed(…)` answers "not found" there, so
+  that a program which asks first — FFmpeg's checkasm, `#ifdef __has_embed`
+  — takes its other road rather than the refusal. A GNU dialect takes both,
+  as before, and so does `ccinrs` under every `-std=` (see Changed).
 * Under `ccinrs`, a diagnostic that says how to choose another standard or
-  dialect names the option — "compile with -std=gnu17 for the same
-  leniency", "(this file is compiled with -std=c17)" — rather than the
-  `gnu17!` macro; `Options::front_end` says which front end the C came
-  through.
+  dialect names the command line — "(this file is compiled with
+  -std=c17)", "GCC accepts this with a warning, and so does ccinrs without
+  -pedantic-errors or with -std=gnu17" — rather than the `gnu17!` macro;
+  `Options::front_end` says which front end the C came through.
 * A static pointing into an `extern` array of unknown size at an offset —
   FFmpeg's `ff_ac3_enc_options + 2` — compiles: pointer arithmetic in a
   static's initialiser is `wrapping_offset`, where rustc's constant

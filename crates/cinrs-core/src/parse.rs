@@ -426,7 +426,7 @@ impl Parser<'_> {
     /// Whether this block has the GNU leniencies; see
     /// [`Sema::gnu_leniency`](crate::sema).
     fn gnu_leniency(&self) -> bool {
-        self.gating.dialect.is_gnu()
+        self.gating.lenient()
     }
 
     /// The note that names the entry point which would have accepted what
