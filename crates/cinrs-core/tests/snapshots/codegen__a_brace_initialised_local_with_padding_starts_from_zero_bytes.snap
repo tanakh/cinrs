@@ -15,18 +15,20 @@ mod __cinrs_unit_bc799006 {
     impl info {
         #[inline]
         pub fn unrecognized(&self) -> ::core::ffi::c_uint {
-            let raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
                 as ::core::primitive::u64;
-            let value: ::core::primitive::u64 = raw & 0x1;
-            value as ::core::ffi::c_uint
+            let __cinrs_value: ::core::primitive::u64 = __cinrs_raw & 0x1;
+            __cinrs_value as ::core::ffi::c_uint
         }
         #[inline]
-        pub fn set_unrecognized(&mut self, value: ::core::ffi::c_uint) {
-            let bits: ::core::primitive::u64 = (value as ::core::primitive::u64) & 0x1;
-            let raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
+        pub fn set_unrecognized(&mut self, __cinrs_value: ::core::ffi::c_uint) {
+            let __cinrs_bits: ::core::primitive::u64 = (__cinrs_value
+                as ::core::primitive::u64) & 0x1;
+            let __cinrs_raw: ::core::primitive::u64 = self.__cinrs_bits0[0]
                 as ::core::primitive::u64;
-            let raw: ::core::primitive::u64 = (raw & 0xfffffffffffffffe) | bits;
-            self.__cinrs_bits0[0] = raw as ::core::primitive::u8;
+            let __cinrs_raw: ::core::primitive::u64 = (__cinrs_raw & 0xfffffffffffffffe)
+                | __cinrs_bits;
+            self.__cinrs_bits0[0] = __cinrs_raw as ::core::primitive::u8;
         }
     }
     #[repr(C)]

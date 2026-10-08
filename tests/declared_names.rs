@@ -192,6 +192,52 @@ fn a_local_may_carry_a_declared_functions_name() {
     }
 }
 
+/// A local, a parameter or a hoisted local named like a file-scope `static`
+/// is renamed apart (a Rust binding cannot shadow a static, E0530), and so
+/// must every binding the generated code makes of its own: FFmpeg's
+/// `fastaudio.c` has a `static` named `bits`, which the bit-field setters'
+/// own `let bits` collided with.
+#[test]
+fn a_static_named_like_the_generated_codes_locals() {
+    cinrs::gnu99! {
+        static unsigned char bits[4] = { 6, 5, 4, 3 };
+        static int raw = 1, value = 2, n = 3, other = 4, count = 5;
+
+        struct flags { unsigned a : 3; unsigned b : 5; };
+
+        static int params(int n, int value) { return n + value; }
+
+        int named_like_statics(int k) {
+            int total = bits[0] + raw + value;
+            for (int i = 0; i < k; i++) {
+                int bits = i * 2;
+                int raw = 1, value = 1;
+                total += bits + raw + value;
+            }
+            struct flags f = { 1, 2 };
+            f.b = 7;
+            return total + f.a + f.b + params(10, 20);
+        }
+
+        /* Through the graph, whose locals are hoisted to the top. */
+        int hoisted(int k) {
+            if (k) goto inside;
+            {
+                int n = 100;
+            inside:
+                n = 10;
+                int other = n + 1;
+                return other + count;
+            }
+        }
+    }
+
+    unsafe {
+        assert_eq!(named_like_statics(3), 9 + 12 + 8 + 30);
+        assert_eq!(hoisted(1), 16);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // two C names, one symbol
 // ---------------------------------------------------------------------------

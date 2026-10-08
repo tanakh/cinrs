@@ -547,12 +547,12 @@ pub struct Flags { pub __cinrs_bits0: [u8; 8] }
 impl Flags {
     #[inline]
     pub fn level(&self) -> c_int {
-        let raw: u64 = self.__cinrs_bits0[0] as u64;
-        let value: u64 = (raw >> 1) & 0x7;
-        (((value << 61) as i64) >> 61) as c_int   // sign-extended
+        let __cinrs_raw: u64 = self.__cinrs_bits0[0] as u64;
+        let __cinrs_value: u64 = (__cinrs_raw >> 1) & 0x7;
+        (((__cinrs_value << 61) as i64) >> 61) as c_int   // sign-extended
     }
     #[inline]
-    pub fn set_level(&mut self, value: c_int) { /* read, mask, write back */ }
+    pub fn set_level(&mut self, __cinrs_value: c_int) { /* read, mask, write back */ }
     // … and a pair for `ready` and for `mask`
 }
 ```

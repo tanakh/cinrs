@@ -2011,29 +2011,33 @@ impl<'a> Codegen<'a> {
         let ty = self.ty(field.ty, span);
         let name = self.c_ident(&bits.getter, span);
         let mask = word_literal(mask_of(bits.width, word_bits), word_bits, span);
+        // The locals are `__cinrs_` names: a plain `raw` or `value` would be
+        // E0530 beside a C `static` of that name (FFmpeg's `bits`), as these
+        // methods are in the unit's own module.
+        let (raw, value_name) = accessor_locals(span);
         let shifted = if shift == 0 {
-            quote_spanned! {span=> raw & #mask }
+            quote_spanned! {span=> #raw & #mask }
         } else {
             let by = usize_literal(u64::from(shift), span);
-            quote_spanned! {span=> (raw >> #by) & #mask }
+            quote_spanned! {span=> (#raw >> #by) & #mask }
         };
         let value = if field.ty.is_bool() {
-            quote_spanned! {span=> value != 0 }
+            quote_spanned! {span=> #value_name != 0 }
         } else if !bits.signed || bits.width == word_bits {
-            quote_spanned! {span=> value as #ty }
+            quote_spanned! {span=> #value_name as #ty }
         } else {
             // Sign extension: shift the field's top bit up to the sign bit of
             // the window's signed counterpart and let the arithmetic shift
             // bring it back down.
             let signed = window_ty(word_bits, true, span);
             let by = usize_literal(u64::from(word_bits - bits.width), span);
-            quote_spanned! {span=> (((value << #by) as #signed) >> #by) as #ty }
+            quote_spanned! {span=> (((#value_name << #by) as #signed) >> #by) as #ty }
         };
         let body = self.accessor_body(
             record,
             quote_spanned! {span=>
-                let raw: #word = #read;
-                let value: #word = #shifted;
+                let #raw: #word = #read;
+                let #value_name: #word = #shifted;
                 #value
             },
             span,
@@ -2061,7 +2065,8 @@ impl<'a> Codegen<'a> {
         let ty = self.ty(field.ty, span);
         let name = self.c_ident(&bits.setter, span);
         let storage = Ident::new(&bits.storage, span);
-        let value = Ident::new("value", span);
+        let (raw, value) = accessor_locals(span);
+        let new_bits = Ident::new("__cinrs_bits", span);
         let field_mask = word_literal(mask, word_bits, span);
         let keep = word_literal(!mask & mask_of(word_bits, word_bits), word_bits, span);
         let shifted = if shift == 0 {
@@ -2078,20 +2083,20 @@ impl<'a> Codegen<'a> {
         for step in 0..count {
             let index = usize_literal(first + u64::from(step), span);
             if step == 0 {
-                writes.extend(quote_spanned! {span=> self.#storage[#index] = raw as #byte; });
+                writes.extend(quote_spanned! {span=> self.#storage[#index] = #raw as #byte; });
             } else {
                 let by = usize_literal(u64::from(step) * 8, span);
                 writes.extend(
-                    quote_spanned! {span=> self.#storage[#index] = (raw >> #by) as #byte; },
+                    quote_spanned! {span=> self.#storage[#index] = (#raw >> #by) as #byte; },
                 );
             }
         }
         let body = self.accessor_body(
             record,
             quote_spanned! {span=>
-                let bits: #word = #shifted;
-                let raw: #word = #read;
-                let raw: #word = (raw & #keep) | bits;
+                let #new_bits: #word = #shifted;
+                let #raw: #word = #read;
+                let #raw: #word = (#raw & #keep) | #new_bits;
                 #writes
             },
             span,
@@ -10420,6 +10425,15 @@ impl<'a> Codegen<'a> {
             }
         }
     }
+}
+
+/// The two locals a bit-field accessor reads into: the window's bytes and the
+/// field's value (the setter's parameter).
+fn accessor_locals(span: Span) -> (Ident, Ident) {
+    (
+        Ident::new("__cinrs_raw", span),
+        Ident::new("__cinrs_value", span),
+    )
 }
 
 /// Whether an initialiser's value is all zero bits — what the `write_bytes`

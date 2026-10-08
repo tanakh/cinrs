@@ -326,6 +326,11 @@ follows [Semantic Versioning][semver].
   three of git's tests passed or failed by luck. Compound literals and
   definitions hoisted out of their block likewise, and `q = p;` of a padded
   type copies the bytes.
+* A file-scope `static` named `bits`, `raw` or `value` beside a record with
+  bit-fields compiles: the accessors' own locals and the setter's parameter
+  are `__cinrs_` names now, where `let bits` was "let bindings cannot shadow
+  statics" (E0530, FFmpeg's `fastaudio.c`). A C local, parameter or hoisted
+  local of such a name was already renamed apart.
 * An array with static storage duration whose list decides its length may
   name itself in that list — `static const struct node tree[] = { { 1, tree
   }, … };`, FFmpeg's `matroskadec.c` — as its scope begins after its
