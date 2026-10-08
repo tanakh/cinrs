@@ -311,6 +311,11 @@ follows [Semantic Versioning][semver].
 
 ### Fixed
 
+* An AArch64 Apple target defines `__arm64__`, `__arm64` and
+  `__ARM64_ARCH_8__` besides `__aarch64__`, as Apple's Clang does: the
+  macOS SDK's `<sys/cdefs.h>` stopped at "Unsupported architecture" without
+  the first. Linux's AArch64 gets none of them, as with GCC. Reported by
+  tasuren in #1.
 * **An inline definition provides no external definition** where the unit
   makes C symbols (`ccinrs`, `#pragma cinrs export`), as C99 6.7.4p7 and
   GNU89 say: a header's `inline` function that two files include is no

@@ -946,6 +946,18 @@ impl TargetModel {
         if self.os == Os::Windows && self.ptr_bits == 64 {
             out.push(("_WIN64", "1".to_owned()));
         }
+        // Apple's names for AArch64, which its Clang defines on Darwin only
+        // (`getAppleMachOAArch64Defines`) and the SDK's `<sys/cdefs.h>`
+        // requires: without `__arm64__` it stops at "Unsupported
+        // architecture". GCC on Linux defines none of them. The rest of that
+        // set — `__ARM_NEON__` and `__AARCH64_SIMD__`, which promise NEON
+        // intrinsics `cinrs` does not have, and an empty
+        // `__REGISTER_PREFIX__` for assembly — is left out.
+        if self.os == Os::Darwin && self.arch == Arch::Aarch64 {
+            out.push(("__arm64__", "1".to_owned()));
+            out.push(("__arm64", "1".to_owned()));
+            out.push(("__ARM64_ARCH_8__", "1".to_owned()));
+        }
         // wasm is neither ELF nor anything `__ELF__` would be right about.
         if self.os.is_elf() && self.arch != Arch::Wasm32 {
             out.push(("__ELF__", "1".to_owned()));

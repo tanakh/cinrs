@@ -522,6 +522,45 @@ fn the_relocation_model_fxsr_and_the_gnu_names() {
     );
 }
 
+/// Apple's Clang names AArch64 `__arm64__`, `__arm64` and
+/// `__ARM64_ARCH_8__` as well as `__aarch64__`, and the macOS SDK's
+/// `<sys/cdefs.h>` stops at "Unsupported architecture" without the first.
+/// GCC on Linux defines none of them. Reported in #1.
+#[test]
+fn apple_aarch64_has_apples_names_for_it() {
+    accepts(
+        "aarch64-apple-darwin",
+        r#"
+        #if !defined(__aarch64__) || __arm64__ != 1 || __arm64 != 1 || __ARM64_ARCH_8__ != 1
+        #error Apple's AArch64 is __arm64__, __arm64 and __ARM64_ARCH_8__ too
+        #endif
+        #if defined(__ARM_NEON__) || defined(__AARCH64_SIMD__)
+        #error no NEON intrinsics are promised
+        #endif
+        #if !defined(__sys_cdefs_arch_unknown__) && defined(__arm64__)
+        #else
+        #error Unsupported architecture
+        #endif
+        "#,
+    );
+    accepts(
+        "aarch64-unknown-linux-gnu",
+        r#"
+        #if !defined(__aarch64__) || defined(__arm64__) || defined(__arm64) || defined(__ARM64_ARCH_8__)
+        #error Linux's AArch64 is __aarch64__ alone
+        #endif
+        "#,
+    );
+    accepts(
+        "x86_64-apple-darwin",
+        r#"
+        #if defined(__arm64__) || !defined(__x86_64__)
+        #error Intel macOS is x86-64
+        #endif
+        "#,
+    );
+}
+
 /// `<limits.h>`, which is written entirely in terms of those macros.
 #[test]
 fn limits_h_follows_the_model() {

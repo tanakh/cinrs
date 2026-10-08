@@ -117,7 +117,7 @@ families that are, never a guess.
 | --- | --- | --- | --- | --- | --- | --- |
 | `x86_64*` (incl. `gnux32`, where the pointer is 32) | 64 (32) | LP64 rule | little | yes | 8 | `__x86_64__`, `__amd64__`, `__SSE__`, `__SSE2__`, `__FXSR__` |
 | `i386`/`i486`/`i586`/`i686` | 32 | 32 | little | no | **4 off Windows**, 8 on it | `__i386__`; `i386` in a GNU dialect |
-| `aarch64*` (`aarch64_be` big; `gnu_ilp32` 32-bit pointer) | 64 (32) | LP64 rule | little | yes | 8 | `__aarch64__` |
+| `aarch64*` (`aarch64_be` big; `gnu_ilp32` 32-bit pointer) | 64 (32) | LP64 rule | little | yes | 8 | `__aarch64__`; on Apple's systems also `__arm64__`, `__arm64` and `__ARM64_ARCH_8__`, as Apple's Clang has them and the macOS SDK's `<sys/cdefs.h>` requires (not `__ARM_NEON__` or `__AARCH64_SIMD__`, which would promise NEON intrinsics) |
 | `arm*`, `thumb*` (`armeb*` big) | 32 | 32 | little | no | 8 | `__arm__` |
 | `riscv32*` / `riscv64*` | 32 / 64 | LP64 rule | little | 64-bit only | 8 | `__riscv`, `__riscv_xlen` |
 | `wasm32` | 32 | 32 (64 on a Linux ABI) | little | no | 8 | `__wasm__`, `__wasm32__` |
