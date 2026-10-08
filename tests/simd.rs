@@ -1757,6 +1757,9 @@ c11! {
     }
 }
 
+/// The rule is the System V psABI's; the Windows x64 ABI has none, and there
+/// an array is aligned as its elements are.
+#[cfg(not(windows))]
 #[test]
 fn an_array_variable_has_the_psabis_alignment() {
     unsafe {

@@ -447,13 +447,15 @@ fn an_under_aligned_record_typedef_reads_and_writes_at_any_address() {
         #include <stdint.h>
         #include <string.h>
 
-        typedef struct { unsigned long data[2]; } aes_block_t __attribute__((__aligned__(1)));
+        /* `uint64_t` rather than OpenSSL's `unsigned long`, which is four
+         * bytes on Windows. */
+        typedef struct { uint64_t data[2]; } aes_block_t __attribute__((__aligned__(1)));
         struct holder { char c; aes_block_t b; };
 
         static unsigned char bytes[40];
 
         int unaligned_record_typedef(void) {
-            unsigned long want0, want1;
+            uint64_t want0, want1;
             int i, ok = 1;
             for (i = 0; i < 40; i++) bytes[i] = (unsigned char) i;
             memcpy(&want0, bytes + 1, 8);
@@ -462,7 +464,7 @@ fn an_under_aligned_record_typedef_reads_and_writes_at_any_address() {
                 aes_block_t b = *(const aes_block_t *) (bytes + 1);
                 const aes_block_t *p = (const aes_block_t *) (bytes + 3);
                 ok &= b.data[0] == want0 && b.data[1] == want1;
-                ok &= p->data[0] == *(const unsigned long *) memcpy(&want0, bytes + 3, 8);
+                ok &= p->data[0] == *(const uint64_t *) memcpy(&want0, bytes + 3, 8);
                 *(aes_block_t *) (bytes + 5) = b;
                 ok &= memcmp(bytes + 5, &b, sizeof b) == 0;
                 ((aes_block_t *) (bytes + 7))->data[1] = 0;

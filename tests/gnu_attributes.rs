@@ -625,6 +625,10 @@ mod exported {
 /// — is a real test even at `-O2`, where LLVM would otherwise take any
 /// declared function's address as non-null. One the program does define, in
 /// another unit here, is found and called as usual.
+///
+/// Not on Windows: a weak reference needs an ELF or Mach-O object, and cinrs
+/// refuses `weak` on a declaration there.
+#[cfg(not(windows))]
 mod weak {
     mod hooks {
         cinrs::gnu99! {
@@ -634,26 +638,37 @@ mod weak {
         }
     }
 
-    mod user {
+    /// A symbol nothing defines: ELF only. Mach-O's weak reference is one the
+    /// *loader* may find missing, and Apple's linker still wants a definition
+    /// to link against (or `-Wl,-U,_name`), from Clang's objects as from
+    /// these — zstd uses its weak hooks on ELF alone for that reason.
+    #[cfg(not(target_vendor = "apple"))]
+    mod absent {
         cinrs::gnu99! {
             #include <stddef.h>
 
             __attribute__((__weak__)) int cinrs_weak_test_absent(int x);
-            int cinrs_weak_test_present(int x) __attribute__((weak));
             extern int cinrs_weak_test_absent_obj __attribute__((weak));
-            extern int cinrs_weak_test_present_obj __attribute__((weak));
 
             int absent_hook(void) {
                 if (cinrs_weak_test_absent != NULL)
                     return cinrs_weak_test_absent(1);
                 return -1;
             }
-            int present_hook(void) {
-                return cinrs_weak_test_present ? cinrs_weak_test_present(1) : -1;
-            }
             int (*hook_pointer(void))(int) { return cinrs_weak_test_absent; }
             int absent_obj(void) {
                 return &cinrs_weak_test_absent_obj == NULL ? -1 : cinrs_weak_test_absent_obj;
+            }
+        }
+    }
+
+    mod user {
+        cinrs::gnu99! {
+            int cinrs_weak_test_present(int x) __attribute__((weak));
+            extern int cinrs_weak_test_present_obj __attribute__((weak));
+
+            int present_hook(void) {
+                return cinrs_weak_test_present ? cinrs_weak_test_present(1) : -1;
             }
             int present_obj(void) {
                 int *p = &cinrs_weak_test_present_obj;
@@ -664,12 +679,13 @@ mod weak {
         }
     }
 
+    #[cfg(not(target_vendor = "apple"))]
     #[test]
     fn a_weak_reference_is_null_when_nothing_defines_the_symbol() {
         unsafe {
-            assert_eq!(user::absent_hook(), -1);
-            assert!(user::hook_pointer().is_none());
-            assert_eq!(user::absent_obj(), -1);
+            assert_eq!(absent::absent_hook(), -1);
+            assert!(absent::hook_pointer().is_none());
+            assert_eq!(absent::absent_obj(), -1);
         }
     }
 

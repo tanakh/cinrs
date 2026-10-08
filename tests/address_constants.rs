@@ -395,9 +395,18 @@ fn an_integer_holds_an_address() {
         static void callback(void) { called++; }
         static int table[4];
 
+        /* `long` where it is as wide as a pointer, as it is on LP64; on
+         * Windows it is narrower, and an address does not fit one (GCC
+         * refuses it there too). */
+        #if __SIZEOF_LONG__ == __SIZEOF_POINTER__
+        typedef long word;
+        #else
+        typedef long long word;
+        #endif
+
         static uintptr_t as_integer = (uintptr_t) callback;
         static atomic_uintptr_t as_atomic = (uintptr_t) callback;
-        long into_table = (long) &table[2];
+        word into_table = (word) &table[2];
         static const intptr_t offset = (intptr_t) (table + 1);
         static uintptr_t not_an_address = (uintptr_t) (void *) 16;
 
@@ -405,7 +414,7 @@ fn an_integer_holds_an_address() {
             void (*f)(void) = (void (*)(void)) atomic_load(&as_atomic);
             f();
             int ok = (as_integer == (uintptr_t) callback)
-                + (into_table == (long) &table[2]) * 2
+                + (into_table == (word) &table[2]) * 2
                 + (offset == (intptr_t) &table[1]) * 4
                 + (not_an_address == 16) * 8
                 + called * 16;
@@ -441,8 +450,14 @@ fn a_table_holds_addresses_in_integer_members() {
         struct module { int id; struct variable vars[2]; };
         const struct module ssl = { 1, { { "ssl_protocol", (uintptr_t) get_protocol }, { "none", 0 } } };
 
-        union word { long n; void *p; };
-        static union word words[2] = { { .n = (long) &options[1] }, { .n = 5 } };
+        /* A pointer-sized `long` where there is one (see above). */
+        #if __SIZEOF_LONG__ == __SIZEOF_POINTER__
+        typedef long word_n;
+        #else
+        typedef long long word_n;
+        #endif
+        union word { word_n n; void *p; };
+        static union word words[2] = { { .n = (word_n) &options[1] }, { .n = 5 } };
 
         int tables(void) {
             return (((const char *) options[0].defval)[0] == 'a')
@@ -450,7 +465,7 @@ fn a_table_holds_addresses_in_integer_members() {
                 + (options[2].defval == 3 && options[2].flags == 1) * 4
                 + (((getter_t) ssl.vars[0].data)() == 7) * 8
                 + (ssl.vars[1].data == 0 && ssl.id == 1) * 16
-                + (words[0].n == (long) &options[1] && words[1].n == 5) * 32;
+                + (words[0].n == (word_n) &options[1] && words[1].n == 5) * 32;
         }
     }
 
