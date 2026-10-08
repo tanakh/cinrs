@@ -366,14 +366,22 @@ impl Target {
             }
             None => (rustc.host.clone(), TargetModel::host()),
         };
-        let Some(libdir) = rustc.target_libdir(&triple) else {
-            return Err(format!(
-                "the Rust standard library for '{triple}' is not installed; \
-                 `rustup target add {triple}` installs it"
-            ));
+        // The machine `rustc` runs on has its standard library — `rustup`
+        // installs it with the compiler, and `rustc` says so itself where it
+        // is missing — so only another machine's is looked for, and musl's,
+        // which may carry its C library: asking costs another run of `rustc`
+        // for every file compiled.
+        let self_contained = if triple == rustc.host && model.env != Env::Musl {
+            false
+        } else {
+            let Some(libdir) = rustc.target_libdir(&triple) else {
+                return Err(format!(
+                    "the Rust standard library for '{triple}' is not installed; \
+                     `rustup target add {triple}` installs it"
+                ));
+            };
+            model.env == Env::Musl && libdir.join("self-contained/libc.a").is_file()
         };
-        let self_contained =
-            model.env == Env::Musl && libdir.join("self-contained/libc.a").is_file();
         let bare_wasm = model.arch == Arch::Wasm32 && model.os == Os::None;
         Ok(Self {
             cross: triple != rustc.host,
