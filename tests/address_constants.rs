@@ -358,6 +358,29 @@ fn a_constant_condition_chooses_a_string_literal() {
     assert_eq!(unsafe { chosen_length() }, expected);
 }
 
+/// An array whose list decides its length names itself in that list: its
+/// scope begins after its declarator (C17 6.2.1p7), before the initialiser.
+/// FFmpeg's matroskadec.c builds a tree of syntax elements this way.
+#[test]
+fn an_array_of_unknown_length_names_itself_in_its_list() {
+    cinrs::c11! {
+        struct node { int v; const struct node *child; };
+        static const struct node tree[] = { { 1, tree }, { 2, 0 }, { 3, &tree[1] } };
+        const char *const names[] = { "a", "b", (const char *) names };
+
+        int self_references(void) {
+            static const void *self[] = { 0, self, &self[2] };
+            return (tree[0].child == tree)
+                + (tree[2].child->v == 2) * 2
+                + (sizeof tree / sizeof tree[0] == 3) * 4
+                + (names[2] == (const char *) names) * 8
+                + (self[1] == self && self[2] == &self[2]) * 16;
+        }
+    }
+
+    assert_eq!(unsafe { self_references() }, 31);
+}
+
 /// An integer as wide as a pointer, initialised with an address converted to
 /// it: FFmpeg's `static atomic_uintptr_t av_log_callback = (uintptr_t)
 /// av_log_default_callback;`. GCC takes it as the relocated address; the item

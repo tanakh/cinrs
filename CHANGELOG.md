@@ -315,6 +315,10 @@ follows [Semantic Versioning][semver].
   GCC takes as a relocated constant: FFmpeg's `static atomic_uintptr_t
   av_log_callback = (uintptr_t)av_log_default_callback;`. The item holds the
   address as a pointer and every use reads it as the integer.
+* An array with static storage duration whose list decides its length may
+  name itself in that list — `static const struct node tree[] = { { 1, tree
+  }, … };`, FFmpeg's `matroskadec.c` — as its scope begins after its
+  declarator (C17 6.2.1p7). It was "use of undeclared identifier".
 * `__attribute__((aligned(1)))` on a `typedef` of a record lowers its
   alignment, as GCC does for a scalar's: a read, a write or a member access
   through a pointer to the `typedef` is an unaligned one. OpenSSL's

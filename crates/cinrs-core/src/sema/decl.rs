@@ -466,8 +466,11 @@ impl Sema<'_> {
         //
         // The two forms whose type the initialiser decides — C23's `auto x =
         // e` and `T x[] = { … }` — cannot do that, because there is no type to
-        // declare the object with yet. Neither of them can name itself either
-        // (an incomplete array has no `sizeof`), so nothing is lost.
+        // declare the object with yet. An `auto` one cannot name itself; an
+        // array with static storage duration can, by its address — FFmpeg's
+        // `static const struct node tree[] = { { 1, tree }, … };` — so that
+        // one is declared with its incomplete type first, as a tentative
+        // definition would be, and completed once the list has been read.
         //
         // Every bound that is not a constant expression gets a hidden object
         // of its own during the resolution below, and the statements that bind
@@ -489,6 +492,44 @@ impl Sema<'_> {
         {
             inferred = false;
         }
+        let predeclared = if inferred
+            && (file_scope || storage == Some(ast::StorageClass::Static))
+            && matches!(
+                declarator.ty.kind,
+                ast::TypeKind::Array {
+                    size: ast::ArraySize::Unspecified,
+                    ..
+                }
+            )
+            && self.declared_here(&name.name).is_none()
+        {
+            // The list resolves the type again and reports what is wrong with
+            // it, so this look ahead says nothing itself.
+            let said = std::mem::replace(&mut self.diags, crate::diag::Diagnostics::new());
+            let resolved = self.declared_object_ty_of(
+                &declarator.ty,
+                &name.name,
+                Completeness::TentativeArray,
+            );
+            let failed = self.diags.has_errors();
+            self.diags = said;
+            resolved
+                .filter(|ty| !failed && !ty.is_error())
+                .and_then(|incomplete| {
+                    let incomplete = self.apply_type_attrs(incomplete, &attrs);
+                    self.declare_static_object(
+                        name,
+                        incomplete,
+                        declarator.ty.qualifiers.is_const,
+                        storage == Some(ast::StorageClass::Static),
+                        file_scope,
+                        thread_local == ThreadLocal::Yes,
+                        declarator,
+                    )
+                })
+        } else {
+            None
+        };
         let (mut ty, mut init) = if inferred {
             self.typed_initializer(declarator, &name.name)
                 .unwrap_or((Ty::Error, None))
@@ -618,15 +659,25 @@ impl Sema<'_> {
             } else {
                 ty
             };
-            let object = self.declare_static_object(
-                name,
-                ty,
-                is_const,
-                is_static,
-                file_scope,
-                thread_local == ThreadLocal::Yes,
-                declarator,
-            );
+            let object = match predeclared {
+                // Its initialiser has said how long it is now.
+                Some(id) => {
+                    self.retype_object(id, ty, declarator);
+                    if file_scope {
+                        self.note_object_ty(id, ty);
+                    }
+                    Some(id)
+                }
+                None => self.declare_static_object(
+                    name,
+                    ty,
+                    is_const,
+                    is_static,
+                    file_scope,
+                    thread_local == ThreadLocal::Yes,
+                    declarator,
+                ),
+            };
             if !inferred {
                 // An object with static storage duration is the only one GNU C
                 // lets initialise a flexible array member: its storage is the
