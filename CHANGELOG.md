@@ -326,6 +326,11 @@ follows [Semantic Versioning][semver].
   three of git's tests passed or failed by luck. Compound literals and
   definitions hoisted out of their block likewise, and `q = p;` of a padded
   type copies the bytes.
+* A static pointing into an `extern` array of unknown size at an offset —
+  FFmpeg's `ff_ac3_enc_options + 2` — compiles: pointer arithmetic in a
+  static's initialiser is `wrapping_offset`, where rustc's constant
+  evaluation refused an `offset` past the zero bytes it knew of the array
+  (E0080).
 * A file-scope `static` named `bits`, `raw` or `value` beside a record with
   bit-fields compiles: the accessors' own locals and the setter's parameter
   are `__cinrs_` names now, where `let bits` was "let bindings cannot shadow

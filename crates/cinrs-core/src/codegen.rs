@@ -1123,6 +1123,12 @@ struct Codegen<'a> {
     map: &'a SourceMap,
     options: &'a Options,
     continue_styles: HashMap<LoopId, ContinueStyle>,
+    /// Set while the initialiser of an object with static storage duration is
+    /// generated: pointer arithmetic there is `wrapping_offset`, because Rust's
+    /// constant evaluation checks an `offset` against the size it knows, and
+    /// an `extern T tab[];` it knows as zero bytes (FFmpeg's
+    /// `ff_ac3_enc_options + 2`). GCC's relocation is not checked either.
+    in_static_init: bool,
     /// The Rust names of the locals of the function being generated, wherever
     /// they differ from the C ones: in [CFG mode](crate::cfg), where every
     /// local of the function shares one scope, and for a local whose name
@@ -1270,6 +1276,7 @@ impl<'a> Codegen<'a> {
             map,
             options,
             continue_styles: HashMap::new(),
+            in_static_init: false,
             local_names: HashMap::new(),
             env: HashMap::new(),
             reserved,
@@ -2669,6 +2676,17 @@ impl<'a> Codegen<'a> {
         }
     }
 
+    /// `offset`, or `wrapping_offset` in a static's initialiser; see
+    /// [`Codegen::in_static_init`].
+    fn offset_method(&self, span: Span) -> Ident {
+        let name = if self.in_static_init {
+            "wrapping_offset"
+        } else {
+            "offset"
+        };
+        Ident::new(name, span)
+    }
+
     /// The type and the initialiser of a static that holds addresses in
     /// integer members; see [`ir::Object::address_slots`].
     ///
@@ -2704,7 +2722,7 @@ impl<'a> Codegen<'a> {
         let mut writes = TokenStream::new();
         for (path, address) in slots {
             let address_ty = self.ty(address.ty, span);
-            let tokens = self.expr_at(&address, address.ty);
+            let tokens = self.static_init(&address, address.ty, span);
             writes.extend(quote_spanned! {span=>
                 (&raw mut (*#base)#wrapper #path).cast::<#address_ty>().write_unaligned(#tokens);
             });
@@ -2937,7 +2955,9 @@ impl<'a> Codegen<'a> {
     /// The initialiser of a `static mut`, wrapped in `unsafe` when it needs to
     /// be (`mem::zeroed`, or the address of another `static mut`).
     fn static_init(&mut self, expr: &Expr, ty: Ty, span: Span) -> TokenStream {
+        let outer = std::mem::replace(&mut self.in_static_init, true);
         let tokens = self.expr_at(expr, ty);
+        self.in_static_init = outer;
         if needs_unsafe(&self.program.types, expr) {
             let block = braced(tokens, span);
             return quote_spanned! {span=> unsafe #block };
@@ -6433,7 +6453,8 @@ impl<'a> Codegen<'a> {
                 let pointee = self.program.types.pointee(ptr.ty).unwrap_or(Ty::Void);
                 let base = self.expr(ptr).at(prec::CALL, span);
                 let offset = self.scaled_offset(pointee, index, *sub, span);
-                Value::new(quote_spanned! {span=> #base.offset(#offset) }, prec::CALL)
+                let method = self.offset_method(span);
+                Value::new(quote_spanned! {span=> #base.#method(#offset) }, prec::CALL)
             }
             // GNU's label difference, `&&a - &&b`. Both operands are state
             // numbers rather than addresses, so the subtraction is done on the
@@ -9971,8 +9992,9 @@ impl<'a> Codegen<'a> {
                 let pointer = self.pointer_operand(base, place.ty, mutable, span);
                 let offset = self.scaled_offset(place.ty, index, false, span);
                 let tmp = self.temporary_at(span);
+                let method = self.offset_method(span);
                 LoweredPlace::plain(
-                    quote_spanned! {span=> let #tmp = #pointer.offset(#offset); },
+                    quote_spanned! {span=> let #tmp = #pointer.#method(#offset); },
                     parenthesize(quote_spanned! {span=> *#tmp }, span),
                 )
             }
@@ -10200,8 +10222,9 @@ impl<'a> Codegen<'a> {
                 let from = base.ty;
                 let pointer = self.expr(base).at(prec::CALL, span);
                 let offset = self.scaled_offset(place.ty, index, false, span);
+                let method = self.offset_method(span);
                 let value = Value::new(
-                    quote_spanned! {span=> #pointer.offset(#offset) },
+                    quote_spanned! {span=> #pointer.#method(#offset) },
                     prec::CALL,
                 );
                 return self.pointer_cast(value, from, want, span);

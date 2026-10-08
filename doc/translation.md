@@ -179,6 +179,13 @@ and Rust reaches such an object the way one C translation unit hands another a
 FILE *get_stdout(void) { return stdout; }
 ```
 
+An object's constant initialiser is a Rust constant, and the pointer
+arithmetic in it is `wrapping_offset`: Rust's constant evaluation checks an
+`offset` against the size it knows of the object, and an `extern const int
+tab[];` it knows as zero bytes, so FFmpeg's `static const int *p =
+ff_ac3_enc_options + 2;` would be refused where GCC's relocation is not
+checked either.
+
 ### Locals declared without an initialiser
 
 C leaves such a local indeterminate, and Rust may not read uninitialised

@@ -169,6 +169,35 @@ mod importer {
     }
 }
 
+/// A table one unit defines and another declares without a size, pointed
+/// into at an offset by a static: FFmpeg's `ff_ac3_enc_options + 2`. The
+/// declaring unit knows the array as zero bytes, so the offset is a
+/// `wrapping_offset`, which Rust's constant evaluation does not check against
+/// that size, as GCC's relocation is not checked either.
+mod extern_table {
+    pub(crate) mod definer {
+        cinrs::c99! {
+            #pragma cinrs export
+            const int cinrs_test_table[] = { 1, 2, 3, 4 };
+        }
+    }
+
+    mod user {
+        cinrs::c99! {
+            extern const int cinrs_test_table[];
+            static const int *second = cinrs_test_table + 1;
+            static const int *fourth = &cinrs_test_table[3];
+
+            int table_entries(void) { return *second * 10 + *fourth; }
+        }
+
+        #[test]
+        fn a_static_points_into_an_extern_array_of_unknown_size() {
+            assert_eq!(unsafe { table_entries() }, 24);
+        }
+    }
+}
+
 /// A third unit, sharing a header with the exporting one and calling into it.
 mod header_client {
     use cinrs::c99;
