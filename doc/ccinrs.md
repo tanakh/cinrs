@@ -263,8 +263,9 @@ limits](limitations.md#setjmp-and-longjmp) the whole list. For a C project:
   `-fno-cinrs-unwind` takes it back, and then `setjmp` and `longjmp` are
   located errors that name the option.
 * **A `setjmp` may only stand where C17 7.13.1.1p4 allows it**, plus
-  `r = setjmp(buf);`, `int r = setjmp(buf);` and
-  `if ((r = setjmp(buf)) == 0)`; anywhere else is a located error.
+  `r = setjmp(buf);`, `int r = setjmp(buf);`,
+  `if ((r = setjmp(buf)) == 0)` and `if (!r || !setjmp(buf))`; anywhere else
+  is a located error.
 * **A `longjmp` costs about 1.2 µs**, plus about 130 ns per frame it crosses,
   not GCC's tens of nanoseconds: Lua's `error`/`pcall` loop is several times
   slower than gcc's build, its ordinary code is not.

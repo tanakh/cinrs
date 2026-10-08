@@ -655,7 +655,7 @@ impl Sema<'_> {
     /// Checks the controlling expression of a `switch`, giving it the type the
     /// labels are converted to.
     fn scrutinee(&mut self, cond: &ast::Expr) -> Option<Expr> {
-        let scrutinee = self.with_setjmp_permit(cond, SetjmpPlace::Control, |s| s.expr(cond))?;
+        let scrutinee = self.with_setjmp_permit(cond, SetjmpPlace::Switch, |s| s.expr(cond))?;
         if !scrutinee.ty.is_integer() {
             self.error(
                 cond.range,

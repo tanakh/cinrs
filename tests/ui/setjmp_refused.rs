@@ -3,9 +3,10 @@
 //! A `longjmp` comes back to the `setjmp` by re-entering the function's
 //! graph at the code that follows it, so that code has to be something the
 //! graph can resume: the rest of a controlling expression that compares the
-//! result with a constant, or the rest of an expression statement. An
-//! operand of anything else is refused where the call was written, and so is
-//! a `setjmp` inside a statement expression.
+//! result with a constant, or the rest of an expression statement — and, as
+//! GCC takes it, an operand of `&&` or `||` in a branch's condition, which the
+//! graph splits into branches. An operand of anything else is refused where
+//! the call was written, and so is a `setjmp` inside a statement expression.
 
 cinrs::gnu99! {
     #include <setjmp.h>
@@ -18,8 +19,10 @@ cinrs::gnu99! {
         if (setjmp(env) == x) //~ ERROR: 'setjmp' cannot be called here
             return 1;
         g(setjmp(env)); //~ ERROR: 'setjmp' cannot be called here
-        if (setjmp(env) && x) //~ ERROR: 'setjmp' cannot be called here
-            return 2;
+        switch (x || setjmp(env)) { case 1: return 2; } //~ ERROR: 'setjmp' cannot be called here
+        y = x && setjmp(env); //~ ERROR: 'setjmp' cannot be called here
+        if (x || (setjmp(env) && x) == 1) //~ ERROR: 'setjmp' cannot be called here
+            return 3;
         return setjmp(env); //~ ERROR: 'setjmp' cannot be called here
     }
 
@@ -35,6 +38,8 @@ cinrs::gnu99! {
         if (setjmp(env) != 0) r++;
         while (setjmp(env) < 3) r++;
         switch (setjmp(env)) { case 1: r++; }
+        if (r || !setjmp(env)) r++;
+        while (r > 9 && (setjmp(env) == 0 || r < 3)) r++;
         setjmp(env);
         (void) setjmp(env);
         r = setjmp(env);

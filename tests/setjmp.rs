@@ -103,6 +103,63 @@ fn every_place_c_allows_a_setjmp() {
     }
 }
 
+/// Beyond C17, as GCC and Clang take it: a `setjmp` as an operand of `||` or
+/// `&&` in a branch's condition, which runs only when the operand before it
+/// did not decide. OpenSSL's `async_fibre_swapcontext` is the first function;
+/// a `longjmp` comes back to the right operand without evaluating the left
+/// one again.
+#[test]
+fn a_setjmp_as_an_operand_of_a_logical_operator() {
+    gnu99! {
+        #include <setjmp.h>
+
+        static jmp_buf env;
+        static int lefts;
+
+        static int left(int r) { lefts++; return r; }
+
+        int resume(int r) {
+            if (!left(r) || !_setjmp(env)) {
+                if (r)
+                    _longjmp(env, 1);
+                return 0;
+            }
+            return 1;
+        }
+
+        int nested(int a, int b) {
+            int log = 0;
+            /* Either side of `&&`, inside `||`. */
+            if (a && (b || setjmp(env) == 0)) {
+                log += 1;
+                if (!b)
+                    longjmp(env, 2);
+            } else {
+                log += 10;
+            }
+            /* The left operand, and a loop that calls it on every pass. */
+            int passes = 0;
+            while (setjmp(env) < 3 && a) {
+                passes++;
+                longjmp(env, passes);
+            }
+            return log + passes * 100;
+        }
+
+        int counted_lefts(void) { return lefts; }
+    }
+
+    unsafe {
+        assert_eq!(resume(0), 0);
+        assert_eq!(counted_lefts(), 1);
+        assert_eq!(resume(1), 1);
+        assert_eq!(counted_lefts(), 2);
+        assert_eq!(nested(1, 1), 1 + 300);
+        assert_eq!(nested(1, 0), 1 + 10 + 300);
+        assert_eq!(nested(0, 0), 10);
+    }
+}
+
 #[test]
 fn nested_setjmps_in_one_function() {
     c99! {

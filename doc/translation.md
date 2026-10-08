@@ -1213,7 +1213,10 @@ What this asks of the program:
   there with `!`, compared there with an integer constant, or as a whole
   expression statement; cinrs also takes `r = setjmp(buf);` and
   `int r = setjmp(buf);`, and the assignment inside a controlling expression,
-  `if ((r = setjmp(buf)) == 0)`, as GCC does. Anything else — `f(setjmp(buf))`,
+  `if ((r = setjmp(buf)) == 0)`, as GCC does, and in the condition of an `if`
+  or a loop, any of those as an operand of `&&` or `||`, `if (!r ||
+  !setjmp(buf))`: the operators become the branches they stand for, so the
+  call ends a block of its own. Anything else — `f(setjmp(buf))`,
   `return setjmp(buf);`, one inside a statement expression — is a located
   error, because what follows the call could not be resumed on its own.
 * **The ABI.** An unwind that leaves an `extern "C"` function is undefined

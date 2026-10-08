@@ -228,9 +228,13 @@ from that:
 expression of an `if`, `switch`, `while`, `do` or `for`, alone, negated with
 `!`, or compared with an integer constant; or a whole expression statement,
 cast to `void` or not. Beyond C17, as GCC takes them: `r = setjmp(buf);`,
-`int r = setjmp(buf);` and `if ((r = setjmp(buf)) == 0)`. Anywhere else — an
-operand of anything else, `return setjmp(buf);`, a statement expression — is
-a located error that says so: what follows the call could not be resumed.
+`int r = setjmp(buf);` and `if ((r = setjmp(buf)) == 0)`, and in the
+condition of an `if` or a loop any of the controlling forms as an operand of
+`&&` or `||`, at any depth — OpenSSL's `if (!r || !_setjmp(env))`, where the
+call ends a block of its own once the operand before it has not decided.
+Anywhere else — an operand of anything else, `return setjmp(buf);`, `switch
+(x || setjmp(buf))`, a statement expression — is a located error that says
+so: what follows the call could not be resumed.
 
 **What differs from GCC.**
 

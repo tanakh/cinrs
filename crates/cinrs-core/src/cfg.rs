@@ -135,6 +135,19 @@
 //!   if (value == 0) f(); else g();
 //! ```
 //!
+//! A call that is an operand of `&&` or `||` in a branch's condition — `if
+//! (!r || !setjmp(b))`, which GCC takes — runs only when the operand before
+//! it did not decide, so the operator is first made the branches it stands
+//! for, and the call is lifted in the block that evaluates its own operand:
+//!
+//! ```text
+//!   if (!r) goto then; else goto right;
+//! right:
+//!   save(b, site 1); value = 0; goto c1;
+//! c1:
+//!   if (!value) goto then; else goto else;
+//! ```
+//!
 //! The graph's entry is then a `switch` on the hidden `resume`, whose `case k`
 //! is site `k`'s continuation and whose `default` is the body. Code
 //! generation runs the graph inside a `catch_unwind`, with the locals hoisted
@@ -173,8 +186,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::capture::SourceRange;
 use crate::ir::{
-    BinOp, BreakTarget, BuiltinOp, CaseRange, Expr, ExprKind, LabelId, LoopId, Object, ObjectId,
-    Place, PlaceKind, Stmt, Storage, SwitchId, is_always_true,
+    BinOp, BreakTarget, BuiltinOp, CaseRange, Expr, ExprKind, LabelId, LogicalOp, LoopId, Object,
+    ObjectId, Place, PlaceKind, Stmt, Storage, SwitchId, is_always_true,
 };
 
 /// Identifies a basic block inside a [`Cfg`].
@@ -1008,8 +1021,35 @@ impl Lowerer<'_> {
         unreachable!("the loop above always terminates")
     }
 
+    /// [`Self::lift_setjmp`] for the condition of a branch to `then_blk` or
+    /// `else_blk`, where the call may also be an operand of `&&` or `||`:
+    /// each such operator on the way down to it becomes the two branches it
+    /// stands for, ending the current block, and the call is lifted in the
+    /// block that evaluates its own operand. What is returned is the
+    /// condition left for the current block to branch on.
+    fn lift_condition(&mut self, cond: Expr, then_blk: BlockId, else_blk: BlockId) -> Expr {
+        if !matches!(cond.kind, ExprKind::Logical { .. }) || !holds_setjmp(&cond) {
+            return self.lift_setjmp(cond);
+        }
+        let ExprKind::Logical { op, lhs, rhs } = cond.kind else {
+            unreachable!("just matched")
+        };
+        let right = self.new_block();
+        let (on_true, on_false) = match op {
+            LogicalOp::Or => (then_blk, right),
+            LogicalOp::And => (right, else_blk),
+        };
+        let lhs = self.lift_condition(*lhs, on_true, on_false);
+        self.terminate(Terminator::Branch {
+            cond: lhs,
+            then_blk: on_true,
+            else_blk: on_false,
+        });
+        self.continue_at(right);
+        self.lift_condition(*rhs, then_blk, else_blk)
+    }
+
     fn if_stmt(&mut self, cond: Expr, then_branch: Stmt, else_branch: Option<Stmt>) {
-        let cond = self.lift_setjmp(cond);
         let range = cond.range;
         let then_blk = self.new_block();
         let else_blk = self.new_block();
@@ -1018,6 +1058,7 @@ impl Lowerer<'_> {
         } else {
             else_blk
         };
+        let cond = self.lift_condition(cond, then_blk, else_blk);
         self.terminate(Terminator::Branch {
             cond,
             then_blk,
@@ -1137,7 +1178,7 @@ impl Lowerer<'_> {
     fn test(&mut self, cond: Expr, then_blk: BlockId, else_blk: BlockId, range: SourceRange) {
         // A `setjmp` in the condition is called on every pass, so it is lifted
         // inside the block the loop comes back to.
-        let cond = self.lift_setjmp(cond);
+        let cond = self.lift_condition(cond, then_blk, else_blk);
         if is_always_true(&cond) {
             self.jump(then_blk, range);
             return;
@@ -1402,5 +1443,25 @@ fn take_setjmp(expr: &mut Expr, value: &Place) -> Option<(Vec<Expr>, SourceRange
         }
         ExprKind::Assign { value: stored, .. } => take_setjmp(stored, value),
         _ => None,
+    }
+}
+
+/// Whether `expr` holds a `setjmp`, through the shapes [`take_setjmp`] goes
+/// through and the operands of `&&` and `||`, which only
+/// [`Lowerer::lift_condition`] takes one out of.
+fn holds_setjmp(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Builtin {
+            op: BuiltinOp::SetJmp,
+            ..
+        } => true,
+        ExprKind::Cast(inner) | ExprKind::Neg(inner) | ExprKind::BitNot(inner) => {
+            holds_setjmp(inner)
+        }
+        ExprKind::Compare { lhs, rhs, .. }
+        | ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Logical { lhs, rhs, .. } => holds_setjmp(lhs) || holds_setjmp(rhs),
+        ExprKind::Assign { value, .. } => holds_setjmp(value),
+        _ => false,
     }
 }

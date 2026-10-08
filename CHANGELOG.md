@@ -20,8 +20,9 @@ follows [Semantic Versioning][semver].
   included), `__builtin_setjmp` and their `longjmp`s, from the bundled
   `<setjmp.h>` (now a real header) or the platform's, and `longjmp`'s address.
   A `setjmp` where C17 7.13.1.1p4 allows it, plus `r = setjmp(buf)`,
-  `int r = setjmp(buf)` and `if ((r = setjmp(buf)) == 0)`, and anywhere else
-  a located error. libpng's default build, TurboJPEG, xz's unit tests and Lua
+  `int r = setjmp(buf)`, `if ((r = setjmp(buf)) == 0)` and, in the condition
+  of an `if` or a loop, an operand of `&&` or `||` (OpenSSL's `if (!r ||
+  !_setjmp(env))`), and anywhere else a located error. libpng's default build, TurboJPEG, xz's unit tests and Lua
   now build and pass their suites with `ccinrs`, and six gcc-torture cases
   pass. See [`doc/limitations.md`](doc/limitations.md#setjmp-and-longjmp) for
   what works and what does not.

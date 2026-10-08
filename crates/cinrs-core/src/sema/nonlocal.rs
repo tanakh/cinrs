@@ -39,11 +39,16 @@ use super::{Entry, Sema};
 /// `setjmp`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum SetjmpPlace {
-    /// The controlling expression of an `if`, `switch`, `while`, `do` or
-    /// `for`: the call itself, `!` of it, or it compared with an integer
-    /// constant — and, beyond C17, any of those with the call's value
-    /// assigned first, `(rc = setjmp(buf)) == 0`.
+    /// The controlling expression of an `if`, `while`, `do` or `for`: the
+    /// call itself, `!` of it, or it compared with an integer constant — and,
+    /// beyond C17, any of those with the call's value assigned first, `(rc =
+    /// setjmp(buf)) == 0`, and any of those as an operand of `&&` or `||`,
+    /// `!r || !setjmp(buf)`.
     Control,
+    /// The controlling expression of a `switch`: what `Control` takes but an
+    /// operand of `&&` or `||`, which the control-flow graph only splits
+    /// into branches where the expression is a branch's condition.
+    Switch,
     /// A whole expression statement: the call, the call cast to `void`, and —
     /// beyond C17, as GCC accepts it — `lvalue = setjmp(buf)`.
     Statement,
@@ -65,7 +70,9 @@ const SETJMP_PLACES: &str = "as the whole controlling expression of an 'if', 'sw
                              'while', 'do' or 'for' statement — on its own, negated with '!', \
                              or compared with an integer constant — or as a whole expression \
                              statement (C17 7.13.1.1p4); cinrs also takes 'r = setjmp(buf);', \
-                             'int r = setjmp(buf);' and 'if ((r = setjmp(buf)) == 0)'";
+                             'int r = setjmp(buf);', 'if ((r = setjmp(buf)) == 0)' and, outside \
+                             a 'switch', a controlling expression's form as an operand of '&&' \
+                             or '||', 'if (!r || !setjmp(buf))'";
 
 impl Sema<'_> {
     /// Runs `check` over `expr` with the one `setjmp` C allows in `place`, if
@@ -375,14 +382,16 @@ fn permitted_setjmp<'e>(
     // it is resumed with it.
     let call = |e: &'e ast::Expr| -> Option<&'e ast::Expr> {
         match &e.kind {
-            ast::ExprKind::Assign { op: None, rhs, .. } if place == SetjmpPlace::Control => {
+            ast::ExprKind::Assign { op: None, rhs, .. }
+                if matches!(place, SetjmpPlace::Control | SetjmpPlace::Switch) =>
+            {
                 call(rhs)
             }
             _ => call(e),
         }
     };
     match place {
-        SetjmpPlace::Control => {
+        SetjmpPlace::Control | SetjmpPlace::Switch => {
             if let Some(found) = call(expr) {
                 return Some(found);
             }
@@ -406,6 +415,17 @@ fn permitted_setjmp<'e>(
                     (None, Some(found)) if constant(lhs) => Some(found),
                     _ => None,
                 },
+                // Beyond C17 once more, as GCC and Clang take it: any of the
+                // above as an operand of `&&` or `||`, at any depth —
+                // OpenSSL's `if (!r || !_setjmp(env))`. The graph branches on
+                // the operators one by one, so the call ends a block of its
+                // own and its continuation goes on with the operand it is in.
+                ast::ExprKind::Binary {
+                    op: ast::BinaryOp::LogAnd | ast::BinaryOp::LogOr,
+                    lhs,
+                    rhs,
+                } if place == SetjmpPlace::Control => permitted_setjmp(lhs, place, constant)
+                    .or_else(|| permitted_setjmp(rhs, place, constant)),
                 _ => None,
             }
         }
