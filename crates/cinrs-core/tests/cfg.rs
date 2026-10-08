@@ -432,6 +432,38 @@ fn a_switch_with_more_groups_than_rustc_can_nest_takes_the_graph() {
 }
 
 #[test]
+fn only_the_labelled_blocks_the_output_has_count_towards_its_depth() {
+    // A run of shapes stands inside one labelled block per shape that
+    // something further up breaks forwards to. One that is only fallen into
+    // needs none: three hundred `if`s one after another are six hundred
+    // shapes in a row, and no labelled block at all. (`{ goto top; } { top:
+    // … }` is what makes the function take the graph.)
+    let ifs: String = (0..300)
+        .map(|i| format!("if (x & {i}) t += {i};"))
+        .collect();
+    let flat = format!("int f(int x) {{ int t = 0; {{ goto top; }} {{ top: {ifs} }} return t; }}");
+    assert_eq!(tier(&flat, "f"), Tier::Relooped);
+    check_invariants(&cfg_of(&flat, "f"));
+
+    // A `switch` whose cases all jump forwards past it, to labels that fall
+    // one into the next, is one labelled block per label — the shape of
+    // Tcl's bytecode interpreter, whose instructions jump on to shared
+    // cleanup code. Two hundred and fifty of them are relooped; past four
+    // hundred, the whole function is the machine, whose `match` is flat.
+    let chain = |n: u32| {
+        let cases: String = (0..n).map(|i| format!("case {i}: goto l{i};")).collect();
+        let labels: String = (0..n).map(|i| format!("l{i}: t += {i};")).collect();
+        format!(
+            "int g(int x) {{ int t = 0; switch (x) {{ {cases} default: return -1; }} {labels} \
+             return t; }}"
+        )
+    };
+    assert_eq!(tier(&chain(250), "g"), Tier::Relooped);
+    assert_eq!(tier(&chain(450), "g"), Tier::Machine);
+    check_invariants(&cfg_of(&chain(450), "g"));
+}
+
+#[test]
 fn a_computed_goto_is_a_switch_over_the_labels_whose_address_is_taken() {
     // `&&label` is the label's number among them, from 1, and every `goto *`
     // jumps to one dispatch block that switches on it — so the function is

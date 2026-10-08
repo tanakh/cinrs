@@ -242,6 +242,14 @@ follows [Semantic Versioning][semver].
   its `-flto`, links `redis-server` (122 of its 125 files optimised).
   Elsewhere `rustc`'s LTO is as it was. `-fuse-ld` naming another linker is
   ignored, with a warning, at a link that has `-flto` bitcode in it.
+* **A function whose jumps the relooper structures is no longer made the
+  whole-function state machine for a nesting it does not have.** The depth
+  check counted a labelled block for every shape in a run, where the output
+  has one only for a shape something breaks forwards to, and its limit is 400
+  such blocks rather than 200. Tcl's bytecode interpreter (`TEBCresume`, 230
+  deep where 563 were counted) is relooped: Tcl's `expr` benchmark runs in
+  0.98 s rather than 2.77 s (gcc: 0.67 s), and `tclExecute.c` compiles in
+  2.6 s rather than 30.6 s.
 * A program or library `ccinrs` links stops at a panic — a run-time check
   that failed — with Rust's message and `abort`, through a hook its link
   installs. Now that every function is `extern "C-unwind"`, the panic would

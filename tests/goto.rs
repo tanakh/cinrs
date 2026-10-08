@@ -1292,6 +1292,39 @@ fn continue_outer_and_break_outer_through_the_graph() {
 
 /// A `switch` inside a `do`/`while` whose `continue` leaves the `switch` and
 /// not the loop, entered by a `goto` into one of its groups.
+/// A `switch` whose cases jump forwards past it to labels that fall one into
+/// the next: one labelled block per label, each inside the last, all broken
+/// to from the `switch`. Tcl's bytecode interpreter has this shape, about 230
+/// deep, and is relooped rather than made the whole-function machine; this is
+/// what says a nest that deep compiles and runs.
+#[test]
+fn a_switch_that_jumps_on_to_three_hundred_labels() {
+    c99! {
+        #define CASE(n) case n: goto l # # n;
+        #define LAB(n) l # # n: t += n;
+        #define D(M, p) M(p # # 0) M(p # # 1) M(p # # 2) M(p # # 3) M(p # # 4) M(p # # 5) M(p # # 6) M(p # # 7) M(p # # 8) M(p # # 9)
+        #define H(M, p) D(M, p # # 0) D(M, p # # 1) D(M, p # # 2) D(M, p # # 3) D(M, p # # 4) D(M, p # # 5) D(M, p # # 6) D(M, p # # 7) D(M, p # # 8) D(M, p # # 9)
+
+        int chain(int x) {
+            int t = 0;
+            switch (x) {
+                H(CASE, 1) H(CASE, 2) H(CASE, 3)
+            default:
+                return -1;
+            }
+            H(LAB, 1) H(LAB, 2) H(LAB, 3)
+            return t;
+        }
+    }
+
+    unsafe {
+        assert_eq!(chain(100), (100..400).sum::<i32>());
+        assert_eq!(chain(250), (250..400).sum::<i32>());
+        assert_eq!(chain(399), 399);
+        assert_eq!(chain(7), -1);
+    }
+}
+
 #[test]
 fn a_switch_inside_a_do_while_with_continue() {
     c99! {

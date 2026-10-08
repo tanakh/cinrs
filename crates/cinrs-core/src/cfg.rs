@@ -26,8 +26,9 @@
 //! [`Cfg::shape`] — so that the loop a C program wrote is a Rust loop even when
 //! its jumps are ones no label can express, and LLVM sees the graph GCC sees.
 //! The state machine below is the last resort, for a function whose shapes
-//! would nest deeper than `rustc`'s own parser will go — this `match` is flat
-//! however many arms it has:
+//! would nest deeper than is safe to compile (more than four hundred labelled
+//! blocks, one inside the next) — this `match` is flat however many arms it
+//! has:
 //!
 //! ```text
 //! let mut __cinrs_state: u32 = 0;

@@ -65,13 +65,16 @@
 //!
 //! # Giving up
 //!
-//! Two things keep the [state machine](crate::cfg) alive. A `switch` whose
-//! `case`s fall through one into the next gives each of them a labelled block,
-//! and past two hundred of those `rustc`'s own parser runs out of stack, where
-//! the machine's flat `match` does not. And the shapes are checked before they
-//! are handed over: if every block is not in the tree exactly once, or if some
-//! jump has nothing to break to, [`plan`] answers `None` and the state machine
-//! runs instead of something subtly wrong.
+//! Two things keep the [state machine](crate::cfg) alive. A run of shapes that
+//! are broken to from further up — the `case`s of a `switch` that fall through
+//! one into the next, or the shared code an interpreter's instructions jump
+//! to — gives each of them a labelled block around everything before it, and
+//! past [`MAX_NESTING`] of those, counted as [`codegen`](crate::codegen) emits
+//! them, the output would nest deeper than is safe to compile, where the
+//! machine's flat `match` does not nest at all. And the shapes are checked
+//! before they are handed over: if every block is not in the tree exactly
+//! once, or if some jump has nothing to break to, [`plan`] answers `None` and
+//! the state machine runs instead of something subtly wrong.
 //!
 //! GNU's computed `goto` is not one of them: [`cfg`](crate::cfg) has already
 //! made it a `switch` over the labels whose address is taken, so an
@@ -203,7 +206,7 @@ pub struct Plan {
 /// `names` is the C label each block stands at, where it stands at one, which
 /// is what the loops are named after. `None` means the [state
 /// machine](crate::cfg) has to be used: a function whose shapes would nest
-/// deeper than `rustc` parses, or — which has not been observed, and is checked
+/// deeper than [`MAX_NESTING`], or — which has not been observed, and is checked
 /// for rather than trusted — one whose shapes would not account for every block
 /// or would leave a jump with nothing to break to.
 pub fn plan(blocks: &[BasicBlock], names: &HashMap<BlockId, String>) -> Option<Plan> {
@@ -223,45 +226,58 @@ pub fn plan(blocks: &[BasicBlock], names: &HashMap<BlockId, String>) -> Option<P
     if seen.iter().any(|times| *times != 1) {
         return None;
     }
-    if nesting(&plan.body, 0) > MAX_NESTING {
-        return None;
-    }
-    let mut scopes = Vec::new();
-    resolves(blocks, &plan.body, &Exit::nowhere(), &mut scopes).then_some(plan)
+    // The walk recurses no deeper than the relooper itself did to build the
+    // shapes; it is the depth of what codegen then *emits* that is bounded.
+    let labelled = resolves(blocks, &plan.body)?;
+    (nesting(&plan.body, 0, &labelled) <= MAX_NESTING).then_some(plan)
 }
 
 /// How deeply the output may nest blocks and loops.
 ///
-/// A `switch` whose `case`s fall through one into the next gives each of them a
-/// labelled block of its own, and `rustc`'s own parser runs out of stack
-/// somewhere past four hundred of those — which is what the same figure in
-/// [`sema`](crate::sema) is for. Past this, the [state machine](crate::cfg),
+/// A sequence of shapes that something breaks forwards into stands inside one
+/// labelled block per shape broken to, each inside the last — Tcl's bytecode
+/// interpreter, whose instructions jump to shared cleanup code after the
+/// `switch`, nests about 230 deep. Through `ccinrs` and through the macros
+/// (with a debug build of `cinrs`) a thousand of those still compile, and two
+/// thousand overflow `ccinrs`'s own stack while printing the tokens; this
+/// leaves more than twice the room. Past it, the [state machine](crate::cfg),
 /// whose `match` is flat however many arms it has, is the answer.
-const MAX_NESTING: usize = 200;
+const MAX_NESTING: usize = 400;
 
 /// How deeply the shapes of `seq` nest, given that they already stand `depth`
 /// blocks deep.
 ///
-/// It stops counting past [`MAX_NESTING`], which is also what bounds its own
-/// recursion — and the recursion of everything that walks a plan that passed
-/// the check, [`codegen`](crate::codegen) included.
-fn nesting(seq: &Seq, depth: usize) -> usize {
+/// A shape of a sequence stands inside one labelled block for each shape
+/// after it that something breaks to; `labelled` says which those are, and
+/// [`codegen`](crate::codegen) leaves the others out — a shape that is only
+/// fallen into needs none, which is most of them. It stops counting past
+/// [`MAX_NESTING`], which is also what bounds its own recursion — and the
+/// recursion of everything that walks a plan that passed the check,
+/// [`codegen`](crate::codegen) included.
+fn nesting(seq: &Seq, depth: usize, labelled: &[bool]) -> usize {
     if depth > MAX_NESTING {
         return depth;
     }
-    let last = seq.len().saturating_sub(1);
     let mut out = depth;
+    // The labelled blocks open around the shape at `index`: one per later
+    // shape that is broken to. Counted from the end, so it is one pass.
+    let mut around: Vec<usize> = vec![0; seq.len()];
+    let mut later = 0;
+    for (index, shape) in seq.iter().enumerate().rev() {
+        around[index] = later;
+        if index > 0 && label_key(shape).is_some_and(|key| labelled[key.0 as usize]) {
+            later += 1;
+        }
+    }
     for (index, shape) in seq.iter().enumerate() {
-        // Everything but the last shape stands inside one labelled block per
-        // shape that follows it.
-        let here = depth + (last - index);
+        let here = depth + around[index];
         out = out.max(match shape {
             Shape::Simple { arms, .. } | Shape::Dispatch { arms, .. } => arms
                 .iter()
-                .map(|arm| nesting(&arm.body, here + 1))
+                .map(|arm| nesting(&arm.body, here + 1, labelled))
                 .max()
                 .unwrap_or(here),
-            Shape::Loop { body, .. } => nesting(body, here + 1),
+            Shape::Loop { body, .. } => nesting(body, here + 1, labelled),
         });
         if out > MAX_NESTING {
             return out;
@@ -687,70 +703,135 @@ fn count_blocks(seq: &Seq, out: &mut [usize]) {
     }
 }
 
-/// Whether every jump the tree still holds has somewhere to go.
+/// A place a jump can get to from inside the shapes being walked: the start
+/// of a shape that follows in a sequence, or a loop's head or follow.
+struct Scope {
+    exit: Exit,
+    /// For a shape that follows in a sequence, the block that keys its
+    /// labelled block in [`Resolver::labelled`]; `None` for a loop.
+    label: Option<BlockId>,
+}
+
+/// The walk behind [`resolves`].
+struct Resolver<'a> {
+    blocks: &'a [BasicBlock],
+    scopes: Vec<Scope>,
+    /// For each block that starts a shape of a sequence, whether something
+    /// breaks to the labelled block that ends there — which is the only case
+    /// in which [`codegen`](crate::codegen) emits one.
+    labelled: Vec<bool>,
+}
+
+/// The block that keys the labelled block ending where `shape` begins: the
+/// first block it is entered at, which no other shape after the first of a
+/// sequence starts with.
+fn label_key(shape: &Shape) -> Option<BlockId> {
+    match shape {
+        Shape::Simple { block, .. } => Some(*block),
+        Shape::Loop { entries, .. } => entries.first().copied(),
+        Shape::Dispatch { arms, .. } => arms.first().map(|arm| arm.entry),
+    }
+}
+
+/// Whether every jump the tree still holds has somewhere to go, and, when it
+/// does, which of the labelled blocks around the shapes of a sequence a jump
+/// breaks to.
 ///
 /// It walks exactly as [`codegen`](crate::codegen) emits: the shapes of a
 /// sequence in order, with a labelled block open around everything before each
-/// of them, and a loop's head and follow reachable from inside it. A `false`
-/// would be a bug in this module, and answering it is what keeps such a bug
-/// from becoming generated code that jumps to the wrong place.
-fn resolves(blocks: &[BasicBlock], seq: &Seq, fall: &Exit, scopes: &mut Vec<Exit>) -> bool {
-    let exits: Vec<Exit> = seq.iter().map(Shape::exit).collect();
-    let depth = scopes.len();
-    for exit in exits.iter().skip(1).rev() {
-        scopes.push(exit.clone());
-    }
-    let mut ok = true;
-    for (index, shape) in seq.iter().enumerate() {
-        if index > 0 {
-            scopes.pop();
-        }
-        let next = exits.get(index + 1).unwrap_or(fall);
-        ok &= resolves_shape(blocks, shape, next, scopes);
-    }
-    scopes.truncate(depth);
-    ok
+/// of them, and a loop's head and follow reachable from inside it; a jump
+/// falls into the shape that follows where it can, and otherwise leaves the
+/// innermost construct that arrives at its target. A `false` would be a bug
+/// in this module, and answering it is what keeps such a bug from becoming
+/// generated code that jumps to the wrong place.
+fn resolves(blocks: &[BasicBlock], seq: &Seq) -> Option<Vec<bool>> {
+    let mut resolver = Resolver {
+        blocks,
+        scopes: Vec::new(),
+        labelled: vec![false; blocks.len()],
+    };
+    resolver
+        .seq(seq, &Exit::nowhere())
+        .then_some(resolver.labelled)
 }
 
-fn resolves_shape(
-    blocks: &[BasicBlock],
-    shape: &Shape,
-    fall: &Exit,
-    scopes: &mut Vec<Exit>,
-) -> bool {
-    match shape {
-        Shape::Simple { block, arms } => {
-            let mut ok = true;
-            for target in blocks[block.0 as usize].term.successors() {
-                match arms.iter().find(|arm| arm.entry == target) {
-                    Some(arm) => ok &= resolves(blocks, &arm.body, fall, scopes),
-                    None => {
-                        ok &= fall.index_of(target).is_some()
-                            || scopes.iter().any(|exit| exit.index_of(target).is_some());
+impl Resolver<'_> {
+    fn seq(&mut self, seq: &Seq, fall: &Exit) -> bool {
+        let exits: Vec<Exit> = seq.iter().map(Shape::exit).collect();
+        let depth = self.scopes.len();
+        for (exit, shape) in exits.iter().zip(seq).skip(1).rev() {
+            self.scopes.push(Scope {
+                exit: exit.clone(),
+                label: label_key(shape),
+            });
+        }
+        let mut ok = true;
+        for (index, shape) in seq.iter().enumerate() {
+            if index > 0 {
+                self.scopes.pop();
+            }
+            let next = exits.get(index + 1).unwrap_or(fall);
+            ok &= self.shape(shape, next);
+        }
+        self.scopes.truncate(depth);
+        ok
+    }
+
+    fn shape(&mut self, shape: &Shape, fall: &Exit) -> bool {
+        match shape {
+            Shape::Simple { block, arms } => {
+                let mut ok = true;
+                for target in self.blocks[block.0 as usize].term.successors() {
+                    match arms.iter().find(|arm| arm.entry == target) {
+                        Some(arm) => ok &= self.seq(&arm.body, fall),
+                        None => ok &= self.jump(target, fall),
                     }
                 }
+                ok
             }
-            ok
+            Shape::Loop {
+                entries,
+                state,
+                body,
+                ..
+            } => {
+                let head = Exit {
+                    targets: entries.clone(),
+                    state: *state,
+                };
+                self.scopes.push(Scope {
+                    exit: fall.clone(),
+                    label: None,
+                });
+                self.scopes.push(Scope {
+                    exit: head.clone(),
+                    label: None,
+                });
+                let ok = self.seq(body, &head);
+                self.scopes.pop();
+                self.scopes.pop();
+                ok
+            }
+            Shape::Dispatch { arms, .. } => arms.iter().all(|arm| self.seq(&arm.body, fall)),
         }
-        Shape::Loop {
-            entries,
-            state,
-            body,
-            ..
-        } => {
-            let head = Exit {
-                targets: entries.clone(),
-                state: *state,
-            };
-            scopes.push(head.clone());
-            scopes.push(fall.clone());
-            let ok = resolves(blocks, body, &head, scopes);
-            scopes.pop();
-            scopes.pop();
-            ok
+    }
+
+    /// A jump to `target` that is not into an arm.
+    fn jump(&mut self, target: BlockId, fall: &Exit) -> bool {
+        if fall.index_of(target).is_some() {
+            return true;
         }
-        Shape::Dispatch { arms, .. } => arms
+        let Some(scope) = self
+            .scopes
             .iter()
-            .all(|arm| resolves(blocks, &arm.body, fall, scopes)),
+            .rev()
+            .find(|scope| scope.exit.index_of(target).is_some())
+        else {
+            return false;
+        };
+        if let Some(key) = scope.label {
+            self.labelled[key.0 as usize] = true;
+        }
+        true
     }
 }

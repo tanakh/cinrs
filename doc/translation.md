@@ -1028,10 +1028,13 @@ back to.
 
 ### Tier 4: the whole-function machine
 
-The relooper checks what it builds, and a graph whose shapes would nest deeper
-than `rustc`'s own parser goes — a `switch` with more `case` groups falling one
-into the next than it will nest — falls back to one `match` over block numbers,
-which is flat however many arms it has:
+A run of shapes that something further up breaks forwards into — a `case` the
+one before falls into, the shared cleanup code all of an interpreter's
+instructions jump on to — stands inside one labelled block per shape broken
+to, each inside the last. Tcl's bytecode interpreter nests about 230 deep. The
+relooper checks what it builds, and a graph whose shapes would nest more than
+four hundred deep falls back to one `match` over block numbers, which is flat
+however many arms it has:
 
 ```rust
 let mut __cinrs_state: u32 = 0;
