@@ -334,6 +334,11 @@ follows [Semantic Versioning][semver].
   instead of 0.40 s; git's `make -j2` takes 122 s instead of 153 s, and
   libuv's `cmake --build -j2` 56 s instead of 64 s, with every object of both
   defining and referencing the same C symbols as before.
+* The preprocessor's hide sets — which macros a token may no longer expand —
+  are shared rather than rebuilt for every token of every expansion: a
+  third of all the allocations translating a file made were copies of them.
+  ccinrs's own time on git's `abspath.c` and `diff.c` and libuv's
+  `src/unix/core.c` falls by 7 %, 6 % and 10 %, for the same Rust.
 
 ### Fixed
 

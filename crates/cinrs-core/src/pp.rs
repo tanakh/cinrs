@@ -419,15 +419,27 @@ impl HideSet {
     }
 
     /// Every name of `other`, added to this set.
+    ///
+    /// Run for every token of every expansion, so it allocates only when the
+    /// result is a set neither operand already is: a token of a macro's body
+    /// usually hides nothing and takes the expansion's set as it stands.
     fn union(&self, other: &HideSet) -> HideSet {
         let Some(names) = &other.0 else {
             return self.clone();
         };
-        let mut out = self.clone();
-        for name in names.iter() {
-            out = out.add(name);
+        let Some(mine) = &self.0 else {
+            return other.clone();
+        };
+        if names.iter().all(|name| mine.contains(name)) {
+            return self.clone();
         }
-        out
+        let mut out = (**mine).clone();
+        for name in names.iter() {
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        HideSet(Some(Arc::new(out)))
     }
 }
 
