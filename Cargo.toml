@@ -2,7 +2,7 @@
 members = ["benches/cinrs-bench", "crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 # 1.99 is where `c_variadic` — a variadic function *definition* and
 # `core::ffi::VaList` — became stable, and the release whose `core::arch` source
@@ -13,13 +13,14 @@ repository = "https://github.com/tanakh/cinrs"
 description = "Write C code inside Rust: procedural macros that translate a C translation unit to Rust"
 
 [workspace.dependencies]
-# The four crates are released together and only work together, so these are
+# The five crates are released together and only work together, so these are
 # exact requirements and always equal to `workspace.package.version` above:
 # Cargo cannot inherit that number here, but with `=` a bump that forgets one
 # of these is an immediate resolution error rather than a silent mismatch.
-cinrs-core = { path = "crates/cinrs-core", version = "=0.2.0" }
-cinrs-macros = { path = "crates/cinrs-macros", version = "=0.2.0" }
-cinrs-rt = { path = "crates/cinrs-rt", version = "=0.2.0" }
+# (`ccinrs` is a binary nothing depends on, so it has no line here.)
+cinrs-core = { path = "crates/cinrs-core", version = "=0.3.0" }
+cinrs-macros = { path = "crates/cinrs-macros", version = "=0.3.0" }
+cinrs-rt = { path = "crates/cinrs-rt", version = "=0.3.0" }
 # `Complex<T>` is `#[repr(C)]` and `Copy`, which is what makes it C's
 # `_Complex`; `default-features = false` is what keeps `cinrs-rt` `no_std`.
 num-complex = { version = "0.4.6", default-features = false }
