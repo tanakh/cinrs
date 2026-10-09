@@ -1,17 +1,138 @@
 # Changelog
 
 All notable changes to `cinrs` and its companion crates — `cinrs-core`,
-`cinrs-macros` and `cinrs-rt`, which are versioned together with it — are
-recorded here. The format follows [Keep a Changelog][kac], and the project
-follows [Semantic Versioning][semver].
+`cinrs-macros`, `cinrs-rt` and, from 0.3.0, `ccinrs`, which are versioned
+together with it — are recorded here. The format follows [Keep a
+Changelog][kac], and the project follows [Semantic Versioning][semver].
 
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## Unreleased
+## 0.3.0 — unreleased
+
+This release adds a second way to use cinrs: **`ccinrs`, a C compiler with
+GCC's command line**, in a fifth crate versioned with the other four. Each C
+file becomes Rust that `rustc` compiles into an ordinary object, and `rustc`
+links the program, so `make CC=ccinrs` — or a `configure` script or CMake told
+that `ccinrs` is the C compiler — builds a C project with no C compiler
+involved, and with Rust's run-time checks on. Twenty-seven open-source
+programs were built that way from their release tarballs, from bzip2 and
+SQLite to git, nginx, Redis, OpenSSL, FFmpeg and CPython, and their own test
+suites run; see [`doc/ccinrs-real-programs.md`](doc/ccinrs-real-programs.md).
+What they needed is most of the rest of this release, and the macros have it
+too: `setjmp` and `longjmp`, GCC's vector extensions, weak symbols, transparent
+unions, thread-local objects shared between units, inline functions that
+provide no external definition, `volatile` accesses that are volatile, and
+many smaller fixes.
+
+### Upgrading from 0.2
+
+* **An enumeration with no negative enumerator is `unsigned int`**, as in GCC
+  and Clang, so the Rust alias of such an `enum` type is a `c_uint` where it
+  was a `c_int`; the enumerators stay `c_int`. Rust code that passes an
+  enumerator where the type is expected, or compares a value of the type with
+  one, needs an `as`. See [Changed](#changed).
+* **`__DATE__` and `__TIME__` are the moment of translation**, not
+  placeholders, so a block that uses them expands differently from one build
+  to the next; `SOURCE_DATE_EPOCH` fixes the moment for a reproducible build.
+* For direct users of `cinrs-core`: `Options` and the IR's `Program`,
+  `Function`, `Object`, `RecordDef`, `Field`, `PointerType` and `ArrayType`
+  have new public fields, so a struct literal of one needs them; `Options::new`
+  followed by field updates does not. See [Added](#added).
+
+### Conformance and speed, as measured for this release
+
+* c-testsuite: **215 of the 218 cases `c99!` is eligible for are correct
+  (98.6 %)**, 218 of 220 under `c23!` and every GNU dialect, as in 0.2.0;
+  `ccinrs` runs the suite through its command line to the same 218 of 220.
+  See [`doc/c-testsuite.md`](doc/c-testsuite.md).
+* GCC's C torture tests: **1,698 of the 1,769 run are correct (96.0 %)**
+  under `gnu11!`, up from 1,643, and 1,693 (95.7 %) under `gnu89!`, up from
+  1,636; most of the gain is cases that use GCC's vector extensions or
+  `setjmp`.
+  See [`doc/gcc-torture.md`](doc/gcc-torture.md).
+* Clang's C conformance tests: **169 of the 203 revisions run are correct
+  (83.3 %)**, up from 167, and 582 of the 620 `expected-error` lines land on
+  the right line, up from 557.
+* **Not one case in any of the three is tagged `[bug]`.**
+* 48 whole C programs built as `gcc -O2`, `clang -O2` and a `cinrs` block:
+  median `cinrs`/`gcc -O2` ratio **1.00×**, 42 of 48 within 10 % of `gcc -O2`
+  or faster, every program's output identical across the three builds
+  ([`doc/benchmarks.md`](doc/benchmarks.md), measured on Rust 1.99.0).
+  `spectral-norm-sse2` is still the one row slower than both compilers
+  (1.12×), the price of signed arithmetic that wraps. `dhrystone` takes 0.83×
+  GCC's time but twice Clang's: a local `char[31]` is now 16-byte aligned as
+  the psABI asks (see [Changed](#changed)), which in Rust makes the object 32
+  bytes, and the `strcmp` of it that Clang folds — and cinrs folded before —
+  is a call again, as in GCC.
+* **`ccinrs` on real programs**: 27 open-source programs built from their
+  release tarballs with their own build systems, their own test suites run
+  against GCC's build ([`doc/ccinrs-real-programs.md`](doc/ccinrs-real-programs.md));
+  SQLite, Lua, git, Redis, libuv, zstd, jq and OpenSSL were built and tested
+  again with this release, with the same results. With the run-time checks
+  on, most take 1.0 to 1.5 times GCC's time, and about GCC's own without
+  them; interpreters pay most (CPython 1.70× with the checks, 1.30× without).
+  Building takes longer than with GCC: git 2.2× GCC's time at `make -j2`
+  (114.6 s against 53.1 s), libuv 2.1×, SQLite 1.2×.
 
 ### Added
 
+* **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
+  versioned with the other four; see [`doc/ccinrs.md`](doc/ccinrs.md), and
+  [`doc/ccinrs-real-programs.md`](doc/ccinrs-real-programs.md) for the 27
+  programs it has built. Each C file is translated by cinrs and compiled by
+  `rustc` into an ordinary object, and `rustc` links the program, so `make
+  CC=ccinrs` — or CMake told that `ccinrs` is the C compiler — builds a C
+  project with no C compiler involved. `cargo install ccinrs` installs it,
+  and what it needs to build a program is what `cargo build` needs.
+  * GCC's defaults: `gnu17`, GCC 14.2's predefined macros, the platform's
+    headers before the bundled ones, every non-`static` definition a symbol.
+    Rust's run-time checks are on unless `-fno-cinrs-checks` says otherwise,
+    and a panic names the C file and line: the Rust is printed on the C's
+    lines. At `-O1` and above LLVM's inline thresholds are raised, so that
+    the checks do not change which functions are inlined; without the checks
+    they still make CPython's interpreter about 3 % faster.
+  * `-c` objects carry the `rustc` that made them, and a link with another
+    refuses them in one sentence; `-S` writes the Rust; `-E` prints the
+    preprocessed C with GCC's line markers, and `-dM` the macros;
+    `-fsyntax-only` checks and writes nothing; `-M`, `-MM`, `-MD`, `-MMD`,
+    `-MF`, `-MT`, `-MQ` and `-MP` write Makefile rules under GCC's names;
+    `-include` and standard input (`-`) are read as GCC reads them.
+  * `--target=` for another machine, with nothing to install but the Rust
+    target: `wasm32-wasip1` and `wasm32-wasip2`; musl, linked by `rust-lld`
+    itself into a static program on a machine with no C compiler at all;
+    and `wasm32-unknown-unknown`, as a module that exports the C's functions
+    and a `malloc` family and imports what the C leaves undefined. `-march=`
+    and `-m<feature>` as `rustc`'s target CPU and features, with the feature
+    macros to match.
+  * `-flto` compiles each file to an rlib and has the link optimise them as
+    one program, cinrs's runtime and Rust's standard library included.
+  * `-shared` links an ELF shared library that exports the C symbols, those
+    of an archive between `-Wl,--whole-archive` and `-Wl,--no-whole-archive`
+    included, as libtool links a convenience library into one, and those of
+    an object another compiler or an assembler made, read off its symbol
+    table;
+    `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`, and
+    the `-print-*` questions libtool asks, `-Xlinker` and `-l:file`. GCC's
+    warning options are taken without a word; an unknown one is a warning,
+    and an error under `-Werror`, which is what a `configure` probe looks
+    for, and which makes every warning an error, `#warning` included. A
+    version script is found however it is given, libtool's
+    `-Wl,--version-script -Wl,file` included, and a wildcard in its `global:`
+    list stands for the C symbols, not for Rust's standard library linked in
+    beside them. `-E` takes a header. `-fuse-ld=` chooses a
+    program's linker (GNU ld for `bfd`, where `rustc`'s own is LLD), and
+    `-pie`, `-no-pie` and the hardening options distributions pass are taken.
+    `/dev/null` is a C file like any other, and a file for the linker that
+    does not exist is an error even when nothing is linked, as in GCC 15.
+  * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`
+    the first time a program needs it and kept in a cache directory.
+  * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark, brotli, zlib and
+    expat with their own build systems — Makefiles, CMake, zlib's `configure`,
+    autoconf and libtool — and runs their tests, and runs c-testsuite through
+    the command line (218 of 220). `-v` ends with GCC's `gcc version …` line,
+    which is what a `configure` script reads to decide that a compiler takes
+    GCC's options.
 * **`setjmp` and `longjmp`**, as a Rust unwind: `longjmp` is `resume_unwind`
   to the activation the `jmp_buf` names, and a function that calls `setjmp`
   runs its control-flow graph inside `catch_unwind`, with its locals hoisted
@@ -70,59 +191,6 @@ follows [Semantic Versioning][semver].
   checks); the option makes them
   `extern "C"` and refuses `setjmp` and `longjmp` with a located error naming
   it.
-* **`ccinrs`, a C compiler with GCC's command line**, in a fifth crate
-  versioned with the other four; see [`doc/ccinrs.md`](doc/ccinrs.md). Each C
-  file is translated by cinrs and compiled by `rustc` into an ordinary object,
-  and `rustc` links the program, so `make CC=ccinrs` — or CMake told that
-  `ccinrs` is the C compiler — builds a C project with no C compiler involved.
-  * GCC's defaults: `gnu17`, GCC 14.2's predefined macros, the platform's
-    headers before the bundled ones, every non-`static` definition a symbol.
-    Rust's run-time checks are on unless `-fno-cinrs-checks` says otherwise,
-    and a panic names the C file and line: the Rust is printed on the C's
-    lines. At `-O1` and above LLVM's inline thresholds are raised, so that
-    the checks do not change which functions are inlined; without the checks
-    they still make CPython's interpreter about 3 % faster.
-  * `-c` objects carry the `rustc` that made them, and a link with another
-    refuses them in one sentence; `-S` writes the Rust; `-E` prints the
-    preprocessed C with GCC's line markers, and `-dM` the macros; `-M`,
-    `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write Makefile rules
-    under GCC's names; `-include` and standard input (`-`) are read as GCC
-    reads them.
-  * `--target=` for another machine, with nothing to install but the Rust
-    target: `wasm32-wasip1` and `wasm32-wasip2`; musl, linked by `rust-lld`
-    itself into a static program on a machine with no C compiler at all;
-    and `wasm32-unknown-unknown`, as a module that exports the C's functions
-    and a `malloc` family and imports what the C leaves undefined. `-march=`
-    and `-m<feature>` as `rustc`'s target CPU and features, with the feature
-    macros to match.
-  * `-flto` compiles each file to an rlib and has the link optimise them as
-    one program, cinrs's runtime and Rust's standard library included.
-  * `-shared` links an ELF shared library that exports the C symbols, those
-    of an archive between `-Wl,--whole-archive` and `-Wl,--no-whole-archive`
-    included, as libtool links a convenience library into one, and those of
-    an object another compiler or an assembler made, read off its symbol
-    table;
-    `-static`, `-rdynamic`, `--version`, `-dumpversion`, `-dumpmachine`, and
-    the `-print-*` questions libtool asks, `-Xlinker` and `-l:file`. GCC's
-    warning options are taken without a word; an unknown one is a warning,
-    and an error under `-Werror`, which is what a `configure` probe looks
-    for, and which makes every warning an error, `#warning` included. A
-    version script is found however it is given, libtool's
-    `-Wl,--version-script -Wl,file` included, and a wildcard in its `global:`
-    list stands for the C symbols, not for Rust's standard library linked in
-    beside them. `-E` takes a header. `-fuse-ld=` chooses a
-    program's linker (GNU ld for `bfd`, where `rustc`'s own is LLD), and
-    `-pie`, `-no-pie` and the hardening options distributions pass are taken.
-    `/dev/null` is a C file like any other, and a file for the linker that
-    does not exist is an error even when nothing is linked, as in GCC 15.
-  * `_Complex` works: cinrs-rt's source is compiled with the user's `rustc`
-    the first time a program needs it and kept in a cache directory.
-  * `scripts/check-ccinrs.sh` builds lz4, cJSON, cmark, brotli, zlib and
-    expat with their own build systems — Makefiles, CMake, zlib's `configure`,
-    autoconf and libtool — and runs their tests, and runs c-testsuite through
-    the command line (218 of 220). `-v` ends with GCC's `gcc version …` line,
-    which is what a `configure` script reads to decide that a compiler takes
-    GCC's options.
 * **A `long double` through a literal `printf` or `scanf` format.**
   `printf("%.2Lf", x)` and `sscanf(s, "%Le", &x)` used to be refused where the
   platform's `long double` is wider than cinrs's (x87's, on x86-64 Linux and
@@ -320,8 +388,8 @@ follows [Semantic Versioning][semver].
   proves. An interpreter's `goto *table[opcode]` is the case: CPython's eval
   loop is 6 % smaller and runs 2.6 % fewer instructions on a recursive
   benchmark, QuickJS's 6 % fewer on a numeric one, in about the same time.
-  An array reached through a pointer, and a safe function, keep the pointer
-  arithmetic.
+  An array reached through a pointer, a thread-local one included, and a
+  safe function keep the pointer arithmetic.
 * **`ccinrs` generates Rust only for what an object needs**: the
   definitions the linker sees — every symbol of the unit, what a section or a
   constructor list puts in the object — what they call, take the address of
@@ -512,6 +580,21 @@ follows [Semantic Versioning][semver].
 * A statement may begin with `__extension__` and still be an expression:
   curl's `typecheck-gcc.h` wraps every `curl_easy_setopt` in
   `__extension__({ … })`, which was read as a declaration with no type.
+
+### Toolchain and platforms
+
+Rust **1.99** or later, tested on 1.99.0; CI builds on stable only.
+
+The macros: as in 0.2.0, developed and fully tested on x86-64 Linux, with the
+examples and the portable tests built, linked and run in CI on macOS (arm64)
+and Windows (x86-64, MSVC); other targets are compile-checked.
+
+`ccinrs`: developed and tested on x86-64 Linux, where every program in
+[`doc/ccinrs-real-programs.md`](doc/ccinrs-real-programs.md) was built, and
+for `wasm32-wasip1`, `wasm32-wasip2`, `wasm32-unknown-unknown` and musl
+(aarch64 musl under qemu) through `--target`. Its shared libraries, weak
+definitions and version scripts are ELF's. macOS and Windows hosts are not
+tried yet.
 
 ## 0.2.0 — 2026-10-02
 
