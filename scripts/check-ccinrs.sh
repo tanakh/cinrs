@@ -19,9 +19,8 @@
 #   cJSON 1.7.19  `make` (serially: upstream's rule for libcjson_utils.so uses
 #                 cJSON.o without depending on it): both libraries, static and
 #                 shared, and the test program; then the 21 Unity unit tests,
-#                 built by hand with Unity's own switches for a compiler
-#                 without setjmp/longjmp or weak definitions
-#                 (UNITY_EXCLUDE_SETJMP_H, UNITY_NO_WEAK)
+#                 built by hand as upstream's CMake builds them: Unity with its
+#                 setjmp-based TEST_PROTECT and its weak setUp/tearDown
 #   cmark 0.31.2  CMake, the `cmark` command; the CommonMark spec, the
 #                 regression and the smart-punctuation tests (python3).
 #                 `api_test` is not built: it has C++ in it, which CMake links
@@ -32,7 +31,9 @@
 #                 script; `make test`, static, shared and 64-bit
 #   expat 2.7.3   autoconf's `configure` and libtool: the library, static and
 #                 shared, and `xmlwf`, run on a document with an entity and on
-#                 a malformed one. expat's own tests need setjmp and longjmp
+#                 a malformed one; then expat's own C test suite, `runtests`
+#                 (its C++ twin, `runtests_cxx`, is left out: `c++` would
+#                 link it, and only `rustc` can link ccinrs's objects)
 #
 # and c-testsuite (the third_party/c-testsuite submodule) through the command
 # line, `ccinrs case.c -o case && ./case`, whose failures must all be on
@@ -66,7 +67,7 @@ for arg in "$@"; do
     case $arg in
     -k | --keep) KEEP=1 ;;
     -h | --help)
-        sed -n '3,49p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+        sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     lz4 | cjson | cmark | brotli | zlib | expat | c-testsuite) ONLY+=("$arg") ;;
@@ -203,10 +204,9 @@ check_cjson() {
         set -e
         cc=$1
         cd "$2/tests"
-        unity="-DUNITY_EXCLUDE_SETJMP_H -DUNITY_NO_WEAK -Iunity/src"
+        unity="-Iunity/src"
         mkdir -p ../unit
         $cc -c $unity unity/src/unity.c -o ../unit/unity.o
-        $cc -c unity_setup.c -o ../unit/unity_setup.o
         $cc -c -I.. ../cJSON_Utils.c -o ../unit/cJSON_Utils.o
         failed=0
         for test in *.c; do
@@ -217,7 +217,7 @@ check_cjson() {
             if grep -q cJSON_Utils "$test" && ! grep -q cJSON_Utils.c "$test"; then
                 extra=../unit/cJSON_Utils.o
             fi
-            if $cc -w $unity -I.. "$test" $extra ../unit/unity.o ../unit/unity_setup.o \
+            if $cc -w $unity -I.. "$test" $extra ../unit/unity.o \
                 -lm -o "../unit/$name" && "../unit/$name" > "../unit/$name.out"; then
                 echo "  $name: $(tail -2 "../unit/$name.out" | head -1)"
             else
@@ -328,6 +328,10 @@ check_expat() {
         [ "$(cat out/ok.xml)" = "<r a=\"1\">entity &amp; <b>x</b></r>" ] &&
         ! ./xmlwf/xmlwf bad.xml > bad.out 2>&1 &&
         grep -q "mismatched tag" bad.out' sh "$src"
+    # The C half of `make check`; the C++ half needs `c++` to link.
+    step "expat: runtests" sh -c "
+        cd '$src' && make -C tests -j$JOBS check TESTS=runtests check_PROGRAMS=runtests &&
+        grep -q 'Failed: 0' tests/runtests.log"
 }
 
 # ---------------------------------------------------------------------------

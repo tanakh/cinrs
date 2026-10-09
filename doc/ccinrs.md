@@ -266,20 +266,19 @@ their own tests; it also runs c-testsuite through the command line.
 | | build | tests |
 | --- | --- | --- |
 | lz4 1.10.0 | `make`: the library, static and shared, and `lz4` | frame and fuzz tests, the command's seven test targets |
-| cJSON 1.7.19 | `make`: both libraries, static and shared, and the test program | the 21 Unity unit tests (built by hand, see below) |
+| cJSON 1.7.19 | `make`: both libraries, static and shared, and the test program | the 21 Unity unit tests, built by hand as its CMake builds them |
 | cmark 0.31.2 | CMake | the CommonMark spec (652 examples), regressions (23), smart punctuation (16) |
 | brotli 1.2.0 | CMake, shared libraries | ctest (12); the output is byte for byte `gcc`'s at every quality tried |
 | zlib 1.3.1 | its own `configure` and `make`; the shared library with zlib's version script | `make test`: static, shared and 64-bit; the library exports what `gcc`'s does, with the same versions |
-| expat 2.7.3 | autoconf's `configure`, libtool, `make`: static and shared | `xmlwf`, on a document with an entity and on a malformed one |
+| expat 2.7.3 | autoconf's `configure`, libtool, `make`: static and shared | `xmlwf`, on a document with an entity and on a malformed one; `runtests`, the C half of `make check` (4,632 checks) |
 | c-testsuite | `ccinrs case.c` | 218 of 220; the two are on [the list](c-testsuite.md) |
 
 SQLite's amalgamation goes through `-E` and back: the preprocessed `.i`
-compiles, links and answers queries. cJSON's Unity tests are built with
-Unity's switches for a compiler without `setjmp` or weak definitions
-(`-DUNITY_EXCLUDE_SETJMP_H -DUNITY_NO_WEAK` and its `unity_setup.c`), which
-its CMake build does not give outside MSVC — the script was written before
-`ccinrs` had either, and keeps them; cmark's `api_test` has C++ in it,
-which CMake links with `c++` — see below.
+compiles, links and answers queries. cJSON's Unity tests are built as its
+CMake build makes them, with Unity's `setjmp`-based `TEST_PROTECT` and its
+weak `setUp` and `tearDown`. Two test programs have C++ in them, which their
+build systems link with `c++` — cmark's `api_test` and expat's `runtests_cxx`
+— and are left out; see below.
 
 ## setjmp and longjmp
 
