@@ -135,10 +135,16 @@ common `-f` code-generation option (`-fPIC`, `-fno-strict-aliasing`,
 are accepted. An unknown `-f` option is too, with a warning, and so is an
 unknown `-W` one — except under `-Werror`, where either is an error, as it is
 in GCC: that is how a `configure` script finds out whether an option is
-taken. An option that would change what a program means and that
-cinrs cannot follow — `-fshort-enums`, `-fpack-struct`, `-fopenmp`,
-`-fsanitize=` — is an error, never a silent difference, and so is anything
-unknown. Not yet: `-imacros`, `-dD`, `-MG`.
+taken; Clang's `-Werror=unknown-warning-option` makes an unknown `-W` one an
+error on its own, and `-Wno-unknown-warning-option` silences the warning.
+`-mtune=` is ignored; `-Wa,…` and `-Wp,…` are ignored with a warning, as
+there is no separate assembler or preprocessor to pass them to, and so are
+`-C` and `-CC`. `-finput-charset=` and `-fexec-charset=` take UTF-8, which is what
+cinrs reads and writes, and refuse any other. An option that would change
+what a program means and that cinrs cannot follow — `-fshort-enums`,
+`-fpack-struct`, `-fopenmp`, `-fsanitize=` — is an error, never a silent
+difference, and so is anything unknown, a C++, Objective-C or assembly source
+file included. Not yet: `-imacros`, `-dD`, `-dN`, `-MG`.
 
 ## Targets
 
@@ -264,14 +270,15 @@ their own tests; it also runs c-testsuite through the command line.
 | cmark 0.31.2 | CMake | the CommonMark spec (652 examples), regressions (23), smart punctuation (16) |
 | brotli 1.2.0 | CMake, shared libraries | ctest (12); the output is byte for byte `gcc`'s at every quality tried |
 | zlib 1.3.1 | its own `configure` and `make`; the shared library with zlib's version script | `make test`: static, shared and 64-bit; the library exports what `gcc`'s does, with the same versions |
-| expat 2.7.3 | autoconf's `configure`, libtool, `make`: static and shared | `xmlwf` (its own tests need `setjmp`) |
+| expat 2.7.3 | autoconf's `configure`, libtool, `make`: static and shared | `xmlwf`, on a document with an entity and on a malformed one |
 | c-testsuite | `ccinrs case.c` | 218 of 220; the two are on [the list](c-testsuite.md) |
 
 SQLite's amalgamation goes through `-E` and back: the preprocessed `.i`
 compiles, links and answers queries. cJSON's Unity tests are built with
 Unity's switches for a compiler without `setjmp` or weak definitions
 (`-DUNITY_EXCLUDE_SETJMP_H -DUNITY_NO_WEAK` and its `unity_setup.c`), which
-its CMake build does not give outside MSVC; cmark's `api_test` has C++ in it,
+its CMake build does not give outside MSVC — the script was written before
+`ccinrs` had either, and keeps them; cmark's `api_test` has C++ in it,
 which CMake links with `c++` — see below.
 
 ## setjmp and longjmp
