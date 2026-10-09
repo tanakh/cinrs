@@ -1250,12 +1250,15 @@ int main(int argc, char **argv) {
     assert!(out.status.success());
     assert_eq!(stdout(&out), "16843009\n");
 
-    // With the checks, LLVM's inliner is told to reach further, so that they
-    // do not change what is inlined; without them, nothing is said.
+    // When optimising, LLVM's inliner is told to reach further, so that the
+    // checks do not change what is inlined, and without them as well; at
+    // `-O0`, nothing is said.
     let threshold = "llvm-args=-inlinehint-threshold=1000";
     let out = s.ccinrs(&["-v", "-O2", "-c", "align.c"]);
     assert!(stderr(&out).contains(threshold), "{}", stderr(&out));
     let out = s.ccinrs(&["-v", "-O2", "-fno-cinrs-checks", "-c", "align.c"]);
+    assert!(stderr(&out).contains(threshold), "{}", stderr(&out));
+    let out = s.ccinrs(&["-v", "-O0", "-c", "align.c"]);
     assert!(!stderr(&out).contains(threshold), "{}", stderr(&out));
 }
 

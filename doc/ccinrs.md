@@ -79,11 +79,13 @@ it is kept in the cache directory (`CCINRS_CACHE_DIR`, or the platform's —
   program with a panic at the C line, at every optimisation level — Rust's
   message, and then `abort`, which a hook the link installs makes immediate
   rather than an unwind looking for a handler.
-  `-fno-cinrs-checks` takes them out. With them on, LLVM's inliner is told to
-  reach further (`-inlinehint-threshold=1000`,
+  `-fno-cinrs-checks` takes them out. At `-O1` and above, LLVM's inliner is
+  told to reach further (`-inlinehint-threshold=1000`,
   `-inline-cold-callsite-threshold=225`), so that a small `inline` function
   the checks swell is still inlined, where most of its checks then prove
   redundant: mbedtls's ChaCha20 runs at the speed it has without them.
+  Without the checks the thresholds still pay, if less: CPython's
+  interpreter runs about 3 % faster with them.
 * The **platform's headers** are searched, after `-I`, and before cinrs's
   bundled ones, which supply what only a compiler has (`<stdarg.h>`,
   `<stddef.h>`, the intrinsics) — GCC's order. `-nostdinc` leaves the

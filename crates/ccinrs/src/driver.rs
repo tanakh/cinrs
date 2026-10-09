@@ -1539,9 +1539,9 @@ impl Run<'_> {
         }
         // `-flto` at the link is what optimises them all as one. Where the
         // objects are bitcode for the linker, `rust-lld` does it, with every
-        // other object in view; see `Target::linker_lto`. The inlining
-        // thresholds the checks raise (see `codegen_flags`) are the linker's
-        // LLVM's to apply then.
+        // other object in view; see `Target::linker_lto`. The raised
+        // inlining thresholds (see `codegen_flags`) are the linker's LLVM's
+        // to apply then.
         //
         // Otherwise it is `rustc`'s, which optimises the C, the runtime and
         // Rust's standard library alike — but not when an object or an
@@ -1553,7 +1553,7 @@ impl Run<'_> {
         match inv.lto {
             _ if linked.bitcode => {
                 cmd.args(["-C", "linker-plugin-lto"]);
-                if inv.checks && inv.opt_level != "0" {
+                if inv.opt_level != "0" {
                     for threshold in [
                         "-inlinehint-threshold=1000",
                         "-inline-cold-callsite-threshold=225",
@@ -1788,8 +1788,10 @@ fn codegen_flags(inv: &Invocation) -> Vec<String> {
     // are inlined, so the thresholds are raised about as much as the checks
     // swell a function: `inline` ones (225 → 1000 for a hinted callee) and
     // call sites LLVM thinks seldom run (45 → 225), which is every case of
-    // an interpreter's big `switch`. A program grows by under 2 %.
-    if inv.checks && inv.opt_level != "0" {
+    // an interpreter's big `switch`. A program grows by under 2 %. Without
+    // the checks the same thresholds still pay, if less: CPython's
+    // interpreter runs about 3 % faster with them.
+    if inv.opt_level != "0" {
         flags.extend([
             "-C".to_owned(),
             "llvm-args=-inlinehint-threshold=1000".to_owned(),
