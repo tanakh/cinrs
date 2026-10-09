@@ -362,6 +362,26 @@ fn an_in_range_subscript_of_an_array_object_is_an_element_of_it() {
     ));
 }
 
+/// A thread-local array is reached through the pointer its cell hands out,
+/// so even a constant subscript of it is pointer arithmetic on the element
+/// type: a projection through the alignment wrapper would check the
+/// wrapper's 64, which Apple's dyld does not give a thread's copy (it aligns
+/// to 16), where the element's 4 always holds.
+#[test]
+fn a_thread_local_array_is_reached_through_its_pointer() {
+    insta::assert_snapshot!(generate_for(
+        Standard::C11,
+        r"
+        _Thread_local _Alignas(64) int per_thread[4];
+
+        int set(void) {
+            per_thread[2] = 9;
+            return per_thread[2];
+        }
+        "
+    ));
+}
+
 /// Every read and every write of a `volatile` lvalue is one `read_volatile`
 /// or `write_volatile` of its address: an object declared `volatile` (through
 /// a `typedef` too, and a local), anything through a pointer to `volatile`, a

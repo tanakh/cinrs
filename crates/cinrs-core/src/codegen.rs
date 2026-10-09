@@ -10315,9 +10315,19 @@ impl<'a> Codegen<'a> {
     /// Whether a place is a named object, or a member or an in-range element
     /// of one, rather than anything reached through a pointer; see
     /// [`Codegen::projectable_array`].
+    ///
+    /// A thread-local object is reached through the `*mut T` its cell or its
+    /// accessor hands out, so it is as much behind a pointer as `p->a` is,
+    /// and more than a check: on Apple's platforms dyld allocates a thread's
+    /// copy with `malloc`, aligned to 16, and a projection through the
+    /// alignment wrapper of a `_Thread_local _Alignas(64)` array would check
+    /// the wrapper's 64 there and fail.
     fn reached_without_deref(&self, place: &Place) -> bool {
         match &place.kind {
-            PlaceKind::Object(id) => self.program.object(*id).weak.is_none(),
+            PlaceKind::Object(id) => {
+                let object = self.program.object(*id);
+                object.weak.is_none() && !object.storage.is_thread_local()
+            }
             PlaceKind::Field { base, .. } => self.reached_without_deref(base),
             PlaceKind::Index { base, index } => {
                 self.projectable_array(base, index, place.ty).is_some()
