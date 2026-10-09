@@ -41,6 +41,10 @@ fn main() {
 
 That is `examples/readme.rs`: `cargo run --example readme`.
 
+The same front end is also a C compiler: [`ccinrs`](#ccinrs-a-c-compiler)
+takes GCC's command line and has `rustc` compile and link what each C file
+becomes, so `make CC=ccinrs` builds a C project with no C compiler at all.
+
 ## Why
 
 * **No C toolchain in the build.** The macro *is* the compiler: no `build.rs`,
@@ -66,11 +70,12 @@ That is `examples/readme.rs`: `cargo run --example readme`.
 * **Real C, not a subset.** `goto` (computed ones too), `switch` with
   fallthrough, bit-fields with GCC's layout, variable length arrays, variadic
   functions, `_Complex`, `_Atomic`, `<threads.h>`, K&R definitions, the whole
-  preprocessor with `#include` and `#embed` — and the GNU extensions real code
+  preprocessor with `#include` and `#embed`, `volatile` accesses, and
+  `setjmp`/`longjmp` as a Rust unwind — and the GNU extensions real code
   uses: statement expressions, `typeof`, `__attribute__((cleanup))`, nested
-  functions, `__int128`, `__builtin_*`, and inline assembly, for the operand
-  kinds `asm!` has, and `setjmp`/`longjmp` as a Rust unwind. What has no
-  honest translation is a located error, never a guess.
+  functions, `__int128`, `__builtin_*`, vector types (`vector_size`), and
+  inline assembly, for the operand kinds `asm!` has. What has no honest
+  translation is a located error, never a guess.
 * **The SIMD intrinsics, by name.** `#include <immintrin.h>` and write
   `_mm_add_epi32(a, b)`: 6,081 of Intel's intrinsics, SSE through AVX2 and
   AVX-512 with FMA, AES, GFNI, VAES, SHA, RDRAND and the BMI scalar ones, mapped
@@ -81,8 +86,8 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   `const` generic, and `__attribute__((target("avx2")))` becomes
   `#[target_feature]`. BLAKE3's C implementation — four SIMD kernels and a
   `cpuid` dispatcher in inline assembly — builds unedited and picks AVX-512.
-* **Measured, not claimed.** 98 % of [c-testsuite], 89–93 % of [GCC's torture
-  tests][gcc-torture] and 82 % of [Clang's C conformance tests][clang-c-tests]
+* **Measured, not claimed.** 98 % of [c-testsuite], 96 % of [GCC's torture
+  tests][gcc-torture] and 83 % of [Clang's C conformance tests][clang-c-tests]
   — about 2,270 cases, every failure listed by name with its reason, and **not
   one of them a known bug**. See [Conformance and speed](#conformance-and-speed).
 * **As fast as a C compiler.** Over 48 whole programs the median run time is
@@ -92,13 +97,20 @@ That is `examples/readme.rs`: `cargo run --example readme`.
   `__attribute__((cinrs_safe))`) and it is generated *without* `unsafe`, so
   `rustc` checks the translation and Rust calls it as `fact(10)`.
 * **`core`-only output.** The expansion names nothing but `core` — a variable
-  length array needs `alloc`, and a `_Thread_local` object needs `std` — so it
-  works in a `#![no_std]` crate.
+  length array needs `alloc`, and a `_Thread_local` object and `setjmp` need
+  `std` — so it works in a `#![no_std]` crate.
 
 ## Installation
 
 ```text
 cargo add cinrs
+```
+
+or, in `Cargo.toml`:
+
+```toml
+[dependencies]
+cinrs = "0.3"
 ```
 
 Rust **1.99** or later — the release that made `c_variadic` stable, which is
@@ -108,7 +120,8 @@ what a variadic function *definition* is translated to.
 where the whole test suite and the conformance corpora run; macOS (arm64) and
 Windows (x86-64, MSVC) build, link and run the examples and the portable tests
 on every push. Other targets are compile-checked; see
-[Cross-compilation][cross].
+[Cross-compilation][cross]. (That is the macros;
+[`ccinrs`](#ccinrs-a-c-compiler) is tried on Linux only so far.)
 
 Two features: `complex` (on by default) is C's complex types, as
 [`num_complex::Complex`](https://docs.rs/num-complex) — `default-features =
@@ -175,7 +188,7 @@ away:
 ```
 
 See [system headers][system-headers], and [the pragma reference][pragmas] for
-all eight `#pragma cinrs` options and the environment variables that go with
+all ten `#pragma cinrs` options and the environment variables that go with
 them.
 
 ### Calling a C library
@@ -217,21 +230,38 @@ fn main() {
 Without it a cross build fails a compile-time assertion instead of computing
 the wrong thing. [Cross-compilation][cross] has the supported targets.
 
-### As a C compiler
+## ccinrs, a C compiler
 
-[`ccinrs`][ccinrs] is the same front end as a command with GCC's command line:
-each C file becomes Rust, which `rustc` compiles and links, so a C project
-builds with `make CC=ccinrs` or CMake told that `ccinrs` is its C compiler —
-with Rust's run-time checks on, and a panic naming the C file and line. It
-takes `-c`, `-E`, `-M` and its relatives, `-shared`, `--target` (WebAssembly
-through `wasm32-wasip1` and `-p2` included) and `-march`; lz4, cJSON, cmark and
-brotli build with their own Makefiles and CMake files and pass their own
-tests.
+[`ccinrs`][ccinrs] is the same front end as a command with GCC's command line.
+Each C file becomes Rust, which `rustc` compiles into an ordinary object file,
+and `rustc` links the program — so a C project builds with its own build
+system and no C compiler involved:
 
 ```text
 cargo install ccinrs
 make CC=ccinrs
+cmake -S . -B build -DCMAKE_C_COMPILER=ccinrs
 ```
+
+It needs a `rustc` of 1.99 or later (`RUSTC`, or the one on `PATH`) and the
+platform's C headers and library, which `rustc` links anyway. It takes what a build
+passes GCC — `-c`, `-E`, `-S` (which writes the Rust), `-M` and its
+relatives, `-O`, `-g`, `-flto`, `-shared`, `-march`, GCC's warning options,
+the `-print-*` questions libtool asks — and refuses an option it cannot
+follow rather than ignore one that changes what the program means. Its
+defaults are GCC's (`-std=gnu17`, GCC 14.2's predefined macros), with
+Rust's run-time checks on and a panic naming the C file and line
+(`-fno-cinrs-checks` takes them out).
+
+Twenty-seven open-source programs — SQLite, CPython, OpenSSL, FFmpeg, git,
+nginx, Redis and twenty more — have been built with their own Makefiles,
+CMake files and `configure` scripts, their test suites run against GCC's, and
+their speed measured: [ccinrs on real programs][ccinrs-real-programs]. It is developed
+and tested on x86-64 Linux; `--target` reaches musl (a static program, with
+no C compiler on the machine at all) and WebAssembly (`wasm32-wasip1`,
+`wasm32-wasip2` and `wasm32-unknown-unknown`), and macOS and Windows are not
+tried yet. [The `ccinrs` page][ccinrs] has the options, the defaults, the
+targets and the limitations.
 
 ## What is supported
 
@@ -244,11 +274,15 @@ extensions][gnu-extensions] is the same for GCC's.
 
 The ones most likely to matter; [the full list][limitations] has the rest.
 
-* Not supported, each as a located error: the memory
-  operands and `asm goto` of inline assembly (which is otherwise
+* Not supported, each as a located error: `asm goto`, flag outputs and the
+  rest of the inline assembly `asm!` cannot express (what it can is
   `core::arch::asm!`, x86 only), a GNU vector passed by value to a function
   the unit does not define (the vector extensions themselves are here),
   `_BitInt`, `_Imaginary`, an `_Atomic` aggregate.
+* `setjmp` and `longjmp` are a Rust unwind: a `setjmp` may stand where C
+  allows it (and in a few more places GCC takes), a `longjmp` costs about a
+  microsecond rather than GCC's tens of nanoseconds, and neither is there on
+  WebAssembly, under `#pragma cinrs no_std` or with `panic = "abort"`.
 * `long double` is `double`.
 * The SIMD intrinsics are x86's, and only the baseline instruction set is
   predefined: a procedural macro cannot see `-C target-feature`, so `#ifdef
@@ -271,7 +305,7 @@ The ones most likely to matter; [the full list][limitations] has the rest.
 | [c-testsuite] — whole programs with expected output | **215 of 218 (98.6 %)** | `c99!` |
 | [GCC's C torture tests][gcc-torture] — 1,776 self-checking programs | **1,697 of 1,769 (95.9 %)** | `gnu11!` |
 | [Clang's C conformance tests][clang-c-tests] — what must be *refused*, line by line | **169 of 203 (83.3 %)** | per test |
-| glibc's own headers through the front end | **66 of 67** | `gnu11!`, `c11!` |
+| glibc's own headers through the front end | **67 of 67** | `gnu11!`, `c11!` |
 
 "Correct" means the case passed, or the entry point is required to refuse it
 and did. Every remaining case is listed by name as unimplemented or not
@@ -316,9 +350,14 @@ wrapping arithmetic where C defines wrap-around, `pub unsafe extern "C" fn` for
 each function. Every token it emits is stamped with the span of the C it came
 from, which is what makes the errors land where they should.
 
-`0.1` means the macro surface may still change. The companion crates
-`cinrs-core`, `cinrs-macros` and `cinrs-rt` are implementation details of this
-one and carry no stability promise.
+`ccinrs` runs the same front end over a `.c` file instead, and hands the Rust
+to `rustc` as a crate of its own per file.
+
+A `0.x` version means the macro surface may still change. The companion
+crates `cinrs-core`, `cinrs-macros` and `cinrs-rt` are implementation details
+of this one and carry no stability promise; `ccinrs`'s interface is its
+command line, which follows GCC's. All five are released together, under one
+version number.
 
 ## License
 
