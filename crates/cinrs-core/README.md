@@ -6,9 +6,11 @@ crate that lets you write C inside Rust. **Use that crate.**
 This one is the C front end itself: the lexer, the preprocessor, the parser,
 the semantic analysis and the code generator, driven as a library over a
 `proc_macro2::TokenStream`, plus the headers `cinrs` bundles — ISO C's, and
-GCC's x86 intrinsics headers. It is published because `cinrs-macros` depends on it, and because a
-tool that wants the front end without the procedural macro can use it — but
-**there is no stability promise for this API**. It is versioned with `cinrs`
+GCC's x86 intrinsics headers. It is published because `cinrs-macros` depends
+on it, and so does [`ccinrs`](https://crates.io/crates/ccinrs), the C compiler
+with GCC's command line, which translates a `.c` file through
+`translate_file`; a tool that wants the front end without the procedural
+macro can use it too — but **there is no stability promise for this API**. It is versioned with `cinrs`
 and changes whenever that is convenient for `cinrs`, in a patch release as
 readily as in a minor one.
 

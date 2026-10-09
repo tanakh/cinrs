@@ -12,6 +12,12 @@ written into every macro expansion. The crate is `#![no_std]`, so having it
 costs a `#![no_std]` crate nothing. **There is no stability promise for this
 API**: it is versioned with `cinrs` and follows it.
 
+[`ccinrs`](https://crates.io/crates/ccinrs), the C compiler built on `cinrs`,
+compiles this crate's source itself, with no Cargo and so with no
+dependencies: the `sources` feature (on by default) is that source as text,
+and without the `num-complex` feature `Complex` is a type of this crate's own
+with the same layout.
+
 Documentation: <https://docs.rs/cinrs-rt>.
 
 [`num_complex::Complex`]: https://docs.rs/num-complex
