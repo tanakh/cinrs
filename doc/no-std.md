@@ -14,7 +14,7 @@ A complex type is the one thing that names another crate — `cinrs::rt`, the
 re-export of `cinrs-rt` — and `cinrs-rt` is itself `#![no_std]`, so it changes
 nothing here. `default-features = false` drops it, and `_Complex` with it.
 
-Three constructs are the exception. Two of them are variable length arrays and
+A few constructs are the exception. Two of them are variable length arrays and
 `alloca`, whose storage is a bump arena made of `Vec`s. Nothing in the C says
 which kind of crate the expansion is going into, so those are `::std::vec::Vec`s
 unless the unit says otherwise:
@@ -31,7 +31,10 @@ them. Without the pragma, a variable length array in a `#![no_std]` crate is
 `rustc`'s own "cannot find `std`", with the caret on the declaration that
 needed it, and then the thread-local's name, which that left undefined.
 
-The third is a **thread-local object**, and the pragma does not help there:
+Another is a **thread-local object**, and the pragma does not help there:
 `thread_local!` is a `std` macro and `core` has no thread-local storage at all,
 so `_Thread_local` under `#pragma cinrs no_std` is a located error saying
-exactly that.
+exactly that. So are `setjmp` and `longjmp`: a `longjmp` is a Rust unwind
+that `std`'s `catch_unwind` stops (see [setjmp and
+longjmp](limitations.md#setjmp-and-longjmp)), and `core` has nothing to catch
+one with.

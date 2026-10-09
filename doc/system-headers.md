@@ -186,8 +186,10 @@ this and only this: **when a bundled header and one of the platform's own define
 the same macro differently, the platform's definition wins and nothing is
 reported.** They are two descriptions of one C library, and where they disagree
 it is about spelling rather than about the platform. Every other redefinition —
-a program redefining a bundled macro, or a program redefining its own — keeps
-its diagnostic.
+a program redefining a bundled macro, or a program redefining its own — is
+GCC's warning, which `ccinrs` prints and a `c99!` block has no way to raise,
+and the later definition stands; see [the
+leniencies](gnu-extensions.md#the-leniencies-constraint-violations-gcc-only-warns-about).
 
 `<time.h>` and `<wchar.h>` are the only two bundled headers that need a guard,
 because they are the only two that *define* a type the platform also defines —
@@ -458,16 +460,17 @@ beyond the search rules:
 * **`#include_next`**, which was refused outright before, on the grounds that
   there was nothing to reach. `/usr/include/limits.h` ends with one.
 * **`__attribute__((weak))` on a declaration.** glibc's `<pthread.h>` writes it
-  on `__pthread_unwind_next`. It is now refused on a *definition* only, and a
-  declaration is a weak reference; see the
+  on `__pthread_unwind_next`. A declaration is now a weak reference, and a
+  definition a real weak one under `ccinrs` on ELF and an ordinary one, with
+  a warning, elsewhere; see the
   [attribute table](gnu-extensions.md#__attribute__-forms) for both, and for
   why `__has_attribute(weak)` still answers 0.
 * **A clean refusal for the extended floating types**, as above.
 * **`setjmp`/`longjmp` recognised by name.** The platform's `<setjmp.h>`
   declares them as ordinary functions, and calling the C library's would
   corrupt the program; so a call is translated by name, whichever header
-  declared it (a call through a function pointer of one of those names is
-  still refused).
+  declared it, and `longjmp`'s address is that of a function of the unit's
+  own that does the same.
 * **`dev_t` and `ino_t` in the bundled `<sys/types.h>`**, which were
   `unsigned long long` on a 64-bit target where glibc and musl both spell them
   `unsigned long`. Same width, different type — and a typedef redefinition is

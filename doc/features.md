@@ -17,6 +17,8 @@ module an expansion goes into — is [What the C becomes](translation.md).
 * [Calling a C library from Rust](#calling-a-c-library-from-rust)
 * [GNU extensions](#gnu-extensions)
 * [`__int128`](#__int128)
+* [SIMD intrinsics](#simd-intrinsics)
+* [Inline assembly](#inline-assembly)
 * [Thread-local objects](#thread-local-objects)
 * [C11 threads](#c11-threads)
 * [Atomics](#atomics)
@@ -204,7 +206,7 @@ cinrs does what they promise (`__GNUC_STDC_INLINE__`, or
 `__NO_INLINE__` are absent on purpose. Nothing claims to be Clang. And cinrs
 says who it really is: `__CINRS__` (and `__cinrs__`) is `1`, and
 `__CINRS_MAJOR__`, `__CINRS_MINOR__` and `__CINRS_PATCH__` are its version,
-while `__VERSION__` says both — `"14.2.0 (cinrs 0.2.0)"` for this version.
+while `__VERSION__` says both — `"14.2.0 (cinrs 0.3.0)"` for this version.
 `__has_include`, `__has_include_next`, `__has_attribute`, `__has_c_attribute`,
 `__has_builtin`, `__has_feature` and `__has_extension` are answered from cinrs's
 own tables, so a program that guards a construct with one is told the truth about
@@ -228,7 +230,7 @@ in. `__FILE_NAME__` is `__FILE__` without the directory and follows it;
 crate**, written in plain C99 rather than read from the platform, and the calls
 link against the real C library: `<assert.h>`, `<complex.h>`, `<ctype.h>`,
 `<errno.h>`, `<float.h>`, `<inttypes.h>`, `<iso646.h>`, `<limits.h>`,
-`<math.h>`, `<signal.h>`, `<stdalign.h>`, `<stdarg.h>`, `<stdatomic.h>`,
+`<math.h>`, `<setjmp.h>`, `<signal.h>`, `<stdalign.h>`, `<stdarg.h>`, `<stdatomic.h>`,
 `<stdbool.h>`, `<stdckdint.h>`, `<stddef.h>`, `<stdint.h>`, `<stdio.h>`,
 `<stdlib.h>`, `<stdnoreturn.h>`, `<string.h>`, `<threads.h>`, `<time.h>`,
 `<uchar.h>`, `<wchar.h>` and `<wctype.h>`. A real `<stdio.h>` is not plain C —
@@ -384,7 +386,10 @@ private file-scope item that takes a pointer to each enclosing local it uses, so
 a store inside one is visible outside it, and no trampoline is written onto the
 stack (the address of a nested function that *does* use the enclosing frame is
 the one thing a trampoline is for, and is refused by name) —
-`__attribute__((mode(DI)))`, the `__builtin_*` family — bit counting, checked
+`__attribute__((mode(DI)))`, **vector types** of the program's own
+(`vector_size(16)`) with GCC's element-wise operators, `transparent_union`,
+`weak` — a real weak reference, and under `ccinrs` on ELF a real weak
+definition — the `__builtin_*` family — bit counting, checked
 overflow, `__builtin_expect`, `__builtin_types_compatible_p`, the floating
 classifications (`__builtin_isnan`, `signbit`, `fpclassify`, `isunordered` and
 the rest, answered in `core` with no maths library involved), and a
@@ -1078,9 +1083,13 @@ two exported units defining one name is a duplicate symbol);
 `#pragma cinrs no_std` takes the storage a variable length array or `alloca`
 needs from `alloc` rather than from `std`, and refuses a thread-local object,
 which needs `std` outright;
+`#pragma cinrs unwind` makes every function of the unit `extern "C-unwind"`,
+so that a `longjmp` may pass through it;
+`#pragma cinrs auto_var_init uninitialized` leaves a local array declared
+without an initialiser uninitialised rather than zero-filled;
 `#pragma cinrs crate "…"` says where the `cinrs` crate itself is, for a renamed
 dependency — the generated code names it only for complex numbers, and
-`::cinrs` is the default. `#pragma cinrs system_include` is the eighth and has a
+`::cinrs` is the default. `#pragma cinrs system_include` is the tenth and has a
 [page](system-headers.md) of its own.
 
 There is no pragma for naming the module an expansion goes into: it is

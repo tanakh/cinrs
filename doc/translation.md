@@ -1442,7 +1442,10 @@ block's `extern` declaration has nothing to link against.
 [`#pragma cinrs export`](pragmas.md#export) changes that for a whole unit: every
 function and object with external linkage in it gets `#[unsafe(no_mangle)]` and
 is therefore a real C symbol that another block — or a C library, or anything
-else in the program — resolves by name.
+else in the program — resolves by name. (A thread-local object is reached
+through an accessor instead, and an inline definition that provides no
+external definition is not exported; [the pragma's
+section](pragmas.md#export) has both.)
 
 ```rust
 mod library {

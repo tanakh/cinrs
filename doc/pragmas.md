@@ -210,7 +210,12 @@ its author gave it. A definition becomes `#[unsafe(no_mangle)]`, or
 `#[unsafe(export_name = "…")]` where the Rust item is not spelled like the C
 name (`int match(int)` is the item `r#match` and the symbol `match`). A
 `static` function or object keeps the internal linkage C gives it and is not
-exported.
+exported, and neither is an inline definition that provides no external
+definition (C99 6.7.4p7, or GNU89's rules under `gnu_inline`): a header's
+`inline` function is a private item the unit's own calls use, and its address
+is the symbol the one external definition makes, so two exported units that
+include the header do not define it twice. See [the inline
+row](c-status.md#c99).
 
 It takes no argument and reaches the whole unit wherever it is written. An
 argument is reported — the option says nothing about *what* is exported — and
@@ -284,7 +289,9 @@ needs neither the pragma nor an allocator. See
 It takes no argument and reaches the whole unit wherever it is written. An
 argument is reported and the option is still honoured. A `_Thread_local`
 object under it is a located error: `thread_local!` is a `std` macro and
-`core` has no thread-local storage, so the pragma cannot help there.
+`core` has no thread-local storage, so the pragma cannot help there. So are
+`setjmp` and `longjmp`, a `longjmp` being an unwind that only `std` can
+catch.
 
 There is no environment variable for it, and no Cargo feature: the `cinrs`
 facade is `#![no_std]` already, and this is about the *generated code*.
@@ -559,3 +566,5 @@ there is an error that lists the ones it has: today only `safe`.
 | `CINRS_SYSTEM_INCLUDE` | `1`/`on`/`true`/`yes`, `first`, or `0`/`off`/`false`/`no`/empty | [`system_include`](#system_include-and-system_include-first), which overrides it |
 | `CINRS_SYSTEM_INCLUDE_PATH` | *replaces* the per-target default system directories, split like `PATH`; the only way to reach a sysroot or an SDK | — |
 | `CARGO_MANIFEST_DIR` | set by Cargo; what a relative [`include_path`](#include_path-dir) resolves against | — |
+| `SOURCE_DATE_EPOCH` | the moment of translation `__DATE__` and `__TIME__` give, in seconds since 1970 UTC — what a reproducible build sets; without it they are now, in the local zone | — |
+| `TZ`, `TZDIR` | the local zone `__DATE__`, `__TIME__` and `__TIMESTAMP__` are in when `SOURCE_DATE_EPOCH` does not decide, read as a C library reads them; `/etc/localtime` without `TZ`, and UTC where neither says anything | — |
