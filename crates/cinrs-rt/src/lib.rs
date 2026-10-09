@@ -19,9 +19,9 @@
 //!   expression — would bloat every expansion; [`complex`] holds one copy.
 //!
 //! Nothing else belongs here. Everything else `cinrs` generates is `core`-only
-//! (with `alloc` or `std` for a variable length array, `alloca` and
-//! `_Thread_local`), and this crate is `#![no_std]` so that `_Complex` does not
-//! change that.
+//! (with `alloc` or `std` for a variable length array, `alloca`,
+//! `_Thread_local` and `setjmp`), and this crate is `#![no_std]` so that
+//! `_Complex` does not change that.
 //!
 //! # Versioning
 //!

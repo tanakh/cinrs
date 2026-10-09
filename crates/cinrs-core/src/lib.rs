@@ -81,6 +81,20 @@
 //! its own `path:line:column` into the message, which is exactly what a header
 //! already does.
 //!
+//! # Where `ccinrs` fits
+//!
+//! `ccinrs`, the C compiler with GCC's command line, drives the same passes
+//! with no procedural macro around them. [`translate_file`] (or
+//! [`translate_source`]) reads a `.c` file and hands back a
+//! [`FileTranslation`] — the Rust, the diagnostics for the caller to render,
+//! the headers read and the C symbols defined — and [`preprocess_file`] (or
+//! [`preprocess_source`]) stops after the preprocessor, which is GCC's `-E`
+//! and `-M`. What a command line chooses arrives through [`Options`]:
+//! [`Options::export`], [`Options::macros`], [`Options::includes`],
+//! [`Options::target_features`], [`Options::reachable_only`] and their
+//! neighbours, each off or empty by default, so that a `c99!` block is
+//! unchanged.
+//!
 //! # Example
 //!
 //! ```

@@ -237,10 +237,11 @@ const IGNORED_ATTRIBUTES: &[&str] = &[
 /// weak reference, whose address is null when nothing defines the symbol.
 /// What a program usually asks the question before is whether it may write a
 /// weak *definition* — an overridable default, as Unity's `setUp` is — and
-/// that is refused here. A program that guards on the answer therefore takes
-/// the portable branch, and one that writes the attribute unguarded on a
-/// declaration — glibc's `<pthread.h>`, zstd's tracing hooks — gets the weak
-/// reference it asked for.
+/// that is a real one only under `ccinrs` on ELF, and an ordinary definition
+/// with a warning everywhere else. A program that guards on the answer
+/// therefore takes the portable branch, and one that writes the attribute
+/// unguarded on a declaration — glibc's `<pthread.h>`, zstd's tracing hooks —
+/// gets the weak reference it asked for.
 pub fn has_attribute(name: &str) -> bool {
     attribute(name).is_some_and(|a| !matches!(a, Attribute::Unsupported | Attribute::Weak))
 }
