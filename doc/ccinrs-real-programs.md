@@ -39,6 +39,11 @@ the tables give the last state.
   run-time checks on; "no checks" is `-fno-cinrs-checks`.
 * **ccinrs changed during the work.** The numbers are the last measurement of
   each project; where a later fix is known to change them, the row says so.
+  For the 0.3.0 release, eight of them — SQLite, Lua, git, Redis, libuv, zstd,
+  jq and OpenSSL — were built again from fresh trees with the release
+  candidate and their tests run (git's whole suite, 51 of Redis's units), and
+  every result is the one the table gives. SQLite's speedtest1, timed again
+  with the checks on, is 1.17 times GCC's.
 
 ## The results
 
@@ -197,11 +202,12 @@ the answer GCC's run found through the probe's cache variable — for CPython,
 * **Build time.** Every C file is a `rustc` run. It used to take about a
   second even for a small file, most of it spent on the thousands of header
   declarations a C file brings in; the `.rs` now holds only what the object
-  can reach — git's `abspath.c` is 26 KB of Rust instead of 2 MB, and compiles
-  in 0.48 s instead of 1.26 s (GCC: 0.13 s). git's 563 files build in 2.7
-  times GCC's time (172 s against 64.5 s; nine times before), libuv's in 2.8
-  times, and SQLite's one large file in 1.2 times. What is left is the front
-  end's own work and LLVM's.
+  can reach — git's `abspath.c` is 29 KB of Rust instead of 2 MB, and compiles
+  in 0.28 s instead of 1.26 s (GCC: 0.12 s). On an otherwise idle machine,
+  from fresh trees with the same flags, git's 563 files build in 2.2 times
+  GCC's time at `make -j2` (115 s against 53 s; nine times before), libuv's
+  in 2.1 times (49 s against 24 s), and SQLite's one large file in 1.2 times
+  (54 s against 45 s). What is left is the front end's own work and LLVM's.
 * **Size.** Programs are two to twenty times as large, and every shared
   library carries its own copy of Rust's standard library: CPython's 71
   extension modules take 368 MB where GCC's take 26 MB.

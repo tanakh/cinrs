@@ -361,3 +361,7 @@ C project meets first:
   `wasm32-wasip1` and `-p2`; macOS and Windows are not tried yet.
 * A program is bigger than GCC's: it carries Rust's standard library, and
   the run-time checks.
+* A build takes about twice GCC's time, since every C file is a `rustc` run:
+  git's 563 files take 2.2 times as long at `make -j2` (115 s against 53 s),
+  libuv's 2.1 times, and SQLite's one large file 1.2 times. See [ccinrs on
+  real programs](ccinrs-real-programs.md#what-is-left).
