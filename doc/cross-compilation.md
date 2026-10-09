@@ -287,7 +287,7 @@ taken:
 | Platform | How far |
 | --- | --- |
 | **`x86_64-unknown-linux-gnu`** | the development platform: the whole test suite, the three conformance corpora, and the differential tests that compile the same C with `gcc` and `clang` and compare |
-| **macOS (arm64) and Windows (x86-64, MSVC)** | built, linked and **run** on every push by the `portability` job in `.github/workflows/ci.yml`: both examples, and the test files `scripts/portability-tests.txt` names — `tests/portability.rs`, which asserts the C library through the bundled headers value by value, beside thirty-five behavioural files, which is every one with no platform in it |
+| **macOS (arm64) and Windows (x86-64, MSVC)** | built, linked and **run** on every push by the `portability` job in `.github/workflows/ci.yml`: both examples, and the test files `scripts/portability-tests.txt` names — `tests/portability.rs`, which asserts the C library through the bundled headers value by value, beside forty behavioural files, which is every one with no platform in it |
 | **`i686-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `wasm32-unknown-unknown`** | compile-checked with a real `cargo check --target` — `tests/cross_targets.rs`, which also shows the data-model assertion firing when `CINRS_TARGET` is left out |
 | **everything else in the table above** | the front end only: every bundled header is compiled for a model of each family, and the widths, alignments, layouts and predefined macros are asserted in-process |
 

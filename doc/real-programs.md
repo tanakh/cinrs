@@ -21,7 +21,7 @@ compared. Times are the median of five repetitions, in milliseconds per pass.
 Neither `-march=native` nor `-ffast-math` nor link-time optimisation is given to
 any side, and every call in the native columns crosses into a static library
 while the `cinrs` column is Rust the optimiser can see through; see the
-[benchmark page's caveats](benchmarks.md#caveats). A library's own run-time
+[benchmark page's caveats](benchmarks.md#what-is-not-being-measured). A library's own run-time
 dispatch (`cpuid`) is left to do what it does in each build, and on this host
 every dispatcher picks its AVX-512 path.
 
@@ -42,7 +42,7 @@ running.
 ## SQLite 3.53.4
 
 The amalgamation, 269,649 lines in one file, public domain, `SQLITE_THREADSAFE=1`;
-what it exercises is in [`doc/testsuites.md`](testsuites.md#one-real-program-sqlite).
+what it exercises is in [`doc/testsuites.md`](testsuites.md#three-real-programs-sqlite-blake3-and-xxhash).
 An in-memory database,
 `PRAGMA journal_mode=MEMORY`, everything through
 `sqlite3_prepare_v2`/`bind`/`step`/`reset`:
@@ -355,7 +355,8 @@ difference from a `double` sibling is the type (`strtold`, `sinl`, `powl`, …)
 is linked to the sibling, which is what "`long double` is `double`" means
 here; any other external function with a `long double` in its signature, and
 a `long double` handed to an external variadic function, is refused by name
-with the rewrite. One thing stays as it is, by nature: chibicc itself
+with the rewrite — since 0.3, except where a literal `printf` or `scanf`
+format names it with `L`, which becomes `l`. One thing stays as it is, by nature: chibicc itself
 assumes the host's `long double` is x87 when it builds an 80-bit image
 through a `union`, so a program it compiles that *uses* `long double` gets
 `double`'s bits — the same documented limitation, one level down.
