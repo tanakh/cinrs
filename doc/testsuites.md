@@ -6,7 +6,7 @@ questions, which is why there are three of them and not one:
 | suite | corpus | what it asks | cases | **correct** | errors |
 | --- | --- | --- | ---: | ---: | --- |
 | [c-testsuite](c-testsuite.md) | `third_party/c-testsuite/tests/single-exec` | does a small whole program run and print the right thing? | 220 | **98.6 %** (`c99!`), 99.1 % (`c23!`) | 3: 3 unimplemented |
-| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **95.9 %** (`gnu11!`), 95.6 % (`gnu89!`) | 72: 0 bug, 5 unimplemented, 67 not planned |
+| [GCC torture](gcc-torture.md) | `third_party/gcc/…/gcc.c-torture/execute` | does a corner case somebody once filed a bug about still work? | 1776 | **96.0 %** (`gnu11!`), 95.7 % (`gnu89!`) | 71: 0 bug, 5 unimplemented, 66 not planned |
 | [Clang C](clang-c-tests.md) | `third_party/llvm-project/clang/test/C` | is exactly the right *line* diagnosed, or accepted? | 276 | **83.3 %** of the 203 run | 34: 0 bug, 6 unimplemented, 28 not planned |
 
 The first two run programs and check the answer; only the third measures what
@@ -53,7 +53,7 @@ as unimplemented or not planned, case by case.
   which lines must be diagnosed. **169 of the 203 revisions run are correct
   (83.3 %)** — 138 answered exactly and 31 refused because the entry point
   requires it — and of the 620 `expected-error` lines the suite asks about,
-  **577 are diagnosed on the right line**. This is the only suite that measures
+  **582 are diagnosed on the right line**. This is the only suite that measures
   what `cinrs` *refuses*, which is half of what a front end is for, and **not
   one of its 34 errors is a bug** either: they are the features the document
   lists as not yet implemented, and the places where `cinrs` and Clang

@@ -216,14 +216,14 @@ The report counts the `expected-error` *lines* as well as the revisions:
 ```
   annotations, over the 203 revisions run
       620  lines carry a required `expected-error`
-      577  of them were diagnosed (93.1%)
-       43  were not
+      582  of them were diagnosed (93.9%)
+       38  were not
       451  errors landed on a line no directive names
            191 of those are on the 31 revisions this entry point is required
            to refuse, where every later revision's feature is one of them
 ```
 
-620 lines are asked about and **577 are answered on the right line**. The last
+620 lines are asked about and **582 are answered on the right line**. The last
 row is what an earlier entry point costs rather than a count of wrong answers:
 a `c89!` revision of a C23 paper refuses every C99 and C11 construct in the
 file, and Clang — which takes each as an extension and only warns — names none
@@ -231,11 +231,15 @@ of them. 191 of the 451 are on the 31 revisions that are conforming refusals
 outright; the other 260 are on the 34 error revisions, where the same effect
 piles up behind whichever refusal came first.
 
-The last three came from `_Alignas` on an *object*, which is now honoured
-rather than refused: `drs/dr4xx.c` asks for the other five things C11 6.7.5p2
-forbids it on — a `typedef`, a function, a bit-field, a parameter and a
-`register` object — and each of those is a constraint violation of its own,
-diagnosed where it is written.
+The last five came from a directive written between the parentheses of a
+macro invocation, which is now a directive, as it is in GCC, rather than
+argument tokens: DR250's `#nondirective` in `drs/dr2xx.c` is diagnosed as an
+invalid directive on its line in each of the file's five revisions. The three
+before them came from `_Alignas` on an *object*, which is now honoured rather
+than refused: `drs/dr4xx.c` asks for the other five things C11 6.7.5p2 forbids
+it on — a `typedef`, a function, a bit-field, a parameter and a `register`
+object — and each of those is a constraint violation of its own, diagnosed
+where it is written.
 
 ### The errors, by category
 
@@ -268,9 +272,9 @@ which are the same gap — only the arithmetic types are supported.
   290. A constant expression may not hold a comma operator (6.6p3), **GCC
   refuses it too** ("enumerator value for 'ex2' is not an integer
   constant"), and Clang folds it as a GNU extension — the same disagreement
-  as `drs/dr4xx.c`. Behind it, `#nondirective` written *between the
-  parentheses of a macro invocation* is taken for argument tokens here and
-  not diagnosed.
+  as `drs/dr4xx.c`. DR250's `#nondirective`, written *between the
+  parentheses of a macro invocation*, is a directive as in GCC and is
+  diagnosed on its line.
 * `drs/dr0xx.c` (1, and 2 more for the `_Static_assert` gate): the `c23!`
   revision, whose two DR035 `expected-error` lines are inside
   `#if __STDC_VERSION__ < 202311L` — the harness limit of `C99/n448.c`
@@ -354,7 +358,9 @@ the conforming refusal described above. A differing macro redefinition
 becoming a warning, with the later definition standing as in GCC and Clang,
 then took it to **83.3 %**: `drs/dr0xx.c:3` and `drs/dr0xx.c:4` came out as
 required, and over the same rounds the annotations answered on the right line
-rose from 557 to 577 (93.1 %).
+rose from 557 to 577 (93.1 %). Taking a directive inside a macro's arguments
+as a directive, which CPython needed, left the revisions as they were and took
+the annotations to 582 (93.9 %).
 That round is the list at the end of this document. It began with five
 `[bug]` root causes: two of them — `drs/dr1xx.c` and `C23/n3007.c` — came out
 as required, and the other three were reclassified with the reason, which is
