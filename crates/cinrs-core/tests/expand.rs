@@ -1322,6 +1322,69 @@ fn an_asm_label_wins_over_the_renaming() {
     assert!(!output.contains("_time64"), "{output}");
 }
 
+/// On Mach-O an `__asm__` label is the assembler's exact symbol name, so it is
+/// written behind `\x01`, which tells LLVM not to add its own underscore.
+/// Thus a label such as `"_fputs"` remains `_fputs`, while `"foo"` remains
+/// `foo`.
+///
+/// A name cinrs picks for itself — the C name of an undecorated declaration,
+/// a `long double` function's `double` twin — is a C name, and is left for the
+/// platform to decorate.
+#[test]
+fn an_asm_label_is_the_assemblers_symbol_on_mach_o() {
+    let source = "int say(const char *) __asm__(\"_puts\");\nvoid hi(void) { say(\"hi\"); }";
+
+    let apple = expand_for("aarch64-apple-darwin", source);
+    assert!(apple.contains("link_name = \"\\u{1}_puts\""), "{apple}");
+    let intel = expand_for("x86_64-apple-darwin", source);
+    assert!(intel.contains("link_name = \"\\u{1}_puts\""), "{intel}");
+
+    for triple in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+        let output = expand_for(triple, source);
+        assert!(
+            output.contains("link_name = \"_puts\""),
+            "{triple}: {output}"
+        );
+        assert!(!output.contains("u{1}"), "{triple}: {output}");
+    }
+
+    // No label, no marker: this one is `_printf` on Mach-O by LLVM's doing.
+    let plain = expand_for(
+        "aarch64-apple-darwin",
+        "int printf(const char *, ...);\nvoid hi(void) { printf(\"hi\"); }",
+    );
+    assert!(plain.contains("link_name = \"printf\""), "{plain}");
+    assert!(!plain.contains("u{1}"), "{plain}");
+
+    // The `long double` twin is cinrs's own redirection, not the program's.
+    let twin = expand_for(
+        "aarch64-apple-darwin",
+        "double strtold(const char *, char **);\n\
+         double f(const char *s) { return strtold(s, 0); }",
+    );
+    assert!(twin.contains("link_name = \"strtod\""), "{twin}");
+    assert!(!twin.contains("u{1}"), "{twin}");
+}
+
+/// The same on a definition: a unit that asked for real C symbols names the
+/// one an `__asm__` label gives it with `export_name`, which LLVM decorates in
+/// exactly the way `link_name` is.
+#[test]
+fn an_asm_label_on_an_exported_definition_is_the_assemblers_symbol_on_mach_o() {
+    let source = "#pragma cinrs export\n\
+                  int f(void) __asm__(\"_f_symbol\");\n\
+                  int f(void) { return 1; }";
+
+    let apple = expand_for("aarch64-apple-darwin", source);
+    assert!(
+        apple.contains("export_name = \"\\u{1}_f_symbol\""),
+        "{apple}"
+    );
+
+    let linux = expand_for("x86_64-unknown-linux-gnu", source);
+    assert!(linux.contains("export_name = \"_f_symbol\""), "{linux}");
+}
+
 /// A function the unit **defines** is its own symbol: a C program that defines
 /// `time` has defined `time`, and nothing renames it.
 #[test]

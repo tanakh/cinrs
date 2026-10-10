@@ -2565,6 +2565,15 @@ fn the_long_double_iso_functions_link_to_their_double_twins() {
         "aarch64-apple-darwin",
         "armv7-unknown-linux-gnueabihf",
     ] {
+        // `my_cos` is the program's own label, which on Mach-O is the
+        // assembler's symbol and so is kept apart from the underscore LLVM
+        // adds (`TargetModel::asm_label_symbol`). The other five are cinrs's
+        // own redirections, C names for the platform to decorate.
+        let own_label = if triple.contains("apple") {
+            "cosl=\u{1}my_cos"
+        } else {
+            "cosl=my_cos"
+        };
         assert_eq!(
             link_names_on(triple, source),
             [
@@ -2573,7 +2582,7 @@ fn the_long_double_iso_functions_link_to_their_double_twins() {
                 "sinl=sin",
                 "csinl=csin",
                 "nexttoward=nextafter",
-                "cosl=my_cos",
+                own_label,
             ],
             "for {triple}"
         );

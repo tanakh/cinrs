@@ -1266,7 +1266,8 @@ impl Sema<'_> {
             return;
         }
         if let Some(label) = &declarator.asm_label {
-            self.program.objects[id.0 as usize].asm_label = Some(label.node.clone());
+            self.program.objects[id.0 as usize].asm_label =
+                Some(self.target.asm_label_symbol(&label.node));
         }
         if let Some(section) = &attrs.section {
             self.program.objects[id.0 as usize].section = Some(section.node.clone());
@@ -2880,7 +2881,7 @@ impl Sema<'_> {
                 entry.asm_label = entry
                     .asm_label
                     .take()
-                    .or_else(|| asm_label.map(|label| label.node.clone()));
+                    .or_else(|| asm_label.map(|label| self.target.asm_label_symbol(&label.node)));
                 // GCC takes the union of the `target` attributes written on
                 // the declarations of one function, as it does for every other
                 // attribute; the definition's are simply added to whatever a
@@ -2929,8 +2930,8 @@ impl Sema<'_> {
                     cold: attrs.cold.is_some(),
                     deprecated: attrs.deprecated.as_ref().map(|d| d.node.clone()),
                     section: attrs.section.as_ref().map(|s| s.node.clone()),
-                    asm_label: asm_label.map(|label| label.node.clone()),
                     weak: attrs.weak,
+                    asm_label: asm_label.map(|label| self.target.asm_label_symbol(&label.node)),
                     init_kind,
                     target_features,
                     address_taken: false,

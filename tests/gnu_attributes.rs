@@ -424,9 +424,17 @@ c99! {
      * block declares `my_strlen` under that C name and points it at `strlen`
      * with `#[link_name]`, so the two names are two items and one symbol.
      * `strlen` answers a `size_t`, and saying `unsigned long` instead would be
-     * four bytes too few on Windows. */
-    size_t my_strlen(const char *s) __asm__("strlen");
-    int my_abs(int n) __asm__("abs");
+     * four bytes too few on Windows.
+     *
+     * An asm label names the assembler symbol directly, so Mach-O needs
+     * `_strlen`. Use `__USER_LABEL_PREFIX__` for a portable spelling.
+     * The extra macro step expands the prefix before stringizing it,
+     * since an argument used with `#` is not macro-expanded. */
+    #define ASMNAME(cname) ASMNAME2(__USER_LABEL_PREFIX__, cname)
+    #define ASMNAME2(prefix, cname) ASMSTR(prefix) cname
+    #define ASMSTR(x) #x
+    size_t my_strlen(const char *s) __asm__(ASMNAME("strlen"));
+    int my_abs(int n) __asm__(ASMNAME("abs"));
 
     size_t length_of(const char *s) { return my_strlen(s); }
     int magnitude(int n) { return my_abs(n); }
@@ -436,6 +444,23 @@ c99! {
 fn an_asm_label_points_a_declaration_at_another_symbol() {
     assert_eq!(unsafe { length_of(c"hello".as_ptr()) }, 5);
     assert_eq!(unsafe { magnitude(-7) }, 7);
+}
+
+/// A label that starts with its own underscore has to reach the linker as
+/// written, the way Mach-O spells every symbol. LLVM puts an underscore in
+/// front of every name `rustc` hands it, which made this `__getpid` until the
+/// label was passed behind the `\x01` that switches that off.
+#[cfg(target_vendor = "apple")]
+mod mach_o_label {
+    cinrs::c99! {
+        int my_getpid(void) __asm__("_getpid");
+        int through_the_label(void) { return my_getpid(); }
+    }
+
+    #[test]
+    fn a_label_with_its_own_underscore_links() {
+        assert_eq!(unsafe { through_the_label() } as u32, std::process::id());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +626,10 @@ mod exported {
     mod library {
         cinrs::c99! {
             #pragma cinrs export
-            int cinrs_gnu_test_add(int a, int b) __asm__("cinrs_gnu_test_plus");
+            #define ASMNAME(cname) ASMNAME2(__USER_LABEL_PREFIX__, cname)
+            #define ASMNAME2(prefix, cname) ASMSTR(prefix) cname
+            #define ASMSTR(x) #x
+            int cinrs_gnu_test_add(int a, int b) __asm__(ASMNAME("cinrs_gnu_test_plus"));
             int cinrs_gnu_test_add(int a, int b) { return a + b; }
         }
     }
