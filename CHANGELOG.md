@@ -8,7 +8,7 @@ Changelog][kac], and the project follows [Semantic Versioning][semver].
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/spec/v2.0.0.html
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-10-13
 
 This release adds a second way to use cinrs: **`ccinrs`, a C compiler with
 GCC's command line**, in a fifth crate versioned with the other four. Each C
@@ -32,6 +32,11 @@ many smaller fixes.
   was a `c_int`; the enumerators stay `c_int`. Rust code that passes an
   enumerator where the type is expected, or compares a value of the type with
   one, needs an `as`. See [Changed](#changed).
+* **On macOS an `__asm__` label is the assembler's symbol**, as in GCC and
+  Clang, so it spells Mach-O's leading underscore itself: `__asm__("strlen")`
+  now names the symbol `strlen`, and the C library's is
+  `__asm__("_strlen")`, which `__USER_LABEL_PREFIX__` spells portably. Other
+  targets are unchanged. See [Fixed](#fixed).
 * **`__DATE__` and `__TIME__` are the moment of translation**, not
   placeholders, so a block that uses them expands differently from one build
   to the next; `SOURCE_DATE_EPOCH` fixes the moment for a reproducible build.
@@ -583,7 +588,7 @@ many smaller fixes.
 * Explicit asm labels on Darwin name the assembler symbol directly, without
   LLVM adding an extra leading underscore. Labels produced by Apple's
   system-header macros could otherwise reference `__fputs` instead of
-  `_fputs` and fail to link. Fixes #2.
+  `_fputs` and fail to link. Reported in #2 and fixed in #4 by tasuren.
 
 ### Toolchain and platforms
 
