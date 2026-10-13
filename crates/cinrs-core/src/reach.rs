@@ -154,9 +154,11 @@ impl<'a> Walk<'a> {
 
     /// Every function and object the words of an assembly template could
     /// name: its C name, the Rust item it is generated as, or the symbol an
-    /// `__asm__` label gave it.
+    /// `__asm__` label gave it — as the template spells it, without the `\x01`
+    /// a Mach-O label is kept behind (see `TargetModel::asm_label_symbol`).
     fn asm_text(&mut self, template: &str) {
         let program = self.program;
+        let assembler = |label: &'a str| label.strip_prefix('\u{1}').unwrap_or(label);
         let symbols = self.symbols.get_or_insert_with(|| {
             let mut symbols: HashMap<&str, Vec<Target>> = HashMap::new();
             for (index, func) in program.functions.iter().enumerate() {
@@ -164,7 +166,7 @@ impl<'a> Walk<'a> {
                 for name in [
                     Some(func.name.as_str()),
                     Some(func.item_name()),
-                    func.asm_label.as_deref(),
+                    func.asm_label.as_deref().map(assembler),
                 ]
                 .into_iter()
                 .flatten()
@@ -180,7 +182,7 @@ impl<'a> Walk<'a> {
                 for name in [
                     Some(object.name.as_str()),
                     object.storage.item_name(),
-                    object.asm_label.as_deref(),
+                    object.asm_label.as_deref().map(assembler),
                 ]
                 .into_iter()
                 .flatten()

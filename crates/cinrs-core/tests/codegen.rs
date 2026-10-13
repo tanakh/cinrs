@@ -2315,6 +2315,34 @@ fn only_what_the_object_reaches_is_generated() {
     ));
 }
 
+/// Under `Options::reachable_only`, a function the words of a file-scope `asm`
+/// name is reached, by the symbol an `__asm__` label gives it too — on
+/// Mach-O as well, where the label is kept behind LLVM's `\x01` escape and
+/// the template spells the symbol without it.
+#[test]
+fn a_label_a_file_scope_asm_names_is_reached_on_mach_o_too() {
+    for (triple, label) in [
+        ("x86_64-unknown-linux-gnu", "cinrs_reach_helper"),
+        ("x86_64-apple-darwin", "_cinrs_reach_helper"),
+    ] {
+        let target = cinrs_core::target::TargetModel::from_triple(triple).expect("a known triple");
+        let mut options = Options::gnu(Standard::C99).for_target(target);
+        options.export = true;
+        options.reachable_only = true;
+        let output = generate_with(
+            options,
+            &format!(
+                r#"
+                static int helper(int x) __asm__("{label}");
+                static int helper(int x) {{ return x + 41; }}
+                __asm__(".globl entry_point\nentry_point:\n\tjmp {label}\n");
+                "#
+            ),
+        );
+        assert!(output.contains("41"), "{triple}: {output}");
+    }
+}
+
 /// A GCC vector type is a `#[repr(C, align(N))]` struct over its elements,
 /// and each operator is written out over them: a scalar broadcast with
 /// `[x; N]`, the operation through `core::array::from_fn`, and a read
