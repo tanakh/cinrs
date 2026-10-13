@@ -580,6 +580,10 @@ many smaller fixes.
 * A statement may begin with `__extension__` and still be an expression:
   curl's `typecheck-gcc.h` wraps every `curl_easy_setopt` in
   `__extension__({ … })`, which was read as a declaration with no type.
+* Explicit asm labels on Darwin name the assembler symbol directly, without
+  LLVM adding an extra leading underscore. Labels produced by Apple's
+  system-header macros could otherwise reference `__fputs` instead of
+  `_fputs` and fail to link. Fixes #2.
 
 ### Toolchain and platforms
 

@@ -869,6 +869,55 @@ impl TargetModel {
         self.os == Os::Windows && self.env == Env::Msvc
     }
 
+    /// The symbol a program's own `__asm__("label")` names, spelled for Rust's
+    /// `#[link_name]` and `#[unsafe(export_name)]`.
+    ///
+    /// As in GCC and Clang, the label is the **assembler's** symbol: the
+    /// target's usual decoration of C names is not applied to it, so on Mach-O
+    /// a label spells the leading underscore itself, and C code spells it
+    /// portably with the predefined `__USER_LABEL_PREFIX__`. Apple's headers
+    /// use labels to point a declaration at a versioned symbol
+    /// (`__DARWIN_INODE64(stat)` is `__asm("_stat$INODE64")` on x86-64), and
+    /// where no version applies the same macros give the name the compiler
+    /// would have chosen anyway (`__DARWIN_ALIAS(fputs)` is `__asm("_fputs")`
+    /// on arm64), which is how a label that renames nothing still reached the
+    /// linker with a second underscore.
+    ///
+    /// `link_name` and `export_name` mean something else, since the name they
+    /// are given is still decorated, so on Darwin the label comes back behind
+    /// LLVM's `\x01` escape and `__asm("_fputs")` links as `_fputs` rather than
+    /// `__fputs`. Every other target gets the label unchanged, and a label that
+    /// already starts with `\x01` is left alone.
+    ///
+    /// This is for labels written by the **program**. A name cinrs picks
+    /// itself, such as a `long double` function's `double` twin or the UCRT's
+    /// `_time64`, is a C name that is meant to be decorated, and must not come
+    /// through here.
+    ///
+    /// Not guaranteed: object formats other than Mach-O are not handled, and
+    /// `rustc_codegen_cranelift` ignores the escape
+    /// (rust-lang/rustc_codegen_cranelift#1689), so the result is right for
+    /// the LLVM backend only.
+    pub fn asm_label_symbol(&self, label: &str) -> String {
+        // Mach-O's data layout (`m:o`) makes LLVM put `_` in front of every
+        // global name it is given, `link_name` and `export_name` included, so
+        // passing `_fputs` on as it stands would link `__fputs`. A leading
+        // `\x01` (`\01` in LLVM IR) switches that off. LangRef, "Identifiers"
+        // (https://llvm.org/docs/LangRef.html#identifiers): "The "\01" prefix
+        // can be used on global values to suppress mangling."
+        //
+        // Only Mach-O is handled. 32-bit x86 COFF decorates C names as well,
+        // and by calling convention too (`@N` on `stdcall`), which has not been
+        // looked at. `__USER_LABEL_PREFIX__` is `_` there as it is on Mach-O
+        // (see `pp.rs`), so on that target the macro and this function still
+        // disagree about what a label means.
+        if self.os == Os::Darwin && !label.starts_with('\u{1}') {
+            format!("\u{1}{label}")
+        } else {
+            label.to_owned()
+        }
+    }
+
     /// Whether the **platform's** `long double` is the IEEE double, eight
     /// bytes, passed exactly as a `double` is.
     ///

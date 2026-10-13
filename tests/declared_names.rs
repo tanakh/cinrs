@@ -250,7 +250,12 @@ fn two_names_may_point_at_one_symbol() {
     c99! {
         #include <stdlib.h>
 
-        int magnitude(int n) __asm__("abs");
+        /* The label is the assembler's symbol, so Mach-O's `_abs` is spelled
+         * with `__USER_LABEL_PREFIX__`; see `an_asm_label_points_a_declaration_at_another_symbol`. */
+        #define ASMNAME(cname) ASMNAME2(__USER_LABEL_PREFIX__, cname)
+        #define ASMNAME2(prefix, cname) ASMSTR(prefix) cname
+        #define ASMSTR(x) #x
+        int magnitude(int n) __asm__(ASMNAME("abs"));
 
         int both(int n) { return magnitude(n) + abs(n); }
     }

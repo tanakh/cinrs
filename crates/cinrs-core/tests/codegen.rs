@@ -1230,7 +1230,12 @@ fn a_nested_function_two_levels_down_is_handed_the_pointer() {
 
 #[test]
 fn the_function_attributes_become_rust_ones() {
-    insta::assert_snapshot!(generate(
+    // Pinned to Linux because `renamed`'s label is spelled differently on
+    // Mach-O (`\x01` in front of it), and this snapshot is about the
+    // attributes rather than about a platform.
+    insta::assert_snapshot!(generate_for_target(
+        Standard::C99,
+        "x86_64-unknown-linux-gnu",
         r#"
         __attribute__((always_inline)) int fast(int n) { return n + 1; }
         __attribute__((noinline, cold)) int slow(int n) { return n + 2; }
